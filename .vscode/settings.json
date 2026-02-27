@@ -1,0 +1,12 @@
+{
+  "cmake.configureOnOpen": true,
+  "cmake.buildDirectory": "${workspaceFolder}/build",
+  "cmake.configureSettings": {
+    "CMAKE_CONFIGURATION_TYPES": "Debug"
+  },
+  "cmake.ctestArgs": [
+    "-C",
+    "Debug",
+    "--output-on-failure"
+  ]
+}

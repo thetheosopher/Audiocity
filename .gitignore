@@ -1,0 +1,56 @@
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
+
+# VS Code local workspace state
+.vscode/*.log
+.vscode/*.code-workspace
+
+# Visual Studio / MSBuild artifacts
+.vs/
+*.VC.db
+*.VC.opendb
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# CMake out-of-source build trees
+/build/
+/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+DartConfiguration.tcl
+cmake_install.cmake
+install_manifest.txt
+Testing/
+
+# Compiled binaries/libraries
+*.obj
+*.o
+*.pdb
+*.idb
+*.ilk
+*.exp
+*.lib
+*.a
+*.dll
+*.so
+*.dylib
+*.exe
+
+# JUCE/plugin artifacts
+*.vst3
+*.component
+*.app
+*.pkg
+*.msi
+
+# Test/runtime outputs
+*.wav
+*.aiff
+*.flac
+*.log
