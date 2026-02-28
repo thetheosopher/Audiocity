@@ -31,6 +31,10 @@ public:
     void fileDragMove(const juce::StringArray& files, int x, int y) override;
     void fileDragExit(const juce::StringArray& files) override;
     void filesDropped(const juce::StringArray& files, int x, int y) override;
+
+    // Deferred drop handling (processed in timerCallback, outside OLE modal loop)
+    juce::StringArray pendingDropFiles_;
+    bool hasPendingDrop_ = false;
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
@@ -60,7 +64,8 @@ private:
     public:
         void setState(int totalSamples, std::vector<std::vector<float>> peaksByChannel,
                       int playbackStart, int playbackEnd,
-                      int loopStart, int loopEnd);
+                      int loopStart, int loopEnd,
+                      juce::String loopFormatBadge);
         void resetView();
 
         std::function<void(int, int)> onLoopPreview;
@@ -91,6 +96,7 @@ private:
         int playbackEnd_ = 0;
         int loopStart_ = 0;
         int loopEnd_ = 0;
+        juce::String loopFormatBadge_;
 
         int viewStartSample_ = 0;
         int viewSampleCount_ = 0;
@@ -118,12 +124,14 @@ private:
         juce::String fileName;
         juce::String fileNameLower;
         juce::String relativePathLower;
+        juce::String loopFormatBadge;
         juce::String metadataLine;
         std::vector<float> previewPeaks;
     };
     std::vector<SampleListEntry> allSampleEntries_;
     std::vector<int> visibleSampleEntryIndices_;
     juce::String sampleRootFolderPath_;
+    juce::String lastWaveformSamplePath_;
 
     // ── Sample Browser ──
     juce::Label sampleBrowserRootLabel_{ {}, "Source Folder" };
@@ -191,7 +199,7 @@ private:
     std::vector<DialMapping> allDials_;
 
     void openSampleChooser();
-    void refreshUI();
+    void refreshUI(bool forceWaveformReset = false);
     void pushPlaybackWindow();
     void applyLoopPoints();
     void enforcePlaybackLoopConstraints();

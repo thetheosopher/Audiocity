@@ -22,57 +22,90 @@ juce::String formatMidiNoteName(const int midiNote)
     return juce::String(name) + juce::String(octave) + " (" + juce::String(clamped) + ")";
 }
 
-auto buildPreviewAndMetadata(const juce::File& file) -> std::pair<std::vector<float>, juce::String>
+struct SamplePreviewData
 {
-    constexpr int kPeakCount = 96;
-    std::vector<float> peaks(static_cast<std::size_t>(kPeakCount), 0.0f);
+    std::vector<float> peaks;
+    juce::String metadataLine;
+    juce::String loopFormatBadge;
+};
 
-    juce::AudioFormatManager formatManager;
-    formatManager.registerBasicFormats();
-    std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
-    if (reader == nullptr || reader->lengthInSamples <= 0)
-        return { std::move(peaks), "SR: --  Ch: --  Bit Depth: --  Duration: --  Samples: --" };
-
-    const auto totalSamples = static_cast<int64_t>(reader->lengthInSamples);
-    const auto sampleRateHz = static_cast<int>(std::round(reader->sampleRate));
-
-    const auto totalMs = static_cast<int64_t>(std::round((static_cast<double>(totalSamples) * 1000.0) / reader->sampleRate));
-    const auto minutes = static_cast<int>(totalMs / 60000);
-    const auto seconds = static_cast<int>((totalMs % 60000) / 1000);
-    const auto millis = static_cast<int>(totalMs % 1000);
-    const auto durationText = juce::String::formatted("%02d:%02d.%03d", minutes, seconds, millis);
-    auto metadataLine = "SR: " + juce::String(sampleRateHz)
-        + " Hz  Ch: " + juce::String(static_cast<int>(reader->numChannels))
-        + "  Bit Depth: " + juce::String(reader->bitsPerSample)
-        + "  Duration: " + durationText
-        + "  Samples: " + juce::String(static_cast<juce::int64>(totalSamples));
-
-    juce::AudioBuffer<float> scratchBuffer(1, 4096);
-
-    for (int i = 0; i < kPeakCount; ++i)
+auto buildPreviewAndMetadata(const juce::File& file) -> SamplePreviewData
+{
+    auto detectLoopFormatBadge = [](const juce::File& sampleFile, const juce::StringPairArray& metadata) -> juce::String
     {
-        const auto start = (static_cast<int64_t>(i) * totalSamples) / kPeakCount;
-        const auto end = juce::jmax(start + 1, (static_cast<int64_t>(i + 1) * totalSamples) / kPeakCount);
+        const auto hasRootNote = metadata.containsKey("MidiUnityNote");
+        const auto loopStart = metadata.getValue("Loop0Start", "-1").getIntValue();
+        const auto loopEnd = metadata.getValue("Loop0End", "-1").getIntValue();
+        const auto hasLoop = loopStart >= 0 && loopEnd > loopStart;
+        if (!(hasRootNote && hasLoop))
+            return {};
 
-        auto maxAbs = 0.0f;
-        int64_t position = start;
-        while (position < end)
+        const auto ext = sampleFile.getFileExtension().toLowerCase();
+        if (ext == ".wav")
+            return "Acidized";
+        if (ext == ".aif" || ext == ".aiff")
+            return "Apple Loop";
+        return {};
+    };
+
+    auto buildData = [&detectLoopFormatBadge](const juce::File& sampleFile) -> SamplePreviewData
+    {
+        constexpr int kPeakCount = 96;
+        SamplePreviewData out;
+        out.peaks.assign(static_cast<std::size_t>(kPeakCount), 0.0f);
+
+        juce::AudioFormatManager formatManager;
+        formatManager.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(sampleFile));
+        if (reader == nullptr || reader->lengthInSamples <= 0)
         {
-            const auto chunk = static_cast<int>(juce::jmin<int64_t>(scratchBuffer.getNumSamples(), end - position));
-            if (!reader->read(&scratchBuffer, 0, chunk, position, true, true))
-                break;
-
-            const auto* samples = scratchBuffer.getReadPointer(0);
-            for (int s = 0; s < chunk; ++s)
-                maxAbs = juce::jmax(maxAbs, std::abs(samples[s]));
-
-            position += chunk;
+            out.metadataLine = "SR: --  Ch: --  Bit Depth: --  Duration: --  Samples: --";
+            return out;
         }
 
-        peaks[static_cast<std::size_t>(i)] = juce::jlimit(0.0f, 1.0f, maxAbs);
-    }
+        out.loopFormatBadge = detectLoopFormatBadge(sampleFile, reader->metadataValues);
 
-    return { std::move(peaks), metadataLine };
+        const auto totalSamples = static_cast<int64_t>(reader->lengthInSamples);
+        const auto sampleRateHz = static_cast<int>(std::round(reader->sampleRate));
+        const auto totalMs = static_cast<int64_t>(std::round((static_cast<double>(totalSamples) * 1000.0) / reader->sampleRate));
+        const auto minutes = static_cast<int>(totalMs / 60000);
+        const auto seconds = static_cast<int>((totalMs % 60000) / 1000);
+        const auto millis = static_cast<int>(totalMs % 1000);
+        const auto durationText = juce::String::formatted("%02d:%02d.%03d", minutes, seconds, millis);
+        out.metadataLine = "SR: " + juce::String(sampleRateHz)
+            + " Hz  Ch: " + juce::String(static_cast<int>(reader->numChannels))
+            + "  Bit Depth: " + juce::String(reader->bitsPerSample)
+            + "  Duration: " + durationText
+            + "  Samples: " + juce::String(static_cast<juce::int64>(totalSamples));
+
+        juce::AudioBuffer<float> scratchBuffer(1, 4096);
+        for (int i = 0; i < kPeakCount; ++i)
+        {
+            const auto start = (static_cast<int64_t>(i) * totalSamples) / kPeakCount;
+            const auto end = juce::jmax(start + 1, (static_cast<int64_t>(i + 1) * totalSamples) / kPeakCount);
+
+            auto maxAbs = 0.0f;
+            int64_t position = start;
+            while (position < end)
+            {
+                const auto chunk = static_cast<int>(juce::jmin<int64_t>(scratchBuffer.getNumSamples(), end - position));
+                if (!reader->read(&scratchBuffer, 0, chunk, position, true, true))
+                    break;
+
+                const auto* samples = scratchBuffer.getReadPointer(0);
+                for (int s = 0; s < chunk; ++s)
+                    maxAbs = juce::jmax(maxAbs, std::abs(samples[s]));
+
+                position += chunk;
+            }
+
+            out.peaks[static_cast<std::size_t>(i)] = juce::jlimit(0.0f, 1.0f, maxAbs);
+        }
+
+        return out;
+    };
+
+    return buildData(file);
 }
 }
 
@@ -81,7 +114,8 @@ auto buildPreviewAndMetadata(const juce::File& file) -> std::pair<std::vector<fl
 void AudiocityAudioProcessorEditor::WaveformView::setState(
     const int totalSamples, std::vector<std::vector<float>> peaksByChannel,
     const int playbackStart, const int playbackEnd,
-    const int loopStart, const int loopEnd)
+    const int loopStart, const int loopEnd,
+    juce::String loopFormatBadge)
 {
     totalSamples_ = juce::jmax(0, totalSamples);
     peaksByChannel_ = std::move(peaksByChannel);
@@ -89,6 +123,7 @@ void AudiocityAudioProcessorEditor::WaveformView::setState(
     playbackEnd_ = playbackEnd;
     loopStart_ = loopStart;
     loopEnd_ = loopEnd;
+    loopFormatBadge_ = std::move(loopFormatBadge);
 
     if (viewSampleCount_ <= 0)
         viewSampleCount_ = juce::jmax(1, totalSamples_);
@@ -253,6 +288,19 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
     g.setColour(juce::Colours::orange);
     g.drawText("S", static_cast<int>(loopLeft) - 6, static_cast<int>(bounds.getY()) + 2, 12, 12, juce::Justification::centred);
     g.drawText("E", static_cast<int>(loopRight) - 6, static_cast<int>(bounds.getY()) + 2, 12, 12, juce::Justification::centred);
+
+    if (loopFormatBadge_.isNotEmpty())
+    {
+        const auto badgeWidth = loopFormatBadge_ == "Apple Loop" ? 84 : 66;
+        auto badge = juce::Rectangle<float>(bounds.getRight() - static_cast<float>(badgeWidth) - 8.0f,
+            bounds.getY() + 6.0f, static_cast<float>(badgeWidth), 16.0f);
+
+        g.setColour(loopFormatBadge_ == "Apple Loop" ? juce::Colour(0xff5b4b8a) : juce::Colour(0xff4b6b2a));
+        g.fillRoundedRectangle(badge, 4.0f);
+        g.setColour(juce::Colour(0xffdfe6ff));
+        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.drawText(loopFormatBadge_, badge, juce::Justification::centred, false);
+    }
 }
 
 void AudiocityAudioProcessorEditor::WaveformView::mouseDown(const juce::MouseEvent& event)
@@ -623,6 +671,55 @@ AudiocityAudioProcessorEditor::~AudiocityAudioProcessorEditor()
 
 void AudiocityAudioProcessorEditor::timerCallback()
 {
+    // ── Process deferred drag-and-drop (safe: outside OLE modal loop) ──
+    if (hasPendingDrop_)
+    {
+        DBG("[DnD] timerCallback: processing pending drop");
+        hasPendingDrop_ = false;
+        auto droppedFiles = std::move(pendingDropFiles_);
+        pendingDropFiles_.clear();
+
+        for (const auto& path : droppedFiles)
+        {
+            auto normalizedPath = path.trim();
+            DBG("[DnD]   raw path: \"" + normalizedPath + "\"");
+
+            // Normalise file:// URIs to a local path (string ops first, URL fallback)
+            if (normalizedPath.startsWithIgnoreCase("file:///"))
+                normalizedPath = normalizedPath.substring(8).replace("/", "\\");
+            else if (normalizedPath.startsWithIgnoreCase("file://"))
+                normalizedPath = normalizedPath.substring(7).replace("/", "\\");
+
+            // Percent-decode common URL-encoded chars (%20 → space, etc.)
+            normalizedPath = juce::URL::removeEscapeChars(normalizedPath);
+
+            DBG("[DnD]   normalized: \"" + normalizedPath + "\"");
+
+            const juce::File dropped(normalizedPath);
+            DBG("[DnD]   existsAsFile: " + juce::String(dropped.existsAsFile() ? "yes" : "no"));
+            if (!dropped.existsAsFile())
+                continue;
+
+            const auto ext = dropped.getFileExtension().toLowerCase();
+            DBG("[DnD]   ext: \"" + ext + "\"");
+            if (ext == ".wav" || ext == ".aiff" || ext == ".aif")
+            {
+                DBG("[DnD]   loading sample...");
+                if (processor_.loadSampleFromFile(dropped))
+                {
+                    DBG("[DnD]   load succeeded, refreshing UI");
+                    refreshUI(true);
+                }
+                else
+                {
+                    DBG("[DnD]   load FAILED");
+                }
+                break;
+            }
+        }
+        DBG("[DnD] timerCallback: pending drop processing complete");
+    }
+
     const auto selectedTab = tabBar_.getCurrentTabIndex();
     if (selectedTab != currentTabIndex_)
     {
@@ -756,9 +853,23 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
     }
 
     auto firstLine = content.removeFromTop(18);
-    const auto pathWidth = juce::jmax(140, firstLine.getWidth() / 2);
-    auto fileArea = firstLine.removeFromLeft(juce::jmax(40, firstLine.getWidth() - pathWidth - 6));
     auto pathArea = firstLine;
+    if (entry.loopFormatBadge.isNotEmpty())
+    {
+        const auto badgeWidth = entry.loopFormatBadge == "Apple Loop" ? 84 : 66;
+        auto badgeArea = pathArea.removeFromRight(badgeWidth);
+
+        g.setColour(entry.loopFormatBadge == "Apple Loop" ? juce::Colour(0xff5b4b8a) : juce::Colour(0xff4b6b2a));
+        g.fillRoundedRectangle(badgeArea.toFloat(), 4.0f);
+        g.setColour(juce::Colour(0xffdfe6ff));
+        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.drawText(entry.loopFormatBadge, badgeArea, juce::Justification::centred, false);
+
+        pathArea.removeFromRight(6);
+    }
+
+    const auto pathWidth = juce::jmax(140, pathArea.getWidth() / 2);
+    auto fileArea = pathArea.removeFromLeft(juce::jmax(40, pathArea.getWidth() - pathWidth - 6));
 
     g.setColour(juce::Colour(0xffe5e5ef));
     g.setFont(juce::Font(juce::FontOptions(14.0f)));
@@ -850,8 +961,9 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
             item.fileNameLower = item.fileName.toLowerCase();
             item.relativePathLower = item.relativePath.toLowerCase();
             auto previewData = buildPreviewAndMetadata(file);
-            item.previewPeaks = std::move(previewData.first);
-            item.metadataLine = std::move(previewData.second);
+            item.previewPeaks = std::move(previewData.peaks);
+            item.metadataLine = std::move(previewData.metadataLine);
+            item.loopFormatBadge = std::move(previewData.loopFormatBadge);
             scanned.push_back(std::move(item));
         }
 
@@ -927,7 +1039,14 @@ void AudiocityAudioProcessorEditor::loadSampleFromBrowserRow(const int row)
 
     const auto& file = allSampleEntries_[static_cast<std::size_t>(sourceIndex)].file;
     if (processor_.loadSampleFromFile(file))
+    {
+        tabBar_.setCurrentTabIndex(0);
+        currentTabIndex_ = 0;
+        updateTabVisibility();
+        resized();
+        repaint();
         refreshUI();
+    }
 }
 
 void AudiocityAudioProcessorEditor::paintSampleBrowserPane(
@@ -1180,72 +1299,95 @@ void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const
 void AudiocityAudioProcessorEditor::setupTooltips()
 {
     sampleBrowserChooseRootButton_.setTooltip(
-        "Choose Root Folder \xe2\x80\x94 Select a source folder to scan recursively for samples");
+        "Choose Root Folder - Select a source folder to scan recursively for samples");
     sampleBrowserFilterEditor_.setTooltip(
-        "Search Samples \xe2\x80\x94 Filter by sample name or relative path");
+        "Search Samples - Filter by sample name or relative path");
     sampleBrowserSortCombo_.setTooltip(
-        "Sort Samples \xe2\x80\x94 Sort by sample name or by relative source path");
+        "Sort Samples - Sort by sample name or by relative source path");
 
     rootNoteLabel_.setTooltip(
-        "Root Note \xe2\x80\x94 MIDI note number and pitch name for the sample's original pitch");
+        "Root Note - MIDI note number and pitch name for the sample's original pitch");
     rootNoteCombo_.setTooltip(
-        "Root Note \xe2\x80\x94 MIDI note number and pitch name for the sample's original pitch");
+        "Root Note - MIDI note number and pitch name for the sample's original pitch");
     playbackStartDial_.setLabelTooltip(
-        "Playback Start \xe2\x80\x94 Sample position where playback begins");
+        "Playback Start - Sample position where playback begins");
     playbackEndDial_.setLabelTooltip(
-        "Playback End \xe2\x80\x94 Sample position where playback ends");
+        "Playback End - Sample position where playback ends");
     loopStartDial_.setLabelTooltip(
-        "Loop Start \xe2\x80\x94 Sample position where the loop region begins");
+        "Loop Start - Sample position where the loop region begins");
     loopEndDial_.setLabelTooltip(
-        "Loop End \xe2\x80\x94 Sample position where the loop region ends");
+        "Loop End - Sample position where the loop region ends");
     glideDial_.setLabelTooltip(
-        "Glide Time \xe2\x80\x94 Portamento time between notes in milliseconds");
+        "Glide Time - Portamento time between notes in milliseconds");
     chokeGroupDial_.setLabelTooltip(
-        "Choke Group \xe2\x80\x94 Voices in the same group cut each other off");
+        "Choke Group - Voices in the same group cut each other off");
     ampAttackDial_.setLabelTooltip(
-        "Attack \xe2\x80\x94 Amplitude envelope attack time in milliseconds");
+        "Attack - Amplitude envelope attack time in milliseconds");
     ampDecayDial_.setLabelTooltip(
-        "Decay \xe2\x80\x94 Amplitude envelope decay time in milliseconds");
+        "Decay - Amplitude envelope decay time in milliseconds");
     ampSustainDial_.setLabelTooltip(
-        "Sustain \xe2\x80\x94 Amplitude envelope sustain level (0 to 1)");
+        "Sustain - Amplitude envelope sustain level (0 to 1)");
     ampReleaseDial_.setLabelTooltip(
-        "Release \xe2\x80\x94 Amplitude envelope release time in milliseconds");
+        "Release - Amplitude envelope release time in milliseconds");
     filterCutoffDial_.setLabelTooltip(
-        "Filter Cutoff \xe2\x80\x94 Low-pass filter frequency in Hz");
+        "Filter Cutoff - Low-pass filter frequency in Hz");
     filterResDial_.setLabelTooltip(
-        "Resonance \xe2\x80\x94 Filter emphasis at the cutoff frequency");
+        "Resonance - Filter emphasis at the cutoff frequency");
     filterEnvAmtDial_.setLabelTooltip(
-        "Envelope Amount \xe2\x80\x94 Filter envelope modulation depth in Hz");
+        "Envelope Amount - Filter envelope modulation depth in Hz");
     fadeInDial_.setLabelTooltip(
-        "Fade In \xe2\x80\x94 Number of samples to fade in at playback start");
+        "Fade In - Number of samples to fade in at playback start");
     fadeOutDial_.setLabelTooltip(
-        "Fade Out \xe2\x80\x94 Number of samples to fade out at playback end");
+        "Fade Out - Number of samples to fade out at playback end");
     preloadDial_.setLabelTooltip(
-        "Preload \xe2\x80\x94 Number of samples buffered before streaming begins");
+        "Preload - Number of samples buffered before streaming begins");
 
     monoToggle_.setTooltip(
-        "Monophonic \xe2\x80\x94 Limit to a single voice at a time");
+        "Monophonic - Limit to a single voice at a time");
     legatoToggle_.setTooltip(
-        "Legato \xe2\x80\x94 Keep the envelope running between overlapping notes");
+        "Legato - Keep the envelope running between overlapping notes");
     reverseToggle_.setTooltip(
-        "Reverse \xe2\x80\x94 Play the sample backwards");
+        "Reverse - Play the sample backwards");
 }
 
 // ─── Drag & Drop ───────────────────────────────────────────────────────────────
 
 bool AudiocityAudioProcessorEditor::isInterestedInFileDrag(const juce::StringArray& files)
 {
-    for (const auto& path : files)
+    // IMPORTANT: Called from the OLE modal loop on every mouse-move.
+    // juce::File() and getFileExtension() are pure string ops — safe here.
+    // Do NOT use juce::URL (triggers COM), File::existsAsFile() (I/O), etc.
+    DBG("[DnD] isInterestedInFileDrag called with " + juce::String(files.size()) + " file(s)");
+    for (int i = 0; i < files.size(); ++i)
+        DBG("[DnD]   file[" + juce::String(i) + "] = \"" + files[i] + "\"");
+
+    for (const auto& rawPath : files)
     {
+        auto path = rawPath.trim();
+        if (path.isEmpty())
+            continue;
+
+        // Strip file:// URI scheme via string ops (no juce::URL)
+        if (path.startsWithIgnoreCase("file:///"))
+            path = path.substring(8).replace("/", "\\");
+        else if (path.startsWithIgnoreCase("file://"))
+            path = path.substring(7).replace("/", "\\");
+
         const auto ext = juce::File(path).getFileExtension().toLowerCase();
+        DBG("[DnD]   normalized=\"" + path + "\"  ext=\"" + ext + "\"");
         if (ext == ".wav" || ext == ".aiff" || ext == ".aif")
+        {
+            DBG("[DnD]   -> INTERESTED");
             return true;
+        }
     }
+    DBG("[DnD]   -> NOT interested");
     return false;
 }
 
 void AudiocityAudioProcessorEditor::fileDragEnter(const juce::StringArray& files, int, int)
 {
+    DBG("[DnD] fileDragEnter");
     isHoveringValidDrop_ = isInterestedInFileDrag(files);
     repaint();
 }
@@ -1257,29 +1399,24 @@ void AudiocityAudioProcessorEditor::fileDragMove(const juce::StringArray& files,
 
 void AudiocityAudioProcessorEditor::fileDragExit(const juce::StringArray&)
 {
+    DBG("[DnD] fileDragExit");
     isHoveringValidDrop_ = false;
     repaint();
 }
 
 void AudiocityAudioProcessorEditor::filesDropped(const juce::StringArray& files, int, int)
 {
+    // IMPORTANT: Called during the OLE modal loop.
+    // Must NOT do file I/O, juce::URL, callAsync, or any COM call.
+    // Just stash the raw paths and let timerCallback handle the load.
+    DBG("[DnD] filesDropped called with " + juce::String(files.size()) + " file(s)");
+    for (int i = 0; i < files.size(); ++i)
+        DBG("[DnD]   dropped[" + juce::String(i) + "] = \"" + files[i] + "\"");
     isHoveringValidDrop_ = false;
+    pendingDropFiles_ = files;
+    hasPendingDrop_ = true;
     repaint();
-
-    for (const auto& path : files)
-    {
-        const juce::File dropped(path);
-        if (!dropped.existsAsFile())
-            continue;
-
-        const auto ext = dropped.getFileExtension().toLowerCase();
-        if (ext == ".wav" || ext == ".aiff" || ext == ".aif")
-        {
-            if (processor_.loadSampleFromFile(dropped))
-                refreshUI();
-            return;
-        }
-    }
+    DBG("[DnD] filesDropped finished, hasPendingDrop_=true");
 }
 
 // ─── File Chooser ──────────────────────────────────────────────────────────────
@@ -1302,18 +1439,31 @@ void AudiocityAudioProcessorEditor::openSampleChooser()
 
 // ─── Refresh UI ────────────────────────────────────────────────────────────────
 
-void AudiocityAudioProcessorEditor::refreshUI()
+void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
 {
     const auto path = processor_.getLoadedSamplePath();
     samplePathLabel_.setText(path.isNotEmpty() ? path : "No sample loaded", juce::dontSendNotification);
+    const auto isNewLoadedSample = path.isNotEmpty() && path != lastWaveformSamplePath_;
 
     rootNoteCombo_.setSelectedId(processor_.getRootMidiNote() + 1, juce::dontSendNotification);
 
     const auto sampleLength = processor_.getLoadedSampleLength();
+    const auto maxSampleIndex = juce::jmax(1, sampleLength - 1);
+
+    playbackStartDial_.setRange(0.0, static_cast<double>(maxSampleIndex), 1.0);
+    playbackEndDial_.setRange(0.0, static_cast<double>(maxSampleIndex), 1.0);
+    loopStartDial_.setRange(0.0, static_cast<double>(maxSampleIndex), 1.0);
+    loopEndDial_.setRange(0.0, static_cast<double>(maxSampleIndex), 1.0);
 
     waveformView_.setState(sampleLength, processor_.getLoadedSamplePeaksByChannel(),
         processor_.getSampleWindowStart(), processor_.getSampleWindowEnd(),
-        processor_.getLoopStart(), processor_.getLoopEnd());
+        processor_.getLoopStart(), processor_.getLoopEnd(),
+        processor_.getLoadedSampleLoopFormatBadge());
+
+    if (forceWaveformReset || isNewLoadedSample)
+        waveformView_.resetView();
+
+    lastWaveformSamplePath_ = path;
 
     // Playback mode
     int playbackId = 1;
@@ -1398,7 +1548,8 @@ void AudiocityAudioProcessorEditor::pushPlaybackWindow()
     // Update waveform view to show new playback bounds
     const auto sampleLength = processor_.getLoadedSampleLength();
     waveformView_.setState(sampleLength, processor_.getLoadedSamplePeaksByChannel(),
-        ps, pe, processor_.getLoopStart(), processor_.getLoopEnd());
+        ps, pe, processor_.getLoopStart(), processor_.getLoopEnd(),
+        processor_.getLoadedSampleLoopFormatBadge());
 }
 
 void AudiocityAudioProcessorEditor::enforcePlaybackLoopConstraints()

@@ -24,6 +24,7 @@ public:
     // Value access
     void setValue(double newValue, juce::NotificationType notification = juce::dontSendNotification);
     [[nodiscard]] double getValue() const noexcept;
+    void setRange(double rangeMin, double rangeMax, double step = 0.0);
 
     // Callbacks
     std::function<void()> onValueChange;

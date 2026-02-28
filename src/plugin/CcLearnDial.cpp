@@ -104,6 +104,11 @@ double CcLearnDial::getValue() const noexcept
     return slider_.getValue();
 }
 
+void CcLearnDial::setRange(const double rangeMin, const double rangeMax, const double step)
+{
+    slider_.setRange(rangeMin, rangeMax, step);
+}
+
 void CcLearnDial::armCcLearn()
 {
     ccLearnArmed_ = true;

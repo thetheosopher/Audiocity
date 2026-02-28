@@ -9,6 +9,26 @@ namespace audiocity::engine
 namespace
 {
 constexpr float kPi = 3.14159265358979323846f;
+
+juce::String detectLoopFormatBadge(const juce::File& file, const juce::StringPairArray& metadata)
+{
+    const auto hasRootNote = metadata.containsKey("MidiUnityNote");
+    const auto loopStart = metadata.getValue("Loop0Start", "-1").getIntValue();
+    const auto loopEnd = metadata.getValue("Loop0End", "-1").getIntValue();
+    const auto hasLoop = loopStart >= 0 && loopEnd > loopStart;
+
+    if (!(hasRootNote && hasLoop))
+        return {};
+
+    const auto ext = file.getFileExtension().toLowerCase();
+    if (ext == ".wav")
+        return "Acidized";
+
+    if (ext == ".aif" || ext == ".aiff")
+        return "Apple Loop";
+
+    return {};
+}
 }
 
 struct EngineCore::SampleSegments
@@ -85,21 +105,30 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
     // Read embedded root note from WAV smpl chunk or AIFF INST chunk
     int embeddedRootNote = rootMidiNote_;
     const auto& metadata = reader->metadataValues;
+    const auto loadedLoopFormatBadge = detectLoopFormatBadge(file, metadata);
     if (metadata.containsKey("MidiUnityNote"))
         embeddedRootNote = juce::jlimit(0, 127, metadata.getValue("MidiUnityNote", juce::String(rootMidiNote_)).getIntValue());
 
     setSampleData(mono, reader->sampleRate, embeddedRootNote);
     displaySampleData_ = loaded;
     samplePath_ = file.getFullPathName();
+    loadedSampleLoopFormatBadge_ = {};
 
     // Read embedded loop points from WAV smpl chunk or AIFF MARK/INST chunks
     const auto embeddedLoopStart = metadata.getValue("Loop0Start", "-1").getIntValue();
     const auto embeddedLoopEnd = metadata.getValue("Loop0End", "-1").getIntValue();
 
-    if (embeddedLoopStart >= 0 && embeddedLoopEnd > embeddedLoopStart)
+    if (loadedLoopFormatBadge.isNotEmpty() && embeddedLoopStart >= 0 && embeddedLoopEnd > embeddedLoopStart)
     {
         setLoopPoints(embeddedLoopStart, embeddedLoopEnd);
         setPlaybackMode(PlaybackMode::loop);
+        loadedSampleLoopFormatBadge_ = loadedLoopFormatBadge;
+    }
+    else
+    {
+        // No embedded loop metadata: reset loop region to full file
+        const auto fullEnd = juce::jmax(0, getTotalSampleLength() - 1);
+        setLoopPoints(0, fullEnd);
     }
 
     return true;
@@ -108,6 +137,7 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
 void EngineCore::setSampleData(const juce::AudioBuffer<float>& sampleData, const double sampleRate, const int rootNote) noexcept
 {
     displaySampleData_ = sampleData;
+    loadedSampleLoopFormatBadge_ = {};
 
     auto monoSample = sampleData;
     sampleDataRate_ = sampleRate > 0.0 ? sampleRate : sampleRate_;
@@ -768,8 +798,10 @@ std::vector<std::vector<float>> EngineCore::buildDisplayPeaksByChannel(const int
         const auto* samples = displaySampleData_.getReadPointer(channel);
         for (int i = 0; i < peakCount; ++i)
         {
-            const auto start = (i * total) / peakCount;
-            const auto endExclusive = juce::jmax(start + 1, ((i + 1) * total) / peakCount);
+            // Use int64_t to avoid overflow when i * total exceeds INT_MAX
+            const auto start = static_cast<int>((static_cast<int64_t>(i) * total) / peakCount);
+            const auto endExclusive = juce::jmax(start + 1,
+                static_cast<int>((static_cast<int64_t>(i + 1) * total) / peakCount));
 
             float maxAbs = 0.0f;
             for (int s = start; s < endExclusive; ++s)
