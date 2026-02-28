@@ -653,12 +653,35 @@ AudiocityAudioProcessorEditor::SettingsPanel::SettingsPanel()
     addAndMakeVisible(preloadLabel_);
     addAndMakeVisible(preloadEditor_);
     addAndMakeVisible(applyButton_);
+    addAndMakeVisible(qualityTierLabel_);
+    addAndMakeVisible(qualityTierCombo_);
+    addAndMakeVisible(qualityDescriptionLabel_);
     addAndMakeVisible(copyDiagnosticsButton_);
     addAndMakeVisible(splitInfoLabel_);
 
     preloadEditor_.setInputRestrictions(8, "0123456789");
     preloadEditor_.setText("32768", juce::dontSendNotification);
     preloadEditor_.setTooltip("Number of samples preloaded in memory before streamed region.");
+
+    qualityTierCombo_.addItem("CPU", 1);
+    qualityTierCombo_.addItem("Fidelity", 2);
+    qualityTierCombo_.setSelectedId(2, juce::dontSendNotification);
+    qualityTierCombo_.setTooltip("CPU uses nearest read; Fidelity uses linear interpolation.");
+    qualityTierCombo_.onChange = [this]
+    {
+        qualityDescriptionLabel_.setText(
+            qualityTierCombo_.getSelectedId() == 1
+                ? "CPU: lower cost, nearest sample read"
+                : "Fidelity: linear interpolation, smoother pitch",
+            juce::dontSendNotification);
+
+        if (onQualityTierChanged)
+            onQualityTierChanged(qualityTierCombo_.getSelectedId() - 1);
+    };
+
+    qualityDescriptionLabel_.setJustificationType(juce::Justification::centredLeft);
+    qualityDescriptionLabel_.setText("Fidelity: linear interpolation, smoother pitch", juce::dontSendNotification);
+
     splitInfoLabel_.setJustificationType(juce::Justification::centredLeft);
     splitInfoLabel_.setText("Loaded split: preload 0 | stream 0", juce::dontSendNotification);
 
@@ -687,6 +710,16 @@ void AudiocityAudioProcessorEditor::SettingsPanel::setPreloadSamples(const int s
     preloadEditor_.setText(juce::String(juce::jmax(256, samples)), juce::dontSendNotification);
 }
 
+void AudiocityAudioProcessorEditor::SettingsPanel::setQualityTier(const int qualityTierIndex)
+{
+    qualityTierCombo_.setSelectedId(juce::jlimit(1, 2, qualityTierIndex + 1), juce::dontSendNotification);
+    qualityDescriptionLabel_.setText(
+        qualityTierCombo_.getSelectedId() == 1
+            ? "CPU: lower cost, nearest sample read"
+            : "Fidelity: linear interpolation, smoother pitch",
+        juce::dontSendNotification);
+}
+
 void AudiocityAudioProcessorEditor::SettingsPanel::setPreloadSplit(const int preloadSamples, const int streamSamples)
 {
     splitInfoLabel_.setText(
@@ -705,6 +738,12 @@ void AudiocityAudioProcessorEditor::SettingsPanel::resized()
     applyButton_.setBounds(row.removeFromLeft(70));
     row.removeFromLeft(8);
     copyDiagnosticsButton_.setBounds(row.removeFromLeft(130));
+    area.removeFromTop(8);
+    auto qualityRow = area.removeFromTop(28);
+    qualityTierLabel_.setBounds(qualityRow.removeFromLeft(120));
+    qualityTierCombo_.setBounds(qualityRow.removeFromLeft(120));
+    area.removeFromTop(8);
+    qualityDescriptionLabel_.setBounds(area.removeFromTop(24));
     area.removeFromTop(8);
     splitInfoLabel_.setBounds(area.removeFromTop(24));
 }
@@ -736,6 +775,12 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     settingsPanel_.onPreloadSamplesChanged = [this](const int samples)
     {
         processor_.setPreloadSamples(samples);
+    };
+    settingsPanel_.onQualityTierChanged = [this](const int qualityTierIndex)
+    {
+        processor_.setQualityTier(qualityTierIndex == 0
+            ? AudiocityAudioProcessor::QualityTier::cpu
+            : AudiocityAudioProcessor::QualityTier::fidelity);
     };
     settingsPanel_.onCopyDiagnostics = [this]
     {
@@ -977,6 +1022,7 @@ void AudiocityAudioProcessorEditor::refreshBrowserPanel()
 void AudiocityAudioProcessorEditor::refreshSettingsPanel()
 {
     settingsPanel_.setPreloadSamples(processor_.getPreloadSamples());
+    settingsPanel_.setQualityTier(processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::cpu ? 0 : 1);
     settingsPanel_.setPreloadSplit(processor_.getLoadedPreloadSamples(), processor_.getLoadedStreamSamples());
 }
 
@@ -1011,6 +1057,7 @@ juce::String AudiocityAudioProcessorEditor::buildStreamingDiagnosticsLine(const 
     return "Streaming readiness: rebuilds=" + juce::String(processor_.getSegmentRebuildCount())
         + " | preload=" + juce::String(processor_.getLoadedPreloadSamples())
         + " | stream=" + juce::String(processor_.getLoadedStreamSamples())
+        + " | quality=" + juce::String(processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::cpu ? "cpu" : "fidelity")
         + " | sfz(e/w)=" + juce::String(errorCount) + "/" + juce::String(warningCount)
         + " | sample=" + sampleToken;
 }

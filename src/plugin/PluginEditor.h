@@ -178,8 +178,10 @@ private:
     public:
         SettingsPanel();
         std::function<void(int)> onPreloadSamplesChanged;
+        std::function<void(int)> onQualityTierChanged;
         std::function<void()> onCopyDiagnostics;
         void setPreloadSamples(int samples);
+        void setQualityTier(int qualityTierIndex);
         void setPreloadSplit(int preloadSamples, int streamSamples);
         void resized() override;
         void paint(juce::Graphics& g) override;
@@ -188,6 +190,9 @@ private:
         juce::Label preloadLabel_{ {}, "Preload Samples" };
         juce::TextEditor preloadEditor_;
         juce::TextButton applyButton_{ "Apply" };
+        juce::Label qualityTierLabel_{ {}, "Quality Tier" };
+        juce::ComboBox qualityTierCombo_;
+        juce::Label qualityDescriptionLabel_;
         juce::TextButton copyDiagnosticsButton_{ "Copy Diagnostics" };
         juce::Label splitInfoLabel_;
     };

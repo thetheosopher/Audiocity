@@ -501,6 +501,10 @@ float EngineCore::readSampleLinear(const float position) const noexcept
 
     const auto clampedPosition = juce::jlimit(0.0f, static_cast<float>(sampleLength - 1), position);
     const auto sampleIndex = static_cast<int>(clampedPosition);
+
+    if (qualityTier_ == QualityTier::cpu)
+        return readSampleAt(sampleIndex);
+
     const auto nextIndex = juce::jmin(sampleIndex + 1, sampleLength - 1);
     const auto fraction = clampedPosition - static_cast<float>(sampleIndex);
 

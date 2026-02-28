@@ -22,6 +22,7 @@ constexpr auto kFilterBaseCutoff = "filterBaseCutoff";
 constexpr auto kFilterEnvAmount = "filterEnvAmount";
 constexpr auto kRrMode = "rrMode";
 constexpr auto kPlaybackMode = "playbackMode";
+constexpr auto kQualityTier = "qualityTier";
 constexpr auto kPreloadSamples = "preloadSamples";
 constexpr auto kMonoMode = "monoMode";
 constexpr auto kLegatoMode = "legatoMode";
@@ -112,6 +113,7 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kPlaybackMode,
         getPlaybackMode() == PlaybackMode::oneShot ? 1 : (getPlaybackMode() == PlaybackMode::loop ? 2 : 0),
         nullptr);
+    state.setProperty(kQualityTier, getQualityTier() == QualityTier::cpu ? 0 : 1, nullptr);
     state.setProperty(kPreloadSamples, getPreloadSamples(), nullptr);
     state.setProperty(kMonoMode, getMonoMode() ? 1 : 0, nullptr);
     state.setProperty(kLegatoMode, getLegatoMode() ? 1 : 0, nullptr);
@@ -191,6 +193,7 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     setRoundRobinMode(static_cast<int>(state.getProperty(kRrMode, 0)) == 1 ? RoundRobinMode::random : RoundRobinMode::ordered);
     const auto playbackMode = static_cast<int>(state.getProperty(kPlaybackMode, 0));
     setPlaybackMode(playbackMode == 1 ? PlaybackMode::oneShot : (playbackMode == 2 ? PlaybackMode::loop : PlaybackMode::gate));
+    setQualityTier(static_cast<int>(state.getProperty(kQualityTier, 1)) == 0 ? QualityTier::cpu : QualityTier::fidelity);
     setPreloadSamples(static_cast<int>(state.getProperty(kPreloadSamples, getPreloadSamples())));
     setMonoMode(static_cast<int>(state.getProperty(kMonoMode, getMonoMode() ? 1 : 0)) == 1);
     setLegatoMode(static_cast<int>(state.getProperty(kLegatoMode, getLegatoMode() ? 1 : 0)) == 1);

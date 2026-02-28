@@ -64,6 +64,10 @@ public:
     void setPlaybackMode(PlaybackMode mode) noexcept;
     [[nodiscard]] PlaybackMode getPlaybackMode() const noexcept;
 
+    using QualityTier = audiocity::engine::EngineCore::QualityTier;
+    void setQualityTier(QualityTier tier) noexcept { engine_.setQualityTier(tier); }
+    [[nodiscard]] QualityTier getQualityTier() const noexcept { return engine_.getQualityTier(); }
+
     void setPreloadSamples(int preloadSamples) noexcept { engine_.setPreloadSamples(preloadSamples); }
     [[nodiscard]] int getPreloadSamples() const noexcept { return engine_.getPreloadSamples(); }
     [[nodiscard]] int getLoadedPreloadSamples() const noexcept { return engine_.getLoadedPreloadSamples(); }

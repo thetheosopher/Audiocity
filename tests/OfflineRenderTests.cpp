@@ -6,6 +6,7 @@
 #include "../src/engine/sfz/SfzImport.h"
 
 #include <cmath>
+#include <limits>
 
 namespace
 {
@@ -715,6 +716,188 @@ bool runSegmentRebuildCounterTest()
 
     return afterPreloadChangeCount > afterLoadCount;
 }
+
+bool runQualityTierDifferenceTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> sample(1, 2048);
+    for (int i = 0; i < sample.getNumSamples(); ++i)
+    {
+        const auto value = static_cast<float>((i % 31) / 31.0);
+        sample.setSample(0, i, value * 0.5f - 0.25f);
+    }
+
+    audiocity::engine::EngineCore cpu;
+    cpu.prepare(sampleRate, blockSize, channels);
+    cpu.setQualityTier(audiocity::engine::EngineCore::QualityTier::cpu);
+    cpu.setSampleData(sample, sampleRate, 60);
+
+    audiocity::engine::EngineCore fidelity;
+    fidelity.prepare(sampleRate, blockSize, channels);
+    fidelity.setQualityTier(audiocity::engine::EngineCore::QualityTier::fidelity);
+    fidelity.setSampleData(sample, sampleRate, 60);
+
+    juce::AudioBuffer<float> cpuBlock(channels, blockSize);
+    juce::AudioBuffer<float> fidelityBlock(channels, blockSize);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 67, 1.0f), 0);
+
+    cpu.render(cpuBlock, midi);
+    fidelity.render(fidelityBlock, midi);
+
+    return !buffersAreEqual(cpuBlock, fidelityBlock, 1.0e-7f);
+}
+
+juce::AudioBuffer<float> renderQualityTierSequence(audiocity::engine::EngineCore& engine)
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr int blocks = 6;
+
+    juce::AudioBuffer<float> output(channels, blockSize * blocks);
+
+    for (int block = 0; block < blocks; ++block)
+    {
+        juce::AudioBuffer<float> blockBuffer(channels, blockSize);
+        juce::MidiBuffer midi;
+
+        if (block == 0)
+            midi.addEvent(juce::MidiMessage::noteOn(1, 67, 0.95f), 0);
+
+        if (block == 3)
+            midi.addEvent(juce::MidiMessage::noteOff(1, 67), 64);
+
+        engine.render(blockBuffer, midi);
+
+        for (int channel = 0; channel < channels; ++channel)
+            output.copyFrom(channel, block * blockSize, blockBuffer, channel, 0, blockSize);
+    }
+
+    return output;
+}
+
+bool runQualityTierDeterminismTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> sample(1, 2048);
+    for (int i = 0; i < sample.getNumSamples(); ++i)
+    {
+        const auto value = static_cast<float>((i % 29) / 29.0);
+        sample.setSample(0, i, value * 0.7f - 0.35f);
+    }
+
+    auto renderPairForTier = [&](const audiocity::engine::EngineCore::QualityTier tier)
+    {
+        audiocity::engine::EngineCore first;
+        first.prepare(sampleRate, blockSize, channels);
+        first.setQualityTier(tier);
+        first.setSampleData(sample, sampleRate, 60);
+
+        audiocity::engine::EngineCore second;
+        second.prepare(sampleRate, blockSize, channels);
+        second.setQualityTier(tier);
+        second.setSampleData(sample, sampleRate, 60);
+
+        const auto a = renderQualityTierSequence(first);
+        const auto b = renderQualityTierSequence(second);
+        return buffersAreEqual(a, b, 1.0e-7f);
+    };
+
+    return renderPairForTier(audiocity::engine::EngineCore::QualityTier::cpu)
+        && renderPairForTier(audiocity::engine::EngineCore::QualityTier::fidelity);
+}
+
+double computeAverage(const std::vector<float>& values, const int startIndex, const int endIndexExclusive)
+{
+    if (values.empty())
+        return 0.0;
+
+    const auto start = juce::jlimit(0, static_cast<int>(values.size()), startIndex);
+    const auto endExclusive = juce::jlimit(start, static_cast<int>(values.size()), endIndexExclusive);
+
+    double sum = 0.0;
+    int count = 0;
+    for (int i = start; i < endExclusive; ++i)
+    {
+        sum += static_cast<double>(values[static_cast<std::size_t>(i)]);
+        ++count;
+    }
+
+    return count > 0 ? sum / static_cast<double>(count) : 0.0;
+}
+
+bool runCpuQualityEnergyDriftSmokeTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr int blocks = 128;
+    constexpr double sampleRate = 48000.0;
+    constexpr double maxCpuVsFidelityDriftDelta = 0.15;
+    constexpr double hardMaxNormalizedDrift = 1.0;
+
+    juce::AudioBuffer<float> shaped(1, 96);
+    shaped.clear();
+    for (int i = 20; i < 56; ++i)
+        shaped.setSample(0, i, 0.75f * std::sin(static_cast<float>(i) * 0.33f));
+
+    audiocity::engine::EngineCore::AdsrSettings stableAdsr;
+    stableAdsr.attackSeconds = 0.0001f;
+    stableAdsr.decaySeconds = 0.001f;
+    stableAdsr.sustainLevel = 1.0f;
+    stableAdsr.releaseSeconds = 0.2f;
+
+    auto computeDrift = [&](const audiocity::engine::EngineCore::QualityTier tier)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setQualityTier(tier);
+        engine.setAmpEnvelope(stableAdsr);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+        engine.setSfzLoopMode(audiocity::engine::EngineCore::SfzLoopMode::loopContinuous);
+        engine.setSampleData(shaped, sampleRate, 60);
+        engine.setLoopPoints(20, 55);
+
+        std::vector<float> energies;
+        energies.reserve(static_cast<std::size_t>(blocks));
+
+        for (int block = 0; block < blocks; ++block)
+        {
+            juce::AudioBuffer<float> blockBuffer(channels, blockSize);
+            juce::MidiBuffer midi;
+
+            if (block == 0)
+                midi.addEvent(juce::MidiMessage::noteOn(1, 60, 0.9f), 0);
+
+            engine.render(blockBuffer, midi);
+            energies.push_back(blockEnergy(blockBuffer));
+        }
+
+        const auto earlyMean = computeAverage(energies, 16, 48);
+        const auto lateMean = computeAverage(energies, blocks - 32, blocks);
+
+        if (!(earlyMean > 1.0e-6) || !std::isfinite(earlyMean) || !std::isfinite(lateMean))
+            return std::numeric_limits<double>::infinity();
+
+        return std::abs(lateMean - earlyMean) / earlyMean;
+    };
+
+    const auto cpuDrift = computeDrift(audiocity::engine::EngineCore::QualityTier::cpu);
+    const auto fidelityDrift = computeDrift(audiocity::engine::EngineCore::QualityTier::fidelity);
+
+    if (!std::isfinite(cpuDrift) || !std::isfinite(fidelityDrift))
+        return false;
+
+    if (cpuDrift > hardMaxNormalizedDrift)
+        return false;
+
+    return cpuDrift <= fidelityDrift + maxCpuVsFidelityDriftDelta;
+}
 }
 
 int main()
@@ -763,6 +946,15 @@ int main()
 
     if (!runSegmentRebuildCounterTest())
         return 15;
+
+    if (!runQualityTierDifferenceTest())
+        return 16;
+
+    if (!runQualityTierDeterminismTest())
+        return 17;
+
+    if (!runCpuQualityEnergyDriftSmokeTest())
+        return 18;
 
     return 0;
 }

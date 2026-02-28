@@ -25,6 +25,12 @@ public:
         loop
     };
 
+    enum class QualityTier
+    {
+        cpu,
+        fidelity
+    };
+
     struct AdsrSettings
     {
         float attackSeconds = 0.005f;
@@ -49,6 +55,8 @@ public:
     [[nodiscard]] int getLoadedPreloadSamples() const noexcept { return preloadData_.getNumSamples(); }
     [[nodiscard]] int getLoadedStreamSamples() const noexcept { return streamData_.getNumSamples(); }
     [[nodiscard]] int getSegmentRebuildCount() const noexcept { return segmentRebuildCount_; }
+    void setQualityTier(QualityTier tier) noexcept { qualityTier_ = tier; }
+    [[nodiscard]] QualityTier getQualityTier() const noexcept { return qualityTier_; }
 
     void noteOn(int noteNumber, float velocity, int sampleOffsetInBlock) noexcept;
     void noteOff(int noteNumber, int sampleOffsetInBlock) noexcept;
@@ -161,6 +169,7 @@ private:
     bool legatoMode_ = false;
     float glideSeconds_ = 0.0f;
     int chokeGroup_ = 0;
+    QualityTier qualityTier_ = QualityTier::fidelity;
 
     int loopStartSample_ = 0;
     int loopEndSample_ = 0;
