@@ -2,6 +2,7 @@
 #include <juce_core/juce_core.h>
 
 #include "../src/engine/EngineCore.h"
+#include "../src/engine/SettingsUndoHistory.h"
 #include "../src/engine/ZoneSelector.h"
 #include "../src/engine/sfz/SfzImport.h"
 
@@ -898,6 +899,202 @@ bool runCpuQualityEnergyDriftSmokeTest()
 
     return cpuDrift <= fidelityDrift + maxCpuVsFidelityDriftDelta;
 }
+
+bool runRuntimeQualitySwitchSmokeTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr int blocks = 12;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> sample(1, 3072);
+    for (int i = 0; i < sample.getNumSamples(); ++i)
+    {
+        const auto phase = static_cast<float>(2.0 * juce::MathConstants<double>::pi * i * 330.0 / sampleRate);
+        sample.setSample(0, i, 0.35f * std::sin(phase));
+    }
+
+    audiocity::engine::EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setQualityTier(audiocity::engine::EngineCore::QualityTier::fidelity);
+    engine.setSampleData(sample, sampleRate, 60);
+
+    double totalEnergy = 0.0;
+    for (int block = 0; block < blocks; ++block)
+    {
+        if (block == 4)
+            engine.setQualityTier(audiocity::engine::EngineCore::QualityTier::cpu);
+        if (block == 8)
+            engine.setQualityTier(audiocity::engine::EngineCore::QualityTier::fidelity);
+
+        juce::AudioBuffer<float> blockBuffer(channels, blockSize);
+        juce::MidiBuffer midi;
+        if (block == 0)
+            midi.addEvent(juce::MidiMessage::noteOn(1, 67, 0.9f), 0);
+        if (block == 10)
+            midi.addEvent(juce::MidiMessage::noteOff(1, 67), 32);
+
+        engine.render(blockBuffer, midi);
+
+        for (int channel = 0; channel < blockBuffer.getNumChannels(); ++channel)
+        {
+            const auto* data = blockBuffer.getReadPointer(channel);
+            for (int i = 0; i < blockBuffer.getNumSamples(); ++i)
+            {
+                const auto sampleValue = data[i];
+                if (!std::isfinite(sampleValue))
+                    return false;
+
+                totalEnergy += std::abs(static_cast<double>(sampleValue));
+            }
+        }
+    }
+
+    return totalEnergy > 0.01 && totalEnergy < 20000.0;
+}
+
+bool runSettingsUndoHistoryTest()
+{
+    audiocity::engine::SettingsUndoHistory history;
+    const audiocity::engine::SettingsSnapshot initial{ 32768, 1, 0, 0, false, false, 0.0f, 0 };
+    const audiocity::engine::SettingsSnapshot changedPreload{ 4096, 1, 0, 0, false, false, 0.0f, 0 };
+    const audiocity::engine::SettingsSnapshot changedTierAndMapping{ 4096, 0, 1, 2, true, true, 0.04f, 2 };
+
+    history.recordChange(initial, changedPreload);
+    history.recordChange(changedPreload, changedTierAndMapping);
+
+    if (!history.canUndo() || history.canRedo())
+        return false;
+
+    auto current = changedTierAndMapping;
+    const auto firstUndo = history.undo(current);
+    if (!firstUndo.has_value() || *firstUndo != changedPreload)
+        return false;
+
+    current = *firstUndo;
+    const auto secondUndo = history.undo(current);
+    if (!secondUndo.has_value() || *secondUndo != initial)
+        return false;
+
+    if (history.canUndo() || !history.canRedo())
+        return false;
+
+    current = *secondUndo;
+    const auto firstRedo = history.redo(current);
+    if (!firstRedo.has_value() || *firstRedo != changedPreload)
+        return false;
+
+    current = *firstRedo;
+    const auto secondRedo = history.redo(current);
+    if (!secondRedo.has_value() || *secondRedo != changedTierAndMapping)
+        return false;
+
+    return !history.canRedo() && history.canUndo();
+}
+
+bool runSettingsUndoHistoryCapacityTest()
+{
+    audiocity::engine::SettingsUndoHistory history(2);
+
+    const audiocity::engine::SettingsSnapshot s0{ 32768, 1, 0, 0, false, false, 0.0f, 0 };
+    const audiocity::engine::SettingsSnapshot s1{ 16384, 1, 0, 0, false, false, 0.0f, 0 };
+    const audiocity::engine::SettingsSnapshot s2{ 8192, 1, 0, 1, false, false, 0.0f, 0 };
+    const audiocity::engine::SettingsSnapshot s3{ 4096, 0, 1, 2, true, false, 0.01f, 1 };
+
+    history.recordChange(s0, s1);
+    history.recordChange(s1, s2);
+    history.recordChange(s2, s3);
+
+    auto current = s3;
+
+    const auto undo1 = history.undo(current);
+    if (!undo1.has_value() || *undo1 != s2)
+        return false;
+
+    current = *undo1;
+    const auto undo2 = history.undo(current);
+    if (!undo2.has_value() || *undo2 != s1)
+        return false;
+
+    current = *undo2;
+    const auto undo3 = history.undo(current);
+    if (undo3.has_value())
+        return false;
+
+    return !history.canUndo() && history.canRedo();
+}
+
+bool runSettingsUndoHistoryCoalesceTest()
+{
+    audiocity::engine::SettingsUndoHistory history;
+
+    const audiocity::engine::SettingsSnapshot a{ 32768, 1, 0, 0, false, false, 0.00f, 0 };
+    const audiocity::engine::SettingsSnapshot b{ 30000, 1, 0, 0, false, false, 0.00f, 0 };
+    const audiocity::engine::SettingsSnapshot c{ 25000, 1, 0, 0, false, false, 0.00f, 0 };
+    const audiocity::engine::SettingsSnapshot d{ 22000, 1, 0, 0, false, false, 0.00f, 0 };
+
+    history.recordChange(a, b, 1);
+    history.recordChange(b, c, 1);
+    history.recordChange(c, d, 1);
+
+    auto current = d;
+    const auto firstUndo = history.undo(current);
+    if (!firstUndo.has_value() || *firstUndo != a)
+        return false;
+
+    current = *firstUndo;
+    const auto secondUndo = history.undo(current);
+    if (secondUndo.has_value())
+        return false;
+
+    return history.canRedo();
+}
+
+bool runSettingsUndoHistoryLoopPointsTest()
+{
+    audiocity::engine::SettingsUndoHistory history;
+
+    audiocity::engine::SettingsSnapshot base{ 32768, 1, 0, 0, false, false, 0.0f, 0, { { 4, 40 }, { 8, 88 } } };
+    audiocity::engine::SettingsSnapshot changed = base;
+    changed.importedZoneLoopPoints[1] = { 16, 64 };
+
+    history.recordChange(base, changed);
+    auto current = changed;
+
+    const auto undo = history.undo(current);
+    if (!undo.has_value() || *undo != base)
+        return false;
+
+    current = *undo;
+    const auto redo = history.redo(current);
+    if (!redo.has_value() || *redo != changed)
+        return false;
+
+    return true;
+}
+
+bool runSettingsUndoHistoryLabelsTest()
+{
+    audiocity::engine::SettingsUndoHistory history;
+
+    const audiocity::engine::SettingsSnapshot a{ 32768, 1, 0, 0, false, false, 0.00f, 0, {} };
+    const audiocity::engine::SettingsSnapshot b{ 4096, 1, 0, 0, false, false, 0.00f, 0, {} };
+
+    history.recordChange(a, b, -1, "Change Preload Samples");
+
+    if (history.undoLabel() != "Change Preload Samples")
+        return false;
+
+    auto current = b;
+    const auto undo = history.undo(current);
+    if (!undo.has_value() || *undo != a)
+        return false;
+
+    if (!history.undoLabel().empty())
+        return false;
+
+    return history.canRedo();
+}
 }
 
 int main()
@@ -955,6 +1152,24 @@ int main()
 
     if (!runCpuQualityEnergyDriftSmokeTest())
         return 18;
+
+    if (!runRuntimeQualitySwitchSmokeTest())
+        return 19;
+
+    if (!runSettingsUndoHistoryTest())
+        return 20;
+
+    if (!runSettingsUndoHistoryCapacityTest())
+        return 21;
+
+    if (!runSettingsUndoHistoryCoalesceTest())
+        return 22;
+
+    if (!runSettingsUndoHistoryLoopPointsTest())
+        return 23;
+
+    if (!runSettingsUndoHistoryLabelsTest())
+        return 24;
 
     return 0;
 }

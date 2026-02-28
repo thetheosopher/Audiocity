@@ -657,6 +657,8 @@ AudiocityAudioProcessorEditor::SettingsPanel::SettingsPanel()
     addAndMakeVisible(qualityTierCombo_);
     addAndMakeVisible(qualityDescriptionLabel_);
     addAndMakeVisible(copyDiagnosticsButton_);
+    addAndMakeVisible(undoButton_);
+    addAndMakeVisible(redoButton_);
     addAndMakeVisible(splitInfoLabel_);
 
     preloadEditor_.setInputRestrictions(8, "0123456789");
@@ -703,6 +705,20 @@ AudiocityAudioProcessorEditor::SettingsPanel::SettingsPanel()
         if (onCopyDiagnostics)
             onCopyDiagnostics();
     };
+
+    undoButton_.onClick = [this]
+    {
+        if (onUndoSettings)
+            onUndoSettings();
+    };
+
+    redoButton_.onClick = [this]
+    {
+        if (onRedoSettings)
+            onRedoSettings();
+    };
+
+    setUndoRedoEnabled(false, false);
 }
 
 void AudiocityAudioProcessorEditor::SettingsPanel::setPreloadSamples(const int samples)
@@ -728,6 +744,12 @@ void AudiocityAudioProcessorEditor::SettingsPanel::setPreloadSplit(const int pre
         juce::dontSendNotification);
 }
 
+void AudiocityAudioProcessorEditor::SettingsPanel::setUndoRedoEnabled(const bool canUndo, const bool canRedo)
+{
+    undoButton_.setEnabled(canUndo);
+    redoButton_.setEnabled(canRedo);
+}
+
 void AudiocityAudioProcessorEditor::SettingsPanel::resized()
 {
     auto area = getLocalBounds().reduced(12);
@@ -742,6 +764,10 @@ void AudiocityAudioProcessorEditor::SettingsPanel::resized()
     auto qualityRow = area.removeFromTop(28);
     qualityTierLabel_.setBounds(qualityRow.removeFromLeft(120));
     qualityTierCombo_.setBounds(qualityRow.removeFromLeft(120));
+    qualityRow.removeFromLeft(8);
+    undoButton_.setBounds(qualityRow.removeFromLeft(64));
+    qualityRow.removeFromLeft(6);
+    redoButton_.setBounds(qualityRow.removeFromLeft(64));
     area.removeFromTop(8);
     qualityDescriptionLabel_.setBounds(area.removeFromTop(24));
     area.removeFromTop(8);
@@ -760,6 +786,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 {
     setName("Audiocity");
     setSize(1200, 760);
+    setWantsKeyboardFocus(true);
 
     addAndMakeVisible(tabs_);
 
@@ -774,54 +801,84 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     };
     settingsPanel_.onPreloadSamplesChanged = [this](const int samples)
     {
-        processor_.setPreloadSamples(samples);
+        auto target = captureSettingsSnapshot();
+        target.preloadSamples = samples;
+        applySettingsSnapshot(target, true, 1, "Change Preload Samples");
+        updateSettingsUndoRedoAvailability();
     };
     settingsPanel_.onQualityTierChanged = [this](const int qualityTierIndex)
     {
-        processor_.setQualityTier(qualityTierIndex == 0
-            ? AudiocityAudioProcessor::QualityTier::cpu
-            : AudiocityAudioProcessor::QualityTier::fidelity);
+        auto target = captureSettingsSnapshot();
+        target.qualityTierIndex = juce::jlimit(0, 1, qualityTierIndex);
+        applySettingsSnapshot(target, true, -1, "Change Quality Tier");
+        updateSettingsUndoRedoAvailability();
     };
     settingsPanel_.onCopyDiagnostics = [this]
     {
         juce::SystemClipboard::copyTextToClipboard(buildStreamingDiagnosticsLine(true));
     };
+    settingsPanel_.onUndoSettings = [this]
+    {
+        performSettingsUndo();
+    };
+    settingsPanel_.onRedoSettings = [this]
+    {
+        performSettingsRedo();
+    };
     mappingPanel_.onRrModeChanged = [this](const int modeIndex)
     {
-        if (modeIndex == 1)
-            processor_.setRoundRobinMode(AudiocityAudioProcessor::RoundRobinMode::random);
-        else
-            processor_.setRoundRobinMode(AudiocityAudioProcessor::RoundRobinMode::ordered);
+        auto target = captureSettingsSnapshot();
+        target.rrModeIndex = juce::jlimit(0, 1, modeIndex);
+        applySettingsSnapshot(target, true, -1, "Change RR Mode");
+        updateSettingsUndoRedoAvailability();
     };
     mappingPanel_.onPlaybackModeChanged = [this](const int modeIndex)
     {
-        if (modeIndex == 1)
-            processor_.setPlaybackMode(AudiocityAudioProcessor::PlaybackMode::oneShot);
-        else if (modeIndex == 2)
-            processor_.setPlaybackMode(AudiocityAudioProcessor::PlaybackMode::loop);
-        else
-            processor_.setPlaybackMode(AudiocityAudioProcessor::PlaybackMode::gate);
+        auto target = captureSettingsSnapshot();
+        target.playbackModeIndex = juce::jlimit(0, 2, modeIndex);
+        applySettingsSnapshot(target, true, -1, "Change Playback Mode");
+        updateSettingsUndoRedoAvailability();
     };
     mappingPanel_.onMonoModeChanged = [this](const bool enabled)
     {
-        processor_.setMonoMode(enabled);
+        auto target = captureSettingsSnapshot();
+        target.monoEnabled = enabled;
+        if (!enabled)
+            target.legatoEnabled = false;
+        applySettingsSnapshot(target, true, -1, "Change Mono Mode");
+        updateSettingsUndoRedoAvailability();
     };
     mappingPanel_.onLegatoModeChanged = [this](const bool enabled)
     {
-        processor_.setLegatoMode(enabled);
+        auto target = captureSettingsSnapshot();
+        target.legatoEnabled = enabled;
+        applySettingsSnapshot(target, true, -1, "Change Legato Mode");
+        updateSettingsUndoRedoAvailability();
     };
     mappingPanel_.onGlideSecondsChanged = [this](const float seconds)
     {
-        processor_.setGlideSeconds(seconds);
+        auto target = captureSettingsSnapshot();
+        target.glideSeconds = seconds;
+        applySettingsSnapshot(target, true, 2, "Change Glide");
+        updateSettingsUndoRedoAvailability();
     };
     mappingPanel_.onChokeGroupChanged = [this](const int chokeGroup)
     {
-        processor_.setChokeGroup(chokeGroup);
+        auto target = captureSettingsSnapshot();
+        target.chokeGroup = chokeGroup;
+        applySettingsSnapshot(target, true, -1, "Change Choke Group");
+        updateSettingsUndoRedoAvailability();
     };
     mappingPanel_.onLoopPointsApply = [this](const int row, const int loopStart, const int loopEnd)
     {
-        if (processor_.updateImportedZoneLoopPoints(row, loopStart, loopEnd))
-            refreshImportedSfzViews();
+        auto target = captureSettingsSnapshot();
+        if (row < 0 || row >= static_cast<int>(target.importedZoneLoopPoints.size()))
+            return;
+
+        target.importedZoneLoopPoints[static_cast<std::size_t>(row)].loopStart = juce::jmax(0, loopStart);
+        target.importedZoneLoopPoints[static_cast<std::size_t>(row)].loopEnd = juce::jmax(loopStart + 1, loopEnd);
+        applySettingsSnapshot(target, true, -1, "Edit Loop Points");
+        updateSettingsUndoRedoAvailability();
     };
     browserPanel_.onAddWatchedFolder = [this]
     {
@@ -878,6 +935,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     refreshBrowserPanel();
     refreshImportedSfzViews();
     refreshSettingsPanel();
+    updateSettingsUndoRedoAvailability();
     refreshDiagnosticsTabTitle();
 
     tabs_.addTab("Browser", juce::Colours::transparentBlack, &browserPanel_, false);
@@ -895,6 +953,34 @@ AudiocityAudioProcessorEditor::~AudiocityAudioProcessorEditor()
 void AudiocityAudioProcessorEditor::resized()
 {
     tabs_.setBounds(getLocalBounds().reduced(8));
+}
+
+bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
+{
+    const auto selectedTab = tabs_.getCurrentTabIndex();
+    const auto isUndoRedoTab = selectedTab == 1 || selectedTab == 3;
+    if (!isUndoRedoTab)
+        return AudioProcessorEditor::keyPressed(key);
+
+    if (dynamic_cast<juce::TextEditor*>(juce::Component::getCurrentlyFocusedComponent()) != nullptr)
+        return AudioProcessorEditor::keyPressed(key);
+
+    const auto modifiers = key.getModifiers();
+    if (modifiers.isCommandDown() && !modifiers.isShiftDown() && !modifiers.isAltDown()
+        && (key.getKeyCode() == 'z' || key.getKeyCode() == 'Z'))
+    {
+        performSettingsUndo();
+        return true;
+    }
+
+    if (modifiers.isCommandDown() && !modifiers.isShiftDown() && !modifiers.isAltDown()
+        && (key.getKeyCode() == 'y' || key.getKeyCode() == 'Y'))
+    {
+        performSettingsRedo();
+        return true;
+    }
+
+    return AudioProcessorEditor::keyPressed(key);
 }
 
 void AudiocityAudioProcessorEditor::openSampleChooser()
@@ -1026,6 +1112,108 @@ void AudiocityAudioProcessorEditor::refreshSettingsPanel()
     settingsPanel_.setPreloadSplit(processor_.getLoadedPreloadSamples(), processor_.getLoadedStreamSamples());
 }
 
+audiocity::engine::SettingsSnapshot AudiocityAudioProcessorEditor::captureSettingsSnapshot() const
+{
+    const auto rrModeIndex = processor_.getRoundRobinMode() == AudiocityAudioProcessor::RoundRobinMode::random ? 1 : 0;
+    int playbackModeIndex = 0;
+    if (processor_.getPlaybackMode() == AudiocityAudioProcessor::PlaybackMode::oneShot)
+        playbackModeIndex = 1;
+    else if (processor_.getPlaybackMode() == AudiocityAudioProcessor::PlaybackMode::loop)
+        playbackModeIndex = 2;
+
+    std::vector<audiocity::engine::SettingsSnapshot::LoopPointSnapshot> loopPoints;
+    const auto& zones = processor_.getImportedZones();
+    loopPoints.reserve(zones.size());
+    for (const auto& zone : zones)
+        loopPoints.push_back({ zone.loopStart, zone.loopEnd });
+
+    return {
+        processor_.getPreloadSamples(),
+        processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::cpu ? 0 : 1,
+        rrModeIndex,
+        playbackModeIndex,
+        processor_.getMonoMode(),
+        processor_.getLegatoMode(),
+        processor_.getGlideSeconds(),
+        processor_.getChokeGroup(),
+        loopPoints
+    };
+}
+
+void AudiocityAudioProcessorEditor::applySettingsSnapshot(
+    const audiocity::engine::SettingsSnapshot& snapshot,
+    const bool recordHistory,
+    const int coalesceKey,
+    const std::string& changeLabel)
+{
+    const auto before = captureSettingsSnapshot();
+
+    processor_.setPreloadSamples(snapshot.preloadSamples);
+    processor_.setQualityTier(snapshot.qualityTierIndex == 0
+        ? AudiocityAudioProcessor::QualityTier::cpu
+        : AudiocityAudioProcessor::QualityTier::fidelity);
+    processor_.setRoundRobinMode(snapshot.rrModeIndex == 1
+        ? AudiocityAudioProcessor::RoundRobinMode::random
+        : AudiocityAudioProcessor::RoundRobinMode::ordered);
+    processor_.setPlaybackMode(snapshot.playbackModeIndex == 1
+        ? AudiocityAudioProcessor::PlaybackMode::oneShot
+        : (snapshot.playbackModeIndex == 2
+            ? AudiocityAudioProcessor::PlaybackMode::loop
+            : AudiocityAudioProcessor::PlaybackMode::gate));
+    processor_.setMonoMode(snapshot.monoEnabled);
+    processor_.setLegatoMode(snapshot.legatoEnabled);
+    processor_.setGlideSeconds(snapshot.glideSeconds);
+    processor_.setChokeGroup(snapshot.chokeGroup);
+
+    for (int i = 0; i < static_cast<int>(snapshot.importedZoneLoopPoints.size()); ++i)
+    {
+        const auto& point = snapshot.importedZoneLoopPoints[static_cast<std::size_t>(i)];
+        processor_.updateImportedZoneLoopPoints(i, point.loopStart, point.loopEnd);
+    }
+
+    const auto after = captureSettingsSnapshot();
+
+    refreshSettingsPanel();
+    mappingPanel_.setPerformanceControls(
+        processor_.getMonoMode(),
+        processor_.getLegatoMode(),
+        processor_.getGlideSeconds(),
+        processor_.getChokeGroup());
+    mappingPanel_.setRrMode(snapshot.rrModeIndex);
+    mappingPanel_.setPlaybackMode(snapshot.playbackModeIndex);
+    mappingPanel_.setZones(processor_.getImportedZones());
+    diagnosticsPanel_.setDiagnostics(
+        processor_.getImportDiagnostics(),
+        buildStreamingDiagnosticsLine(false),
+        buildStreamingDiagnosticsTooltip());
+
+    if (recordHistory)
+        settingsUndoHistory_.recordChange(before, after, coalesceKey, changeLabel);
+}
+
+void AudiocityAudioProcessorEditor::updateSettingsUndoRedoAvailability()
+{
+    settingsPanel_.setUndoRedoEnabled(settingsUndoHistory_.canUndo(), settingsUndoHistory_.canRedo());
+}
+
+void AudiocityAudioProcessorEditor::performSettingsUndo()
+{
+    const auto current = captureSettingsSnapshot();
+    if (const auto previous = settingsUndoHistory_.undo(current))
+        applySettingsSnapshot(*previous, false);
+
+    updateSettingsUndoRedoAvailability();
+}
+
+void AudiocityAudioProcessorEditor::performSettingsRedo()
+{
+    const auto current = captureSettingsSnapshot();
+    if (const auto next = settingsUndoHistory_.redo(current))
+        applySettingsSnapshot(*next, false);
+
+    updateSettingsUndoRedoAvailability();
+}
+
 juce::String AudiocityAudioProcessorEditor::buildStreamingDiagnosticsLine(const bool includeFullSamplePath) const
 {
     int errorCount = 0;
@@ -1058,6 +1246,8 @@ juce::String AudiocityAudioProcessorEditor::buildStreamingDiagnosticsLine(const 
         + " | preload=" + juce::String(processor_.getLoadedPreloadSamples())
         + " | stream=" + juce::String(processor_.getLoadedStreamSamples())
         + " | quality=" + juce::String(processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::cpu ? "cpu" : "fidelity")
+        + " | undo=" + juce::String(settingsUndoHistory_.undoLabel())
+        + " | redo=" + juce::String(settingsUndoHistory_.redoLabel())
         + " | sfz(e/w)=" + juce::String(errorCount) + "/" + juce::String(warningCount)
         + " | sample=" + sampleToken;
 }

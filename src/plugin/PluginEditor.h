@@ -6,8 +6,10 @@
 
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
+#include "../engine/SettingsUndoHistory.h"
 #include "../engine/sfz/SfzModel.h"
 #include "BrowserIndex.h"
 
@@ -20,6 +22,7 @@ public:
     ~AudiocityAudioProcessorEditor() override;
 
     void resized() override;
+    bool keyPressed(const juce::KeyPress& key) override;
 
 private:
     class BrowserPanel final : public juce::Component,
@@ -180,9 +183,12 @@ private:
         std::function<void(int)> onPreloadSamplesChanged;
         std::function<void(int)> onQualityTierChanged;
         std::function<void()> onCopyDiagnostics;
+        std::function<void()> onUndoSettings;
+        std::function<void()> onRedoSettings;
         void setPreloadSamples(int samples);
         void setQualityTier(int qualityTierIndex);
         void setPreloadSplit(int preloadSamples, int streamSamples);
+        void setUndoRedoEnabled(bool canUndo, bool canRedo);
         void resized() override;
         void paint(juce::Graphics& g) override;
 
@@ -194,6 +200,8 @@ private:
         juce::ComboBox qualityTierCombo_;
         juce::Label qualityDescriptionLabel_;
         juce::TextButton copyDiagnosticsButton_{ "Copy Diagnostics" };
+        juce::TextButton undoButton_{ "Undo" };
+        juce::TextButton redoButton_{ "Redo" };
         juce::Label splitInfoLabel_;
     };
 
@@ -234,7 +242,18 @@ private:
     void refreshSettingsPanel();
     [[nodiscard]] juce::String buildStreamingDiagnosticsLine(bool includeFullSamplePath) const;
     [[nodiscard]] juce::String buildStreamingDiagnosticsTooltip() const;
+    [[nodiscard]] audiocity::engine::SettingsSnapshot captureSettingsSnapshot() const;
+    void applySettingsSnapshot(
+        const audiocity::engine::SettingsSnapshot& snapshot,
+        bool recordHistory,
+        int coalesceKey = -1,
+        const std::string& changeLabel = {});
+    void updateSettingsUndoRedoAvailability();
+    void performSettingsUndo();
+    void performSettingsRedo();
     void refreshDiagnosticsTabTitle();
+
+    audiocity::engine::SettingsUndoHistory settingsUndoHistory_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudiocityAudioProcessorEditor)
 };
