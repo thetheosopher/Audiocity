@@ -52,7 +52,9 @@ public:
     [[nodiscard]] int getLoadedPreloadSamples() const noexcept;
     [[nodiscard]] int getLoadedStreamSamples() const noexcept;
     [[nodiscard]] int getLoadedSampleLength() const noexcept;
+    [[nodiscard]] int getLoadedSampleChannels() const noexcept;
     [[nodiscard]] std::vector<float> buildDisplayPeaks(int maxPeaks) const noexcept;
+    [[nodiscard]] std::vector<std::vector<float>> buildDisplayPeaksByChannel(int maxPeaks) const noexcept;
     [[nodiscard]] int getSegmentRebuildCount() const noexcept { return segmentRebuildCount_; }
     void setQualityTier(QualityTier tier) noexcept { qualityTier_ = tier; }
     [[nodiscard]] QualityTier getQualityTier() const noexcept { return qualityTier_; }
@@ -172,6 +174,7 @@ private:
     int pendingEventCount_ = 0;
 
     std::atomic<std::shared_ptr<const SampleSegments>> sampleSegments_{};
+    juce::AudioBuffer<float> displaySampleData_;
     juce::String samplePath_;
     double sampleDataRate_ = 44100.0;
     int rootMidiNote_ = 60;

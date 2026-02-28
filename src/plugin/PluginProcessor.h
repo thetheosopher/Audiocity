@@ -92,7 +92,9 @@ public:
     void setReversePlayback(bool enabled) noexcept { engine_.setReversePlayback(enabled); }
     [[nodiscard]] bool getReversePlayback() const noexcept { return engine_.getReversePlayback(); }
     [[nodiscard]] int getLoadedSampleLength() const noexcept { return engine_.getLoadedSampleLength(); }
+    [[nodiscard]] int getLoadedSampleChannels() const noexcept { return engine_.getLoadedSampleChannels(); }
     [[nodiscard]] std::vector<float> getLoadedSamplePeaks(int maxPeaks = 2048) const noexcept { return engine_.buildDisplayPeaks(maxPeaks); }
+    [[nodiscard]] std::vector<std::vector<float>> getLoadedSamplePeaksByChannel(int maxPeaks = 2048) const noexcept { return engine_.buildDisplayPeaksByChannel(maxPeaks); }
 
     [[nodiscard]] int getRootMidiNote() const noexcept { return engine_.getRootMidiNote(); }
     void setRootMidiNote(int rootNote) noexcept { engine_.setRootMidiNote(rootNote); }

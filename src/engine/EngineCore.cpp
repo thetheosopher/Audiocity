@@ -89,6 +89,7 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
         embeddedRootNote = juce::jlimit(0, 127, metadata.getValue("MidiUnityNote", juce::String(rootMidiNote_)).getIntValue());
 
     setSampleData(mono, reader->sampleRate, embeddedRootNote);
+    displaySampleData_ = loaded;
     samplePath_ = file.getFullPathName();
 
     // Read embedded loop points from WAV smpl chunk or AIFF MARK/INST chunks
@@ -106,6 +107,8 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
 
 void EngineCore::setSampleData(const juce::AudioBuffer<float>& sampleData, const double sampleRate, const int rootNote) noexcept
 {
+    displaySampleData_ = sampleData;
+
     auto monoSample = sampleData;
     sampleDataRate_ = sampleRate > 0.0 ? sampleRate : sampleRate_;
     setRootMidiNote(rootNote);
@@ -163,6 +166,11 @@ void EngineCore::setPreloadSamples(const int preloadSamples) noexcept
 int EngineCore::getLoadedSampleLength() const noexcept
 {
     return getTotalSampleLength();
+}
+
+int EngineCore::getLoadedSampleChannels() const noexcept
+{
+    return juce::jmax(1, displaySampleData_.getNumChannels());
 }
 
 void EngineCore::setSampleWindow(const int startSample, const int endSample) noexcept
@@ -737,26 +745,41 @@ float EngineCore::readSampleAt(const int index) const noexcept
 
 std::vector<float> EngineCore::buildDisplayPeaks(const int maxPeaks) const noexcept
 {
-    const auto total = getTotalSampleLength();
+    const auto byChannel = buildDisplayPeaksByChannel(maxPeaks);
+    if (byChannel.empty())
+        return {};
+
+    return byChannel.front();
+}
+
+std::vector<std::vector<float>> EngineCore::buildDisplayPeaksByChannel(const int maxPeaks) const noexcept
+{
+    const auto channels = juce::jmax(1, displaySampleData_.getNumChannels());
+    const auto total = juce::jmax(0, displaySampleData_.getNumSamples());
     if (total <= 0 || maxPeaks <= 0)
         return {};
 
     const auto peakCount = juce::jmax(1, juce::jmin(maxPeaks, total));
-    std::vector<float> peaks(static_cast<std::size_t>(peakCount), 0.0f);
+    std::vector<std::vector<float>> allPeaks(static_cast<std::size_t>(channels),
+        std::vector<float>(static_cast<std::size_t>(peakCount), 0.0f));
 
-    for (int i = 0; i < peakCount; ++i)
+    for (int channel = 0; channel < channels; ++channel)
     {
-        const auto start = (i * total) / peakCount;
-        const auto endExclusive = juce::jmax(start + 1, ((i + 1) * total) / peakCount);
+        const auto* samples = displaySampleData_.getReadPointer(channel);
+        for (int i = 0; i < peakCount; ++i)
+        {
+            const auto start = (i * total) / peakCount;
+            const auto endExclusive = juce::jmax(start + 1, ((i + 1) * total) / peakCount);
 
-        float maxAbs = 0.0f;
-        for (int s = start; s < endExclusive; ++s)
-            maxAbs = juce::jmax(maxAbs, std::abs(readSampleAt(s)));
+            float maxAbs = 0.0f;
+            for (int s = start; s < endExclusive; ++s)
+                maxAbs = juce::jmax(maxAbs, std::abs(samples[s]));
 
-        peaks[static_cast<std::size_t>(i)] = juce::jlimit(0.0f, 1.0f, maxAbs);
+            allPeaks[static_cast<std::size_t>(channel)][static_cast<std::size_t>(i)] = juce::jlimit(0.0f, 1.0f, maxAbs);
+        }
     }
 
-    return peaks;
+    return allPeaks;
 }
 
 float EngineCore::computeLpf(const float inputSample, const float envValue, float& state) const noexcept
