@@ -28,6 +28,13 @@ constexpr auto kMonoMode = "monoMode";
 constexpr auto kLegatoMode = "legatoMode";
 constexpr auto kGlideSeconds = "glideSeconds";
 constexpr auto kChokeGroup = "chokeGroup";
+constexpr auto kSampleWindowStart = "sampleWindowStart";
+constexpr auto kSampleWindowEnd = "sampleWindowEnd";
+constexpr auto kEditorLoopStart = "editorLoopStart";
+constexpr auto kEditorLoopEnd = "editorLoopEnd";
+constexpr auto kFadeInSamples = "fadeInSamples";
+constexpr auto kFadeOutSamples = "fadeOutSamples";
+constexpr auto kReversePlayback = "reversePlayback";
 constexpr auto kLoopStart = "loopStart";
 constexpr auto kLoopEnd = "loopEnd";
 constexpr auto kSfzLoopMode = "sfzLoopMode";
@@ -37,6 +44,10 @@ constexpr auto kWatchedFolder = "WatchedFolder";
 constexpr auto kFavorite = "Favorite";
 constexpr auto kRecent = "Recent";
 constexpr auto kPath = "path";
+constexpr auto kSfzPath = "sfzPath";
+constexpr auto kZoneLoops = "ZoneLoops";
+constexpr auto kZoneLoop = "ZoneLoop";
+constexpr auto kZoneIndex = "zoneIndex";
 }
 
 AudiocityAudioProcessor::AudiocityAudioProcessor()
@@ -119,12 +130,37 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kLegatoMode, getLegatoMode() ? 1 : 0, nullptr);
     state.setProperty(kGlideSeconds, getGlideSeconds(), nullptr);
     state.setProperty(kChokeGroup, getChokeGroup(), nullptr);
+    state.setProperty(kSampleWindowStart, getSampleWindowStart(), nullptr);
+    state.setProperty(kSampleWindowEnd, getSampleWindowEnd(), nullptr);
+    state.setProperty(kEditorLoopStart, getEditorLoopStart(), nullptr);
+    state.setProperty(kEditorLoopEnd, getEditorLoopEnd(), nullptr);
+    state.setProperty(kFadeInSamples, getFadeInSamples(), nullptr);
+    state.setProperty(kFadeOutSamples, getFadeOutSamples(), nullptr);
+    state.setProperty(kReversePlayback, getReversePlayback() ? 1 : 0, nullptr);
     state.setProperty(kLoopStart, engine_.getLoopStart(), nullptr);
     state.setProperty(kLoopEnd, engine_.getLoopEnd(), nullptr);
     state.setProperty(kSfzLoopMode,
         engine_.getSfzLoopMode() == audiocity::engine::EngineCore::SfzLoopMode::loopSustain ? 1
             : (engine_.getSfzLoopMode() == audiocity::engine::EngineCore::SfzLoopMode::loopContinuous ? 2 : 0),
         nullptr);
+    state.setProperty(kSfzPath, importedSfzPath_, nullptr);
+
+    if (!sfzProgram_.zones.empty())
+    {
+        juce::ValueTree loopState(kZoneLoops);
+
+        for (int i = 0; i < static_cast<int>(sfzProgram_.zones.size()); ++i)
+        {
+            const auto& zone = sfzProgram_.zones[static_cast<std::size_t>(i)];
+            juce::ValueTree node(kZoneLoop);
+            node.setProperty(kZoneIndex, i, nullptr);
+            node.setProperty(kLoopStart, zone.loopStart, nullptr);
+            node.setProperty(kLoopEnd, zone.loopEnd, nullptr);
+            loopState.appendChild(node, nullptr);
+        }
+
+        state.appendChild(loopState, nullptr);
+    }
 
     juce::ValueTree browserState(kBrowserState);
 
@@ -169,6 +205,10 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     if (samplePath.isNotEmpty())
         loadSampleFromFile(juce::File(samplePath));
 
+    const auto sfzPath = state.getProperty(kSfzPath).toString();
+    if (sfzPath.isNotEmpty())
+        importSfzFile(juce::File(sfzPath));
+
     engine_.setRootMidiNote(static_cast<int>(state.getProperty(kRootMidiNote, engine_.getRootMidiNote())));
 
     auto amp = engine_.getAmpEnvelope();
@@ -199,12 +239,38 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     setLegatoMode(static_cast<int>(state.getProperty(kLegatoMode, getLegatoMode() ? 1 : 0)) == 1);
     setGlideSeconds(static_cast<float>(state.getProperty(kGlideSeconds, getGlideSeconds())));
     setChokeGroup(static_cast<int>(state.getProperty(kChokeGroup, getChokeGroup())));
+    setSampleWindow(
+        static_cast<int>(state.getProperty(kSampleWindowStart, getSampleWindowStart())),
+        static_cast<int>(state.getProperty(kSampleWindowEnd, getSampleWindowEnd())));
+    setEditorLoopPoints(
+        static_cast<int>(state.getProperty(kEditorLoopStart, getEditorLoopStart())),
+        static_cast<int>(state.getProperty(kEditorLoopEnd, getEditorLoopEnd())));
+    setFadeSamples(
+        static_cast<int>(state.getProperty(kFadeInSamples, getFadeInSamples())),
+        static_cast<int>(state.getProperty(kFadeOutSamples, getFadeOutSamples())));
+    setReversePlayback(static_cast<int>(state.getProperty(kReversePlayback, getReversePlayback() ? 1 : 0)) == 1);
     engine_.setLoopPoints(static_cast<int>(state.getProperty(kLoopStart, engine_.getLoopStart())),
         static_cast<int>(state.getProperty(kLoopEnd, engine_.getLoopEnd())));
     const auto sfzLoopMode = static_cast<int>(state.getProperty(kSfzLoopMode, 0));
     engine_.setSfzLoopMode(sfzLoopMode == 1 ? audiocity::engine::EngineCore::SfzLoopMode::loopSustain
         : (sfzLoopMode == 2 ? audiocity::engine::EngineCore::SfzLoopMode::loopContinuous
                             : audiocity::engine::EngineCore::SfzLoopMode::noLoop));
+
+    const auto zoneLoops = state.getChildWithName(kZoneLoops);
+    if (zoneLoops.isValid())
+    {
+        for (int i = 0; i < zoneLoops.getNumChildren(); ++i)
+        {
+            const auto node = zoneLoops.getChild(i);
+            if (!node.hasType(kZoneLoop))
+                continue;
+
+            const auto zoneIndex = static_cast<int>(node.getProperty(kZoneIndex, -1));
+            const auto loopStart = static_cast<int>(node.getProperty(kLoopStart, 0));
+            const auto loopEnd = static_cast<int>(node.getProperty(kLoopEnd, 1));
+            updateImportedZoneLoopPoints(zoneIndex, loopStart, loopEnd);
+        }
+    }
 
     const auto browserState = state.getChildWithName(kBrowserState);
     if (browserState.isValid())
@@ -251,6 +317,7 @@ bool AudiocityAudioProcessor::importSfzFile(const juce::File& file)
     audiocity::engine::sfz::Importer importer;
     sfzProgram_ = importer.importFromFile(file);
     zoneSelector_.setZones(sfzProgram_.zones);
+    importedSfzPath_ = file.getFullPathName();
 
     if (!sfzProgram_.zones.empty())
     {
@@ -276,6 +343,9 @@ bool AudiocityAudioProcessor::importSfzFile(const juce::File& file)
             engine_.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::gate);
         }
     }
+
+    if (sfzProgram_.zones.empty())
+        importedSfzPath_.clear();
 
     return !sfzProgram_.zones.empty();
 }

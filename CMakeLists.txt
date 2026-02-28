@@ -43,6 +43,7 @@ target_sources(Audiocity
         src/plugin/PluginProcessor.cpp
         src/plugin/PluginEditor.cpp
         src/plugin/BrowserIndex.cpp
+        src/plugin/ZoneModel.cpp
         src/engine/EngineCore.cpp
         src/engine/VoicePool.cpp
         src/engine/ZoneMap.cpp

@@ -5,6 +5,7 @@
 #include "../src/engine/SettingsUndoHistory.h"
 #include "../src/engine/ZoneSelector.h"
 #include "../src/engine/sfz/SfzImport.h"
+#include "../src/plugin/CommandStack.h"
 
 #include <cmath>
 #include <limits>
@@ -426,6 +427,105 @@ bool runLoopMarkersAndModesTest()
         if (!(continuousEnergy > sustainEnergy * 1.5f))
             return false;
     }
+
+    return true;
+}
+
+bool runEditorSampleEditControlsTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> ascending(1, 64);
+    for (int i = 0; i < ascending.getNumSamples(); ++i)
+        ascending.setSample(0, i, static_cast<float>(i) / 63.0f);
+
+    audiocity::engine::EngineCore::AdsrSettings flatAdsr;
+    flatAdsr.attackSeconds = 0.0001f;
+    flatAdsr.decaySeconds = 0.0001f;
+    flatAdsr.sustainLevel = 1.0f;
+    flatAdsr.releaseSeconds = 0.001f;
+
+    audiocity::engine::EngineCore::FilterSettings openFilter;
+    openFilter.baseCutoffHz = 18000.0f;
+    openFilter.envAmountHz = 0.0f;
+
+    auto configureEngine = [&](audiocity::engine::EngineCore& engine)
+    {
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setQualityTier(audiocity::engine::EngineCore::QualityTier::cpu);
+        engine.setAmpEnvelope(flatAdsr);
+        engine.setFilterSettings(openFilter);
+        engine.setSampleData(ascending, sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::oneShot);
+        engine.setSampleWindow(8, 39);
+    };
+
+    auto renderWithEdits = [&](const bool reverse, const int fadeIn, const int fadeOut)
+    {
+        audiocity::engine::EngineCore engine;
+        configureEngine(engine);
+        engine.setReversePlayback(reverse);
+        engine.setFadeSamples(fadeIn, fadeOut);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+        return block;
+    };
+
+    const auto forward = renderWithEdits(false, 0, 0);
+    const auto reversed = renderWithEdits(true, 0, 0);
+
+    float forwardEarly = 0.0f;
+    float forwardLate = 0.0f;
+    float reverseEarly = 0.0f;
+    float reverseLate = 0.0f;
+
+    for (int i = 4; i < 12; ++i)
+    {
+        forwardEarly += std::abs(forward.getSample(0, i));
+        reverseEarly += std::abs(reversed.getSample(0, i));
+    }
+
+    for (int i = 20; i < 28; ++i)
+    {
+        forwardLate += std::abs(forward.getSample(0, i));
+        reverseLate += std::abs(reversed.getSample(0, i));
+    }
+
+    if (!(forwardLate > forwardEarly * 1.25f))
+        return false;
+
+    if (!(reverseEarly > reverseLate * 1.25f))
+        return false;
+
+    const auto faded = renderWithEdits(false, 10, 10);
+
+    float noFadeHead = 0.0f;
+    float fadedHead = 0.0f;
+    float noFadeTail = 0.0f;
+    float fadedTail = 0.0f;
+
+    for (int i = 1; i < 8; ++i)
+    {
+        noFadeHead += std::abs(forward.getSample(0, i));
+        fadedHead += std::abs(faded.getSample(0, i));
+    }
+
+    for (int i = 24; i < 31; ++i)
+    {
+        noFadeTail += std::abs(forward.getSample(0, i));
+        fadedTail += std::abs(faded.getSample(0, i));
+    }
+
+    if (!(fadedHead < noFadeHead * 0.65f))
+        return false;
+
+    if (!(fadedTail < noFadeTail * 0.75f))
+        return false;
 
     return true;
 }
@@ -1095,6 +1195,108 @@ bool runSettingsUndoHistoryLabelsTest()
 
     return history.canRedo();
 }
+
+bool runSettingsUndoHistoryEditorStateTest()
+{
+    audiocity::engine::SettingsUndoHistory history;
+
+    audiocity::engine::SettingsSnapshot base;
+    base.sampleWindowStart = 4;
+    base.sampleWindowEnd = 120;
+    base.editorLoopStart = 16;
+    base.editorLoopEnd = 96;
+    base.fadeInSamples = 2;
+    base.fadeOutSamples = 2;
+    base.reversePlayback = false;
+
+    auto edited = base;
+    edited.sampleWindowStart = 20;
+    edited.sampleWindowEnd = 80;
+    edited.editorLoopStart = 24;
+    edited.editorLoopEnd = 72;
+    edited.fadeInSamples = 8;
+    edited.fadeOutSamples = 10;
+    edited.reversePlayback = true;
+
+    history.recordChange(base, edited, -1, "Edit Sample");
+
+    auto current = edited;
+    const auto undo = history.undo(current);
+    if (!undo.has_value() || *undo != base)
+        return false;
+
+    current = *undo;
+    const auto redo = history.redo(current);
+    if (!redo.has_value() || *redo != edited)
+        return false;
+
+    return true;
+}
+
+bool runSetZoneLoopStartCommandApplyUndoRedoTest()
+{
+    class FakeZoneModel final : public IZoneModel
+    {
+    public:
+        FakeZoneModel()
+        {
+            zones_.push_back({ 10, 40 });
+        }
+
+        [[nodiscard]] int getZoneCount() const override
+        {
+            return static_cast<int>(zones_.size());
+        }
+
+        [[nodiscard]] std::optional<ZoneLoopState> getZoneLoopState(const int zoneIndex) const override
+        {
+            if (zoneIndex < 0 || zoneIndex >= static_cast<int>(zones_.size()))
+                return std::nullopt;
+
+            return zones_[static_cast<std::size_t>(zoneIndex)];
+        }
+
+        bool setZoneLoopState(const int zoneIndex, const int loopStart, const int loopEnd) override
+        {
+            if (zoneIndex < 0 || zoneIndex >= static_cast<int>(zones_.size()))
+                return false;
+
+            auto& zone = zones_[static_cast<std::size_t>(zoneIndex)];
+            zone.loopStart = juce::jmax(0, loopStart);
+            zone.loopEnd = juce::jmax(zone.loopStart + 1, loopEnd);
+            return true;
+        }
+
+    private:
+        std::vector<ZoneLoopState> zones_;
+    };
+
+    FakeZoneModel model;
+    CommandStack stack;
+
+    if (!stack.execute(std::make_unique<SetZoneLoopStartCommand>(model, 0, 24)))
+        return false;
+
+    const auto afterApply = model.getZoneLoopState(0);
+    if (!afterApply.has_value() || afterApply->loopStart != 24 || afterApply->loopEnd != 40)
+        return false;
+
+    if (!stack.undo())
+        return false;
+
+    const auto afterUndo = model.getZoneLoopState(0);
+    if (!afterUndo.has_value() || afterUndo->loopStart != 10 || afterUndo->loopEnd != 40)
+        return false;
+
+    if (!stack.redo())
+        return false;
+
+    const auto afterRedo = model.getZoneLoopState(0);
+    if (!afterRedo.has_value() || afterRedo->loopStart != 24 || afterRedo->loopEnd != 40)
+        return false;
+
+    return true;
+}
 }
 
 int main()
@@ -1123,53 +1325,62 @@ int main()
     if (!runLoopMarkersAndModesTest())
         return 8;
 
-    if (!runChokeGroupStopsPreviousVoiceTest())
+    if (!runEditorSampleEditControlsTest())
         return 9;
 
-    if (!runMonoLegatoUsesSingleVoiceTest())
+    if (!runChokeGroupStopsPreviousVoiceTest())
         return 10;
 
-    if (!runGlideChangesLegatoTransitionTest())
+    if (!runMonoLegatoUsesSingleVoiceTest())
         return 11;
 
-    if (!runPreloadSegmentationDeterminismTest())
+    if (!runGlideChangesLegatoTransitionTest())
         return 12;
 
-    if (!runRuntimePreloadChangeStabilityTest())
+    if (!runPreloadSegmentationDeterminismTest())
         return 13;
 
-    if (!runLoopModeRuntimePreloadChangeStabilityTest())
+    if (!runRuntimePreloadChangeStabilityTest())
         return 14;
 
-    if (!runSegmentRebuildCounterTest())
+    if (!runLoopModeRuntimePreloadChangeStabilityTest())
         return 15;
 
-    if (!runQualityTierDifferenceTest())
+    if (!runSegmentRebuildCounterTest())
         return 16;
 
-    if (!runQualityTierDeterminismTest())
+    if (!runQualityTierDifferenceTest())
         return 17;
 
-    if (!runCpuQualityEnergyDriftSmokeTest())
+    if (!runQualityTierDeterminismTest())
         return 18;
 
-    if (!runRuntimeQualitySwitchSmokeTest())
+    if (!runCpuQualityEnergyDriftSmokeTest())
         return 19;
 
-    if (!runSettingsUndoHistoryTest())
+    if (!runRuntimeQualitySwitchSmokeTest())
         return 20;
 
-    if (!runSettingsUndoHistoryCapacityTest())
+    if (!runSettingsUndoHistoryTest())
         return 21;
 
-    if (!runSettingsUndoHistoryCoalesceTest())
+    if (!runSettingsUndoHistoryCapacityTest())
         return 22;
 
-    if (!runSettingsUndoHistoryLoopPointsTest())
+    if (!runSettingsUndoHistoryCoalesceTest())
         return 23;
 
-    if (!runSettingsUndoHistoryLabelsTest())
+    if (!runSettingsUndoHistoryLoopPointsTest())
         return 24;
+
+    if (!runSettingsUndoHistoryLabelsTest())
+        return 25;
+
+    if (!runSettingsUndoHistoryEditorStateTest())
+        return 26;
+
+    if (!runSetZoneLoopStartCommandApplyUndoRedoTest())
+        return 27;
 
     return 0;
 }

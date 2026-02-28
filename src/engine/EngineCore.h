@@ -54,9 +54,21 @@ public:
     [[nodiscard]] int getPreloadSamples() const noexcept { return preloadSamples_; }
     [[nodiscard]] int getLoadedPreloadSamples() const noexcept { return preloadData_.getNumSamples(); }
     [[nodiscard]] int getLoadedStreamSamples() const noexcept { return streamData_.getNumSamples(); }
+    [[nodiscard]] int getLoadedSampleLength() const noexcept;
     [[nodiscard]] int getSegmentRebuildCount() const noexcept { return segmentRebuildCount_; }
     void setQualityTier(QualityTier tier) noexcept { qualityTier_ = tier; }
     [[nodiscard]] QualityTier getQualityTier() const noexcept { return qualityTier_; }
+
+    void setSampleWindow(int startSample, int endSample) noexcept;
+    [[nodiscard]] int getSampleWindowStart() const noexcept { return sampleWindowStart_; }
+    [[nodiscard]] int getSampleWindowEnd() const noexcept { return sampleWindowEnd_; }
+
+    void setFadeSamples(int fadeInSamples, int fadeOutSamples) noexcept;
+    [[nodiscard]] int getFadeInSamples() const noexcept { return fadeInSamples_; }
+    [[nodiscard]] int getFadeOutSamples() const noexcept { return fadeOutSamples_; }
+
+    void setReversePlayback(bool enabled) noexcept { reversePlayback_ = enabled; }
+    [[nodiscard]] bool getReversePlayback() const noexcept { return reversePlayback_; }
 
     void noteOn(int noteNumber, float velocity, int sampleOffsetInBlock) noexcept;
     void noteOff(int noteNumber, int sampleOffsetInBlock) noexcept;
@@ -142,6 +154,9 @@ private:
     [[nodiscard]] float computeSampleIncrementForNote(int noteNumber) const noexcept;
     void rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData) noexcept;
     [[nodiscard]] int getTotalSampleLength() const noexcept;
+    [[nodiscard]] int getEffectivePlaybackLength() const noexcept;
+    [[nodiscard]] int mapPlaybackIndexToSampleIndex(int playbackIndex) const noexcept;
+    [[nodiscard]] float computeEditGain(float playbackPosition) const noexcept;
     [[nodiscard]] float readSampleAt(int index) const noexcept;
 
     [[nodiscard]] float readSampleLinear(float position) const noexcept;
@@ -173,6 +188,11 @@ private:
 
     int loopStartSample_ = 0;
     int loopEndSample_ = 0;
+    int sampleWindowStart_ = 0;
+    int sampleWindowEnd_ = 0;
+    int fadeInSamples_ = 0;
+    int fadeOutSamples_ = 0;
+    bool reversePlayback_ = false;
 
     double sampleRate_ = 44100.0;
     int maxSamplesPerBlock_ = 0;

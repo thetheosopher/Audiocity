@@ -97,6 +97,9 @@ void EngineCore::setSampleData(const juce::AudioBuffer<float>& sampleData, const
     if (getTotalSampleLength() <= 0)
         generateFallbackSample();
 
+    setSampleWindow(0, getTotalSampleLength() - 1);
+    setFadeSamples(0, 0);
+    reversePlayback_ = false;
     setLoopPoints(0, getTotalSampleLength() - 1);
 }
 
@@ -113,7 +116,33 @@ void EngineCore::setPreloadSamples(const int preloadSamples) noexcept
         mono.setSample(0, i, readSampleAt(i));
 
     rebuildSampleSegments(mono);
+    setSampleWindow(sampleWindowStart_, sampleWindowEnd_);
+    setFadeSamples(fadeInSamples_, fadeOutSamples_);
     setLoopPoints(loopStartSample_, loopEndSample_);
+}
+
+int EngineCore::getLoadedSampleLength() const noexcept
+{
+    return getTotalSampleLength();
+}
+
+void EngineCore::setSampleWindow(const int startSample, const int endSample) noexcept
+{
+    const auto totalSamples = getTotalSampleLength();
+    const auto maxValid = juce::jmax(0, totalSamples - 1);
+
+    sampleWindowStart_ = juce::jlimit(0, maxValid, startSample);
+    sampleWindowEnd_ = juce::jlimit(0, maxValid, endSample);
+
+    if (sampleWindowEnd_ <= sampleWindowStart_)
+        sampleWindowEnd_ = maxValid;
+}
+
+void EngineCore::setFadeSamples(const int fadeInSamples, const int fadeOutSamples) noexcept
+{
+    const auto maxFade = juce::jmax(0, getEffectivePlaybackLength() - 1);
+    fadeInSamples_ = juce::jlimit(0, maxFade, fadeInSamples);
+    fadeOutSamples_ = juce::jlimit(0, maxFade, fadeOutSamples);
 }
 
 void EngineCore::noteOn(const int noteNumber, const float velocity, const int sampleOffsetInBlock) noexcept
@@ -166,7 +195,7 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
                 continue;
 
             auto& voice = voices_[static_cast<std::size_t>(voiceIndex)];
-            const auto sampleLength = getTotalSampleLength();
+            const auto sampleLength = getEffectivePlaybackLength();
 
             if (sampleLength <= 1)
             {
@@ -177,9 +206,24 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
                 continue;
             }
 
-            const auto effectiveLoopStart = juce::jlimit(0, sampleLength - 1, loopStartSample_);
-            const auto effectiveLoopEnd = juce::jlimit(0, sampleLength - 1,
-                loopEndSample_ > effectiveLoopStart ? loopEndSample_ : sampleLength - 1);
+            const auto toPlaybackIndex = [this](const int absoluteSample)
+            {
+                if (reversePlayback_)
+                    return sampleWindowEnd_ - absoluteSample;
+
+                return absoluteSample - sampleWindowStart_;
+            };
+
+            const auto rawLoopStart = toPlaybackIndex(loopStartSample_);
+            const auto rawLoopEnd = toPlaybackIndex(loopEndSample_);
+
+            auto effectiveLoopStart = juce::jlimit(0, sampleLength - 1, juce::jmin(rawLoopStart, rawLoopEnd));
+            auto effectiveLoopEnd = juce::jlimit(0, sampleLength - 1, juce::jmax(rawLoopStart, rawLoopEnd));
+            if (effectiveLoopEnd <= effectiveLoopStart)
+            {
+                effectiveLoopStart = 0;
+                effectiveLoopEnd = sampleLength - 1;
+            }
 
             const auto loopEnabled = sfzLoopMode_ != SfzLoopMode::noLoop && playbackMode_ == PlaybackMode::loop;
             const auto shouldLoopNow = loopEnabled
@@ -494,24 +538,26 @@ float EngineCore::computeSampleIncrementForNote(const int noteNumber) const noex
 
 float EngineCore::readSampleLinear(const float position) const noexcept
 {
-    const auto sampleLength = getTotalSampleLength();
+    const auto sampleLength = getEffectivePlaybackLength();
 
     if (sampleLength <= 1)
         return 0.0f;
 
     const auto clampedPosition = juce::jlimit(0.0f, static_cast<float>(sampleLength - 1), position);
     const auto sampleIndex = static_cast<int>(clampedPosition);
+    const auto mappedIndex = mapPlaybackIndexToSampleIndex(sampleIndex);
+    const auto editGain = computeEditGain(clampedPosition);
 
     if (qualityTier_ == QualityTier::cpu)
-        return readSampleAt(sampleIndex);
+        return readSampleAt(mappedIndex) * editGain;
 
     const auto nextIndex = juce::jmin(sampleIndex + 1, sampleLength - 1);
     const auto fraction = clampedPosition - static_cast<float>(sampleIndex);
 
-    const auto sampleA = readSampleAt(sampleIndex);
-    const auto sampleB = readSampleAt(nextIndex);
+    const auto sampleA = readSampleAt(mappedIndex);
+    const auto sampleB = readSampleAt(mapPlaybackIndexToSampleIndex(nextIndex));
 
-    return sampleA + (sampleB - sampleA) * fraction;
+    return (sampleA + (sampleB - sampleA) * fraction) * editGain;
 }
 
 void EngineCore::rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData) noexcept
@@ -535,6 +581,57 @@ void EngineCore::rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampl
 int EngineCore::getTotalSampleLength() const noexcept
 {
     return preloadData_.getNumSamples() + streamData_.getNumSamples();
+}
+
+int EngineCore::getEffectivePlaybackLength() const noexcept
+{
+    const auto totalLength = getTotalSampleLength();
+    if (totalLength <= 0)
+        return 0;
+
+    const auto clampedStart = juce::jlimit(0, totalLength - 1, sampleWindowStart_);
+    const auto clampedEnd = juce::jlimit(clampedStart, totalLength - 1, sampleWindowEnd_);
+    return clampedEnd - clampedStart + 1;
+}
+
+int EngineCore::mapPlaybackIndexToSampleIndex(const int playbackIndex) const noexcept
+{
+    const auto totalLength = getTotalSampleLength();
+    if (totalLength <= 0)
+        return 0;
+
+    const auto clampedStart = juce::jlimit(0, totalLength - 1, sampleWindowStart_);
+    const auto clampedEnd = juce::jlimit(clampedStart, totalLength - 1, sampleWindowEnd_);
+    const auto clampedPlayback = juce::jlimit(0, clampedEnd - clampedStart, playbackIndex);
+
+    if (reversePlayback_)
+        return clampedEnd - clampedPlayback;
+
+    return clampedStart + clampedPlayback;
+}
+
+float EngineCore::computeEditGain(const float playbackPosition) const noexcept
+{
+    const auto playbackLength = getEffectivePlaybackLength();
+    if (playbackLength <= 1)
+        return 0.0f;
+
+    auto gain = 1.0f;
+
+    if (fadeInSamples_ > 0 && playbackPosition < static_cast<float>(fadeInSamples_))
+        gain = juce::jmin(gain, playbackPosition / static_cast<float>(fadeInSamples_));
+
+    if (fadeOutSamples_ > 0)
+    {
+        const auto fadeOutStart = static_cast<float>(juce::jmax(0, playbackLength - fadeOutSamples_ - 1));
+        if (playbackPosition >= fadeOutStart)
+        {
+            const auto remaining = static_cast<float>(playbackLength - 1) - playbackPosition;
+            gain = juce::jmin(gain, remaining / static_cast<float>(fadeOutSamples_));
+        }
+    }
+
+    return juce::jlimit(0.0f, 1.0f, gain);
 }
 
 float EngineCore::readSampleAt(const int index) const noexcept

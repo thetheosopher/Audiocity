@@ -86,6 +86,22 @@ public:
     void setChokeGroup(int chokeGroup) noexcept { engine_.setChokeGroup(chokeGroup); }
     [[nodiscard]] int getChokeGroup() const noexcept { return engine_.getChokeGroup(); }
 
+    void setSampleWindow(int startSample, int endSample) noexcept { engine_.setSampleWindow(startSample, endSample); }
+    [[nodiscard]] int getSampleWindowStart() const noexcept { return engine_.getSampleWindowStart(); }
+    [[nodiscard]] int getSampleWindowEnd() const noexcept { return engine_.getSampleWindowEnd(); }
+
+    void setEditorLoopPoints(int loopStart, int loopEnd) noexcept { engine_.setLoopPoints(loopStart, loopEnd); }
+    [[nodiscard]] int getEditorLoopStart() const noexcept { return engine_.getLoopStart(); }
+    [[nodiscard]] int getEditorLoopEnd() const noexcept { return engine_.getLoopEnd(); }
+
+    void setFadeSamples(int fadeInSamples, int fadeOutSamples) noexcept { engine_.setFadeSamples(fadeInSamples, fadeOutSamples); }
+    [[nodiscard]] int getFadeInSamples() const noexcept { return engine_.getFadeInSamples(); }
+    [[nodiscard]] int getFadeOutSamples() const noexcept { return engine_.getFadeOutSamples(); }
+
+    void setReversePlayback(bool enabled) noexcept { engine_.setReversePlayback(enabled); }
+    [[nodiscard]] bool getReversePlayback() const noexcept { return engine_.getReversePlayback(); }
+    [[nodiscard]] int getLoadedSampleLength() const noexcept { return engine_.getLoadedSampleLength(); }
+
     BrowserIndex& browserIndex() noexcept { return browserIndex_; }
     const BrowserIndex& browserIndex() const noexcept { return browserIndex_; }
 
@@ -103,6 +119,7 @@ private:
     std::atomic<bool> previewStopRequested_{ false };
     std::atomic<bool> previewPlaying_{ false };
     static constexpr int previewMidiNote_ = 72;
+    juce::String importedSfzPath_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudiocityAudioProcessor)
 };

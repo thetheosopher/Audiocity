@@ -9,6 +9,10 @@
 #include <string>
 #include <vector>
 
+#include "CommandStack.h"
+#include "EditorViewModel.h"
+#include "SelectionModel.h"
+#include "ZoneModel.h"
 #include "../engine/SettingsUndoHistory.h"
 #include "../engine/sfz/SfzModel.h"
 #include "BrowserIndex.h"
@@ -111,6 +115,7 @@ private:
         std::function<void(int)> onRrModeChanged;
         std::function<void(int)> onPlaybackModeChanged;
         std::function<void(int, int, int)> onLoopPointsApply;
+        std::function<void(int)> onZoneSelectionChanged;
         std::function<void(bool)> onMonoModeChanged;
         std::function<void(bool)> onLegatoModeChanged;
         std::function<void(float)> onGlideSecondsChanged;
@@ -205,6 +210,31 @@ private:
         juce::Label splitInfoLabel_;
     };
 
+    class EditorPanel final : public juce::Component
+    {
+    public:
+        EditorPanel();
+        std::function<void(int, int)> onApplyZoneLoopPoints;
+        std::function<void()> onUndo;
+        std::function<void()> onRedo;
+        void setSelectedZoneLoopState(int selectedZoneIndex, int loopStart, int loopEnd, bool hasSelection);
+        void setUndoRedoStatus(bool canUndo, bool canRedo, const juce::String& undoLabel, const juce::String& redoLabel);
+        void resized() override;
+        void paint(juce::Graphics& g) override;
+
+    private:
+        juce::Label selectedZoneLabel_{ {}, "Selected Zone" };
+        juce::Label selectedZoneValue_;
+        juce::Label undoRedoStatusLabel_{ {}, "Undo: (none) | Redo: (none)" };
+        juce::Label loopStartLabel_{ {}, "Loop Start" };
+        juce::TextEditor loopStartEditor_;
+        juce::Label loopEndLabel_{ {}, "Loop End" };
+        juce::TextEditor loopEndEditor_;
+        juce::TextButton undoButton_{ "Undo" };
+        juce::TextButton redoButton_{ "Redo" };
+        juce::TextButton applyButton_{ "Apply" };
+    };
+
     class PlaceholderPanel final : public juce::Component
     {
     public:
@@ -225,12 +255,16 @@ private:
     };
 
     AudiocityAudioProcessor& processor_;
+    SelectionModel selectionModel_{};
+    ProcessorZoneModel zoneModel_;
+    CommandStack commandStack_{};
+    EditorViewModel editorViewModel_;
     juce::TabbedComponent tabs_{ juce::TabbedButtonBar::TabsAtTop };
     std::unique_ptr<juce::FileChooser> fileChooser_;
 
     BrowserPanel browserPanel_{};
     MappingPanel mappingPanel_{};
-    PlaceholderPanel editorPanel_{ "Editor" };
+    EditorPanel editorPanel_{};
     SettingsPanel settingsPanel_{};
     DiagnosticsPanel diagnosticsPanel_{};
 
@@ -239,6 +273,7 @@ private:
     void openWatchedFolderChooser();
     void refreshImportedSfzViews();
     void refreshBrowserPanel();
+    void refreshEditorPanel();
     void refreshSettingsPanel();
     [[nodiscard]] juce::String buildStreamingDiagnosticsLine(bool includeFullSamplePath) const;
     [[nodiscard]] juce::String buildStreamingDiagnosticsTooltip() const;
