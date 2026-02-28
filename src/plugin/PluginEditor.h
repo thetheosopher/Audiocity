@@ -4,6 +4,12 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_core/juce_core.h>
 
+#include <functional>
+#include <memory>
+#include <vector>
+
+#include "../engine/sfz/SfzModel.h"
+
 class AudiocityAudioProcessor;
 
 class AudiocityAudioProcessorEditor final : public juce::AudioProcessorEditor
@@ -15,6 +21,62 @@ public:
     void resized() override;
 
 private:
+    class BrowserPanel final : public juce::Component
+    {
+    public:
+        BrowserPanel();
+
+        std::function<void()> onLoadSample;
+        std::function<void()> onImportSfz;
+        void setSamplePath(const juce::String& path);
+        void resized() override;
+        void paint(juce::Graphics& g) override;
+
+    private:
+        juce::TextButton loadButton_{ "Load Sample (WAV/AIFF)" };
+        juce::TextButton importSfzButton_{ "Import SFZ" };
+        juce::Label samplePathLabel_;
+    };
+
+    class MappingPanel final : public juce::Component,
+                               private juce::TableListBoxModel
+    {
+    public:
+        MappingPanel();
+        void setZones(const std::vector<audiocity::engine::sfz::Zone>& zones);
+        void resized() override;
+        void paint(juce::Graphics& g) override;
+
+    private:
+        int getNumRows() override;
+        void paintRowBackground(juce::Graphics& g,
+            int rowNumber,
+            int width,
+            int height,
+            bool rowIsSelected) override;
+        void paintCell(juce::Graphics& g,
+            int rowNumber,
+            int columnId,
+            int width,
+            int height,
+            bool rowIsSelected) override;
+
+        juce::TableListBox table_{ "zones", this };
+        std::vector<audiocity::engine::sfz::Zone> zones_;
+    };
+
+    class DiagnosticsPanel final : public juce::Component
+    {
+    public:
+        DiagnosticsPanel();
+        void setDiagnostics(const std::vector<audiocity::engine::sfz::Diagnostic>& diagnostics);
+        void resized() override;
+        void paint(juce::Graphics& g) override;
+
+    private:
+        juce::TextEditor text_;
+    };
+
     class PlaceholderPanel final : public juce::Component
     {
     public:
@@ -36,12 +98,19 @@ private:
 
     AudiocityAudioProcessor& processor_;
     juce::TabbedComponent tabs_{ juce::TabbedButtonBar::TabsAtTop };
+    std::unique_ptr<juce::FileChooser> fileChooser_;
 
-    PlaceholderPanel browserPanel_{ "Browser" };
-    PlaceholderPanel mappingPanel_{ "Mapping" };
+    BrowserPanel browserPanel_{};
+    MappingPanel mappingPanel_{};
     PlaceholderPanel editorPanel_{ "Editor" };
     PlaceholderPanel settingsPanel_{ "Settings" };
-    PlaceholderPanel diagnosticsPanel_{ "Diagnostics" };
+    DiagnosticsPanel diagnosticsPanel_{};
+
+    void openSampleChooser();
+    void openSfzChooser();
+    void refreshImportedSfzViews();
+    void refreshBrowserPanel();
+    void refreshDiagnosticsTabTitle();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudiocityAudioProcessorEditor)
 };

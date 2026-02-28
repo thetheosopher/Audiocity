@@ -2,15 +2,21 @@ add_executable(audiocity_offline_tests
     OfflineRenderTests.cpp
     ../src/engine/EngineCore.cpp
     ../src/engine/VoicePool.cpp
-    ../src/engine/ZoneMap.cpp)
+    ../src/engine/ZoneMap.cpp
+    ../src/engine/sfz/SfzImport.cpp)
 
 target_include_directories(audiocity_offline_tests
     PRIVATE
         ../src)
 
+target_compile_definitions(audiocity_offline_tests
+    PRIVATE
+        AUDIOCITY_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 target_link_libraries(audiocity_offline_tests
     PRIVATE
         juce::juce_audio_basics
+        juce::juce_audio_formats
         juce::juce_events
         juce::juce_core)
 

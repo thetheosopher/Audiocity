@@ -1,0 +1,4 @@
+<control> default_path=$SAMPDIR
+#include "inc2.sfz"
+<group> seq_group=1
+<region> sample=kick.wav lovel=0 hivel=63 key=36

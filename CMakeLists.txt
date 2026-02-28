@@ -44,7 +44,8 @@ target_sources(Audiocity
         src/plugin/PluginEditor.cpp
         src/engine/EngineCore.cpp
         src/engine/VoicePool.cpp
-        src/engine/ZoneMap.cpp)
+        src/engine/ZoneMap.cpp
+        src/engine/sfz/SfzImport.cpp)
 
 target_include_directories(Audiocity
     PRIVATE

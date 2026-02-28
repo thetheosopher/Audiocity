@@ -4,6 +4,7 @@
 #include <juce_core/juce_core.h>
 
 #include "../engine/EngineCore.h"
+#include "../engine/sfz/SfzModel.h"
 
 class AudiocityAudioProcessor final : public juce::AudioProcessor
 {
@@ -43,8 +44,16 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
+    bool loadSampleFromFile(const juce::File& file);
+    [[nodiscard]] juce::String getLoadedSamplePath() const;
+
+    bool importSfzFile(const juce::File& file);
+    [[nodiscard]] const std::vector<audiocity::engine::sfz::Zone>& getImportedZones() const noexcept;
+    [[nodiscard]] const std::vector<audiocity::engine::sfz::Diagnostic>& getImportDiagnostics() const noexcept;
+
 private:
     audiocity::engine::EngineCore engine_;
+    audiocity::engine::sfz::Program sfzProgram_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudiocityAudioProcessor)
 };

@@ -1,0 +1,5 @@
+#define $SAMPDIR samples/A/
+#include "inc1.sfz"
+<control> default_path=samples/B/
+<group> seq_group=2
+<region> sample=snare.wav lovel=64 hivel=127 loop_mode=loop_continuous loop_start=10 loop_end=120

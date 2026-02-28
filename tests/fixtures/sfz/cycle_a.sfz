@@ -1,0 +1,2 @@
+#include "cycle_b.sfz"
+<region> sample=samples/A/kick.wav key=40
