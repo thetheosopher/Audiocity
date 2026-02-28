@@ -3,6 +3,7 @@ add_executable(audiocity_offline_tests
     ../src/engine/EngineCore.cpp
     ../src/engine/VoicePool.cpp
     ../src/engine/ZoneMap.cpp
+    ../src/engine/ZoneSelector.cpp
     ../src/engine/sfz/SfzImport.cpp)
 
 target_include_directories(audiocity_offline_tests

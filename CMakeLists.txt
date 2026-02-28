@@ -42,9 +42,11 @@ target_sources(Audiocity
     PRIVATE
         src/plugin/PluginProcessor.cpp
         src/plugin/PluginEditor.cpp
+        src/plugin/BrowserIndex.cpp
         src/engine/EngineCore.cpp
         src/engine/VoicePool.cpp
         src/engine/ZoneMap.cpp
+        src/engine/ZoneSelector.cpp
         src/engine/sfz/SfzImport.cpp)
 
 target_include_directories(Audiocity

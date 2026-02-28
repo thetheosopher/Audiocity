@@ -20,6 +20,22 @@ constexpr auto kFilterSustain = "filterSustain";
 constexpr auto kFilterRelease = "filterRelease";
 constexpr auto kFilterBaseCutoff = "filterBaseCutoff";
 constexpr auto kFilterEnvAmount = "filterEnvAmount";
+constexpr auto kRrMode = "rrMode";
+constexpr auto kPlaybackMode = "playbackMode";
+constexpr auto kPreloadSamples = "preloadSamples";
+constexpr auto kMonoMode = "monoMode";
+constexpr auto kLegatoMode = "legatoMode";
+constexpr auto kGlideSeconds = "glideSeconds";
+constexpr auto kChokeGroup = "chokeGroup";
+constexpr auto kLoopStart = "loopStart";
+constexpr auto kLoopEnd = "loopEnd";
+constexpr auto kSfzLoopMode = "sfzLoopMode";
+
+constexpr auto kBrowserState = "BrowserState";
+constexpr auto kWatchedFolder = "WatchedFolder";
+constexpr auto kFavorite = "Favorite";
+constexpr auto kRecent = "Recent";
+constexpr auto kPath = "path";
 }
 
 AudiocityAudioProcessor::AudiocityAudioProcessor()
@@ -53,6 +69,15 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     for (auto channel = numInputChannels; channel < numOutputChannels; ++channel)
         buffer.clear(channel, 0, buffer.getNumSamples());
 
+    if (previewStopRequested_.exchange(false))
+        engine_.noteOff(previewMidiNote_, 0);
+
+    if (previewStartRequested_.exchange(false))
+    {
+        engine_.noteOff(previewMidiNote_, 0);
+        engine_.noteOn(previewMidiNote_, 0.85f, 0);
+    }
+
     engine_.render(buffer, midiMessages);
 }
 
@@ -83,6 +108,46 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     const auto filter = engine_.getFilterSettings();
     state.setProperty(kFilterBaseCutoff, filter.baseCutoffHz, nullptr);
     state.setProperty(kFilterEnvAmount, filter.envAmountHz, nullptr);
+    state.setProperty(kRrMode, getRoundRobinMode() == RoundRobinMode::random ? 1 : 0, nullptr);
+    state.setProperty(kPlaybackMode,
+        getPlaybackMode() == PlaybackMode::oneShot ? 1 : (getPlaybackMode() == PlaybackMode::loop ? 2 : 0),
+        nullptr);
+    state.setProperty(kPreloadSamples, getPreloadSamples(), nullptr);
+    state.setProperty(kMonoMode, getMonoMode() ? 1 : 0, nullptr);
+    state.setProperty(kLegatoMode, getLegatoMode() ? 1 : 0, nullptr);
+    state.setProperty(kGlideSeconds, getGlideSeconds(), nullptr);
+    state.setProperty(kChokeGroup, getChokeGroup(), nullptr);
+    state.setProperty(kLoopStart, engine_.getLoopStart(), nullptr);
+    state.setProperty(kLoopEnd, engine_.getLoopEnd(), nullptr);
+    state.setProperty(kSfzLoopMode,
+        engine_.getSfzLoopMode() == audiocity::engine::EngineCore::SfzLoopMode::loopSustain ? 1
+            : (engine_.getSfzLoopMode() == audiocity::engine::EngineCore::SfzLoopMode::loopContinuous ? 2 : 0),
+        nullptr);
+
+    juce::ValueTree browserState(kBrowserState);
+
+    for (const auto& folderPath : browserIndex_.getWatchedFolders())
+    {
+        juce::ValueTree node(kWatchedFolder);
+        node.setProperty(kPath, folderPath, nullptr);
+        browserState.appendChild(node, nullptr);
+    }
+
+    for (const auto& favoritePath : browserIndex_.getFavoritePaths())
+    {
+        juce::ValueTree node(kFavorite);
+        node.setProperty(kPath, favoritePath, nullptr);
+        browserState.appendChild(node, nullptr);
+    }
+
+    for (const auto& recentPath : browserIndex_.getRecentPaths(128))
+    {
+        juce::ValueTree node(kRecent);
+        node.setProperty(kPath, recentPath, nullptr);
+        browserState.appendChild(node, nullptr);
+    }
+
+    state.appendChild(browserState, nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary(*xml, destData);
@@ -122,6 +187,50 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     filter.baseCutoffHz = static_cast<float>(state.getProperty(kFilterBaseCutoff, filter.baseCutoffHz));
     filter.envAmountHz = static_cast<float>(state.getProperty(kFilterEnvAmount, filter.envAmountHz));
     engine_.setFilterSettings(filter);
+
+    setRoundRobinMode(static_cast<int>(state.getProperty(kRrMode, 0)) == 1 ? RoundRobinMode::random : RoundRobinMode::ordered);
+    const auto playbackMode = static_cast<int>(state.getProperty(kPlaybackMode, 0));
+    setPlaybackMode(playbackMode == 1 ? PlaybackMode::oneShot : (playbackMode == 2 ? PlaybackMode::loop : PlaybackMode::gate));
+    setPreloadSamples(static_cast<int>(state.getProperty(kPreloadSamples, getPreloadSamples())));
+    setMonoMode(static_cast<int>(state.getProperty(kMonoMode, getMonoMode() ? 1 : 0)) == 1);
+    setLegatoMode(static_cast<int>(state.getProperty(kLegatoMode, getLegatoMode() ? 1 : 0)) == 1);
+    setGlideSeconds(static_cast<float>(state.getProperty(kGlideSeconds, getGlideSeconds())));
+    setChokeGroup(static_cast<int>(state.getProperty(kChokeGroup, getChokeGroup())));
+    engine_.setLoopPoints(static_cast<int>(state.getProperty(kLoopStart, engine_.getLoopStart())),
+        static_cast<int>(state.getProperty(kLoopEnd, engine_.getLoopEnd())));
+    const auto sfzLoopMode = static_cast<int>(state.getProperty(kSfzLoopMode, 0));
+    engine_.setSfzLoopMode(sfzLoopMode == 1 ? audiocity::engine::EngineCore::SfzLoopMode::loopSustain
+        : (sfzLoopMode == 2 ? audiocity::engine::EngineCore::SfzLoopMode::loopContinuous
+                            : audiocity::engine::EngineCore::SfzLoopMode::noLoop));
+
+    const auto browserState = state.getChildWithName(kBrowserState);
+    if (browserState.isValid())
+    {
+        juce::StringArray watchedFolders;
+        juce::StringArray favorites;
+        juce::StringArray recent;
+
+        for (int i = 0; i < browserState.getNumChildren(); ++i)
+        {
+            const auto child = browserState.getChild(i);
+            const auto path = child.getProperty(kPath).toString();
+            if (path.isEmpty())
+                continue;
+
+            if (child.hasType(kWatchedFolder))
+                watchedFolders.add(path);
+            else if (child.hasType(kFavorite))
+                favorites.add(path);
+            else if (child.hasType(kRecent))
+                recent.add(path);
+        }
+
+        if (!watchedFolders.isEmpty())
+            browserIndex_.setWatchedFolders(watchedFolders);
+
+        browserIndex_.setFavoritePaths(favorites);
+        browserIndex_.setRecentPaths(recent);
+    }
 }
 
 bool AudiocityAudioProcessor::loadSampleFromFile(const juce::File& file)
@@ -138,9 +247,32 @@ bool AudiocityAudioProcessor::importSfzFile(const juce::File& file)
 {
     audiocity::engine::sfz::Importer importer;
     sfzProgram_ = importer.importFromFile(file);
+    zoneSelector_.setZones(sfzProgram_.zones);
 
     if (!sfzProgram_.zones.empty())
-        engine_.loadSampleFromFile(juce::File(sfzProgram_.zones.front().resolvedSamplePath));
+    {
+        const auto& zone = sfzProgram_.zones.front();
+        engine_.setRootMidiNote(zone.pitchKeycenter);
+
+        engine_.loadSampleFromFile(juce::File(zone.resolvedSamplePath));
+        engine_.setLoopPoints(zone.loopStart, zone.loopEnd);
+
+        if (zone.loopMode == "loop_continuous")
+        {
+            engine_.setSfzLoopMode(audiocity::engine::EngineCore::SfzLoopMode::loopContinuous);
+            engine_.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+        }
+        else if (zone.loopMode == "loop_sustain")
+        {
+            engine_.setSfzLoopMode(audiocity::engine::EngineCore::SfzLoopMode::loopSustain);
+            engine_.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+        }
+        else
+        {
+            engine_.setSfzLoopMode(audiocity::engine::EngineCore::SfzLoopMode::noLoop);
+            engine_.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::gate);
+        }
+    }
 
     return !sfzProgram_.zones.empty();
 }
@@ -153,6 +285,62 @@ const std::vector<audiocity::engine::sfz::Zone>& AudiocityAudioProcessor::getImp
 const std::vector<audiocity::engine::sfz::Diagnostic>& AudiocityAudioProcessor::getImportDiagnostics() const noexcept
 {
     return sfzProgram_.diagnostics;
+}
+
+bool AudiocityAudioProcessor::updateImportedZoneLoopPoints(const int zoneIndex, const int loopStart, const int loopEnd)
+{
+    if (zoneIndex < 0 || zoneIndex >= static_cast<int>(sfzProgram_.zones.size()))
+        return false;
+
+    auto& zone = sfzProgram_.zones[static_cast<std::size_t>(zoneIndex)];
+    zone.loopStart = juce::jmax(0, loopStart);
+    zone.loopEnd = juce::jmax(zone.loopStart + 1, loopEnd);
+
+    zoneSelector_.setZones(sfzProgram_.zones);
+
+    if (zoneIndex == 0)
+        engine_.setLoopPoints(zone.loopStart, zone.loopEnd);
+
+    return true;
+}
+
+void AudiocityAudioProcessor::setRoundRobinMode(const RoundRobinMode mode) noexcept
+{
+    zoneSelector_.setRoundRobinMode(mode);
+}
+
+AudiocityAudioProcessor::RoundRobinMode AudiocityAudioProcessor::getRoundRobinMode() const noexcept
+{
+    return zoneSelector_.getRoundRobinMode();
+}
+
+void AudiocityAudioProcessor::setPlaybackMode(const PlaybackMode mode) noexcept
+{
+    engine_.setPlaybackMode(mode);
+}
+
+AudiocityAudioProcessor::PlaybackMode AudiocityAudioProcessor::getPlaybackMode() const noexcept
+{
+    return engine_.getPlaybackMode();
+}
+
+bool AudiocityAudioProcessor::startPreviewFromPath(const juce::String& path)
+{
+    const juce::File file(path);
+    if (!loadSampleFromFile(file))
+        return false;
+
+    browserIndex_.markRecent(path);
+    previewStartRequested_.store(true);
+    previewStopRequested_.store(false);
+    previewPlaying_.store(true);
+    return true;
+}
+
+void AudiocityAudioProcessor::stopPreview()
+{
+    previewStopRequested_.store(true);
+    previewPlaying_.store(false);
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
