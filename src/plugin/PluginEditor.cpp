@@ -379,6 +379,15 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
     const auto loopLeft = juce::jmin(lx1, lx2);
     const auto loopRight = juce::jmax(lx1, lx2);
 
+    const auto handleVisualX = [bounds](const float x)
+    {
+        return juce::jlimit(bounds.getX(), bounds.getRight(), x);
+    };
+    const auto pbHX1 = handleVisualX(pbX1);
+    const auto pbHX2 = handleVisualX(pbX2);
+    const auto lpHX1 = handleVisualX(loopLeft);
+    const auto lpHX2 = handleVisualX(loopRight);
+
     for (int channel = 0; channel < channelCount; ++channel)
     {
         const auto laneY = bounds.getY() + static_cast<float>(channel) * channelHeight;
@@ -490,12 +499,12 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
         }
 
         g.setColour(juce::Colours::limegreen.withAlpha(0.9f));
-        g.drawLine(pbX1, lane.getY(), pbX1, lane.getBottom(), 1.5f);
-        g.drawLine(pbX2, lane.getY(), pbX2, lane.getBottom(), 1.5f);
+        g.drawLine(pbHX1, lane.getY(), pbHX1, lane.getBottom(), 1.5f);
+        g.drawLine(pbHX2, lane.getY(), pbHX2, lane.getBottom(), 1.5f);
 
         g.setColour(juce::Colours::orange.withAlpha(0.9f));
-        g.drawLine(loopLeft, lane.getY(), loopLeft, lane.getBottom(), 1.5f);
-        g.drawLine(loopRight, lane.getY(), loopRight, lane.getBottom(), 1.5f);
+        g.drawLine(lpHX1, lane.getY(), lpHX1, lane.getBottom(), 1.5f);
+        g.drawLine(lpHX2, lane.getY(), lpHX2, lane.getBottom(), 1.5f);
     }
 
     // ── Labels on handles ──
@@ -503,13 +512,32 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
 
     // Playback labels (green, at bottom)
     g.setColour(juce::Colours::limegreen);
-    g.drawText("P", static_cast<int>(pbX1) - 6, static_cast<int>(bounds.getBottom()) - 14, 12, 12, juce::Justification::centred);
-    g.drawText("P", static_cast<int>(pbX2) - 6, static_cast<int>(bounds.getBottom()) - 14, 12, 12, juce::Justification::centred);
+    g.drawText("P", static_cast<int>(pbHX1) - 6, static_cast<int>(bounds.getBottom()) - 14, 12, 12, juce::Justification::centred);
+    g.drawText("P", static_cast<int>(pbHX2) - 6, static_cast<int>(bounds.getBottom()) - 14, 12, 12, juce::Justification::centred);
 
     // Loop labels (orange, at top)
     g.setColour(juce::Colours::orange);
-    g.drawText("S", static_cast<int>(loopLeft) - 6, static_cast<int>(bounds.getY()) + 2, 12, 12, juce::Justification::centred);
-    g.drawText("E", static_cast<int>(loopRight) - 6, static_cast<int>(bounds.getY()) + 2, 12, 12, juce::Justification::centred);
+    g.drawText("S", static_cast<int>(lpHX1) - 6, static_cast<int>(bounds.getY()) + 2, 12, 12, juce::Justification::centred);
+    g.drawText("E", static_cast<int>(lpHX2) - 6, static_cast<int>(bounds.getY()) + 2, 12, 12, juce::Justification::centred);
+
+    // Circular grab handles for easier interaction at the range ends
+    constexpr float kHandleRadius = 4.5f;
+    const auto topY = bounds.getY() + 10.0f;
+    const auto bottomY = bounds.getBottom() - 10.0f;
+
+    g.setColour(juce::Colours::orange.withAlpha(0.95f));
+    g.fillEllipse(lpHX1 - kHandleRadius, topY - kHandleRadius, kHandleRadius * 2.0f, kHandleRadius * 2.0f);
+    g.fillEllipse(lpHX2 - kHandleRadius, topY - kHandleRadius, kHandleRadius * 2.0f, kHandleRadius * 2.0f);
+    g.setColour(juce::Colours::black.withAlpha(0.45f));
+    g.drawEllipse(lpHX1 - kHandleRadius, topY - kHandleRadius, kHandleRadius * 2.0f, kHandleRadius * 2.0f, 1.0f);
+    g.drawEllipse(lpHX2 - kHandleRadius, topY - kHandleRadius, kHandleRadius * 2.0f, kHandleRadius * 2.0f, 1.0f);
+
+    g.setColour(juce::Colours::limegreen.withAlpha(0.95f));
+    g.fillEllipse(pbHX1 - kHandleRadius, bottomY - kHandleRadius, kHandleRadius * 2.0f, kHandleRadius * 2.0f);
+    g.fillEllipse(pbHX2 - kHandleRadius, bottomY - kHandleRadius, kHandleRadius * 2.0f, kHandleRadius * 2.0f);
+    g.setColour(juce::Colours::black.withAlpha(0.45f));
+    g.drawEllipse(pbHX1 - kHandleRadius, bottomY - kHandleRadius, kHandleRadius * 2.0f, kHandleRadius * 2.0f, 1.0f);
+    g.drawEllipse(pbHX2 - kHandleRadius, bottomY - kHandleRadius, kHandleRadius * 2.0f, kHandleRadius * 2.0f, 1.0f);
 
     if (loopFormatBadge_.isNotEmpty())
     {
@@ -535,21 +563,31 @@ void AudiocityAudioProcessorEditor::WaveformView::mouseDown(const juce::MouseEve
     }
 
     // Check proximity to all four handles — pick the nearest one
-    struct Handle { DragMode mode; float x; };
-    const Handle handles[] = {
-        { DragMode::dragPlaybackStart, xFromSample(playbackStart_) },
-        { DragMode::dragPlaybackEnd,   xFromSample(playbackEnd_) },
-        { DragMode::dragLoopStart,     xFromSample(loopStart_) },
-        { DragMode::dragLoopEnd,       xFromSample(loopEnd_) },
+    const auto visualHandleX = [this](const float x)
+    {
+        return juce::jlimit(0.0f, static_cast<float>(juce::jmax(0, getWidth())), x);
     };
 
-    constexpr float kHandlePickPx = 8.0f;
+    const auto topY = 10.0f;
+    const auto bottomY = juce::jmax(10.0f, static_cast<float>(getHeight()) - 10.0f);
+
+    struct Handle { DragMode mode; float x; float y; };
+    const Handle handles[] = {
+        { DragMode::dragPlaybackStart, visualHandleX(xFromSample(playbackStart_)), bottomY },
+        { DragMode::dragPlaybackEnd,   visualHandleX(xFromSample(playbackEnd_)), bottomY },
+        { DragMode::dragLoopStart,     visualHandleX(xFromSample(loopStart_)), topY },
+        { DragMode::dragLoopEnd,       visualHandleX(xFromSample(loopEnd_)), topY },
+    };
+
+    constexpr float kHandlePickPx = 12.0f;
     float bestDist = kHandlePickPx + 1.0f;
     DragMode bestMode = DragMode::none;
 
     for (const auto& h : handles)
     {
-        const auto dist = std::abs(event.position.x - h.x);
+        const auto dx = event.position.x - h.x;
+        const auto dy = event.position.y - h.y;
+        const auto dist = std::sqrt(dx * dx + dy * dy);
         if (dist <= kHandlePickPx && dist < bestDist)
         {
             bestDist = dist;
@@ -650,6 +688,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     setName("Audiocity");
     setSize(940, 800);
     setLookAndFeel(&dialLaf_);
+    tooltipWindow_ = std::make_unique<juce::TooltipWindow>(this, 700);
 
     addAndMakeVisible(tabBar_);
     tabBar_.setLookAndFeel(&tabTextLookAndFeel);
@@ -737,18 +776,30 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 
     // Playback mode
     addAndMakeVisible(playbackModeLabel_);
-    addAndMakeVisible(playbackModeCombo_);
-    playbackModeCombo_.addItem("Gate", 1);
-    playbackModeCombo_.addItem("One-shot", 2);
-    playbackModeCombo_.addItem("Loop", 3);
-    playbackModeCombo_.setSelectedId(1, juce::dontSendNotification);
-    playbackModeCombo_.onChange = [this]
+    addAndMakeVisible(playbackModeGateButton_);
+    addAndMakeVisible(playbackModeOneShotButton_);
+    addAndMakeVisible(playbackModeLoopButton_);
+
+    constexpr int kPlaybackModeRadioGroup = 42001;
+    playbackModeGateButton_.setRadioGroupId(kPlaybackModeRadioGroup);
+    playbackModeOneShotButton_.setRadioGroupId(kPlaybackModeRadioGroup);
+    playbackModeLoopButton_.setRadioGroupId(kPlaybackModeRadioGroup);
+
+    playbackModeGateButton_.setToggleState(true, juce::dontSendNotification);
+    playbackModeGateButton_.onClick = [this]
     {
-        const auto mode = playbackModeCombo_.getSelectedId() - 1;
-        processor_.setPlaybackMode(
-            mode == 1 ? AudiocityAudioProcessor::PlaybackMode::oneShot
-                : (mode == 2 ? AudiocityAudioProcessor::PlaybackMode::loop
-                             : AudiocityAudioProcessor::PlaybackMode::gate));
+        if (playbackModeGateButton_.getToggleState())
+            processor_.setPlaybackMode(AudiocityAudioProcessor::PlaybackMode::gate);
+    };
+    playbackModeOneShotButton_.onClick = [this]
+    {
+        if (playbackModeOneShotButton_.getToggleState())
+            processor_.setPlaybackMode(AudiocityAudioProcessor::PlaybackMode::oneShot);
+    };
+    playbackModeLoopButton_.onClick = [this]
+    {
+        if (playbackModeLoopButton_.getToggleState())
+            processor_.setPlaybackMode(AudiocityAudioProcessor::PlaybackMode::loop);
     };
 
     // Playback window (trim) controls
@@ -817,15 +868,23 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 
     // Quality / Preload
     addAndMakeVisible(qualityLabel_);
-    addAndMakeVisible(qualityCombo_);
-    qualityCombo_.addItem("CPU", 1);
-    qualityCombo_.addItem("Fidelity", 2);
-    qualityCombo_.setSelectedId(2, juce::dontSendNotification);
-    qualityCombo_.onChange = [this]
+    addAndMakeVisible(qualityCpuButton_);
+    addAndMakeVisible(qualityFidelityButton_);
+
+    constexpr int kQualityRadioGroup = 42002;
+    qualityCpuButton_.setRadioGroupId(kQualityRadioGroup);
+    qualityFidelityButton_.setRadioGroupId(kQualityRadioGroup);
+
+    qualityFidelityButton_.setToggleState(true, juce::dontSendNotification);
+    qualityCpuButton_.onClick = [this]
     {
-        processor_.setQualityTier(qualityCombo_.getSelectedId() == 1
-            ? AudiocityAudioProcessor::QualityTier::cpu
-            : AudiocityAudioProcessor::QualityTier::fidelity);
+        if (qualityCpuButton_.getToggleState())
+            processor_.setQualityTier(AudiocityAudioProcessor::QualityTier::cpu);
+    };
+    qualityFidelityButton_.onClick = [this]
+    {
+        if (qualityFidelityButton_.getToggleState())
+            processor_.setQualityTier(AudiocityAudioProcessor::QualityTier::fidelity);
     };
 
     addAndMakeVisible(preloadDial_);
@@ -1014,7 +1073,9 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     rootNoteCombo_.setVisible(showSampleTab);
     waveformView_.setVisible(showSampleTab);
     playbackModeLabel_.setVisible(showSampleTab);
-    playbackModeCombo_.setVisible(showSampleTab);
+    playbackModeGateButton_.setVisible(showSampleTab);
+    playbackModeOneShotButton_.setVisible(showSampleTab);
+    playbackModeLoopButton_.setVisible(showSampleTab);
     reverseToggle_.setVisible(showSampleTab);
     playbackStartDial_.setVisible(showSampleTab);
     playbackEndDial_.setVisible(showSampleTab);
@@ -1034,7 +1095,8 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     fadeInDial_.setVisible(showSampleTab);
     fadeOutDial_.setVisible(showSampleTab);
     qualityLabel_.setVisible(showSampleTab);
-    qualityCombo_.setVisible(showSampleTab);
+    qualityCpuButton_.setVisible(showSampleTab);
+    qualityFidelityButton_.setVisible(showSampleTab);
     preloadDial_.setVisible(showSampleTab);
     diagnosticsLabel_.setVisible(showSampleTab);
 }
@@ -1390,8 +1452,17 @@ void AudiocityAudioProcessorEditor::resized()
     constexpr int kGrpHdr   = 22;
     constexpr int kGrpGap   = 10;
     constexpr int kDialGap  = 6;
+    constexpr int kModeStackW = 120;
+    constexpr int kStackLabelH = 16;
+    constexpr int kStackButtonH = 22;
+    constexpr int kStackGap = 2;
+    constexpr int kStackColGap = kDialGap + 8;
     constexpr int kRowH     = kGrpHdr + kGrpPadV + kDialH + kGrpPadV;  // 134
     constexpr int kTopBarH  = 34;
+    constexpr int kTrimFilterInnerW = (kDial * 3) + (kDialGap * 2);
+    constexpr int kLoopInnerW = (kDial * 2) + kDialGap + 8 + kModeStackW;
+    constexpr int kLeftGroupInnerW = juce::jmax(kTrimFilterInnerW, kLoopInnerW);
+    constexpr int kLeftGroupW = kLeftGroupInnerW + (kGrpPadH * 2);
 
     auto content = getLocalBounds().reduced(kMargin);
     tabBar_.setBounds(content.removeFromTop(30));
@@ -1449,10 +1520,37 @@ void AudiocityAudioProcessorEditor::resized()
         return bounds.withTrimmedTop(kGrpHdr).reduced(kGrpPadH, kGrpPadV);
     };
 
+    auto layoutThreeButtonStack = [kStackLabelH, kStackButtonH, kStackGap](juce::Rectangle<int> area,
+                                                                             juce::Label& label,
+                                                                             juce::Button& topButton,
+                                                                             juce::Button& middleButton,
+                                                                             juce::Button& bottomButton)
+    {
+        label.setBounds(area.removeFromTop(kStackLabelH));
+        area.removeFromTop(kStackGap);
+        topButton.setBounds(area.removeFromTop(kStackButtonH));
+        area.removeFromTop(kStackGap);
+        middleButton.setBounds(area.removeFromTop(kStackButtonH));
+        area.removeFromTop(kStackGap);
+        bottomButton.setBounds(area.removeFromTop(kStackButtonH));
+    };
+
+    auto layoutTwoButtonStack = [kStackLabelH, kStackButtonH, kStackGap](juce::Rectangle<int> area,
+                                                                           juce::Label& label,
+                                                                           juce::Button& topButton,
+                                                                           juce::Button& bottomButton)
+    {
+        label.setBounds(area.removeFromTop(kStackLabelH));
+        area.removeFromTop(kStackGap);
+        topButton.setBounds(area.removeFromTop(kStackButtonH));
+        area.removeFromTop(kStackGap);
+        bottomButton.setBounds(area.removeFromTop(kStackButtonH));
+    };
+
     // ── Row 1: Trim | Performance ──
     {
         auto row = area.removeFromTop(kRowH);
-        const auto leftW = (row.getWidth() - kGrpGap) * 2 / 5;
+        const auto leftW = juce::jmin(kLeftGroupW, row.getWidth() - kGrpGap - 220);
 
         auto trimInner = makeGroup("Trim", row.removeFromLeft(leftW));
         row.removeFromLeft(kGrpGap);
@@ -1486,21 +1584,23 @@ void AudiocityAudioProcessorEditor::resized()
     // ── Row 2: Loop | Amplitude Envelope ──
     {
         auto row = area.removeFromTop(kRowH);
-        const auto leftW = (row.getWidth() - kGrpGap) / 2;
+        const auto leftW = juce::jmin(kLeftGroupW, row.getWidth() - kGrpGap - 220);
 
         auto loopInner = makeGroup("Loop", row.removeFromLeft(leftW));
         row.removeFromLeft(kGrpGap);
         auto ampInner = makeGroup("Amplitude Envelope", row);
 
-        // Loop: Loop Start + Loop End + Mode combo
+        // Loop: Loop Start + Loop End + Mode buttons
         loopStartDial_.setBounds(loopInner.removeFromLeft(kDial));
         loopInner.removeFromLeft(kDialGap);
         loopEndDial_.setBounds(loopInner.removeFromLeft(kDial));
-        loopInner.removeFromLeft(kDialGap + 8);
-        auto modeArea = loopInner.removeFromLeft(100);
-        playbackModeLabel_.setBounds(modeArea.removeFromTop(16));
-        modeArea.removeFromTop(2);
-        playbackModeCombo_.setBounds(modeArea.removeFromTop(26));
+        loopInner.removeFromLeft(kStackColGap);
+        auto modeArea = loopInner.removeFromRight(kModeStackW);
+        layoutThreeButtonStack(modeArea,
+                       playbackModeLabel_,
+                       playbackModeGateButton_,
+                       playbackModeOneShotButton_,
+                       playbackModeLoopButton_);
 
         // Amp: A D S R
         ampAttackDial_.setBounds(ampInner.removeFromLeft(kDial));
@@ -1517,7 +1617,7 @@ void AudiocityAudioProcessorEditor::resized()
     // ── Row 3: Filter | Output ──
     {
         auto row = area.removeFromTop(kRowH);
-        const auto leftW = (row.getWidth() - kGrpGap) * 2 / 5;
+        const auto leftW = juce::jmin(kLeftGroupW, row.getWidth() - kGrpGap - 220);
 
         auto filterInner = makeGroup("Filter", row.removeFromLeft(leftW));
         row.removeFromLeft(kGrpGap);
@@ -1534,15 +1634,16 @@ void AudiocityAudioProcessorEditor::resized()
         fadeInDial_.setBounds(outInner.removeFromLeft(kDial));
         outInner.removeFromLeft(kDialGap);
         fadeOutDial_.setBounds(outInner.removeFromLeft(kDial));
-        outInner.removeFromLeft(kDialGap + 8);
+        outInner.removeFromLeft(kStackColGap);
 
         preloadDial_.setBounds(outInner.removeFromLeft(kDial));
-        outInner.removeFromLeft(kDial + 6);
+        outInner.removeFromLeft(kStackColGap);
 
-        auto qualArea = outInner.removeFromLeft(100);
-        qualityLabel_.setBounds(qualArea.removeFromTop(16));
-        qualArea.removeFromTop(2);
-        qualityCombo_.setBounds(qualArea.removeFromTop(26));
+        auto qualArea = outInner.removeFromRight(kModeStackW);
+        layoutTwoButtonStack(qualArea,
+                     qualityLabel_,
+                     qualityCpuButton_,
+                     qualityFidelityButton_);
     }
 
     area.removeFromTop(kGrpGap);
@@ -1662,6 +1763,10 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Fade Out - Number of samples to fade out at playback end");
     preloadDial_.setLabelTooltip(
         "Preload - Number of samples buffered before streaming begins");
+    qualityCpuButton_.setTooltip(
+        "Quality - Prioritize lower CPU usage");
+    qualityFidelityButton_.setTooltip(
+        "Quality - Prioritize highest playback fidelity");
 
     monoToggle_.setTooltip(
         "Monophonic - Limit to a single voice at a time");
@@ -1806,12 +1911,13 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     lastWaveformSamplePath_ = path;
 
     // Playback mode
-    int playbackId = 1;
-    if (processor_.getPlaybackMode() == AudiocityAudioProcessor::PlaybackMode::oneShot)
-        playbackId = 2;
-    else if (processor_.getPlaybackMode() == AudiocityAudioProcessor::PlaybackMode::loop)
-        playbackId = 3;
-    playbackModeCombo_.setSelectedId(playbackId, juce::dontSendNotification);
+    const auto playbackMode = processor_.getPlaybackMode();
+    playbackModeGateButton_.setToggleState(playbackMode == AudiocityAudioProcessor::PlaybackMode::gate,
+        juce::dontSendNotification);
+    playbackModeOneShotButton_.setToggleState(playbackMode == AudiocityAudioProcessor::PlaybackMode::oneShot,
+        juce::dontSendNotification);
+    playbackModeLoopButton_.setToggleState(playbackMode == AudiocityAudioProcessor::PlaybackMode::loop,
+        juce::dontSendNotification);
 
     // Loop points
     loopStartDial_.setValue(processor_.getLoopStart());
@@ -1842,8 +1948,11 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     filterEnvAmtDial_.setValue(filter.envAmountHz);
 
     // Quality / Preload
-    qualityCombo_.setSelectedId(
-        processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::cpu ? 1 : 2,
+    qualityCpuButton_.setToggleState(
+        processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::cpu,
+        juce::dontSendNotification);
+    qualityFidelityButton_.setToggleState(
+        processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::fidelity,
         juce::dontSendNotification);
     preloadDial_.setValue(processor_.getPreloadSamples());
 
@@ -1918,7 +2027,7 @@ void AudiocityAudioProcessorEditor::applyLoopPoints()
     if (processor_.getPlaybackMode() != AudiocityAudioProcessor::PlaybackMode::loop)
     {
         processor_.setPlaybackMode(AudiocityAudioProcessor::PlaybackMode::loop);
-        playbackModeCombo_.setSelectedId(3, juce::dontSendNotification);
+        playbackModeLoopButton_.setToggleState(true, juce::dontSendNotification);
     }
 
     refreshUI();

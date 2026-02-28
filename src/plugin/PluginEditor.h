@@ -107,6 +107,7 @@ private:
 
     AudiocityAudioProcessor& processor_;
     std::unique_ptr<juce::FileChooser> fileChooser_;
+    std::unique_ptr<juce::TooltipWindow> tooltipWindow_;
     audiocity::engine::SettingsUndoHistory settingsUndoHistory_;
     bool isHoveringValidDrop_ = false;
     bool isResizingSampleList_ = false;
@@ -155,7 +156,9 @@ private:
 
     // ── Playback ──
     juce::Label playbackModeLabel_{ {}, "Mode" };
-    juce::ComboBox playbackModeCombo_;
+    juce::ToggleButton playbackModeGateButton_{ "Gate" };
+    juce::ToggleButton playbackModeOneShotButton_{ "One-shot" };
+    juce::ToggleButton playbackModeLoopButton_{ "Loop" };
     juce::ToggleButton reverseToggle_{ "Reverse" };
 
     // ── Trim ──
@@ -187,7 +190,8 @@ private:
     CcLearnDial fadeInDial_{ "Fade In", 0, 10000, 1 };
     CcLearnDial fadeOutDial_{ "Fade Out", 0, 10000, 1 };
     juce::Label qualityLabel_{ {}, "Quality" };
-    juce::ComboBox qualityCombo_;
+    juce::ToggleButton qualityCpuButton_{ "CPU" };
+    juce::ToggleButton qualityFidelityButton_{ "Fidelity" };
     CcLearnDial preloadDial_{ "Preload", 256, 131072, 1, {}, 32768 };
 
     // ── Diagnostics ──
