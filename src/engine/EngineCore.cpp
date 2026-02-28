@@ -11,6 +11,12 @@ namespace
 constexpr float kPi = 3.14159265358979323846f;
 }
 
+struct EngineCore::SampleSegments
+{
+    juce::AudioBuffer<float> preloadData;
+    juce::AudioBuffer<float> streamData;
+};
+
 void EngineCore::prepare(const double sampleRate, const int maxSamplesPerBlock, const int outputChannels) noexcept
 {
     sampleRate_ = sampleRate;
@@ -30,6 +36,18 @@ void EngineCore::release() noexcept
     stopAllVoicesImmediate();
     voicePool_.reset();
     pendingEventCount_ = 0;
+}
+
+int EngineCore::getLoadedPreloadSamples() const noexcept
+{
+    const auto segments = getSampleSegmentsSnapshot();
+    return segments != nullptr ? segments->preloadData.getNumSamples() : 0;
+}
+
+int EngineCore::getLoadedStreamSamples() const noexcept
+{
+    const auto segments = getSampleSegmentsSnapshot();
+    return segments != nullptr ? segments->streamData.getNumSamples() : 0;
 }
 
 bool EngineCore::loadSampleFromFile(const juce::File& file)
@@ -64,8 +82,25 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
         mono.setSample(0, sampleIndex, sum / static_cast<float>(reader->numChannels));
     }
 
-    setSampleData(mono, reader->sampleRate, rootMidiNote_);
+    // Read embedded root note from WAV smpl chunk or AIFF INST chunk
+    int embeddedRootNote = rootMidiNote_;
+    const auto& metadata = reader->metadataValues;
+    if (metadata.containsKey("MidiUnityNote"))
+        embeddedRootNote = juce::jlimit(0, 127, metadata.getValue("MidiUnityNote", juce::String(rootMidiNote_)).getIntValue());
+
+    setSampleData(mono, reader->sampleRate, embeddedRootNote);
     samplePath_ = file.getFullPathName();
+
+    // Read embedded loop points from WAV smpl chunk or AIFF MARK/INST chunks
+    const auto embeddedLoopStart = metadata.getValue("Loop0Start", "-1").getIntValue();
+    const auto embeddedLoopEnd = metadata.getValue("Loop0End", "-1").getIntValue();
+
+    if (embeddedLoopStart >= 0 && embeddedLoopEnd > embeddedLoopStart)
+    {
+        setLoopPoints(embeddedLoopStart, embeddedLoopEnd);
+        setPlaybackMode(PlaybackMode::loop);
+    }
+
     return true;
 }
 
@@ -107,13 +142,17 @@ void EngineCore::setPreloadSamples(const int preloadSamples) noexcept
 {
     preloadSamples_ = juce::jmax(256, preloadSamples);
 
-    const auto totalSamples = getTotalSampleLength();
+    const auto segments = getSampleSegmentsSnapshot();
+    if (segments == nullptr)
+        return;
+
+    const auto totalSamples = getTotalSampleLength(*segments);
     if (totalSamples <= 0)
         return;
 
     juce::AudioBuffer<float> mono(1, totalSamples);
     for (int i = 0; i < totalSamples; ++i)
-        mono.setSample(0, i, readSampleAt(i));
+        mono.setSample(0, i, readSampleAt(*segments, i));
 
     rebuildSampleSegments(mono);
     setSampleWindow(sampleWindowStart_, sampleWindowEnd_);
@@ -174,6 +213,10 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     if (outputs == nullptr || numChannels <= 0 || numSamples <= 0)
         return;
 
+    const auto segments = getSampleSegmentsSnapshot();
+    if (segments == nullptr)
+        return;
+
     for (int channel = 0; channel < numChannels; ++channel)
         juce::FloatVectorOperations::clear(outputs[channel], numSamples);
 
@@ -225,9 +268,8 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
                 effectiveLoopEnd = sampleLength - 1;
             }
 
-            const auto loopEnabled = sfzLoopMode_ != SfzLoopMode::noLoop && playbackMode_ == PlaybackMode::loop;
-            const auto shouldLoopNow = loopEnabled
-                && (sfzLoopMode_ == SfzLoopMode::loopContinuous || voice.noteHeld);
+            const auto loopEnabled = playbackMode_ == PlaybackMode::loop;
+            const auto shouldLoopNow = loopEnabled && voice.noteHeld;
 
             if (voice.samplePosition >= static_cast<float>(sampleLength - 1))
             {
@@ -258,7 +300,7 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
                 continue;
             }
 
-            const float rawSample = readSampleLinear(voice.samplePosition);
+            const float rawSample = readSampleLinear(*segments, voice.samplePosition);
             const float filterEnvValue = voice.filterEnvelope.getNextSample();
             const float filteredSample = computeLpf(rawSample, filterEnvValue, voice.lpfState);
             mixed += filteredSample * ampLevel;
@@ -496,9 +538,6 @@ void EngineCore::releaseVoicesForNote(const int noteNumber) noexcept
 
         voice.noteHeld = false;
 
-        if (sfzLoopMode_ == SfzLoopMode::loopContinuous)
-            continue;
-
         voice.ampEnvelope.noteOff();
         voice.filterEnvelope.noteOff();
     }
@@ -536,56 +575,87 @@ float EngineCore::computeSampleIncrementForNote(const int noteNumber) const noex
     return static_cast<float>(pitchRatio * sourceToOutputRatio);
 }
 
-float EngineCore::readSampleLinear(const float position) const noexcept
+float EngineCore::readSampleLinear(const SampleSegments& segments, const float position) const noexcept
 {
-    const auto sampleLength = getEffectivePlaybackLength();
+    const auto sampleLength = getEffectivePlaybackLength(segments);
 
     if (sampleLength <= 1)
         return 0.0f;
 
     const auto clampedPosition = juce::jlimit(0.0f, static_cast<float>(sampleLength - 1), position);
     const auto sampleIndex = static_cast<int>(clampedPosition);
-    const auto mappedIndex = mapPlaybackIndexToSampleIndex(sampleIndex);
-    const auto editGain = computeEditGain(clampedPosition);
+    const auto mappedIndex = mapPlaybackIndexToSampleIndex(segments, sampleIndex);
+    const auto editGain = computeEditGain(clampedPosition, sampleLength);
 
     if (qualityTier_ == QualityTier::cpu)
-        return readSampleAt(mappedIndex) * editGain;
+        return readSampleAt(segments, mappedIndex) * editGain;
 
     const auto nextIndex = juce::jmin(sampleIndex + 1, sampleLength - 1);
     const auto fraction = clampedPosition - static_cast<float>(sampleIndex);
 
-    const auto sampleA = readSampleAt(mappedIndex);
-    const auto sampleB = readSampleAt(mapPlaybackIndexToSampleIndex(nextIndex));
+    const auto sampleA = readSampleAt(segments, mappedIndex);
+    const auto sampleB = readSampleAt(segments, mapPlaybackIndexToSampleIndex(segments, nextIndex));
 
     return (sampleA + (sampleB - sampleA) * fraction) * editGain;
+}
+
+float EngineCore::readSampleLinear(const float position) const noexcept
+{
+    const auto segments = getSampleSegmentsSnapshot();
+    if (segments == nullptr)
+        return 0.0f;
+
+    return readSampleLinear(*segments, position);
 }
 
 void EngineCore::rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData) noexcept
 {
     ++segmentRebuildCount_;
 
+    sampleSegments_.store(buildSampleSegments(monoSampleData, preloadSamples_), std::memory_order_release);
+}
+
+std::shared_ptr<const EngineCore::SampleSegments> EngineCore::getSampleSegmentsSnapshot() const noexcept
+{
+    return sampleSegments_.load(std::memory_order_acquire);
+}
+
+std::shared_ptr<const EngineCore::SampleSegments> EngineCore::buildSampleSegments(
+    const juce::AudioBuffer<float>& monoSampleData,
+    const int preloadSamples) noexcept
+{
+    auto segments = std::make_shared<SampleSegments>();
+
     const auto totalSamples = monoSampleData.getNumSamples();
-    const auto clampedPreload = juce::jlimit(0, totalSamples, preloadSamples_);
+    const auto clampedPreload = juce::jlimit(0, totalSamples, preloadSamples);
     const auto streamSamples = juce::jmax(0, totalSamples - clampedPreload);
 
-    preloadData_.setSize(1, clampedPreload, false, true, true);
-    streamData_.setSize(1, streamSamples, false, true, true);
+    segments->preloadData.setSize(1, clampedPreload, false, true, true);
+    segments->streamData.setSize(1, streamSamples, false, true, true);
 
     if (clampedPreload > 0)
-        preloadData_.copyFrom(0, 0, monoSampleData, 0, 0, clampedPreload);
+        segments->preloadData.copyFrom(0, 0, monoSampleData, 0, 0, clampedPreload);
 
     if (streamSamples > 0)
-        streamData_.copyFrom(0, 0, monoSampleData, 0, clampedPreload, streamSamples);
+        segments->streamData.copyFrom(0, 0, monoSampleData, 0, clampedPreload, streamSamples);
+
+    return segments;
+}
+
+int EngineCore::getTotalSampleLength(const SampleSegments& segments) const noexcept
+{
+    return segments.preloadData.getNumSamples() + segments.streamData.getNumSamples();
 }
 
 int EngineCore::getTotalSampleLength() const noexcept
 {
-    return preloadData_.getNumSamples() + streamData_.getNumSamples();
+    const auto segments = getSampleSegmentsSnapshot();
+    return segments != nullptr ? getTotalSampleLength(*segments) : 0;
 }
 
-int EngineCore::getEffectivePlaybackLength() const noexcept
+int EngineCore::getEffectivePlaybackLength(const SampleSegments& segments) const noexcept
 {
-    const auto totalLength = getTotalSampleLength();
+    const auto totalLength = getTotalSampleLength(segments);
     if (totalLength <= 0)
         return 0;
 
@@ -594,9 +664,15 @@ int EngineCore::getEffectivePlaybackLength() const noexcept
     return clampedEnd - clampedStart + 1;
 }
 
-int EngineCore::mapPlaybackIndexToSampleIndex(const int playbackIndex) const noexcept
+int EngineCore::getEffectivePlaybackLength() const noexcept
 {
-    const auto totalLength = getTotalSampleLength();
+    const auto segments = getSampleSegmentsSnapshot();
+    return segments != nullptr ? getEffectivePlaybackLength(*segments) : 0;
+}
+
+int EngineCore::mapPlaybackIndexToSampleIndex(const SampleSegments& segments, const int playbackIndex) const noexcept
+{
+    const auto totalLength = getTotalSampleLength(segments);
     if (totalLength <= 0)
         return 0;
 
@@ -610,9 +686,8 @@ int EngineCore::mapPlaybackIndexToSampleIndex(const int playbackIndex) const noe
     return clampedStart + clampedPlayback;
 }
 
-float EngineCore::computeEditGain(const float playbackPosition) const noexcept
+float EngineCore::computeEditGain(const float playbackPosition, const int playbackLength) const noexcept
 {
-    const auto playbackLength = getEffectivePlaybackLength();
     if (playbackLength <= 1)
         return 0.0f;
 
@@ -634,18 +709,54 @@ float EngineCore::computeEditGain(const float playbackPosition) const noexcept
     return juce::jlimit(0.0f, 1.0f, gain);
 }
 
-float EngineCore::readSampleAt(const int index) const noexcept
+float EngineCore::readSampleAt(const SampleSegments& segments, const int index) const noexcept
 {
-    const auto preloadSamples = preloadData_.getNumSamples();
+    if (index < 0)
+        return 0.0f;
+
+    const auto preloadSamples = segments.preloadData.getNumSamples();
 
     if (index < preloadSamples)
-        return preloadData_.getSample(0, index);
+        return segments.preloadData.getSample(0, index);
 
     const auto streamIndex = index - preloadSamples;
-    if (streamIndex >= 0 && streamIndex < streamData_.getNumSamples())
-        return streamData_.getSample(0, streamIndex);
+    if (streamIndex >= 0 && streamIndex < segments.streamData.getNumSamples())
+        return segments.streamData.getSample(0, streamIndex);
 
     return 0.0f;
+}
+
+float EngineCore::readSampleAt(const int index) const noexcept
+{
+    const auto segments = getSampleSegmentsSnapshot();
+    if (segments == nullptr)
+        return 0.0f;
+
+    return readSampleAt(*segments, index);
+}
+
+std::vector<float> EngineCore::buildDisplayPeaks(const int maxPeaks) const noexcept
+{
+    const auto total = getTotalSampleLength();
+    if (total <= 0 || maxPeaks <= 0)
+        return {};
+
+    const auto peakCount = juce::jmax(1, juce::jmin(maxPeaks, total));
+    std::vector<float> peaks(static_cast<std::size_t>(peakCount), 0.0f);
+
+    for (int i = 0; i < peakCount; ++i)
+    {
+        const auto start = (i * total) / peakCount;
+        const auto endExclusive = juce::jmax(start + 1, ((i + 1) * total) / peakCount);
+
+        float maxAbs = 0.0f;
+        for (int s = start; s < endExclusive; ++s)
+            maxAbs = juce::jmax(maxAbs, std::abs(readSampleAt(s)));
+
+        peaks[static_cast<std::size_t>(i)] = juce::jlimit(0.0f, 1.0f, maxAbs);
+    }
+
+    return peaks;
 }
 
 float EngineCore::computeLpf(const float inputSample, const float envValue, float& state) const noexcept
@@ -653,9 +764,11 @@ float EngineCore::computeLpf(const float inputSample, const float envValue, floa
     const auto cutoff = juce::jlimit(20.0f, static_cast<float>(sampleRate_ * 0.45),
         filterSettings_.baseCutoffHz + envValue * filterSettings_.envAmountHz);
 
+    // Resonant one-pole: feedback drives self-oscillation toward cutoff
+    const auto fb = filterSettings_.resonance * 0.95f;
     const auto alpha = std::exp(-2.0f * kPi * cutoff / static_cast<float>(sampleRate_));
-    const auto output = (1.0f - alpha) * inputSample + alpha * state;
-    state = output;
-    return output;
+    const auto filtered = (1.0f - alpha) * (inputSample + fb * (state - inputSample)) + alpha * state;
+    state = filtered;
+    return filtered;
 }
 }

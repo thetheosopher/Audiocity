@@ -3,12 +3,12 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_core/juce_core.h>
 
-#include <atomic>
-
 #include "../engine/EngineCore.h"
-#include "../engine/ZoneSelector.h"
-#include "../engine/sfz/SfzModel.h"
-#include "BrowserIndex.h"
+
+#include <array>
+#include <atomic>
+#include <map>
+#include <mutex>
 
 class AudiocityAudioProcessor final : public juce::AudioProcessor
 {
@@ -51,15 +51,6 @@ public:
     bool loadSampleFromFile(const juce::File& file);
     [[nodiscard]] juce::String getLoadedSamplePath() const;
 
-    bool importSfzFile(const juce::File& file);
-    [[nodiscard]] const std::vector<audiocity::engine::sfz::Zone>& getImportedZones() const noexcept;
-    [[nodiscard]] const std::vector<audiocity::engine::sfz::Diagnostic>& getImportDiagnostics() const noexcept;
-    bool updateImportedZoneLoopPoints(int zoneIndex, int loopStart, int loopEnd);
-
-    using RoundRobinMode = audiocity::engine::ZoneSelector::RoundRobinMode;
-    void setRoundRobinMode(RoundRobinMode mode) noexcept;
-    [[nodiscard]] RoundRobinMode getRoundRobinMode() const noexcept;
-
     using PlaybackMode = audiocity::engine::EngineCore::PlaybackMode;
     void setPlaybackMode(PlaybackMode mode) noexcept;
     [[nodiscard]] PlaybackMode getPlaybackMode() const noexcept;
@@ -90,9 +81,9 @@ public:
     [[nodiscard]] int getSampleWindowStart() const noexcept { return engine_.getSampleWindowStart(); }
     [[nodiscard]] int getSampleWindowEnd() const noexcept { return engine_.getSampleWindowEnd(); }
 
-    void setEditorLoopPoints(int loopStart, int loopEnd) noexcept { engine_.setLoopPoints(loopStart, loopEnd); }
-    [[nodiscard]] int getEditorLoopStart() const noexcept { return engine_.getLoopStart(); }
-    [[nodiscard]] int getEditorLoopEnd() const noexcept { return engine_.getLoopEnd(); }
+    void setLoopPoints(int loopStart, int loopEnd) noexcept { engine_.setLoopPoints(loopStart, loopEnd); }
+    [[nodiscard]] int getLoopStart() const noexcept { return engine_.getLoopStart(); }
+    [[nodiscard]] int getLoopEnd() const noexcept { return engine_.getLoopEnd(); }
 
     void setFadeSamples(int fadeInSamples, int fadeOutSamples) noexcept { engine_.setFadeSamples(fadeInSamples, fadeOutSamples); }
     [[nodiscard]] int getFadeInSamples() const noexcept { return engine_.getFadeInSamples(); }
@@ -101,25 +92,52 @@ public:
     void setReversePlayback(bool enabled) noexcept { engine_.setReversePlayback(enabled); }
     [[nodiscard]] bool getReversePlayback() const noexcept { return engine_.getReversePlayback(); }
     [[nodiscard]] int getLoadedSampleLength() const noexcept { return engine_.getLoadedSampleLength(); }
+    [[nodiscard]] std::vector<float> getLoadedSamplePeaks(int maxPeaks = 2048) const noexcept { return engine_.buildDisplayPeaks(maxPeaks); }
 
-    BrowserIndex& browserIndex() noexcept { return browserIndex_; }
-    const BrowserIndex& browserIndex() const noexcept { return browserIndex_; }
+    [[nodiscard]] int getRootMidiNote() const noexcept { return engine_.getRootMidiNote(); }
+    void setRootMidiNote(int rootNote) noexcept { engine_.setRootMidiNote(rootNote); }
 
-    bool startPreviewFromPath(const juce::String& path);
-    void stopPreview();
-    [[nodiscard]] bool isPreviewPlaying() const noexcept { return previewPlaying_.load(); }
+    using AdsrSettings = audiocity::engine::EngineCore::AdsrSettings;
+    void setAmpEnvelope(const AdsrSettings& settings) noexcept { engine_.setAmpEnvelope(settings); }
+    [[nodiscard]] AdsrSettings getAmpEnvelope() const noexcept { return engine_.getAmpEnvelope(); }
+    void setFilterEnvelope(const AdsrSettings& settings) noexcept { engine_.setFilterEnvelope(settings); }
+    [[nodiscard]] AdsrSettings getFilterEnvelope() const noexcept { return engine_.getFilterEnvelope(); }
+
+    using FilterSettings = audiocity::engine::EngineCore::FilterSettings;
+    void setFilterSettings(const FilterSettings& settings) noexcept { engine_.setFilterSettings(settings); }
+    [[nodiscard]] FilterSettings getFilterSettings() const noexcept { return engine_.getFilterSettings(); }
+
+    // ── MIDI CC mapping ──────────────────────────────────────────────────────
+    struct CcEvent
+    {
+        int ccNumber = 0;
+        int value = 0;
+    };
+
+    // Lock-free FIFO: processBlock writes, editor reads via timer.
+    static constexpr int kCcFifoSize = 256;
+    [[nodiscard]] bool popCcEvent(CcEvent& out);
+
+    // Persistent CC → paramId mappings (thread-safe, called from message thread)
+    void setCcMapping(int ccNumber, const juce::String& paramId);
+    void clearCcMapping(int ccNumber);
+    void clearCcMappingByParam(const juce::String& paramId);
+    [[nodiscard]] int getCcForParam(const juce::String& paramId) const;
+    [[nodiscard]] juce::String getParamForCc(int ccNumber) const;
+    [[nodiscard]] std::map<int, juce::String> getAllCcMappings() const;
 
 private:
     audiocity::engine::EngineCore engine_;
-    audiocity::engine::sfz::Program sfzProgram_;
-    audiocity::engine::ZoneSelector zoneSelector_;
-    BrowserIndex browserIndex_;
 
-    std::atomic<bool> previewStartRequested_{ false };
-    std::atomic<bool> previewStopRequested_{ false };
-    std::atomic<bool> previewPlaying_{ false };
-    static constexpr int previewMidiNote_ = 72;
-    juce::String importedSfzPath_;
+    // Ring buffer for CC events
+    std::array<CcEvent, kCcFifoSize> ccFifo_{};
+    std::atomic<int> ccFifoWritePos_{ 0 };
+    std::atomic<int> ccFifoReadPos_{ 0 };
+    void pushCcEvent(int ccNumber, int value);
+
+    // CC mapping storage
+    mutable std::mutex ccMappingMutex_;
+    std::map<int, juce::String> ccToParam_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudiocityAudioProcessor)
 };

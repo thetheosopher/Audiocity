@@ -3,9 +3,6 @@
 
 #include "../src/engine/EngineCore.h"
 #include "../src/engine/SettingsUndoHistory.h"
-#include "../src/engine/ZoneSelector.h"
-#include "../src/engine/sfz/SfzImport.h"
-#include "../src/plugin/CommandStack.h"
 
 #include <cmath>
 #include <limits>
@@ -128,121 +125,6 @@ bool runVoiceStealingEdgeCaseTest()
     return !engine.isNoteActive(36) && engine.isNoteActive(36 + static_cast<int>(audiocity::engine::VoicePool::maxVoices));
 }
 
-bool runSfzNestedIncludeAndMappingTest()
-{
-    audiocity::engine::sfz::Importer importer;
-    const auto program = importer.importFromFile(fixtureFile("tests/fixtures/sfz/main_nested.sfz"));
-
-    if (program.zones.size() != 3)
-        return false;
-
-    const auto& z0 = program.zones[0];
-    const auto& z1 = program.zones[1];
-    const auto& z2 = program.zones[2];
-
-    if (z0.sourceSample != "loop.wav" || z0.loopMode != "loop_sustain" || z0.loopStart != 8 || z0.loopEnd != 88)
-        return false;
-
-    if (z1.sourceSample != "kick.wav" || z1.lowVelocity != 0 || z1.highVelocity != 63 || z1.rrGroup != 1)
-        return false;
-
-    if (z2.sourceSample != "snare.wav" || z2.lowVelocity != 64 || z2.highVelocity != 127 || z2.rrGroup != 2)
-        return false;
-
-    if (!z2.resolvedSamplePath.contains("samples\\B\\snare.wav")
-        && !z2.resolvedSamplePath.contains("samples/B/snare.wav"))
-        return false;
-
-    return true;
-}
-
-bool runSfzDiagnosticsTest()
-{
-    audiocity::engine::sfz::Importer importer;
-
-    const auto cycleProgram = importer.importFromFile(fixtureFile("tests/fixtures/sfz/cycle_a.sfz"));
-    const auto missingProgram = importer.importFromFile(fixtureFile("tests/fixtures/sfz/missing_and_unsupported.sfz"));
-
-    bool foundCycle = false;
-    bool foundMissing = false;
-    bool foundUnsupported = false;
-
-    for (const auto& diagnostic : cycleProgram.diagnostics)
-    {
-        if (diagnostic.message.containsIgnoreCase("cycle"))
-            foundCycle = true;
-    }
-
-    for (const auto& diagnostic : missingProgram.diagnostics)
-    {
-        if (diagnostic.message.containsIgnoreCase("Missing sample file"))
-            foundMissing = true;
-
-        if (diagnostic.message.containsIgnoreCase("Unsupported opcode"))
-            foundUnsupported = true;
-    }
-
-    return foundCycle && foundMissing && foundUnsupported;
-}
-
-bool runZoneSelectorOrderedModeTest()
-{
-    audiocity::engine::ZoneSelector selector;
-
-    std::vector<audiocity::engine::sfz::Zone> zones;
-    zones.push_back({ "z0.wav", "", 36, 36, -1, 36, 0, 63, 0, 0, 0, 0, 0, "no_loop", 1 });
-    zones.push_back({ "z1.wav", "", 36, 36, -1, 36, 0, 63, 0, 0, 0, 0, 0, "no_loop", 2 });
-    zones.push_back({ "z2.wav", "", 36, 36, -1, 36, 64, 127, 0, 0, 0, 0, 0, "no_loop", 1 });
-
-    selector.setZones(zones);
-    selector.setRoundRobinMode(audiocity::engine::ZoneSelector::RoundRobinMode::ordered);
-
-    if (selector.selectZoneIndex(36, 20) != 0)
-        return false;
-
-    if (selector.selectZoneIndex(36, 20) != 1)
-        return false;
-
-    if (selector.selectZoneIndex(36, 90) != 2)
-        return false;
-
-    if (selector.selectZoneIndex(50, 90) != -1)
-        return false;
-
-    return true;
-}
-
-bool runZoneSelectorRandomModeTest()
-{
-    audiocity::engine::ZoneSelector selectorA;
-    audiocity::engine::ZoneSelector selectorB;
-
-    std::vector<audiocity::engine::sfz::Zone> zones;
-    zones.push_back({ "a.wav", "", 60, 60, -1, 60, 0, 127, 0, 0, 0, 0, 0, "no_loop", 1 });
-    zones.push_back({ "b.wav", "", 60, 60, -1, 60, 0, 127, 0, 0, 0, 0, 0, "no_loop", 2 });
-    zones.push_back({ "c.wav", "", 60, 60, -1, 60, 0, 127, 0, 0, 0, 0, 0, "no_loop", 3 });
-
-    selectorA.setZones(zones);
-    selectorB.setZones(zones);
-
-    selectorA.setRoundRobinMode(audiocity::engine::ZoneSelector::RoundRobinMode::random);
-    selectorB.setRoundRobinMode(audiocity::engine::ZoneSelector::RoundRobinMode::random);
-
-    for (int i = 0; i < 8; ++i)
-    {
-        const auto a = selectorA.selectZoneIndex(60, 100);
-        const auto b = selectorB.selectZoneIndex(60, 100);
-
-        if (a != b)
-            return false;
-
-        if (a < 0 || a > 2)
-            return false;
-    }
-
-    return true;
-}
-
 float blockEnergy(const juce::AudioBuffer<float>& block)
 {
     float energy = 0.0f;
@@ -324,7 +206,6 @@ bool runPlaybackModesTest()
         engine.prepare(sampleRate, blockSize, channels);
         engine.setAmpEnvelope(fastAdsr);
         engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
-        engine.setSfzLoopMode(audiocity::engine::EngineCore::SfzLoopMode::loopSustain);
         engine.setSampleData(createTestSample(128), sampleRate, 60);
 
         juce::AudioBuffer<float> block(channels, blockSize);
@@ -344,7 +225,7 @@ bool runPlaybackModesTest()
     return true;
 }
 
-bool runLoopMarkersAndModesTest()
+bool runLoopMarkersTest()
 {
     constexpr int channels = 2;
     constexpr int blockSize = 128;
@@ -361,7 +242,7 @@ bool runLoopMarkersAndModesTest()
     slowRelease.sustainLevel = 1.0f;
     slowRelease.releaseSeconds = 0.5f;
 
-    // Loop markers should keep playback in the [16, 31] region when looping continuously.
+    // Loop markers should keep playback in the [16, 31] region while note is held.
     {
         audiocity::engine::EngineCore engine;
         engine.prepare(sampleRate, blockSize, channels);
@@ -369,7 +250,6 @@ bool runLoopMarkersAndModesTest()
         engine.setSampleData(shaped, sampleRate, 60);
         engine.setLoopPoints(16, 31);
         engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
-        engine.setSfzLoopMode(audiocity::engine::EngineCore::SfzLoopMode::loopContinuous);
 
         juce::AudioBuffer<float> block(channels, blockSize);
         juce::MidiBuffer midi;
@@ -384,47 +264,30 @@ bool runLoopMarkersAndModesTest()
             return false;
     }
 
-    // loop_sustain should react to note-off and release; loop_continuous should ignore note-off.
+    // After note-off, loop should stop and voice should enter release.
     {
-        juce::MidiBuffer midi;
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setAmpEnvelope(slowRelease);
+        engine.setSampleData(shaped, sampleRate, 60);
+        engine.setLoopPoints(16, 31);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+
         juce::AudioBuffer<float> block(channels, blockSize);
-
-        audiocity::engine::EngineCore sustain;
-        sustain.prepare(sampleRate, blockSize, channels);
-        sustain.setAmpEnvelope(slowRelease);
-        sustain.setSampleData(shaped, sampleRate, 60);
-        sustain.setLoopPoints(16, 31);
-        sustain.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
-        sustain.setSfzLoopMode(audiocity::engine::EngineCore::SfzLoopMode::loopSustain);
-
+        juce::MidiBuffer midi;
         midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
-        sustain.render(block, midi);
+        engine.render(block, midi);
+
         midi.clear();
         midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
-        sustain.render(block, midi);
-        midi.clear();
-        sustain.render(block, midi);
-        const auto sustainEnergy = blockEnergy(block);
+        engine.render(block, midi);
 
-        audiocity::engine::EngineCore continuous;
-        continuous.prepare(sampleRate, blockSize, channels);
-        continuous.setAmpEnvelope(slowRelease);
-        continuous.setSampleData(shaped, sampleRate, 60);
-        continuous.setLoopPoints(16, 31);
-        continuous.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
-        continuous.setSfzLoopMode(audiocity::engine::EngineCore::SfzLoopMode::loopContinuous);
+        // After note-off the voice should eventually stop
+        midi.clear();
+        for (int i = 0; i < 200; ++i)
+            engine.render(block, midi);
 
-        midi.clear();
-        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
-        continuous.render(block, midi);
-        midi.clear();
-        midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
-        continuous.render(block, midi);
-        midi.clear();
-        continuous.render(block, midi);
-        const auto continuousEnergy = blockEnergy(block);
-
-        if (!(continuousEnergy > sustainEnergy * 1.5f))
+        if (engine.activeVoiceCount() != 0)
             return false;
     }
 
@@ -754,6 +617,62 @@ juce::AudioBuffer<float> renderLoopSequenceWithOptionalPreloadChange(
     return output;
 }
 
+juce::AudioBuffer<float> renderSequenceWithOptionalSampleReload(
+    audiocity::engine::EngineCore& engine,
+    const juce::AudioBuffer<float>& sample,
+    const double sampleRate,
+    const bool applyReload)
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr int blocks = 8;
+
+    juce::AudioBuffer<float> output(channels, blockSize * blocks);
+
+    for (int block = 0; block < blocks; ++block)
+    {
+        juce::AudioBuffer<float> blockBuffer(channels, blockSize);
+        juce::MidiBuffer midi;
+
+        if (block == 0)
+            midi.addEvent(juce::MidiMessage::noteOn(1, 60, 0.8f), 0);
+
+        if (block == 5)
+            midi.addEvent(juce::MidiMessage::noteOff(1, 60), 32);
+
+        if (applyReload && block == 2)
+            engine.setSampleData(sample, sampleRate, 60);
+
+        engine.render(blockBuffer, midi);
+
+        for (int channel = 0; channel < channels; ++channel)
+            output.copyFrom(channel, block * blockSize, blockBuffer, channel, 0, blockSize);
+    }
+
+    return output;
+}
+
+bool runRuntimeSampleReloadStabilityTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    const auto sample = createTestSample(8192);
+
+    audiocity::engine::EngineCore reference;
+    reference.prepare(sampleRate, blockSize, channels);
+    reference.setSampleData(sample, sampleRate, 60);
+
+    audiocity::engine::EngineCore changed;
+    changed.prepare(sampleRate, blockSize, channels);
+    changed.setSampleData(sample, sampleRate, 60);
+
+    const auto stable = renderSequenceWithOptionalSampleReload(reference, sample, sampleRate, false);
+    const auto withReload = renderSequenceWithOptionalSampleReload(changed, sample, sampleRate, true);
+    return buffersAreEqual(stable, withReload, 1.0e-6f);
+}
+
 bool runLoopModeRuntimePreloadChangeStabilityTest()
 {
     constexpr int channels = 2;
@@ -775,7 +694,6 @@ bool runLoopModeRuntimePreloadChangeStabilityTest()
     reference.prepare(sampleRate, blockSize, channels);
     reference.setAmpEnvelope(slowRelease);
     reference.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
-    reference.setSfzLoopMode(audiocity::engine::EngineCore::SfzLoopMode::loopContinuous);
     reference.setPreloadSamples(2048);
     reference.setSampleData(shaped, sampleRate, 60);
     reference.setLoopPoints(20, 55);
@@ -784,7 +702,6 @@ bool runLoopModeRuntimePreloadChangeStabilityTest()
     changed.prepare(sampleRate, blockSize, channels);
     changed.setAmpEnvelope(slowRelease);
     changed.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
-    changed.setSfzLoopMode(audiocity::engine::EngineCore::SfzLoopMode::loopContinuous);
     changed.setPreloadSamples(2048);
     changed.setSampleData(shaped, sampleRate, 60);
     changed.setLoopPoints(20, 55);
@@ -960,7 +877,6 @@ bool runCpuQualityEnergyDriftSmokeTest()
         engine.setQualityTier(tier);
         engine.setAmpEnvelope(stableAdsr);
         engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
-        engine.setSfzLoopMode(audiocity::engine::EngineCore::SfzLoopMode::loopContinuous);
         engine.setSampleData(shaped, sampleRate, 60);
         engine.setLoopPoints(20, 55);
 
@@ -1056,9 +972,9 @@ bool runRuntimeQualitySwitchSmokeTest()
 bool runSettingsUndoHistoryTest()
 {
     audiocity::engine::SettingsUndoHistory history;
-    const audiocity::engine::SettingsSnapshot initial{ 32768, 1, 0, 0, false, false, 0.0f, 0 };
-    const audiocity::engine::SettingsSnapshot changedPreload{ 4096, 1, 0, 0, false, false, 0.0f, 0 };
-    const audiocity::engine::SettingsSnapshot changedTierAndMapping{ 4096, 0, 1, 2, true, true, 0.04f, 2 };
+    const audiocity::engine::SettingsSnapshot initial{ 32768, 1, 0, false, false, 0.0f, 0 };
+    const audiocity::engine::SettingsSnapshot changedPreload{ 4096, 1, 0, false, false, 0.0f, 0 };
+    const audiocity::engine::SettingsSnapshot changedTierAndMapping{ 4096, 0, 1, true, true, 0.04f, 2 };
 
     history.recordChange(initial, changedPreload);
     history.recordChange(changedPreload, changedTierAndMapping);
@@ -1096,10 +1012,10 @@ bool runSettingsUndoHistoryCapacityTest()
 {
     audiocity::engine::SettingsUndoHistory history(2);
 
-    const audiocity::engine::SettingsSnapshot s0{ 32768, 1, 0, 0, false, false, 0.0f, 0 };
-    const audiocity::engine::SettingsSnapshot s1{ 16384, 1, 0, 0, false, false, 0.0f, 0 };
-    const audiocity::engine::SettingsSnapshot s2{ 8192, 1, 0, 1, false, false, 0.0f, 0 };
-    const audiocity::engine::SettingsSnapshot s3{ 4096, 0, 1, 2, true, false, 0.01f, 1 };
+    const audiocity::engine::SettingsSnapshot s0{ 32768, 1, 0, false, false, 0.0f, 0 };
+    const audiocity::engine::SettingsSnapshot s1{ 16384, 1, 0, false, false, 0.0f, 0 };
+    const audiocity::engine::SettingsSnapshot s2{ 8192, 1, 1, false, false, 0.0f, 0 };
+    const audiocity::engine::SettingsSnapshot s3{ 4096, 0, 2, true, false, 0.01f, 1 };
 
     history.recordChange(s0, s1);
     history.recordChange(s1, s2);
@@ -1128,10 +1044,10 @@ bool runSettingsUndoHistoryCoalesceTest()
 {
     audiocity::engine::SettingsUndoHistory history;
 
-    const audiocity::engine::SettingsSnapshot a{ 32768, 1, 0, 0, false, false, 0.00f, 0 };
-    const audiocity::engine::SettingsSnapshot b{ 30000, 1, 0, 0, false, false, 0.00f, 0 };
-    const audiocity::engine::SettingsSnapshot c{ 25000, 1, 0, 0, false, false, 0.00f, 0 };
-    const audiocity::engine::SettingsSnapshot d{ 22000, 1, 0, 0, false, false, 0.00f, 0 };
+    const audiocity::engine::SettingsSnapshot a{ 32768, 1, 0, false, false, 0.00f, 0 };
+    const audiocity::engine::SettingsSnapshot b{ 30000, 1, 0, false, false, 0.00f, 0 };
+    const audiocity::engine::SettingsSnapshot c{ 25000, 1, 0, false, false, 0.00f, 0 };
+    const audiocity::engine::SettingsSnapshot d{ 22000, 1, 0, false, false, 0.00f, 0 };
 
     history.recordChange(a, b, 1);
     history.recordChange(b, c, 1);
@@ -1150,35 +1066,12 @@ bool runSettingsUndoHistoryCoalesceTest()
     return history.canRedo();
 }
 
-bool runSettingsUndoHistoryLoopPointsTest()
-{
-    audiocity::engine::SettingsUndoHistory history;
-
-    audiocity::engine::SettingsSnapshot base{ 32768, 1, 0, 0, false, false, 0.0f, 0, { { 4, 40 }, { 8, 88 } } };
-    audiocity::engine::SettingsSnapshot changed = base;
-    changed.importedZoneLoopPoints[1] = { 16, 64 };
-
-    history.recordChange(base, changed);
-    auto current = changed;
-
-    const auto undo = history.undo(current);
-    if (!undo.has_value() || *undo != base)
-        return false;
-
-    current = *undo;
-    const auto redo = history.redo(current);
-    if (!redo.has_value() || *redo != changed)
-        return false;
-
-    return true;
-}
-
 bool runSettingsUndoHistoryLabelsTest()
 {
     audiocity::engine::SettingsUndoHistory history;
 
-    const audiocity::engine::SettingsSnapshot a{ 32768, 1, 0, 0, false, false, 0.00f, 0, {} };
-    const audiocity::engine::SettingsSnapshot b{ 4096, 1, 0, 0, false, false, 0.00f, 0, {} };
+    const audiocity::engine::SettingsSnapshot a{ 32768, 1, 0, false, false, 0.00f, 0 };
+    const audiocity::engine::SettingsSnapshot b{ 4096, 1, 0, false, false, 0.00f, 0 };
 
     history.recordChange(a, b, -1, "Change Preload Samples");
 
@@ -1203,8 +1096,8 @@ bool runSettingsUndoHistoryEditorStateTest()
     audiocity::engine::SettingsSnapshot base;
     base.sampleWindowStart = 4;
     base.sampleWindowEnd = 120;
-    base.editorLoopStart = 16;
-    base.editorLoopEnd = 96;
+    base.loopStart = 16;
+    base.loopEnd = 96;
     base.fadeInSamples = 2;
     base.fadeOutSamples = 2;
     base.reversePlayback = false;
@@ -1212,8 +1105,8 @@ bool runSettingsUndoHistoryEditorStateTest()
     auto edited = base;
     edited.sampleWindowStart = 20;
     edited.sampleWindowEnd = 80;
-    edited.editorLoopStart = 24;
-    edited.editorLoopEnd = 72;
+    edited.loopStart = 24;
+    edited.loopEnd = 72;
     edited.fadeInSamples = 8;
     edited.fadeOutSamples = 10;
     edited.reversePlayback = true;
@@ -1232,71 +1125,6 @@ bool runSettingsUndoHistoryEditorStateTest()
 
     return true;
 }
-
-bool runSetZoneLoopStartCommandApplyUndoRedoTest()
-{
-    class FakeZoneModel final : public IZoneModel
-    {
-    public:
-        FakeZoneModel()
-        {
-            zones_.push_back({ 10, 40 });
-        }
-
-        [[nodiscard]] int getZoneCount() const override
-        {
-            return static_cast<int>(zones_.size());
-        }
-
-        [[nodiscard]] std::optional<ZoneLoopState> getZoneLoopState(const int zoneIndex) const override
-        {
-            if (zoneIndex < 0 || zoneIndex >= static_cast<int>(zones_.size()))
-                return std::nullopt;
-
-            return zones_[static_cast<std::size_t>(zoneIndex)];
-        }
-
-        bool setZoneLoopState(const int zoneIndex, const int loopStart, const int loopEnd) override
-        {
-            if (zoneIndex < 0 || zoneIndex >= static_cast<int>(zones_.size()))
-                return false;
-
-            auto& zone = zones_[static_cast<std::size_t>(zoneIndex)];
-            zone.loopStart = juce::jmax(0, loopStart);
-            zone.loopEnd = juce::jmax(zone.loopStart + 1, loopEnd);
-            return true;
-        }
-
-    private:
-        std::vector<ZoneLoopState> zones_;
-    };
-
-    FakeZoneModel model;
-    CommandStack stack;
-
-    if (!stack.execute(std::make_unique<SetZoneLoopStartCommand>(model, 0, 24)))
-        return false;
-
-    const auto afterApply = model.getZoneLoopState(0);
-    if (!afterApply.has_value() || afterApply->loopStart != 24 || afterApply->loopEnd != 40)
-        return false;
-
-    if (!stack.undo())
-        return false;
-
-    const auto afterUndo = model.getZoneLoopState(0);
-    if (!afterUndo.has_value() || afterUndo->loopStart != 10 || afterUndo->loopEnd != 40)
-        return false;
-
-    if (!stack.redo())
-        return false;
-
-    const auto afterRedo = model.getZoneLoopState(0);
-    if (!afterRedo.has_value() || afterRedo->loopStart != 24 || afterRedo->loopEnd != 40)
-        return false;
-
-    return true;
-}
 }
 
 int main()
@@ -1307,80 +1135,65 @@ int main()
     if (!runVoiceStealingEdgeCaseTest())
         return 2;
 
-    if (!runSfzNestedIncludeAndMappingTest())
+    if (!runPlaybackModesTest())
         return 3;
 
-    if (!runSfzDiagnosticsTest())
+    if (!runLoopMarkersTest())
         return 4;
 
-    if (!runZoneSelectorOrderedModeTest())
+    if (!runEditorSampleEditControlsTest())
         return 5;
 
-    if (!runZoneSelectorRandomModeTest())
+    if (!runChokeGroupStopsPreviousVoiceTest())
         return 6;
 
-    if (!runPlaybackModesTest())
+    if (!runMonoLegatoUsesSingleVoiceTest())
         return 7;
 
-    if (!runLoopMarkersAndModesTest())
+    if (!runGlideChangesLegatoTransitionTest())
         return 8;
 
-    if (!runEditorSampleEditControlsTest())
+    if (!runPreloadSegmentationDeterminismTest())
         return 9;
 
-    if (!runChokeGroupStopsPreviousVoiceTest())
+    if (!runRuntimePreloadChangeStabilityTest())
         return 10;
 
-    if (!runMonoLegatoUsesSingleVoiceTest())
+    if (!runRuntimeSampleReloadStabilityTest())
         return 11;
 
-    if (!runGlideChangesLegatoTransitionTest())
+    if (!runLoopModeRuntimePreloadChangeStabilityTest())
         return 12;
 
-    if (!runPreloadSegmentationDeterminismTest())
+    if (!runSegmentRebuildCounterTest())
         return 13;
 
-    if (!runRuntimePreloadChangeStabilityTest())
+    if (!runQualityTierDifferenceTest())
         return 14;
 
-    if (!runLoopModeRuntimePreloadChangeStabilityTest())
+    if (!runQualityTierDeterminismTest())
         return 15;
 
-    if (!runSegmentRebuildCounterTest())
+    if (!runCpuQualityEnergyDriftSmokeTest())
         return 16;
 
-    if (!runQualityTierDifferenceTest())
+    if (!runRuntimeQualitySwitchSmokeTest())
         return 17;
 
-    if (!runQualityTierDeterminismTest())
+    if (!runSettingsUndoHistoryTest())
         return 18;
 
-    if (!runCpuQualityEnergyDriftSmokeTest())
+    if (!runSettingsUndoHistoryCapacityTest())
         return 19;
 
-    if (!runRuntimeQualitySwitchSmokeTest())
+    if (!runSettingsUndoHistoryCoalesceTest())
         return 20;
 
-    if (!runSettingsUndoHistoryTest())
+    if (!runSettingsUndoHistoryLabelsTest())
         return 21;
 
-    if (!runSettingsUndoHistoryCapacityTest())
-        return 22;
-
-    if (!runSettingsUndoHistoryCoalesceTest())
-        return 23;
-
-    if (!runSettingsUndoHistoryLoopPointsTest())
-        return 24;
-
-    if (!runSettingsUndoHistoryLabelsTest())
-        return 25;
-
     if (!runSettingsUndoHistoryEditorStateTest())
-        return 26;
-
-    if (!runSetZoneLoopStartCommandApplyUndoRedoTest())
-        return 27;
+        return 22;
 
     return 0;
 }

@@ -3,1156 +3,810 @@
 #include "PluginProcessor.h"
 
 #include <algorithm>
+#include <cmath>
 
-void AudiocityAudioProcessorEditor::BrowserPanel::WaveformView::setPeaks(std::vector<float> peaks)
+// ─── WaveformView ──────────────────────────────────────────────────────────────
+
+void AudiocityAudioProcessorEditor::WaveformView::setState(
+    const int totalSamples, std::vector<float> peaks,
+    const int playbackStart, const int playbackEnd,
+    const int loopStart, const int loopEnd)
 {
+    totalSamples_ = juce::jmax(0, totalSamples);
     peaks_ = std::move(peaks);
+    playbackStart_ = playbackStart;
+    playbackEnd_ = playbackEnd;
+    loopStart_ = loopStart;
+    loopEnd_ = loopEnd;
+
+    if (viewSampleCount_ <= 0)
+        viewSampleCount_ = juce::jmax(1, totalSamples_);
+
+    clampView();
     repaint();
 }
 
-void AudiocityAudioProcessorEditor::BrowserPanel::WaveformView::setPlayheadProgress(const float progress)
+void AudiocityAudioProcessorEditor::WaveformView::resetView()
 {
-    playheadProgress_ = juce::jlimit(0.0f, 1.0f, progress);
+    viewStartSample_ = 0;
+    viewSampleCount_ = juce::jmax(1, totalSamples_);
+    clampView();
     repaint();
 }
 
-void AudiocityAudioProcessorEditor::BrowserPanel::WaveformView::paint(juce::Graphics& g)
+int AudiocityAudioProcessorEditor::WaveformView::sampleFromX(const float x) const noexcept
 {
-    g.fillAll(juce::Colours::black.withAlpha(0.85f));
-    g.setColour(juce::Colours::white.withAlpha(0.2f));
-    g.drawRect(getLocalBounds(), 1);
+    const auto width = juce::jmax(1.0f, static_cast<float>(getWidth()));
+    const auto norm = juce::jlimit(0.0f, 1.0f, x / width);
+    return viewStartSample_ + static_cast<int>(norm * static_cast<float>(juce::jmax(1, viewSampleCount_ - 1)));
+}
 
-    if (peaks_.empty())
+float AudiocityAudioProcessorEditor::WaveformView::xFromSample(const int sample) const noexcept
+{
+    const auto width = juce::jmax(1.0f, static_cast<float>(getWidth()));
+    const auto local = juce::jlimit(0, juce::jmax(1, viewSampleCount_ - 1), sample - viewStartSample_);
+    return (static_cast<float>(local) / static_cast<float>(juce::jmax(1, viewSampleCount_ - 1))) * width;
+}
+
+void AudiocityAudioProcessorEditor::WaveformView::clampView()
+{
+    const auto total = juce::jmax(1, totalSamples_);
+    const auto minWindow = juce::jmin(32, total);
+    viewSampleCount_ = juce::jlimit(minWindow, total, viewSampleCount_);
+    viewStartSample_ = juce::jlimit(0, juce::jmax(0, total - viewSampleCount_), viewStartSample_);
+}
+
+void AudiocityAudioProcessorEditor::WaveformView::zoomAround(const float anchorX, const float zoomFactor)
+{
+    if (totalSamples_ <= 0)
         return;
 
-    const auto bounds = getLocalBounds().toFloat();
-    const auto centreY = bounds.getCentreY();
-    const auto width = bounds.getWidth();
+    const auto anchorSample = sampleFromX(anchorX);
+    const auto minWindow = juce::jmin(32, juce::jmax(1, totalSamples_));
+    const auto nextCount = juce::jlimit(minWindow, juce::jmax(1, totalSamples_),
+        static_cast<int>(std::round(static_cast<double>(viewSampleCount_) * zoomFactor)));
+    const auto anchorNorm = juce::jlimit(0.0, 1.0,
+        static_cast<double>(anchorX / juce::jmax(1.0f, static_cast<float>(getWidth()))));
 
-    g.setColour(juce::Colours::deepskyblue.withAlpha(0.75f));
-    for (int i = 0; i < static_cast<int>(peaks_.size()); ++i)
+    viewSampleCount_ = nextCount;
+    viewStartSample_ = anchorSample - static_cast<int>(anchorNorm * static_cast<double>(viewSampleCount_));
+    clampView();
+    repaint();
+}
+
+void AudiocityAudioProcessorEditor::WaveformView::panByPixels(const float deltaX)
+{
+    if (totalSamples_ <= 0)
+        return;
+
+    const auto samplesPerPixel = static_cast<double>(juce::jmax(1, viewSampleCount_))
+        / static_cast<double>(juce::jmax(1, getWidth()));
+    viewStartSample_ -= static_cast<int>(std::round(static_cast<double>(deltaX) * samplesPerPixel));
+    clampView();
+    repaint();
+}
+
+void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colours::black.withAlpha(0.85f));
+    g.setColour(juce::Colours::white.withAlpha(0.25f));
+    g.drawRect(getLocalBounds(), 1);
+
+    if (totalSamples_ <= 0 || peaks_.empty())
     {
-        const auto x = bounds.getX() + width * (static_cast<float>(i) / static_cast<float>(peaks_.size()));
-        const auto amplitude = peaks_[static_cast<std::size_t>(i)] * bounds.getHeight() * 0.45f;
-        g.drawLine(x, centreY - amplitude, x, centreY + amplitude, 1.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.4f));
+        g.drawText("Load a sample (WAV/AIFF)", getLocalBounds(), juce::Justification::centred);
+        return;
     }
 
-    g.setColour(juce::Colours::yellow.withAlpha(0.9f));
-    const auto playheadX = bounds.getX() + bounds.getWidth() * playheadProgress_;
-    g.drawLine(playheadX, bounds.getY(), playheadX, bounds.getBottom(), 1.5f);
+    const auto bounds = getLocalBounds().toFloat();
+    const auto centerY = bounds.getCentreY();
+
+    // ── Playback region (green, drawn first / behind) ──
+    const auto pbX1 = xFromSample(playbackStart_);
+    const auto pbX2 = xFromSample(playbackEnd_);
+
+    // Dim area outside playback window
+    g.setColour(juce::Colours::black.withAlpha(0.45f));
+    if (pbX1 > bounds.getX())
+        g.fillRect(juce::Rectangle<float>(bounds.getX(), bounds.getY(), pbX1 - bounds.getX(), bounds.getHeight()));
+    if (pbX2 < bounds.getRight())
+        g.fillRect(juce::Rectangle<float>(pbX2, bounds.getY(), bounds.getRight() - pbX2, bounds.getHeight()));
+
+    // Playback marker lines
+    g.setColour(juce::Colours::limegreen.withAlpha(0.9f));
+    g.drawVerticalLine(static_cast<int>(pbX1), bounds.getY(), bounds.getBottom());
+    g.drawVerticalLine(static_cast<int>(pbX2), bounds.getY(), bounds.getBottom());
+
+    // ── Loop region (orange, drawn on top) ──
+    const auto lx1 = xFromSample(loopStart_);
+    const auto lx2 = xFromSample(loopEnd_);
+    const auto loopLeft = juce::jmin(lx1, lx2);
+    const auto loopRight = juce::jmax(lx1, lx2);
+
+    g.setColour(juce::Colours::orange.withAlpha(0.18f));
+    g.fillRect(juce::Rectangle<float>(loopLeft, bounds.getY(), juce::jmax(1.0f, loopRight - loopLeft), bounds.getHeight()));
+
+    g.setColour(juce::Colours::orange.withAlpha(0.9f));
+    g.drawVerticalLine(static_cast<int>(loopLeft), bounds.getY(), bounds.getBottom());
+    g.drawVerticalLine(static_cast<int>(loopRight), bounds.getY(), bounds.getBottom());
+
+    // ── Waveform ──
+    g.setColour(juce::Colours::deepskyblue.withAlpha(0.85f));
+    const auto peakCount = static_cast<int>(peaks_.size());
+    for (int i = 0; i < peakCount; ++i)
+    {
+        const auto sample = (i * totalSamples_) / juce::jmax(1, peakCount);
+        if (sample < viewStartSample_ || sample > (viewStartSample_ + viewSampleCount_))
+            continue;
+
+        const auto x = xFromSample(sample);
+        const auto amp = juce::jlimit(0.0f, 1.0f, peaks_[static_cast<std::size_t>(i)]) * bounds.getHeight() * 0.45f;
+        g.drawLine(x, centerY - amp, x, centerY + amp, 1.0f);
+    }
+
+    // ── Labels on handles ──
+    g.setFont(10.0f);
+
+    // Playback labels (green, at bottom)
+    g.setColour(juce::Colours::limegreen);
+    g.drawText("P", static_cast<int>(pbX1) - 6, static_cast<int>(bounds.getBottom()) - 14, 12, 12, juce::Justification::centred);
+    g.drawText("P", static_cast<int>(pbX2) - 6, static_cast<int>(bounds.getBottom()) - 14, 12, 12, juce::Justification::centred);
+
+    // Loop labels (orange, at top)
+    g.setColour(juce::Colours::orange);
+    g.drawText("S", static_cast<int>(loopLeft) - 6, static_cast<int>(bounds.getY()) + 2, 12, 12, juce::Justification::centred);
+    g.drawText("E", static_cast<int>(loopRight) - 6, static_cast<int>(bounds.getY()) + 2, 12, 12, juce::Justification::centred);
 }
 
-AudiocityAudioProcessorEditor::BrowserPanel::BrowserPanel()
+void AudiocityAudioProcessorEditor::WaveformView::mouseDown(const juce::MouseEvent& event)
 {
-    addAndMakeVisible(addFolderButton_);
-    addAndMakeVisible(rescanButton_);
-    addAndMakeVisible(loadButton_);
-    addAndMakeVisible(importSfzButton_);
-    addAndMakeVisible(favoriteButton_);
-    addAndMakeVisible(previewButton_);
-
-    addAndMakeVisible(searchLabel_);
-    addAndMakeVisible(searchEditor_);
-    searchEditor_.setMultiLine(false);
-
-    addAndMakeVisible(resultsLabel_);
-    addAndMakeVisible(resultCombo_);
-
-    addAndMakeVisible(watchedLabel_);
-    addAndMakeVisible(watchedView_);
-    watchedView_.setMultiLine(true);
-    watchedView_.setReadOnly(true);
-
-    addAndMakeVisible(favoritesLabel_);
-    addAndMakeVisible(favoritesView_);
-    favoritesView_.setMultiLine(true);
-    favoritesView_.setReadOnly(true);
-
-    addAndMakeVisible(recentLabel_);
-    addAndMakeVisible(recentView_);
-    recentView_.setMultiLine(true);
-    recentView_.setReadOnly(true);
-
-    addAndMakeVisible(waveformView_);
-    addAndMakeVisible(samplePathLabel_);
-
-    samplePathLabel_.setJustificationType(juce::Justification::centredLeft);
-    samplePathLabel_.setText("No sample loaded", juce::dontSendNotification);
-
-    addFolderButton_.onClick = [this]
+    if (event.mods.isRightButtonDown() || event.mods.isMiddleButtonDown())
     {
-        if (onAddWatchedFolder)
-            onAddWatchedFolder();
+        dragMode_ = DragMode::pan;
+        dragAnchorViewStart_ = viewStartSample_;
+        return;
+    }
+
+    // Check proximity to all four handles — pick the nearest one
+    struct Handle { DragMode mode; float x; };
+    const Handle handles[] = {
+        { DragMode::dragPlaybackStart, xFromSample(playbackStart_) },
+        { DragMode::dragPlaybackEnd,   xFromSample(playbackEnd_) },
+        { DragMode::dragLoopStart,     xFromSample(loopStart_) },
+        { DragMode::dragLoopEnd,       xFromSample(loopEnd_) },
     };
 
-    rescanButton_.onClick = [this]
+    constexpr float kHandlePickPx = 8.0f;
+    float bestDist = kHandlePickPx + 1.0f;
+    DragMode bestMode = DragMode::none;
+
+    for (const auto& h : handles)
     {
-        if (onRescan)
-            onRescan();
-    };
-
-    loadButton_.onClick = [this]
-    {
-        if (onLoadSample && selectedPath_.isNotEmpty())
-            onLoadSample(selectedPath_);
-    };
-
-    importSfzButton_.onClick = [this]
-    {
-        if (onImportSfz)
-            onImportSfz();
-    };
-
-    favoriteButton_.onClick = [this]
-    {
-        if (onToggleFavorite && selectedPath_.isNotEmpty())
-            onToggleFavorite(selectedPath_);
-    };
-
-    previewButton_.onClick = [this]
-    {
-        if (onPreviewToggle && selectedPath_.isNotEmpty())
-            onPreviewToggle(selectedPath_, !previewPlaying_);
-    };
-
-    searchEditor_.onTextChange = [this]
-    {
-        if (onSearchChanged)
-            onSearchChanged(searchEditor_.getText());
-    };
-
-    resultCombo_.onChange = [this]
-    {
-        const auto id = resultCombo_.getSelectedId();
-        if (id <= 0 || id > static_cast<int>(results_.size()))
-            return;
-
-        selectedPath_ = results_[static_cast<std::size_t>(id - 1)].path;
-        if (onSelectionChanged)
-            onSelectionChanged(selectedPath_);
-    };
-}
-
-void AudiocityAudioProcessorEditor::BrowserPanel::setSamplePath(const juce::String& path)
-{
-    samplePathLabel_.setText(path.isNotEmpty() ? path : "No sample loaded", juce::dontSendNotification);
-}
-
-void AudiocityAudioProcessorEditor::BrowserPanel::setWatchedFolders(const juce::StringArray& folders)
-{
-    watchedView_.setText(folders.joinIntoString("\n"), juce::dontSendNotification);
-}
-
-void AudiocityAudioProcessorEditor::BrowserPanel::setSearchText(const juce::String& text)
-{
-    if (searchEditor_.getText() != text)
-        searchEditor_.setText(text, juce::dontSendNotification);
-}
-
-void AudiocityAudioProcessorEditor::BrowserPanel::setSearchResults(const std::vector<BrowserIndex::EntrySnapshot>& results)
-{
-    results_ = results;
-    refreshResultCombo();
-}
-
-void AudiocityAudioProcessorEditor::BrowserPanel::setFavorites(const std::vector<BrowserIndex::EntrySnapshot>& favorites)
-{
-    favoritesView_.setText(listToText(favorites), juce::dontSendNotification);
-}
-
-void AudiocityAudioProcessorEditor::BrowserPanel::setRecent(const std::vector<BrowserIndex::EntrySnapshot>& recent)
-{
-    recentView_.setText(listToText(recent), juce::dontSendNotification);
-}
-
-void AudiocityAudioProcessorEditor::BrowserPanel::setSelectedPath(const juce::String& path)
-{
-    selectedPath_ = path;
-
-    int idToSelect = 0;
-    for (int i = 0; i < static_cast<int>(results_.size()); ++i)
-    {
-        if (results_[static_cast<std::size_t>(i)].path == path)
+        const auto dist = std::abs(event.position.x - h.x);
+        if (dist <= kHandlePickPx && dist < bestDist)
         {
-            idToSelect = i + 1;
-            break;
+            bestDist = dist;
+            bestMode = h.mode;
         }
     }
 
-    if (idToSelect > 0 && resultCombo_.getSelectedId() != idToSelect)
-        resultCombo_.setSelectedId(idToSelect, juce::dontSendNotification);
+    dragMode_ = bestMode;
 }
 
-void AudiocityAudioProcessorEditor::BrowserPanel::setWaveformPeaks(std::vector<float> peaks)
+void AudiocityAudioProcessorEditor::WaveformView::mouseDrag(const juce::MouseEvent& event)
 {
-    waveformView_.setPeaks(std::move(peaks));
-}
-
-void AudiocityAudioProcessorEditor::BrowserPanel::setPreviewState(const bool isPlaying, const double durationSeconds)
-{
-    previewPlaying_ = isPlaying;
-    previewDurationSeconds_ = durationSeconds;
-
-    if (isPlaying)
+    if (dragMode_ == DragMode::pan)
     {
-        previewStartedSeconds_ = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-        previewButton_.setButtonText("Stop");
-        startTimerHz(30);
-    }
-    else
-    {
-        previewButton_.setButtonText("Preview");
-        stopTimer();
-        waveformView_.setPlayheadProgress(0.0f);
-    }
-}
-
-juce::String AudiocityAudioProcessorEditor::BrowserPanel::getSelectedPath() const
-{
-    return selectedPath_;
-}
-
-void AudiocityAudioProcessorEditor::BrowserPanel::timerCallback()
-{
-    if (!previewPlaying_ || previewDurationSeconds_ <= 0.0)
-    {
-        waveformView_.setPlayheadProgress(0.0f);
+        panByPixels(static_cast<float>(event.getDistanceFromDragStartX()));
         return;
     }
 
-    const auto elapsed = (juce::Time::getMillisecondCounterHiRes() / 1000.0) - previewStartedSeconds_;
-    waveformView_.setPlayheadProgress(static_cast<float>(juce::jlimit(0.0, 1.0, elapsed / previewDurationSeconds_)));
+    const auto sample = juce::jlimit(0, juce::jmax(0, totalSamples_ - 1), sampleFromX(event.position.x));
 
-    if (elapsed >= previewDurationSeconds_)
-        setPreviewState(false, previewDurationSeconds_);
-}
-
-void AudiocityAudioProcessorEditor::BrowserPanel::refreshResultCombo()
-{
-    const auto previousSelection = selectedPath_;
-
-    resultCombo_.clear(juce::dontSendNotification);
-    int selectedId = 0;
-
-    for (int i = 0; i < static_cast<int>(results_.size()); ++i)
+    if (dragMode_ == DragMode::dragLoopStart)
     {
-        const auto& entry = results_[static_cast<std::size_t>(i)];
-        const auto id = i + 1;
-
-        resultCombo_.addItem(entry.fileName, id);
-        if (entry.path == previousSelection)
-            selectedId = id;
+        // Loop start must stay >= playbackStart_ and < loopEnd_
+        loopStart_ = juce::jlimit(playbackStart_, juce::jmax(playbackStart_, loopEnd_ - 1), sample);
+        if (onLoopPreview)
+            onLoopPreview(loopStart_, loopEnd_);
+    }
+    else if (dragMode_ == DragMode::dragLoopEnd)
+    {
+        // Loop end must stay <= playbackEnd_ and > loopStart_
+        loopEnd_ = juce::jlimit(loopStart_ + 1, juce::jmax(loopStart_ + 1, playbackEnd_), sample);
+        if (onLoopPreview)
+            onLoopPreview(loopStart_, loopEnd_);
+    }
+    else if (dragMode_ == DragMode::dragPlaybackStart)
+    {
+        // Playback start must stay <= loopStart_
+        playbackStart_ = juce::jlimit(0, juce::jmax(0, loopStart_), sample);
+        if (onPlaybackPreview)
+            onPlaybackPreview(playbackStart_, playbackEnd_);
+    }
+    else if (dragMode_ == DragMode::dragPlaybackEnd)
+    {
+        // Playback end must stay >= loopEnd_
+        playbackEnd_ = juce::jlimit(loopEnd_, juce::jmax(0, totalSamples_ - 1), sample);
+        if (onPlaybackPreview)
+            onPlaybackPreview(playbackStart_, playbackEnd_);
+    }
+    else
+    {
+        return;
     }
 
-    if (selectedId == 0 && !results_.empty())
+    repaint();
+}
+
+void AudiocityAudioProcessorEditor::WaveformView::mouseUp(const juce::MouseEvent&)
+{
+    if (dragMode_ == DragMode::dragLoopStart || dragMode_ == DragMode::dragLoopEnd)
     {
-        selectedId = 1;
-        selectedPath_ = results_.front().path;
+        if (onLoopCommitted)
+            onLoopCommitted(loopStart_, loopEnd_);
+    }
+    else if (dragMode_ == DragMode::dragPlaybackStart || dragMode_ == DragMode::dragPlaybackEnd)
+    {
+        if (onPlaybackCommitted)
+            onPlaybackCommitted(playbackStart_, playbackEnd_);
     }
 
-    if (selectedId > 0)
-        resultCombo_.setSelectedId(selectedId, juce::dontSendNotification);
+    dragMode_ = DragMode::none;
 }
 
-juce::String AudiocityAudioProcessorEditor::BrowserPanel::listToText(const std::vector<BrowserIndex::EntrySnapshot>& entries)
+void AudiocityAudioProcessorEditor::WaveformView::mouseDoubleClick(const juce::MouseEvent&)
 {
-    if (entries.empty())
-        return "(none)";
-
-    juce::StringArray lines;
-    for (const auto& entry : entries)
-        lines.add(entry.fileName);
-
-    return lines.joinIntoString("\n");
+    resetView();
 }
 
-void AudiocityAudioProcessorEditor::BrowserPanel::resized()
+void AudiocityAudioProcessorEditor::WaveformView::mouseWheelMove(
+    const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
 {
-    auto area = getLocalBounds().reduced(12);
-    auto topRow = area.removeFromTop(30);
-    addFolderButton_.setBounds(topRow.removeFromLeft(170));
-    topRow.removeFromLeft(6);
-    rescanButton_.setBounds(topRow.removeFromLeft(80));
-    topRow.removeFromLeft(6);
-    importSfzButton_.setBounds(topRow.removeFromLeft(100));
-    topRow.removeFromLeft(6);
-    loadButton_.setBounds(topRow.removeFromLeft(180));
-    topRow.removeFromLeft(6);
-    favoriteButton_.setBounds(topRow.removeFromLeft(130));
-    topRow.removeFromLeft(6);
-    previewButton_.setBounds(topRow.removeFromLeft(90));
+    if (event.mods.isCommandDown())
+    {
+        const auto zoomFactor = wheel.deltaY > 0.0f ? 0.85f : 1.2f;
+        zoomAround(event.position.x, zoomFactor);
+        return;
+    }
 
-    area.removeFromTop(8);
-
-    auto searchRow = area.removeFromTop(24);
-    searchLabel_.setBounds(searchRow.removeFromLeft(52));
-    searchEditor_.setBounds(searchRow);
-
-    area.removeFromTop(6);
-
-    auto resultRow = area.removeFromTop(24);
-    resultsLabel_.setBounds(resultRow.removeFromLeft(52));
-    resultCombo_.setBounds(resultRow);
-
-    area.removeFromTop(8);
-
-    waveformView_.setBounds(area.removeFromTop(130));
-
-    area.removeFromTop(6);
-    samplePathLabel_.setBounds(area.removeFromTop(24));
-
-    area.removeFromTop(8);
-    auto infoArea = area;
-    auto colWidth = infoArea.getWidth() / 3;
-
-    auto watchedArea = infoArea.removeFromLeft(colWidth).reduced(2);
-    watchedLabel_.setBounds(watchedArea.removeFromTop(20));
-    watchedView_.setBounds(watchedArea);
-
-    auto favoritesArea = infoArea.removeFromLeft(colWidth).reduced(2);
-    favoritesLabel_.setBounds(favoritesArea.removeFromTop(20));
-    favoritesView_.setBounds(favoritesArea);
-
-    auto recentArea = infoArea.reduced(2);
-    recentLabel_.setBounds(recentArea.removeFromTop(20));
-    recentView_.setBounds(recentArea);
+    const auto panAmount = (wheel.deltaX != 0.0f ? wheel.deltaX : wheel.deltaY) * 120.0f;
+    panByPixels(-panAmount);
 }
 
-void AudiocityAudioProcessorEditor::BrowserPanel::paint(juce::Graphics& g)
-{
-    g.fillAll(juce::Colours::black.withAlpha(0.9f));
-    g.setColour(juce::Colours::white.withAlpha(0.35f));
-    g.drawRect(getLocalBounds().reduced(8), 1);
-}
+// ─── Editor Constructor ────────────────────────────────────────────────────────
 
-AudiocityAudioProcessorEditor::MappingPanel::MappingPanel()
+AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProcessor& processor)
+    : AudioProcessorEditor(&processor),
+      processor_(processor)
 {
-    addAndMakeVisible(rrModeLabel_);
-    addAndMakeVisible(rrModeCombo_);
+    setName("Audiocity");
+    setSize(940, 800);
+    setLookAndFeel(&dialLaf_);
+
+    // Sample info row
+    addAndMakeVisible(samplePathLabel_);
+    samplePathLabel_.setJustificationType(juce::Justification::centredLeft);
+    samplePathLabel_.setText("No sample loaded", juce::dontSendNotification);
+
+    addAndMakeVisible(loadButton_);
+    loadButton_.onClick = [this] { openSampleChooser(); };
+
+    addAndMakeVisible(rootNoteDial_);
+    rootNoteDial_.onValueChange = [this]
+    {
+        processor_.setRootMidiNote(static_cast<int>(rootNoteDial_.getValue()));
+    };
+
+    // Waveform
+    addAndMakeVisible(waveformView_);
+    waveformView_.onLoopPreview = [this](const int ls, const int le)
+    {
+        loopStartDial_.setValue(ls);
+        loopEndDial_.setValue(le);
+    };
+    waveformView_.onLoopCommitted = [this](const int ls, const int le)
+    {
+        loopStartDial_.setValue(ls);
+        loopEndDial_.setValue(le);
+        applyLoopPoints();
+    };
+    waveformView_.onPlaybackPreview = [this](const int ps, const int pe)
+    {
+        playbackStartDial_.setValue(ps);
+        playbackEndDial_.setValue(pe);
+    };
+    waveformView_.onPlaybackCommitted = [this](const int ps, const int pe)
+    {
+        playbackStartDial_.setValue(ps);
+        playbackEndDial_.setValue(pe);
+        pushPlaybackWindow();
+    };
+
+    // Playback mode
     addAndMakeVisible(playbackModeLabel_);
     addAndMakeVisible(playbackModeCombo_);
-    addAndMakeVisible(monoToggle_);
-    addAndMakeVisible(legatoToggle_);
-    addAndMakeVisible(glideLabel_);
-    addAndMakeVisible(glideEditor_);
-    addAndMakeVisible(chokeGroupLabel_);
-    addAndMakeVisible(chokeGroupEditor_);
-    addAndMakeVisible(zoneSummaryLabel_);
-    addAndMakeVisible(loopStartLabel_);
-    addAndMakeVisible(loopStartEditor_);
-    addAndMakeVisible(loopEndLabel_);
-    addAndMakeVisible(loopEndEditor_);
-    addAndMakeVisible(applyLoopButton_);
-    addAndMakeVisible(table_);
-
-    loopStartEditor_.setInputRestrictions(8, "0123456789");
-    loopEndEditor_.setInputRestrictions(8, "0123456789");
-    glideEditor_.setInputRestrictions(8, "0123456789.");
-    chokeGroupEditor_.setInputRestrictions(3, "0123456789");
-
-    monoToggle_.setTooltip("Monophonic playback: one voice at a time.");
-    legatoToggle_.setTooltip("When Mono is enabled, keep envelope running between notes.");
-    glideEditor_.setTooltip("Portamento time in milliseconds.");
-    chokeGroupEditor_.setTooltip("Group index; values > 0 choke previous sounding voice.");
-
-    applyLoopButton_.onClick = [this]
-    {
-        if (selectedRow_ < 0 || selectedRow_ >= static_cast<int>(zones_.size()))
-            return;
-
-        const auto loopStart = loopStartEditor_.getText().getIntValue();
-        const auto loopEnd = loopEndEditor_.getText().getIntValue();
-
-        if (onLoopPointsApply)
-            onLoopPointsApply(selectedRow_, loopStart, loopEnd);
-    };
-
-    rrModeCombo_.addItem("Ordered", 1);
-    rrModeCombo_.addItem("Random", 2);
-    rrModeCombo_.setSelectedId(1, juce::dontSendNotification);
-    rrModeCombo_.onChange = [this]
-    {
-        if (onRrModeChanged)
-            onRrModeChanged(rrModeCombo_.getSelectedId() - 1);
-    };
-
     playbackModeCombo_.addItem("Gate", 1);
     playbackModeCombo_.addItem("One-shot", 2);
     playbackModeCombo_.addItem("Loop", 3);
     playbackModeCombo_.setSelectedId(1, juce::dontSendNotification);
     playbackModeCombo_.onChange = [this]
     {
-        if (onPlaybackModeChanged)
-            onPlaybackModeChanged(playbackModeCombo_.getSelectedId() - 1);
+        const auto mode = playbackModeCombo_.getSelectedId() - 1;
+        processor_.setPlaybackMode(
+            mode == 1 ? AudiocityAudioProcessor::PlaybackMode::oneShot
+                : (mode == 2 ? AudiocityAudioProcessor::PlaybackMode::loop
+                             : AudiocityAudioProcessor::PlaybackMode::gate));
     };
 
-    monoToggle_.onClick = [this]
+    // Playback window (trim) controls
+    addAndMakeVisible(playbackStartDial_);
+    addAndMakeVisible(playbackEndDial_);
+    playbackStartDial_.onValueChange = [this]
     {
-        updatePerformanceControlAvailability();
-
-        if (onMonoModeChanged)
-            onMonoModeChanged(monoToggle_.getToggleState());
+        enforcePlaybackLoopConstraints();
+        pushPlaybackWindow();
+    };
+    playbackEndDial_.onValueChange = [this]
+    {
+        enforcePlaybackLoopConstraints();
+        pushPlaybackWindow();
     };
 
-    legatoToggle_.onClick = [this]
+    // Loop controls
+    addAndMakeVisible(loopStartDial_);
+    addAndMakeVisible(loopEndDial_);
+    loopStartDial_.onValueChange = [this]
     {
-        if (onLegatoModeChanged)
-            onLegatoModeChanged(legatoToggle_.getToggleState());
+        enforcePlaybackLoopConstraints();
+        applyLoopPoints();
+    };
+    loopEndDial_.onValueChange = [this]
+    {
+        enforcePlaybackLoopConstraints();
+        applyLoopPoints();
     };
 
-    auto pushGlideValue = [this]
-    {
-        const auto glideMs = juce::jmax(0.0f, static_cast<float>(glideEditor_.getText().getDoubleValue()));
-        glideEditor_.setText(juce::String(glideMs, 1), juce::dontSendNotification);
+    // Performance
+    addAndMakeVisible(monoToggle_);
+    addAndMakeVisible(legatoToggle_);
+    monoToggle_.onClick = [this] { pushPerformanceControls(); };
+    legatoToggle_.onClick = [this] { pushPerformanceControls(); };
 
-        if (onGlideSecondsChanged)
-            onGlideSecondsChanged(glideMs / 1000.0f);
+    addAndMakeVisible(glideDial_);
+    glideDial_.onValueChange = [this]
+    {
+        processor_.setGlideSeconds(static_cast<float>(glideDial_.getValue()) / 1000.0f);
     };
 
-    glideEditor_.onReturnKey = pushGlideValue;
-    glideEditor_.onFocusLost = pushGlideValue;
-
-    auto pushChokeGroupValue = [this]
+    addAndMakeVisible(chokeGroupDial_);
+    chokeGroupDial_.onValueChange = [this]
     {
-        const auto chokeGroup = juce::jmax(0, chokeGroupEditor_.getText().getIntValue());
-        chokeGroupEditor_.setText(juce::String(chokeGroup), juce::dontSendNotification);
-
-        if (onChokeGroupChanged)
-            onChokeGroupChanged(chokeGroup);
+        processor_.setChokeGroup(static_cast<int>(chokeGroupDial_.getValue()));
     };
 
-    chokeGroupEditor_.onReturnKey = pushChokeGroupValue;
-    chokeGroupEditor_.onFocusLost = pushChokeGroupValue;
+    // Amp ADSR
+    addAndMakeVisible(ampAttackDial_);
+    addAndMakeVisible(ampDecayDial_);
+    addAndMakeVisible(ampSustainDial_);
+    addAndMakeVisible(ampReleaseDial_);
+    ampAttackDial_.onValueChange = [this] { pushAmpEnvelope(); };
+    ampDecayDial_.onValueChange = [this] { pushAmpEnvelope(); };
+    ampSustainDial_.onValueChange = [this] { pushAmpEnvelope(); };
+    ampReleaseDial_.onValueChange = [this] { pushAmpEnvelope(); };
 
-    auto& header = table_.getHeader();
-    header.addColumn("Sample", 1, 420);
-    header.addColumn("Key", 2, 120);
-    header.addColumn("Vel", 3, 120);
-    header.addColumn("RR Group", 4, 110);
-    header.addColumn("Loop", 5, 120);
+    // Filter
+    addAndMakeVisible(filterCutoffDial_);
+    addAndMakeVisible(filterResDial_);
+    addAndMakeVisible(filterEnvAmtDial_);
+    filterCutoffDial_.onValueChange = [this] { pushFilterSettings(); };
+    filterResDial_.onValueChange = [this] { pushFilterSettings(); };
+    filterEnvAmtDial_.onValueChange = [this] { pushFilterSettings(); };
 
-    updatePerformanceControlAvailability();
-}
-
-void AudiocityAudioProcessorEditor::MappingPanel::setZones(const std::vector<audiocity::engine::sfz::Zone>& zones)
-{
-    zones_ = zones;
-    table_.updateContent();
-
-    if (zones_.empty())
-        selectedRow_ = -1;
-    else if (selectedRow_ < 0 || selectedRow_ >= static_cast<int>(zones_.size()))
-        selectedRow_ = 0;
-
-    if (selectedRow_ >= 0)
-        table_.selectRow(selectedRow_);
-
-    updateLoopEditorsFromSelection();
-    repaint();
-}
-
-void AudiocityAudioProcessorEditor::MappingPanel::setRrMode(const int modeIndex)
-{
-    const auto id = juce::jlimit(1, 2, modeIndex + 1);
-    rrModeCombo_.setSelectedId(id, juce::dontSendNotification);
-}
-
-void AudiocityAudioProcessorEditor::MappingPanel::setPlaybackMode(const int modeIndex)
-{
-    const auto id = juce::jlimit(1, 3, modeIndex + 1);
-    playbackModeCombo_.setSelectedId(id, juce::dontSendNotification);
-}
-
-void AudiocityAudioProcessorEditor::MappingPanel::setPerformanceControls(
-    const bool monoEnabled,
-    const bool legatoEnabled,
-    const float glideSeconds,
-    const int chokeGroup)
-{
-    monoToggle_.setToggleState(monoEnabled, juce::dontSendNotification);
-    legatoToggle_.setToggleState(legatoEnabled, juce::dontSendNotification);
-    glideEditor_.setText(juce::String(juce::jmax(0.0f, glideSeconds) * 1000.0f, 1), juce::dontSendNotification);
-    chokeGroupEditor_.setText(juce::String(juce::jmax(0, chokeGroup)), juce::dontSendNotification);
-    updatePerformanceControlAvailability();
-}
-
-void AudiocityAudioProcessorEditor::MappingPanel::updatePerformanceControlAvailability()
-{
-    const auto monoEnabled = monoToggle_.getToggleState();
-    legatoToggle_.setEnabled(monoEnabled);
-
-    if (!monoEnabled && legatoToggle_.getToggleState())
+    // Quality / Preload
+    addAndMakeVisible(qualityLabel_);
+    addAndMakeVisible(qualityCombo_);
+    qualityCombo_.addItem("CPU", 1);
+    qualityCombo_.addItem("Fidelity", 2);
+    qualityCombo_.setSelectedId(2, juce::dontSendNotification);
+    qualityCombo_.onChange = [this]
     {
-        legatoToggle_.setToggleState(false, juce::dontSendNotification);
-
-        if (onLegatoModeChanged)
-            onLegatoModeChanged(false);
-    }
-}
-
-void AudiocityAudioProcessorEditor::MappingPanel::resized()
-{
-    auto area = getLocalBounds().reduced(12);
-    auto top = area.removeFromTop(24);
-    rrModeLabel_.setBounds(top.removeFromLeft(70));
-    rrModeCombo_.setBounds(top.removeFromLeft(140));
-    top.removeFromLeft(14);
-    playbackModeLabel_.setBounds(top.removeFromLeft(70));
-    playbackModeCombo_.setBounds(top.removeFromLeft(130));
-    top.removeFromLeft(14);
-    loopStartLabel_.setBounds(top.removeFromLeft(70));
-    loopStartEditor_.setBounds(top.removeFromLeft(70));
-    top.removeFromLeft(8);
-    loopEndLabel_.setBounds(top.removeFromLeft(60));
-    loopEndEditor_.setBounds(top.removeFromLeft(70));
-    top.removeFromLeft(8);
-    applyLoopButton_.setBounds(top.removeFromLeft(60));
-
-    area.removeFromTop(6);
-    auto perfRow = area.removeFromTop(24);
-    monoToggle_.setBounds(perfRow.removeFromLeft(72));
-    perfRow.removeFromLeft(8);
-    legatoToggle_.setBounds(perfRow.removeFromLeft(72));
-    perfRow.removeFromLeft(12);
-    glideLabel_.setBounds(perfRow.removeFromLeft(74));
-    glideEditor_.setBounds(perfRow.removeFromLeft(74));
-    perfRow.removeFromLeft(12);
-    chokeGroupLabel_.setBounds(perfRow.removeFromLeft(88));
-    chokeGroupEditor_.setBounds(perfRow.removeFromLeft(56));
-
-    area.removeFromTop(6);
-    zoneSummaryLabel_.setBounds(area.removeFromTop(20));
-    area.removeFromTop(6);
-    table_.setBounds(area);
-}
-
-void AudiocityAudioProcessorEditor::MappingPanel::paint(juce::Graphics& g)
-{
-    g.fillAll(juce::Colours::black.withAlpha(0.9f));
-    g.setColour(juce::Colours::white.withAlpha(0.35f));
-    g.drawRect(getLocalBounds().reduced(8), 1);
-}
-
-int AudiocityAudioProcessorEditor::MappingPanel::getNumRows()
-{
-    return static_cast<int>(zones_.size());
-}
-
-void AudiocityAudioProcessorEditor::MappingPanel::paintRowBackground(juce::Graphics& g,
-    const int rowNumber,
-    int,
-    int,
-    const bool rowIsSelected)
-{
-    if (rowIsSelected)
-        g.fillAll(juce::Colours::darkslategrey.withAlpha(0.8f));
-    else if (rowNumber % 2 == 0)
-        g.fillAll(juce::Colours::black.withAlpha(0.3f));
-}
-
-void AudiocityAudioProcessorEditor::MappingPanel::paintCell(juce::Graphics& g,
-    const int rowNumber,
-    const int columnId,
-    const int width,
-    const int height,
-    bool)
-{
-    if (rowNumber < 0 || rowNumber >= static_cast<int>(zones_.size()))
-        return;
-
-    const auto& zone = zones_[static_cast<std::size_t>(rowNumber)];
-    juce::String text;
-
-    switch (columnId)
-    {
-        case 1: text = zone.sourceSample; break;
-        case 2: text = juce::String(zone.lowKey) + "-" + juce::String(zone.highKey); break;
-        case 3: text = juce::String(zone.lowVelocity) + "-" + juce::String(zone.highVelocity); break;
-        case 4: text = juce::String(zone.rrGroup); break;
-        case 5: text = zone.loopMode + " (" + juce::String(zone.loopStart) + "," + juce::String(zone.loopEnd) + ")"; break;
-        default: break;
-    }
-
-    g.setColour(juce::Colours::white.withAlpha(0.9f));
-    g.drawText(text, 4, 0, width - 8, height, juce::Justification::centredLeft, true);
-}
-
-void AudiocityAudioProcessorEditor::MappingPanel::selectedRowsChanged(const int lastRowSelected)
-{
-    selectedRow_ = lastRowSelected;
-    updateLoopEditorsFromSelection();
-
-    if (onZoneSelectionChanged)
-        onZoneSelectionChanged(selectedRow_);
-}
-
-void AudiocityAudioProcessorEditor::MappingPanel::updateLoopEditorsFromSelection()
-{
-    if (selectedRow_ < 0 || selectedRow_ >= static_cast<int>(zones_.size()))
-    {
-        loopStartEditor_.setText({}, juce::dontSendNotification);
-        loopEndEditor_.setText({}, juce::dontSendNotification);
-        zoneSummaryLabel_.setText("No zone selected", juce::dontSendNotification);
-        return;
-    }
-
-    const auto& zone = zones_[static_cast<std::size_t>(selectedRow_)];
-    loopStartEditor_.setText(juce::String(zone.loopStart), juce::dontSendNotification);
-    loopEndEditor_.setText(juce::String(zone.loopEnd), juce::dontSendNotification);
-    zoneSummaryLabel_.setText(
-        "Selected: key " + juce::String(zone.lowKey) + "-" + juce::String(zone.highKey)
-            + " | vel " + juce::String(zone.lowVelocity) + "-" + juce::String(zone.highVelocity)
-            + " | mode " + zone.loopMode,
-        juce::dontSendNotification);
-}
-
-AudiocityAudioProcessorEditor::DiagnosticsPanel::DiagnosticsPanel()
-{
-    addAndMakeVisible(text_);
-    text_.setMultiLine(true);
-    text_.setReadOnly(true);
-    text_.setScrollbarsShown(true);
-    text_.setText("No diagnostics.", juce::dontSendNotification);
-}
-
-void AudiocityAudioProcessorEditor::DiagnosticsPanel::setDiagnostics(
-    const std::vector<audiocity::engine::sfz::Diagnostic>& diagnostics,
-    const juce::String& streamingInfo,
-    const juce::String& streamingTooltip)
-{
-    juce::StringArray lines;
-
-    if (streamingInfo.isNotEmpty())
-        lines.add("[info] " + streamingInfo);
-
-    text_.setTooltip(streamingTooltip);
-
-    for (const auto& diagnostic : diagnostics)
-    {
-        const auto severity = diagnostic.severity == audiocity::engine::sfz::DiagnosticSeverity::error ? "error" : "warning";
-        lines.add("[" + juce::String(severity) + "] " + diagnostic.filePath + ":" + juce::String(diagnostic.line) + " - " + diagnostic.message);
-    }
-
-    if (lines.isEmpty())
-        lines.add("No diagnostics.");
-
-    text_.setText(lines.joinIntoString("\n"), juce::dontSendNotification);
-}
-
-void AudiocityAudioProcessorEditor::DiagnosticsPanel::resized()
-{
-    text_.setBounds(getLocalBounds().reduced(12));
-}
-
-void AudiocityAudioProcessorEditor::DiagnosticsPanel::paint(juce::Graphics& g)
-{
-    g.fillAll(juce::Colours::black.withAlpha(0.9f));
-    g.setColour(juce::Colours::white.withAlpha(0.35f));
-    g.drawRect(getLocalBounds().reduced(8), 1);
-}
-
-AudiocityAudioProcessorEditor::EditorPanel::EditorPanel()
-{
-    addAndMakeVisible(selectedZoneLabel_);
-    addAndMakeVisible(selectedZoneValue_);
-    addAndMakeVisible(undoRedoStatusLabel_);
-    addAndMakeVisible(loopStartLabel_);
-    addAndMakeVisible(loopStartEditor_);
-    addAndMakeVisible(loopEndLabel_);
-    addAndMakeVisible(loopEndEditor_);
-    addAndMakeVisible(undoButton_);
-    addAndMakeVisible(redoButton_);
-    addAndMakeVisible(applyButton_);
-
-    selectedZoneValue_.setText("(none)", juce::dontSendNotification);
-    selectedZoneValue_.setJustificationType(juce::Justification::centredLeft);
-    undoRedoStatusLabel_.setJustificationType(juce::Justification::centredLeft);
-
-    loopStartEditor_.setInputRestrictions(10, "0123456789");
-    loopEndEditor_.setInputRestrictions(10, "0123456789");
-
-    applyButton_.onClick = [this]
-    {
-        if (!onApplyZoneLoopPoints)
-            return;
-
-        onApplyZoneLoopPoints(
-            loopStartEditor_.getText().getIntValue(),
-            loopEndEditor_.getText().getIntValue());
+        processor_.setQualityTier(qualityCombo_.getSelectedId() == 1
+            ? AudiocityAudioProcessor::QualityTier::cpu
+            : AudiocityAudioProcessor::QualityTier::fidelity);
     };
 
-    undoButton_.onClick = [this]
+    addAndMakeVisible(preloadDial_);
+    preloadDial_.onValueChange = [this]
     {
-        if (onUndo)
-            onUndo();
+        processor_.setPreloadSamples(juce::jmax(256, static_cast<int>(preloadDial_.getValue())));
+        refreshUI();
     };
 
-    redoButton_.onClick = [this]
+    // Reverse / Fade
+    addAndMakeVisible(reverseToggle_);
+    reverseToggle_.onClick = [this]
     {
-        if (onRedo)
-            onRedo();
-    };
-}
-
-void AudiocityAudioProcessorEditor::EditorPanel::setSelectedZoneLoopState(
-    const int selectedZoneIndex,
-    const int loopStart,
-    const int loopEnd,
-    const bool hasSelection)
-{
-    selectedZoneValue_.setText(hasSelection ? juce::String(selectedZoneIndex) : "(none)", juce::dontSendNotification);
-    loopStartEditor_.setText(hasSelection ? juce::String(juce::jmax(0, loopStart)) : juce::String{}, juce::dontSendNotification);
-    loopEndEditor_.setText(hasSelection ? juce::String(juce::jmax(0, loopEnd)) : juce::String{}, juce::dontSendNotification);
-    loopStartEditor_.setEnabled(hasSelection);
-    loopEndEditor_.setEnabled(hasSelection);
-    applyButton_.setEnabled(hasSelection);
-}
-
-void AudiocityAudioProcessorEditor::EditorPanel::setUndoRedoStatus(
-    const bool canUndo,
-    const bool canRedo,
-    const juce::String& undoLabel,
-    const juce::String& redoLabel)
-{
-    const auto undoText = canUndo && undoLabel.isNotEmpty() ? undoLabel : "(none)";
-    const auto redoText = canRedo && redoLabel.isNotEmpty() ? redoLabel : "(none)";
-    undoRedoStatusLabel_.setText("Undo: " + undoText + " | Redo: " + redoText, juce::dontSendNotification);
-    undoButton_.setEnabled(canUndo);
-    redoButton_.setEnabled(canRedo);
-    undoButton_.setTooltip(canUndo ? "Undo " + undoText : "Nothing to undo");
-    redoButton_.setTooltip(canRedo ? "Redo " + redoText : "Nothing to redo");
-}
-
-void AudiocityAudioProcessorEditor::EditorPanel::resized()
-{
-    auto area = getLocalBounds().reduced(12);
-
-    auto row = area.removeFromTop(28);
-    selectedZoneLabel_.setBounds(row.removeFromLeft(110));
-    selectedZoneValue_.setBounds(row.removeFromLeft(100));
-
-    area.removeFromTop(8);
-
-    row = area.removeFromTop(24);
-    undoRedoStatusLabel_.setBounds(row);
-
-    area.removeFromTop(8);
-
-    row = area.removeFromTop(28);
-    loopStartLabel_.setBounds(row.removeFromLeft(80));
-    loopStartEditor_.setBounds(row.removeFromLeft(90));
-    row.removeFromLeft(12);
-    loopEndLabel_.setBounds(row.removeFromLeft(70));
-    loopEndEditor_.setBounds(row.removeFromLeft(90));
-
-    area.removeFromTop(12);
-
-    row = area.removeFromTop(28);
-    undoButton_.setBounds(row.removeFromLeft(80));
-    row.removeFromLeft(8);
-    redoButton_.setBounds(row.removeFromLeft(80));
-    row.removeFromLeft(8);
-    applyButton_.setBounds(row.removeFromLeft(80));
-}
-
-void AudiocityAudioProcessorEditor::EditorPanel::paint(juce::Graphics& g)
-{
-    g.fillAll(juce::Colours::black.withAlpha(0.9f));
-    g.setColour(juce::Colours::white.withAlpha(0.35f));
-    g.drawRect(getLocalBounds().reduced(8), 1);
-}
-
-AudiocityAudioProcessorEditor::SettingsPanel::SettingsPanel()
-{
-    addAndMakeVisible(preloadLabel_);
-    addAndMakeVisible(preloadEditor_);
-    addAndMakeVisible(applyButton_);
-    addAndMakeVisible(qualityTierLabel_);
-    addAndMakeVisible(qualityTierCombo_);
-    addAndMakeVisible(qualityDescriptionLabel_);
-    addAndMakeVisible(copyDiagnosticsButton_);
-    addAndMakeVisible(undoButton_);
-    addAndMakeVisible(redoButton_);
-    addAndMakeVisible(splitInfoLabel_);
-
-    preloadEditor_.setInputRestrictions(8, "0123456789");
-    preloadEditor_.setText("32768", juce::dontSendNotification);
-    preloadEditor_.setTooltip("Number of samples preloaded in memory before streamed region.");
-
-    qualityTierCombo_.addItem("CPU", 1);
-    qualityTierCombo_.addItem("Fidelity", 2);
-    qualityTierCombo_.setSelectedId(2, juce::dontSendNotification);
-    qualityTierCombo_.setTooltip("CPU uses nearest read; Fidelity uses linear interpolation.");
-    qualityTierCombo_.onChange = [this]
-    {
-        qualityDescriptionLabel_.setText(
-            qualityTierCombo_.getSelectedId() == 1
-                ? "CPU: lower cost, nearest sample read"
-                : "Fidelity: linear interpolation, smoother pitch",
-            juce::dontSendNotification);
-
-        if (onQualityTierChanged)
-            onQualityTierChanged(qualityTierCombo_.getSelectedId() - 1);
+        processor_.setReversePlayback(reverseToggle_.getToggleState());
     };
 
-    qualityDescriptionLabel_.setJustificationType(juce::Justification::centredLeft);
-    qualityDescriptionLabel_.setText("Fidelity: linear interpolation, smoother pitch", juce::dontSendNotification);
+    addAndMakeVisible(fadeInDial_);
+    addAndMakeVisible(fadeOutDial_);
+    auto pushFades = [this]
+    {
+        processor_.setFadeSamples(
+            juce::jmax(0, static_cast<int>(fadeInDial_.getValue())),
+            juce::jmax(0, static_cast<int>(fadeOutDial_.getValue())));
+    };
+    fadeInDial_.onValueChange = pushFades;
+    fadeOutDial_.onValueChange = pushFades;
 
-    splitInfoLabel_.setJustificationType(juce::Justification::centredLeft);
-    splitInfoLabel_.setText("Loaded split: preload 0 | stream 0", juce::dontSendNotification);
+    // Diagnostics
+    addAndMakeVisible(diagnosticsLabel_);
+    diagnosticsLabel_.setJustificationType(juce::Justification::centredLeft);
+    diagnosticsLabel_.setFont(juce::Font(juce::FontOptions(11.0f)));
 
-    auto pushValue = [this]
-    {
-        const auto samples = juce::jmax(256, preloadEditor_.getText().getIntValue());
-        preloadEditor_.setText(juce::String(samples), juce::dontSendNotification);
-
-        if (onPreloadSamplesChanged)
-            onPreloadSamplesChanged(samples);
-    };
-
-    applyButton_.onClick = pushValue;
-    preloadEditor_.onReturnKey = pushValue;
-    preloadEditor_.onFocusLost = pushValue;
-
-    copyDiagnosticsButton_.onClick = [this]
-    {
-        if (onCopyDiagnostics)
-            onCopyDiagnostics();
-    };
-
-    undoButton_.onClick = [this]
-    {
-        if (onUndoSettings)
-            onUndoSettings();
-    };
-
-    redoButton_.onClick = [this]
-    {
-        if (onRedoSettings)
-            onRedoSettings();
-    };
-
-    setUndoRedoEnabled(false, false);
-}
-
-void AudiocityAudioProcessorEditor::SettingsPanel::setPreloadSamples(const int samples)
-{
-    preloadEditor_.setText(juce::String(juce::jmax(256, samples)), juce::dontSendNotification);
-}
-
-void AudiocityAudioProcessorEditor::SettingsPanel::setQualityTier(const int qualityTierIndex)
-{
-    qualityTierCombo_.setSelectedId(juce::jlimit(1, 2, qualityTierIndex + 1), juce::dontSendNotification);
-    qualityDescriptionLabel_.setText(
-        qualityTierCombo_.getSelectedId() == 1
-            ? "CPU: lower cost, nearest sample read"
-            : "Fidelity: linear interpolation, smoother pitch",
-        juce::dontSendNotification);
-}
-
-void AudiocityAudioProcessorEditor::SettingsPanel::setPreloadSplit(const int preloadSamples, const int streamSamples)
-{
-    splitInfoLabel_.setText(
-        "Loaded split: preload " + juce::String(juce::jmax(0, preloadSamples))
-            + " | stream " + juce::String(juce::jmax(0, streamSamples)),
-        juce::dontSendNotification);
-}
-
-void AudiocityAudioProcessorEditor::SettingsPanel::setUndoRedoEnabled(const bool canUndo, const bool canRedo)
-{
-    undoButton_.setEnabled(canUndo);
-    redoButton_.setEnabled(canRedo);
-}
-
-void AudiocityAudioProcessorEditor::SettingsPanel::resized()
-{
-    auto area = getLocalBounds().reduced(12);
-    auto row = area.removeFromTop(28);
-    preloadLabel_.setBounds(row.removeFromLeft(120));
-    preloadEditor_.setBounds(row.removeFromLeft(120));
-    row.removeFromLeft(8);
-    applyButton_.setBounds(row.removeFromLeft(70));
-    row.removeFromLeft(8);
-    copyDiagnosticsButton_.setBounds(row.removeFromLeft(130));
-    area.removeFromTop(8);
-    auto qualityRow = area.removeFromTop(28);
-    qualityTierLabel_.setBounds(qualityRow.removeFromLeft(120));
-    qualityTierCombo_.setBounds(qualityRow.removeFromLeft(120));
-    qualityRow.removeFromLeft(8);
-    undoButton_.setBounds(qualityRow.removeFromLeft(64));
-    qualityRow.removeFromLeft(6);
-    redoButton_.setBounds(qualityRow.removeFromLeft(64));
-    area.removeFromTop(8);
-    qualityDescriptionLabel_.setBounds(area.removeFromTop(24));
-    area.removeFromTop(8);
-    splitInfoLabel_.setBounds(area.removeFromTop(24));
-}
-
-void AudiocityAudioProcessorEditor::SettingsPanel::paint(juce::Graphics& g)
-{
-    g.fillAll(juce::Colours::black.withAlpha(0.9f));
-    g.setColour(juce::Colours::white.withAlpha(0.35f));
-    g.drawRect(getLocalBounds().reduced(8), 1);
-}
-
-AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProcessor& processor)
-    : AudioProcessorEditor(&processor),
-      processor_(processor),
-      zoneModel_(processor),
-      editorViewModel_(selectionModel_, zoneModel_, commandStack_)
-{
-    setName("Audiocity");
-    setSize(1200, 760);
-    setWantsKeyboardFocus(true);
-
-    addAndMakeVisible(tabs_);
-
-    browserPanel_.onLoadSample = [this](const juce::String& path)
-    {
-        if (path.isNotEmpty() && processor_.loadSampleFromFile(juce::File(path)))
-            refreshBrowserPanel();
-    };
-    browserPanel_.onImportSfz = [this]
-    {
-        openSfzChooser();
-    };
-    settingsPanel_.onPreloadSamplesChanged = [this](const int samples)
-    {
-        auto target = captureSettingsSnapshot();
-        target.preloadSamples = samples;
-        applySettingsSnapshot(target, true, 1, "Change Preload Samples");
-        updateSettingsUndoRedoAvailability();
-    };
-    settingsPanel_.onQualityTierChanged = [this](const int qualityTierIndex)
-    {
-        auto target = captureSettingsSnapshot();
-        target.qualityTierIndex = juce::jlimit(0, 1, qualityTierIndex);
-        applySettingsSnapshot(target, true, -1, "Change Quality Tier");
-        updateSettingsUndoRedoAvailability();
-    };
-    settingsPanel_.onCopyDiagnostics = [this]
-    {
-        juce::SystemClipboard::copyTextToClipboard(buildStreamingDiagnosticsLine(true));
-    };
-    settingsPanel_.onUndoSettings = [this]
-    {
-        performSettingsUndo();
-    };
-    settingsPanel_.onRedoSettings = [this]
-    {
-        performSettingsRedo();
-    };
-    mappingPanel_.onRrModeChanged = [this](const int modeIndex)
-    {
-        auto target = captureSettingsSnapshot();
-        target.rrModeIndex = juce::jlimit(0, 1, modeIndex);
-        applySettingsSnapshot(target, true, -1, "Change RR Mode");
-        updateSettingsUndoRedoAvailability();
-    };
-    mappingPanel_.onPlaybackModeChanged = [this](const int modeIndex)
-    {
-        auto target = captureSettingsSnapshot();
-        target.playbackModeIndex = juce::jlimit(0, 2, modeIndex);
-        applySettingsSnapshot(target, true, -1, "Change Playback Mode");
-        updateSettingsUndoRedoAvailability();
-    };
-    mappingPanel_.onMonoModeChanged = [this](const bool enabled)
-    {
-        auto target = captureSettingsSnapshot();
-        target.monoEnabled = enabled;
-        if (!enabled)
-            target.legatoEnabled = false;
-        applySettingsSnapshot(target, true, -1, "Change Mono Mode");
-        updateSettingsUndoRedoAvailability();
-    };
-    mappingPanel_.onLegatoModeChanged = [this](const bool enabled)
-    {
-        auto target = captureSettingsSnapshot();
-        target.legatoEnabled = enabled;
-        applySettingsSnapshot(target, true, -1, "Change Legato Mode");
-        updateSettingsUndoRedoAvailability();
-    };
-    mappingPanel_.onGlideSecondsChanged = [this](const float seconds)
-    {
-        auto target = captureSettingsSnapshot();
-        target.glideSeconds = seconds;
-        applySettingsSnapshot(target, true, 2, "Change Glide");
-        updateSettingsUndoRedoAvailability();
-    };
-    mappingPanel_.onChokeGroupChanged = [this](const int chokeGroup)
-    {
-        auto target = captureSettingsSnapshot();
-        target.chokeGroup = chokeGroup;
-        applySettingsSnapshot(target, true, -1, "Change Choke Group");
-        updateSettingsUndoRedoAvailability();
-    };
-    mappingPanel_.onLoopPointsApply = [this](const int row, const int loopStart, const int loopEnd)
-    {
-        auto target = captureSettingsSnapshot();
-        if (row < 0 || row >= static_cast<int>(target.importedZoneLoopPoints.size()))
-            return;
-
-        target.importedZoneLoopPoints[static_cast<std::size_t>(row)].loopStart = juce::jmax(0, loopStart);
-        target.importedZoneLoopPoints[static_cast<std::size_t>(row)].loopEnd = juce::jmax(loopStart + 1, loopEnd);
-        applySettingsSnapshot(target, true, -1, "Edit Loop Points");
-        updateSettingsUndoRedoAvailability();
-    };
-    mappingPanel_.onZoneSelectionChanged = [this](const int selectedRow)
-    {
-        editorViewModel_.setSelectedZoneIndex(selectedRow);
-        refreshEditorPanel();
-    };
-    editorPanel_.onApplyZoneLoopPoints = [this](const int loopStart, const int loopEnd)
-    {
-        if (editorViewModel_.applySelectedZoneLoopPoints(loopStart, loopEnd))
-        {
-            refreshImportedSfzViews();
-            refreshEditorPanel();
-        }
-    };
-    editorPanel_.onUndo = [this]
-    {
-        if (editorViewModel_.undo())
-        {
-            refreshImportedSfzViews();
-            refreshEditorPanel();
-        }
-    };
-    editorPanel_.onRedo = [this]
-    {
-        if (editorViewModel_.redo())
-        {
-            refreshImportedSfzViews();
-            refreshEditorPanel();
-        }
-    };
-    browserPanel_.onAddWatchedFolder = [this]
-    {
-        openWatchedFolderChooser();
-    };
-    browserPanel_.onRescan = [this]
-    {
-        processor_.browserIndex().rescan();
-    };
-    browserPanel_.onSearchChanged = [this](const juce::String& text)
-    {
-        processor_.browserIndex().setSearchText(text);
-    };
-    browserPanel_.onSelectionChanged = [this](const juce::String& path)
-    {
-        browserPanel_.setWaveformPeaks(processor_.browserIndex().getPeaks(path));
-    };
-    browserPanel_.onToggleFavorite = [this](const juce::String& path)
-    {
-        processor_.browserIndex().toggleFavorite(path);
-        refreshBrowserPanel();
-    };
-    browserPanel_.onPreviewToggle = [this](const juce::String& path, const bool start)
-    {
-        if (start)
-        {
-            if (processor_.startPreviewFromPath(path))
-            {
-                const auto results = processor_.browserIndex().getSearchResults();
-                const auto found = std::find_if(results.begin(), results.end(), [&](const BrowserIndex::EntrySnapshot& item)
-                {
-                    return item.path == path;
-                });
-
-                const auto duration = found != results.end() ? found->durationSeconds : 0.0;
-                browserPanel_.setPreviewState(true, duration);
-                refreshBrowserPanel();
-            }
-        }
-        else
-        {
-            processor_.stopPreview();
-            browserPanel_.setPreviewState(false, 0.0);
-        }
+    // Register all dials with their parameter IDs for CC mapping
+    allDials_ = {
+        { &rootNoteDial_,       "rootNote" },
+        { &playbackStartDial_,  "playbackStart" },
+        { &playbackEndDial_,    "playbackEnd" },
+        { &loopStartDial_,      "loopStart" },
+        { &loopEndDial_,        "loopEnd" },
+        { &glideDial_,          "glide" },
+        { &chokeGroupDial_,     "chokeGroup" },
+        { &ampAttackDial_,      "ampAttack" },
+        { &ampDecayDial_,       "ampDecay" },
+        { &ampSustainDial_,     "ampSustain" },
+        { &ampReleaseDial_,     "ampRelease" },
+        { &filterCutoffDial_,   "filterCutoff" },
+        { &filterResDial_,      "filterRes" },
+        { &filterEnvAmtDial_,   "filterEnvAmt" },
+        { &preloadDial_,        "preload" },
+        { &fadeInDial_,         "fadeIn" },
+        { &fadeOutDial_,        "fadeOut" },
     };
 
-    auto safeThis = juce::Component::SafePointer<AudiocityAudioProcessorEditor>(this);
-    processor_.browserIndex().setOnUpdated([safeThis]
-    {
-        if (safeThis != nullptr)
-            safeThis->refreshBrowserPanel();
-    });
-
-    refreshBrowserPanel();
-    refreshImportedSfzViews();
-    refreshEditorPanel();
-    refreshSettingsPanel();
-    updateSettingsUndoRedoAvailability();
-    refreshDiagnosticsTabTitle();
-
-    tabs_.addTab("Browser", juce::Colours::transparentBlack, &browserPanel_, false);
-    tabs_.addTab("Mapping", juce::Colours::transparentBlack, &mappingPanel_, false);
-    tabs_.addTab("Editor", juce::Colours::transparentBlack, &editorPanel_, false);
-    tabs_.addTab("Settings", juce::Colours::transparentBlack, &settingsPanel_, false);
-    tabs_.addTab("Diagnostics", juce::Colours::transparentBlack, &diagnosticsPanel_, false);
+    setupTooltips();
+    refreshUI();
+    syncCcMappingsFromProcessor();
+    startTimerHz(60);
 }
 
 AudiocityAudioProcessorEditor::~AudiocityAudioProcessorEditor()
 {
-    processor_.browserIndex().setOnUpdated({});
+    stopTimer();
+    setLookAndFeel(nullptr);
 }
+
+// ─── Timer: poll CC FIFO ───────────────────────────────────────────────────────
+
+void AudiocityAudioProcessorEditor::timerCallback()
+{
+    AudiocityAudioProcessor::CcEvent event{};
+    while (processor_.popCcEvent(event))
+    {
+        // Check if any dial is armed for CC learn
+        for (auto& [dial, paramId] : allDials_)
+        {
+            if (dial->isCcLearnArmed())
+            {
+                dial->assignCc(event.ccNumber);
+                processor_.setCcMapping(event.ccNumber, paramId);
+                break;
+            }
+        }
+
+        // Route mapped CC to the correct dial
+        const auto mappedParam = processor_.getParamForCc(event.ccNumber);
+        if (mappedParam.isNotEmpty())
+        {
+            for (auto& [dial, paramId] : allDials_)
+            {
+                if (paramId == mappedParam)
+                {
+                    dial->handleCcValue(event.value);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// ─── Layout ────────────────────────────────────────────────────────────────────
 
 void AudiocityAudioProcessorEditor::resized()
 {
-    tabs_.setBounds(getLocalBounds().reduced(8));
+    constexpr int kMargin   = 14;
+    constexpr int kDial     = 78;
+    constexpr int kDialH    = 96;
+    constexpr int kGrpPadH  = 12;
+    constexpr int kGrpPadV  = 8;
+    constexpr int kGrpHdr   = 22;
+    constexpr int kGrpGap   = 10;
+    constexpr int kDialGap  = 6;
+    constexpr int kRowH     = kGrpHdr + kGrpPadV + kDialH + kGrpPadV;  // 134
+
+    auto area = getLocalBounds().reduced(kMargin);
+    groupBoxes_.clear();
+
+    // ── Top bar: Load button + file path + Root Note dial ──
+    {
+        auto bar = area.removeFromTop(kDialH);
+        rootNoteDial_.setBounds(bar.removeFromRight(kDial));
+        bar.removeFromRight(8);
+        auto topRow = bar.removeFromTop(28);
+        loadButton_.setBounds(topRow.removeFromLeft(120));
+        topRow.removeFromLeft(8);
+        samplePathLabel_.setBounds(topRow);
+    }
+
+    area.removeFromTop(6);
+
+    // ── Waveform ──
+    waveformView_.setBounds(area.removeFromTop(170));
+    area.removeFromTop(kGrpGap);
+
+    // Helper: register a group box and return the inner content area
+    auto makeGroup = [this](const juce::String& title,
+                            juce::Rectangle<int> bounds) -> juce::Rectangle<int>
+    {
+        groupBoxes_.push_back({ title, bounds });
+        return bounds.withTrimmedTop(kGrpHdr).reduced(kGrpPadH, kGrpPadV);
+    };
+
+    // ── Row 1: Trim | Loop ──
+    {
+        auto row = area.removeFromTop(kRowH);
+        const auto leftW = (row.getWidth() - kGrpGap) * 2 / 5;
+
+        auto trimInner = makeGroup("Trim", row.removeFromLeft(leftW));
+        row.removeFromLeft(kGrpGap);
+        auto loopInner = makeGroup("Loop", row);
+
+        // Trim: Pb Start + Pb End
+        playbackStartDial_.setBounds(trimInner.removeFromLeft(kDial));
+        trimInner.removeFromLeft(kDialGap);
+        playbackEndDial_.setBounds(trimInner.removeFromLeft(kDial));
+
+        // Loop: Mode combo + Loop Start + Loop End
+        auto modeArea = loopInner.removeFromLeft(100);
+        playbackModeLabel_.setBounds(modeArea.removeFromTop(16));
+        modeArea.removeFromTop(2);
+        playbackModeCombo_.setBounds(modeArea.removeFromTop(26));
+        loopInner.removeFromLeft(kDialGap);
+        loopStartDial_.setBounds(loopInner.removeFromLeft(kDial));
+        loopInner.removeFromLeft(kDialGap);
+        loopEndDial_.setBounds(loopInner.removeFromLeft(kDial));
+    }
+
+    area.removeFromTop(kGrpGap);
+
+    // ── Row 2: Performance | Amp Envelope ──
+    {
+        auto row = area.removeFromTop(kRowH);
+        const auto leftW = (row.getWidth() - kGrpGap) / 2;
+
+        auto perfInner = makeGroup("Performance", row.removeFromLeft(leftW));
+        row.removeFromLeft(kGrpGap);
+        auto ampInner = makeGroup("Amp Envelope", row);
+
+        // Performance: stacked toggles, then Glide + Choke dials
+        auto toggleCol = perfInner.removeFromLeft(80);
+        monoToggle_.setBounds(toggleCol.removeFromTop(28));
+        toggleCol.removeFromTop(4);
+        legatoToggle_.setBounds(toggleCol.removeFromTop(28));
+        toggleCol.removeFromTop(4);
+        reverseToggle_.setBounds(toggleCol.removeFromTop(28));
+        perfInner.removeFromLeft(kDialGap);
+        glideDial_.setBounds(perfInner.removeFromLeft(kDial));
+        perfInner.removeFromLeft(kDialGap);
+        chokeGroupDial_.setBounds(perfInner.removeFromLeft(kDial));
+
+        // Amp: A D S R
+        ampAttackDial_.setBounds(ampInner.removeFromLeft(kDial));
+        ampInner.removeFromLeft(kDialGap);
+        ampDecayDial_.setBounds(ampInner.removeFromLeft(kDial));
+        ampInner.removeFromLeft(kDialGap);
+        ampSustainDial_.setBounds(ampInner.removeFromLeft(kDial));
+        ampInner.removeFromLeft(kDialGap);
+        ampReleaseDial_.setBounds(ampInner.removeFromLeft(kDial));
+    }
+
+    area.removeFromTop(kGrpGap);
+
+    // ── Row 3: Filter | Output ──
+    {
+        auto row = area.removeFromTop(kRowH);
+        const auto leftW = (row.getWidth() - kGrpGap) * 2 / 5;
+
+        auto filterInner = makeGroup("Filter", row.removeFromLeft(leftW));
+        row.removeFromLeft(kGrpGap);
+        auto outInner = makeGroup("Output", row);
+
+        // Filter: Cutoff + Res + Env
+        filterCutoffDial_.setBounds(filterInner.removeFromLeft(kDial));
+        filterInner.removeFromLeft(kDialGap);
+        filterResDial_.setBounds(filterInner.removeFromLeft(kDial));
+        filterInner.removeFromLeft(kDialGap);
+        filterEnvAmtDial_.setBounds(filterInner.removeFromLeft(kDial));
+
+        // Output: FadeIn, FadeOut, Quality, Preload
+        fadeInDial_.setBounds(outInner.removeFromLeft(kDial));
+        outInner.removeFromLeft(kDialGap);
+        fadeOutDial_.setBounds(outInner.removeFromLeft(kDial));
+        outInner.removeFromLeft(kDialGap + 8);
+
+        auto qualArea = outInner.removeFromLeft(100);
+        qualityLabel_.setBounds(qualArea.removeFromTop(16));
+        qualArea.removeFromTop(2);
+        qualityCombo_.setBounds(qualArea.removeFromTop(26));
+        outInner.removeFromLeft(kDialGap);
+        preloadDial_.setBounds(outInner.removeFromLeft(kDial));
+    }
+
+    area.removeFromTop(kGrpGap);
+
+    // ── Diagnostics ──
+    diagnosticsLabel_.setBounds(area.removeFromTop(20));
 }
 
-bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
+void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
 {
-    const auto selectedTab = tabs_.getCurrentTabIndex();
-    const auto isUndoRedoTab = selectedTab == 1 || selectedTab == 2 || selectedTab == 3;
-    if (!isUndoRedoTab)
-        return AudioProcessorEditor::keyPressed(key);
+    g.fillAll(juce::Colour(0xff1e1e2e));
 
-    if (dynamic_cast<juce::TextEditor*>(juce::Component::getCurrentlyFocusedComponent()) != nullptr)
-        return AudioProcessorEditor::keyPressed(key);
+    // Title bar accent
+    g.setColour(juce::Colour(0xff2d2d44));
+    g.fillRect(0, 0, getWidth(), 8);
 
-    const auto modifiers = key.getModifiers();
-    if (modifiers.isCommandDown() && !modifiers.isShiftDown() && !modifiers.isAltDown()
-        && (key.getKeyCode() == 'z' || key.getKeyCode() == 'Z'))
-    {
-        if (selectedTab == 2)
-        {
-            if (editorViewModel_.undo())
-            {
-                refreshImportedSfzViews();
-                refreshEditorPanel();
-            }
-        }
-        else
-        {
-            performSettingsUndo();
-        }
+    // Group boxes
+    paintGroupBoxes(g);
 
-        return true;
-    }
+    if (!isHoveringValidDrop_)
+        return;
 
-    if (modifiers.isCommandDown() && !modifiers.isShiftDown() && !modifiers.isAltDown()
-        && (key.getKeyCode() == 'y' || key.getKeyCode() == 'Y'))
-    {
-        if (selectedTab == 2)
-        {
-            if (editorViewModel_.redo())
-            {
-                refreshImportedSfzViews();
-                refreshEditorPanel();
-            }
-        }
-        else
-        {
-            performSettingsRedo();
-        }
-
-        return true;
-    }
-
-    return AudioProcessorEditor::keyPressed(key);
+    // Drop overlay
+    auto overlay = waveformView_.getBounds().expanded(6);
+    g.setColour(juce::Colours::deepskyblue.withAlpha(0.12f));
+    g.fillRect(overlay);
+    g.setColour(juce::Colours::deepskyblue.withAlpha(0.85f));
+    g.drawRect(overlay, 2);
+    g.setColour(juce::Colours::white.withAlpha(0.95f));
+    g.setFont(14.0f);
+    g.drawText("Drop .wav or .aiff to load", overlay, juce::Justification::centred);
 }
+
+// ─── Group box rendering ───────────────────────────────────────────────────────
+
+void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const
+{
+    for (const auto& group : groupBoxes_)
+    {
+        auto bf = group.bounds.toFloat();
+
+        // Panel background
+        g.setColour(juce::Colour(0xff252538));
+        g.fillRoundedRectangle(bf, 6.0f);
+
+        // Border
+        g.setColour(juce::Colour(0xff3a3a52));
+        g.drawRoundedRectangle(bf.reduced(0.5f), 6.0f, 1.0f);
+
+        // Header band
+        auto hdr = bf.removeFromTop(22.0f);
+        g.setColour(juce::Colour(0xff2d2d44));
+        g.fillRoundedRectangle(hdr, 6.0f);
+        // Square-off the bottom corners of the header
+        g.fillRect(hdr.withTrimmedTop(6.0f));
+
+        // Title text
+        g.setColour(juce::Colour(0xff808098));
+        g.setFont(juce::Font(juce::FontOptions(12.0f)));
+        g.drawText(group.title, hdr.withTrimmedLeft(10.0f),
+                   juce::Justification::centredLeft);
+    }
+}
+
+// ─── Tooltips ──────────────────────────────────────────────────────────────────
+
+void AudiocityAudioProcessorEditor::setupTooltips()
+{
+    rootNoteDial_.setLabelTooltip(
+        "Root Note \xe2\x80\x94 MIDI note number for the sample's original pitch");
+    playbackStartDial_.setLabelTooltip(
+        "Playback Start \xe2\x80\x94 Sample position where playback begins");
+    playbackEndDial_.setLabelTooltip(
+        "Playback End \xe2\x80\x94 Sample position where playback ends");
+    loopStartDial_.setLabelTooltip(
+        "Loop Start \xe2\x80\x94 Sample position where the loop region begins");
+    loopEndDial_.setLabelTooltip(
+        "Loop End \xe2\x80\x94 Sample position where the loop region ends");
+    glideDial_.setLabelTooltip(
+        "Glide Time \xe2\x80\x94 Portamento time between notes in milliseconds");
+    chokeGroupDial_.setLabelTooltip(
+        "Choke Group \xe2\x80\x94 Voices in the same group cut each other off");
+    ampAttackDial_.setLabelTooltip(
+        "Attack \xe2\x80\x94 Amplitude envelope attack time in milliseconds");
+    ampDecayDial_.setLabelTooltip(
+        "Decay \xe2\x80\x94 Amplitude envelope decay time in milliseconds");
+    ampSustainDial_.setLabelTooltip(
+        "Sustain \xe2\x80\x94 Amplitude envelope sustain level (0 to 1)");
+    ampReleaseDial_.setLabelTooltip(
+        "Release \xe2\x80\x94 Amplitude envelope release time in milliseconds");
+    filterCutoffDial_.setLabelTooltip(
+        "Filter Cutoff \xe2\x80\x94 Low-pass filter frequency in Hz");
+    filterResDial_.setLabelTooltip(
+        "Resonance \xe2\x80\x94 Filter emphasis at the cutoff frequency");
+    filterEnvAmtDial_.setLabelTooltip(
+        "Envelope Amount \xe2\x80\x94 Filter envelope modulation depth in Hz");
+    fadeInDial_.setLabelTooltip(
+        "Fade In \xe2\x80\x94 Number of samples to fade in at playback start");
+    fadeOutDial_.setLabelTooltip(
+        "Fade Out \xe2\x80\x94 Number of samples to fade out at playback end");
+    preloadDial_.setLabelTooltip(
+        "Preload \xe2\x80\x94 Number of samples buffered before streaming begins");
+
+    monoToggle_.setTooltip(
+        "Monophonic \xe2\x80\x94 Limit to a single voice at a time");
+    legatoToggle_.setTooltip(
+        "Legato \xe2\x80\x94 Keep the envelope running between overlapping notes");
+    reverseToggle_.setTooltip(
+        "Reverse \xe2\x80\x94 Play the sample backwards");
+}
+
+// ─── Drag & Drop ───────────────────────────────────────────────────────────────
+
+bool AudiocityAudioProcessorEditor::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    for (const auto& path : files)
+    {
+        const auto ext = juce::File(path).getFileExtension().toLowerCase();
+        if (ext == ".wav" || ext == ".aiff" || ext == ".aif")
+            return true;
+    }
+    return false;
+}
+
+void AudiocityAudioProcessorEditor::fileDragEnter(const juce::StringArray& files, int, int)
+{
+    isHoveringValidDrop_ = isInterestedInFileDrag(files);
+    repaint();
+}
+
+void AudiocityAudioProcessorEditor::fileDragMove(const juce::StringArray& files, int x, int y)
+{
+    fileDragEnter(files, x, y);
+}
+
+void AudiocityAudioProcessorEditor::fileDragExit(const juce::StringArray&)
+{
+    isHoveringValidDrop_ = false;
+    repaint();
+}
+
+void AudiocityAudioProcessorEditor::filesDropped(const juce::StringArray& files, int, int)
+{
+    isHoveringValidDrop_ = false;
+    repaint();
+
+    for (const auto& path : files)
+    {
+        const juce::File dropped(path);
+        if (!dropped.existsAsFile())
+            continue;
+
+        const auto ext = dropped.getFileExtension().toLowerCase();
+        if (ext == ".wav" || ext == ".aiff" || ext == ".aif")
+        {
+            if (processor_.loadSampleFromFile(dropped))
+                refreshUI();
+            return;
+        }
+    }
+}
+
+// ─── File Chooser ──────────────────────────────────────────────────────────────
 
 void AudiocityAudioProcessorEditor::openSampleChooser()
 {
@@ -1166,194 +820,211 @@ void AudiocityAudioProcessorEditor::openSampleChooser()
             return;
 
         if (processor_.loadSampleFromFile(selected))
-            refreshBrowserPanel();
+            refreshUI();
     });
 }
 
-void AudiocityAudioProcessorEditor::openSfzChooser()
+// ─── Refresh UI ────────────────────────────────────────────────────────────────
+
+void AudiocityAudioProcessorEditor::refreshUI()
 {
-    fileChooser_ = std::make_unique<juce::FileChooser>("Import SFZ", juce::File{}, "*.sfz");
+    const auto path = processor_.getLoadedSamplePath();
+    samplePathLabel_.setText(path.isNotEmpty() ? path : "No sample loaded", juce::dontSendNotification);
 
-    const auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
-    fileChooser_->launchAsync(chooserFlags, [this](const juce::FileChooser& chooser)
-    {
-        const auto selected = chooser.getResult();
-        if (selected == juce::File{})
-            return;
+    rootNoteDial_.setValue(processor_.getRootMidiNote());
 
-        processor_.importSfzFile(selected);
-        refreshBrowserPanel();
-        refreshImportedSfzViews();
-    });
-}
+    const auto sampleLength = processor_.getLoadedSampleLength();
 
-void AudiocityAudioProcessorEditor::openWatchedFolderChooser()
-{
-    fileChooser_ = std::make_unique<juce::FileChooser>("Add watched folder", juce::File{}, "*");
+    waveformView_.setState(sampleLength, processor_.getLoadedSamplePeaks(),
+        processor_.getSampleWindowStart(), processor_.getSampleWindowEnd(),
+        processor_.getLoopStart(), processor_.getLoopEnd());
 
-    const auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories;
-    fileChooser_->launchAsync(chooserFlags, [this](const juce::FileChooser& chooser)
-    {
-        const auto selected = chooser.getResult();
-        if (!selected.isDirectory())
-            return;
-
-        processor_.browserIndex().addWatchedFolder(selected);
-    });
-}
-
-void AudiocityAudioProcessorEditor::refreshImportedSfzViews()
-{
-    mappingPanel_.setZones(processor_.getImportedZones());
-
-    const auto rrMode = processor_.getRoundRobinMode() == AudiocityAudioProcessor::RoundRobinMode::random ? 1 : 0;
-    mappingPanel_.setRrMode(rrMode);
-
-    int playbackMode = 0;
+    // Playback mode
+    int playbackId = 1;
     if (processor_.getPlaybackMode() == AudiocityAudioProcessor::PlaybackMode::oneShot)
-        playbackMode = 1;
+        playbackId = 2;
     else if (processor_.getPlaybackMode() == AudiocityAudioProcessor::PlaybackMode::loop)
-        playbackMode = 2;
-    mappingPanel_.setPlaybackMode(playbackMode);
-    mappingPanel_.setPerformanceControls(
-        processor_.getMonoMode(),
-        processor_.getLegatoMode(),
-        processor_.getGlideSeconds(),
-        processor_.getChokeGroup());
+        playbackId = 3;
+    playbackModeCombo_.setSelectedId(playbackId, juce::dontSendNotification);
 
-    diagnosticsPanel_.setDiagnostics(
-        processor_.getImportDiagnostics(),
-        buildStreamingDiagnosticsLine(false),
-        buildStreamingDiagnosticsTooltip());
-    refreshDiagnosticsTabTitle();
+    // Loop points
+    loopStartDial_.setValue(processor_.getLoopStart());
+    loopEndDial_.setValue(processor_.getLoopEnd());
+
+    // Playback window
+    playbackStartDial_.setValue(processor_.getSampleWindowStart());
+    playbackEndDial_.setValue(processor_.getSampleWindowEnd());
+
+    // Performance
+    monoToggle_.setToggleState(processor_.getMonoMode(), juce::dontSendNotification);
+    legatoToggle_.setToggleState(processor_.getLegatoMode(), juce::dontSendNotification);
+    legatoToggle_.setEnabled(processor_.getMonoMode());
+    glideDial_.setValue(processor_.getGlideSeconds() * 1000.0f);
+    chokeGroupDial_.setValue(processor_.getChokeGroup());
+
+    // Amp ADSR
+    const auto amp = processor_.getAmpEnvelope();
+    ampAttackDial_.setValue(amp.attackSeconds * 1000.0f);
+    ampDecayDial_.setValue(amp.decaySeconds * 1000.0f);
+    ampSustainDial_.setValue(amp.sustainLevel);
+    ampReleaseDial_.setValue(amp.releaseSeconds * 1000.0f);
+
+    // Filter
+    const auto filter = processor_.getFilterSettings();
+    filterCutoffDial_.setValue(filter.baseCutoffHz);
+    filterResDial_.setValue(static_cast<double>(filter.resonance) * 100.0);
+    filterEnvAmtDial_.setValue(filter.envAmountHz);
+
+    // Quality / Preload
+    qualityCombo_.setSelectedId(
+        processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::cpu ? 1 : 2,
+        juce::dontSendNotification);
+    preloadDial_.setValue(processor_.getPreloadSamples());
+
+    // Reverse / Fade
+    reverseToggle_.setToggleState(processor_.getReversePlayback(), juce::dontSendNotification);
+    fadeInDial_.setValue(processor_.getFadeInSamples());
+    fadeOutDial_.setValue(processor_.getFadeOutSamples());
+
+    // Diagnostics
+    diagnosticsLabel_.setText(
+        "Preload: " + juce::String(processor_.getLoadedPreloadSamples())
+            + " | Stream: " + juce::String(processor_.getLoadedStreamSamples())
+            + " | Rebuilds: " + juce::String(processor_.getSegmentRebuildCount())
+            + " | Root: " + juce::String(processor_.getRootMidiNote())
+            + " | Length: " + juce::String(sampleLength),
+        juce::dontSendNotification);
 }
 
-void AudiocityAudioProcessorEditor::refreshDiagnosticsTabTitle()
+// ─── CC sync ───────────────────────────────────────────────────────────────────
+
+void AudiocityAudioProcessorEditor::syncCcMappingsFromProcessor()
 {
-    const auto& diagnostics = processor_.getImportDiagnostics();
-
-    int errorCount = 0;
-    int warningCount = 0;
-
-    for (const auto& diagnostic : diagnostics)
+    const auto mappings = processor_.getAllCcMappings();
+    for (auto& [dial, paramId] : allDials_)
     {
-        if (diagnostic.severity == audiocity::engine::sfz::DiagnosticSeverity::error)
-            ++errorCount;
+        const auto cc = processor_.getCcForParam(paramId);
+        if (cc >= 0)
+            dial->assignCc(cc);
         else
-            ++warningCount;
+            dial->clearCc();
     }
-
-    auto label = juce::String("Diagnostics");
-    if (errorCount > 0 || warningCount > 0)
-        label << " (" << errorCount << "/" << warningCount << ")";
-
-    tabs_.getTabbedButtonBar().setTabName(4, label);
 }
 
-void AudiocityAudioProcessorEditor::refreshBrowserPanel()
+// ─── Apply helpers ─────────────────────────────────────────────────────────────
+
+void AudiocityAudioProcessorEditor::pushPlaybackWindow()
 {
-    browserPanel_.setSamplePath(processor_.getLoadedSamplePath());
+    const auto ps = juce::jmax(0, static_cast<int>(playbackStartDial_.getValue()));
+    const auto pe = juce::jmax(ps + 1, static_cast<int>(playbackEndDial_.getValue()));
+    processor_.setSampleWindow(ps, pe);
 
-    auto& index = processor_.browserIndex();
-    browserPanel_.setWatchedFolders(index.getWatchedFolders());
-    browserPanel_.setSearchText(index.getSearchText());
-
-    const auto results = index.getSearchResults();
-    browserPanel_.setSearchResults(results);
-    browserPanel_.setFavorites(index.getFavorites());
-    browserPanel_.setRecent(index.getRecent(12));
-
-    auto selectedPath = browserPanel_.getSelectedPath();
-    if (selectedPath.isEmpty() && !results.empty())
-        selectedPath = results.front().path;
-
-    browserPanel_.setSelectedPath(selectedPath);
-    browserPanel_.setWaveformPeaks(index.getPeaks(selectedPath));
-    refreshEditorPanel();
-    refreshSettingsPanel();
-    diagnosticsPanel_.setDiagnostics(
-        processor_.getImportDiagnostics(),
-        buildStreamingDiagnosticsLine(false),
-        buildStreamingDiagnosticsTooltip());
+    // Update waveform view to show new playback bounds
+    const auto sampleLength = processor_.getLoadedSampleLength();
+    waveformView_.setState(sampleLength, processor_.getLoadedSamplePeaks(),
+        ps, pe, processor_.getLoopStart(), processor_.getLoopEnd());
 }
 
-void AudiocityAudioProcessorEditor::refreshEditorPanel()
+void AudiocityAudioProcessorEditor::enforcePlaybackLoopConstraints()
 {
-    const auto selectedZone = editorViewModel_.getSelectedZoneIndex();
-    const auto loopState = editorViewModel_.getSelectedZoneLoopState();
+    auto pbStart  = static_cast<int>(playbackStartDial_.getValue());
+    auto pbEnd    = static_cast<int>(playbackEndDial_.getValue());
+    const auto ls = static_cast<int>(loopStartDial_.getValue());
+    const auto le = static_cast<int>(loopEndDial_.getValue());
 
-    editorPanel_.setUndoRedoStatus(
-        editorViewModel_.canUndo(),
-        editorViewModel_.canRedo(),
-        juce::String(commandStack_.undoLabel()),
-        juce::String(commandStack_.redoLabel()));
+    // Playback start must stay at or before loop start
+    if (pbStart > ls)
+        playbackStartDial_.setValue(ls);
 
-    if (selectedZone < 0 || !loopState.has_value())
+    // Playback end must stay at or after loop end
+    if (pbEnd < le)
+        playbackEndDial_.setValue(le);
+}
+
+void AudiocityAudioProcessorEditor::applyLoopPoints()
+{
+    const auto ls = juce::jmax(0, static_cast<int>(loopStartDial_.getValue()));
+    const auto le = juce::jmax(ls + 1, static_cast<int>(loopEndDial_.getValue()));
+    processor_.setLoopPoints(ls, le);
+
+    // Auto-switch to Loop mode when applying loop points
+    if (processor_.getPlaybackMode() != AudiocityAudioProcessor::PlaybackMode::loop)
     {
-        editorPanel_.setSelectedZoneLoopState(-1, 0, 0, false);
-        return;
+        processor_.setPlaybackMode(AudiocityAudioProcessor::PlaybackMode::loop);
+        playbackModeCombo_.setSelectedId(3, juce::dontSendNotification);
     }
 
-    editorPanel_.setSelectedZoneLoopState(selectedZone, loopState->loopStart, loopState->loopEnd, true);
+    refreshUI();
 }
 
-void AudiocityAudioProcessorEditor::refreshSettingsPanel()
+void AudiocityAudioProcessorEditor::pushAmpEnvelope()
 {
-    settingsPanel_.setPreloadSamples(processor_.getPreloadSamples());
-    settingsPanel_.setQualityTier(processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::cpu ? 0 : 1);
-    settingsPanel_.setPreloadSplit(processor_.getLoadedPreloadSamples(), processor_.getLoadedStreamSamples());
+    AudiocityAudioProcessor::AdsrSettings adsr;
+    adsr.attackSeconds = juce::jmax(0.0001f, static_cast<float>(ampAttackDial_.getValue()) / 1000.0f);
+    adsr.decaySeconds = juce::jmax(0.0001f, static_cast<float>(ampDecayDial_.getValue()) / 1000.0f);
+    adsr.sustainLevel = juce::jlimit(0.0f, 1.0f, static_cast<float>(ampSustainDial_.getValue()));
+    adsr.releaseSeconds = juce::jmax(0.0001f, static_cast<float>(ampReleaseDial_.getValue()) / 1000.0f);
+    processor_.setAmpEnvelope(adsr);
+}
+
+void AudiocityAudioProcessorEditor::pushFilterSettings()
+{
+    AudiocityAudioProcessor::FilterSettings settings;
+    settings.baseCutoffHz = juce::jmax(20.0f, static_cast<float>(filterCutoffDial_.getValue()));
+    settings.resonance = juce::jlimit(0.0f, 1.0f, static_cast<float>(filterResDial_.getValue()) / 100.0f);
+    settings.envAmountHz = juce::jmax(0.0f, static_cast<float>(filterEnvAmtDial_.getValue()));
+    processor_.setFilterSettings(settings);
+}
+
+void AudiocityAudioProcessorEditor::pushPerformanceControls()
+{
+    const auto mono = monoToggle_.getToggleState();
+    processor_.setMonoMode(mono);
+    legatoToggle_.setEnabled(mono);
+
+    if (!mono && legatoToggle_.getToggleState())
+    {
+        legatoToggle_.setToggleState(false, juce::dontSendNotification);
+        processor_.setLegatoMode(false);
+    }
+    else
+    {
+        processor_.setLegatoMode(legatoToggle_.getToggleState());
+    }
 }
 
 audiocity::engine::SettingsSnapshot AudiocityAudioProcessorEditor::captureSettingsSnapshot() const
 {
-    const auto rrModeIndex = processor_.getRoundRobinMode() == AudiocityAudioProcessor::RoundRobinMode::random ? 1 : 0;
     int playbackModeIndex = 0;
     if (processor_.getPlaybackMode() == AudiocityAudioProcessor::PlaybackMode::oneShot)
         playbackModeIndex = 1;
     else if (processor_.getPlaybackMode() == AudiocityAudioProcessor::PlaybackMode::loop)
         playbackModeIndex = 2;
 
-    std::vector<audiocity::engine::SettingsSnapshot::LoopPointSnapshot> loopPoints;
-    const auto& zones = processor_.getImportedZones();
-    loopPoints.reserve(zones.size());
-    for (const auto& zone : zones)
-        loopPoints.push_back({ zone.loopStart, zone.loopEnd });
-
     return {
         processor_.getPreloadSamples(),
         processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::cpu ? 0 : 1,
-        rrModeIndex,
         playbackModeIndex,
         processor_.getMonoMode(),
         processor_.getLegatoMode(),
         processor_.getGlideSeconds(),
         processor_.getChokeGroup(),
-        loopPoints,
         processor_.getSampleWindowStart(),
         processor_.getSampleWindowEnd(),
-        processor_.getEditorLoopStart(),
-        processor_.getEditorLoopEnd(),
+        processor_.getLoopStart(),
+        processor_.getLoopEnd(),
         processor_.getFadeInSamples(),
         processor_.getFadeOutSamples(),
         processor_.getReversePlayback()
     };
 }
 
-void AudiocityAudioProcessorEditor::applySettingsSnapshot(
-    const audiocity::engine::SettingsSnapshot& snapshot,
-    const bool recordHistory,
-    const int coalesceKey,
-    const std::string& changeLabel)
+void AudiocityAudioProcessorEditor::applySettingsSnapshot(const audiocity::engine::SettingsSnapshot& snapshot)
 {
-    const auto before = captureSettingsSnapshot();
-
     processor_.setPreloadSamples(snapshot.preloadSamples);
     processor_.setQualityTier(snapshot.qualityTierIndex == 0
         ? AudiocityAudioProcessor::QualityTier::cpu
         : AudiocityAudioProcessor::QualityTier::fidelity);
-    processor_.setRoundRobinMode(snapshot.rrModeIndex == 1
-        ? AudiocityAudioProcessor::RoundRobinMode::random
-        : AudiocityAudioProcessor::RoundRobinMode::ordered);
     processor_.setPlaybackMode(snapshot.playbackModeIndex == 1
         ? AudiocityAudioProcessor::PlaybackMode::oneShot
         : (snapshot.playbackModeIndex == 2
@@ -1364,99 +1035,10 @@ void AudiocityAudioProcessorEditor::applySettingsSnapshot(
     processor_.setGlideSeconds(snapshot.glideSeconds);
     processor_.setChokeGroup(snapshot.chokeGroup);
     processor_.setSampleWindow(snapshot.sampleWindowStart, snapshot.sampleWindowEnd);
-    processor_.setEditorLoopPoints(snapshot.editorLoopStart, snapshot.editorLoopEnd);
+    processor_.setLoopPoints(snapshot.loopStart, snapshot.loopEnd);
     processor_.setFadeSamples(snapshot.fadeInSamples, snapshot.fadeOutSamples);
     processor_.setReversePlayback(snapshot.reversePlayback);
 
-    for (int i = 0; i < static_cast<int>(snapshot.importedZoneLoopPoints.size()); ++i)
-    {
-        const auto& point = snapshot.importedZoneLoopPoints[static_cast<std::size_t>(i)];
-        processor_.updateImportedZoneLoopPoints(i, point.loopStart, point.loopEnd);
-    }
-
-    const auto after = captureSettingsSnapshot();
-
-    refreshSettingsPanel();
-    refreshEditorPanel();
-    mappingPanel_.setPerformanceControls(
-        processor_.getMonoMode(),
-        processor_.getLegatoMode(),
-        processor_.getGlideSeconds(),
-        processor_.getChokeGroup());
-    mappingPanel_.setRrMode(snapshot.rrModeIndex);
-    mappingPanel_.setPlaybackMode(snapshot.playbackModeIndex);
-    mappingPanel_.setZones(processor_.getImportedZones());
-    diagnosticsPanel_.setDiagnostics(
-        processor_.getImportDiagnostics(),
-        buildStreamingDiagnosticsLine(false),
-        buildStreamingDiagnosticsTooltip());
-
-    if (recordHistory)
-        settingsUndoHistory_.recordChange(before, after, coalesceKey, changeLabel);
+    refreshUI();
 }
 
-void AudiocityAudioProcessorEditor::updateSettingsUndoRedoAvailability()
-{
-    settingsPanel_.setUndoRedoEnabled(settingsUndoHistory_.canUndo(), settingsUndoHistory_.canRedo());
-}
-
-void AudiocityAudioProcessorEditor::performSettingsUndo()
-{
-    const auto current = captureSettingsSnapshot();
-    if (const auto previous = settingsUndoHistory_.undo(current))
-        applySettingsSnapshot(*previous, false);
-
-    updateSettingsUndoRedoAvailability();
-}
-
-void AudiocityAudioProcessorEditor::performSettingsRedo()
-{
-    const auto current = captureSettingsSnapshot();
-    if (const auto next = settingsUndoHistory_.redo(current))
-        applySettingsSnapshot(*next, false);
-
-    updateSettingsUndoRedoAvailability();
-}
-
-juce::String AudiocityAudioProcessorEditor::buildStreamingDiagnosticsLine(const bool includeFullSamplePath) const
-{
-    int errorCount = 0;
-    int warningCount = 0;
-
-    for (const auto& diagnostic : processor_.getImportDiagnostics())
-    {
-        if (diagnostic.severity == audiocity::engine::sfz::DiagnosticSeverity::error)
-            ++errorCount;
-        else
-            ++warningCount;
-    }
-
-    const auto samplePath = processor_.getLoadedSamplePath();
-    juce::String sampleToken("(none)");
-
-    if (samplePath.isNotEmpty())
-    {
-        sampleToken = includeFullSamplePath ? samplePath : juce::File(samplePath).getFileName();
-
-        if (!includeFullSamplePath)
-        {
-            constexpr int maxSampleTokenLength = 40;
-            if (sampleToken.length() > maxSampleTokenLength)
-                sampleToken = sampleToken.substring(0, maxSampleTokenLength - 1) + "…";
-        }
-    }
-
-    return "Streaming readiness: rebuilds=" + juce::String(processor_.getSegmentRebuildCount())
-        + " | preload=" + juce::String(processor_.getLoadedPreloadSamples())
-        + " | stream=" + juce::String(processor_.getLoadedStreamSamples())
-        + " | quality=" + juce::String(processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::cpu ? "cpu" : "fidelity")
-        + " | undo=" + juce::String(settingsUndoHistory_.undoLabel())
-        + " | redo=" + juce::String(settingsUndoHistory_.redoLabel())
-        + " | sfz(e/w)=" + juce::String(errorCount) + "/" + juce::String(warningCount)
-        + " | sample=" + sampleToken;
-}
-
-juce::String AudiocityAudioProcessorEditor::buildStreamingDiagnosticsTooltip() const
-{
-    return "[info] " + buildStreamingDiagnosticsLine(true);
-}

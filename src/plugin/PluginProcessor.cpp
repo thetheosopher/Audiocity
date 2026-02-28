@@ -1,7 +1,6 @@
 #include "PluginProcessor.h"
 
 #include "PluginEditor.h"
-#include "../engine/sfz/SfzImport.h"
 
 namespace
 {
@@ -20,7 +19,7 @@ constexpr auto kFilterSustain = "filterSustain";
 constexpr auto kFilterRelease = "filterRelease";
 constexpr auto kFilterBaseCutoff = "filterBaseCutoff";
 constexpr auto kFilterEnvAmount = "filterEnvAmount";
-constexpr auto kRrMode = "rrMode";
+constexpr auto kFilterResonance = "filterResonance";
 constexpr auto kPlaybackMode = "playbackMode";
 constexpr auto kQualityTier = "qualityTier";
 constexpr auto kPreloadSamples = "preloadSamples";
@@ -30,24 +29,15 @@ constexpr auto kGlideSeconds = "glideSeconds";
 constexpr auto kChokeGroup = "chokeGroup";
 constexpr auto kSampleWindowStart = "sampleWindowStart";
 constexpr auto kSampleWindowEnd = "sampleWindowEnd";
-constexpr auto kEditorLoopStart = "editorLoopStart";
-constexpr auto kEditorLoopEnd = "editorLoopEnd";
+constexpr auto kLoopStart = "loopStart";
+constexpr auto kLoopEnd = "loopEnd";
 constexpr auto kFadeInSamples = "fadeInSamples";
 constexpr auto kFadeOutSamples = "fadeOutSamples";
 constexpr auto kReversePlayback = "reversePlayback";
-constexpr auto kLoopStart = "loopStart";
-constexpr auto kLoopEnd = "loopEnd";
-constexpr auto kSfzLoopMode = "sfzLoopMode";
-
-constexpr auto kBrowserState = "BrowserState";
-constexpr auto kWatchedFolder = "WatchedFolder";
-constexpr auto kFavorite = "Favorite";
-constexpr auto kRecent = "Recent";
-constexpr auto kPath = "path";
-constexpr auto kSfzPath = "sfzPath";
-constexpr auto kZoneLoops = "ZoneLoops";
-constexpr auto kZoneLoop = "ZoneLoop";
-constexpr auto kZoneIndex = "zoneIndex";
+constexpr auto kCcMappings = "ccMappings";
+constexpr auto kCcEntry = "cc";
+constexpr auto kCcNumber = "ccNum";
+constexpr auto kCcParam = "ccParam";
 }
 
 AudiocityAudioProcessor::AudiocityAudioProcessor()
@@ -81,13 +71,12 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     for (auto channel = numInputChannels; channel < numOutputChannels; ++channel)
         buffer.clear(channel, 0, buffer.getNumSamples());
 
-    if (previewStopRequested_.exchange(false))
-        engine_.noteOff(previewMidiNote_, 0);
-
-    if (previewStartRequested_.exchange(false))
+    // Extract CC messages and push to FIFO for the editor to consume
+    for (const auto metadata : midiMessages)
     {
-        engine_.noteOff(previewMidiNote_, 0);
-        engine_.noteOn(previewMidiNote_, 0.85f, 0);
+        const auto msg = metadata.getMessage();
+        if (msg.isController())
+            pushCcEvent(msg.getControllerNumber(), msg.getControllerValue());
     }
 
     engine_.render(buffer, midiMessages);
@@ -120,7 +109,7 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     const auto filter = engine_.getFilterSettings();
     state.setProperty(kFilterBaseCutoff, filter.baseCutoffHz, nullptr);
     state.setProperty(kFilterEnvAmount, filter.envAmountHz, nullptr);
-    state.setProperty(kRrMode, getRoundRobinMode() == RoundRobinMode::random ? 1 : 0, nullptr);
+    state.setProperty(kFilterResonance, filter.resonance, nullptr);
     state.setProperty(kPlaybackMode,
         getPlaybackMode() == PlaybackMode::oneShot ? 1 : (getPlaybackMode() == PlaybackMode::loop ? 2 : 0),
         nullptr);
@@ -132,60 +121,25 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kChokeGroup, getChokeGroup(), nullptr);
     state.setProperty(kSampleWindowStart, getSampleWindowStart(), nullptr);
     state.setProperty(kSampleWindowEnd, getSampleWindowEnd(), nullptr);
-    state.setProperty(kEditorLoopStart, getEditorLoopStart(), nullptr);
-    state.setProperty(kEditorLoopEnd, getEditorLoopEnd(), nullptr);
+    state.setProperty(kLoopStart, getLoopStart(), nullptr);
+    state.setProperty(kLoopEnd, getLoopEnd(), nullptr);
     state.setProperty(kFadeInSamples, getFadeInSamples(), nullptr);
     state.setProperty(kFadeOutSamples, getFadeOutSamples(), nullptr);
     state.setProperty(kReversePlayback, getReversePlayback() ? 1 : 0, nullptr);
-    state.setProperty(kLoopStart, engine_.getLoopStart(), nullptr);
-    state.setProperty(kLoopEnd, engine_.getLoopEnd(), nullptr);
-    state.setProperty(kSfzLoopMode,
-        engine_.getSfzLoopMode() == audiocity::engine::EngineCore::SfzLoopMode::loopSustain ? 1
-            : (engine_.getSfzLoopMode() == audiocity::engine::EngineCore::SfzLoopMode::loopContinuous ? 2 : 0),
-        nullptr);
-    state.setProperty(kSfzPath, importedSfzPath_, nullptr);
 
-    if (!sfzProgram_.zones.empty())
+    // Save CC mappings
     {
-        juce::ValueTree loopState(kZoneLoops);
-
-        for (int i = 0; i < static_cast<int>(sfzProgram_.zones.size()); ++i)
+        auto mappingsNode = juce::ValueTree(kCcMappings);
+        const auto mappings = getAllCcMappings();
+        for (const auto& [ccNum, paramId] : mappings)
         {
-            const auto& zone = sfzProgram_.zones[static_cast<std::size_t>(i)];
-            juce::ValueTree node(kZoneLoop);
-            node.setProperty(kZoneIndex, i, nullptr);
-            node.setProperty(kLoopStart, zone.loopStart, nullptr);
-            node.setProperty(kLoopEnd, zone.loopEnd, nullptr);
-            loopState.appendChild(node, nullptr);
+            auto entry = juce::ValueTree(kCcEntry);
+            entry.setProperty(kCcNumber, ccNum, nullptr);
+            entry.setProperty(kCcParam, paramId, nullptr);
+            mappingsNode.appendChild(entry, nullptr);
         }
-
-        state.appendChild(loopState, nullptr);
+        state.appendChild(mappingsNode, nullptr);
     }
-
-    juce::ValueTree browserState(kBrowserState);
-
-    for (const auto& folderPath : browserIndex_.getWatchedFolders())
-    {
-        juce::ValueTree node(kWatchedFolder);
-        node.setProperty(kPath, folderPath, nullptr);
-        browserState.appendChild(node, nullptr);
-    }
-
-    for (const auto& favoritePath : browserIndex_.getFavoritePaths())
-    {
-        juce::ValueTree node(kFavorite);
-        node.setProperty(kPath, favoritePath, nullptr);
-        browserState.appendChild(node, nullptr);
-    }
-
-    for (const auto& recentPath : browserIndex_.getRecentPaths(128))
-    {
-        juce::ValueTree node(kRecent);
-        node.setProperty(kPath, recentPath, nullptr);
-        browserState.appendChild(node, nullptr);
-    }
-
-    state.appendChild(browserState, nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary(*xml, destData);
@@ -204,10 +158,6 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     const auto samplePath = state.getProperty(kSamplePath).toString();
     if (samplePath.isNotEmpty())
         loadSampleFromFile(juce::File(samplePath));
-
-    const auto sfzPath = state.getProperty(kSfzPath).toString();
-    if (sfzPath.isNotEmpty())
-        importSfzFile(juce::File(sfzPath));
 
     engine_.setRootMidiNote(static_cast<int>(state.getProperty(kRootMidiNote, engine_.getRootMidiNote())));
 
@@ -228,9 +178,9 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     auto filter = engine_.getFilterSettings();
     filter.baseCutoffHz = static_cast<float>(state.getProperty(kFilterBaseCutoff, filter.baseCutoffHz));
     filter.envAmountHz = static_cast<float>(state.getProperty(kFilterEnvAmount, filter.envAmountHz));
+    filter.resonance = static_cast<float>(state.getProperty(kFilterResonance, filter.resonance));
     engine_.setFilterSettings(filter);
 
-    setRoundRobinMode(static_cast<int>(state.getProperty(kRrMode, 0)) == 1 ? RoundRobinMode::random : RoundRobinMode::ordered);
     const auto playbackMode = static_cast<int>(state.getProperty(kPlaybackMode, 0));
     setPlaybackMode(playbackMode == 1 ? PlaybackMode::oneShot : (playbackMode == 2 ? PlaybackMode::loop : PlaybackMode::gate));
     setQualityTier(static_cast<int>(state.getProperty(kQualityTier, 1)) == 0 ? QualityTier::cpu : QualityTier::fidelity);
@@ -242,63 +192,30 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     setSampleWindow(
         static_cast<int>(state.getProperty(kSampleWindowStart, getSampleWindowStart())),
         static_cast<int>(state.getProperty(kSampleWindowEnd, getSampleWindowEnd())));
-    setEditorLoopPoints(
-        static_cast<int>(state.getProperty(kEditorLoopStart, getEditorLoopStart())),
-        static_cast<int>(state.getProperty(kEditorLoopEnd, getEditorLoopEnd())));
+    setLoopPoints(
+        static_cast<int>(state.getProperty(kLoopStart, getLoopStart())),
+        static_cast<int>(state.getProperty(kLoopEnd, getLoopEnd())));
     setFadeSamples(
         static_cast<int>(state.getProperty(kFadeInSamples, getFadeInSamples())),
         static_cast<int>(state.getProperty(kFadeOutSamples, getFadeOutSamples())));
     setReversePlayback(static_cast<int>(state.getProperty(kReversePlayback, getReversePlayback() ? 1 : 0)) == 1);
-    engine_.setLoopPoints(static_cast<int>(state.getProperty(kLoopStart, engine_.getLoopStart())),
-        static_cast<int>(state.getProperty(kLoopEnd, engine_.getLoopEnd())));
-    const auto sfzLoopMode = static_cast<int>(state.getProperty(kSfzLoopMode, 0));
-    engine_.setSfzLoopMode(sfzLoopMode == 1 ? audiocity::engine::EngineCore::SfzLoopMode::loopSustain
-        : (sfzLoopMode == 2 ? audiocity::engine::EngineCore::SfzLoopMode::loopContinuous
-                            : audiocity::engine::EngineCore::SfzLoopMode::noLoop));
 
-    const auto zoneLoops = state.getChildWithName(kZoneLoops);
-    if (zoneLoops.isValid())
+    // Restore CC mappings
     {
-        for (int i = 0; i < zoneLoops.getNumChildren(); ++i)
+        std::lock_guard<std::mutex> lock(ccMappingMutex_);
+        ccToParam_.clear();
+        const auto mappingsNode = state.getChildWithName(kCcMappings);
+        for (int i = 0; i < mappingsNode.getNumChildren(); ++i)
         {
-            const auto node = zoneLoops.getChild(i);
-            if (!node.hasType(kZoneLoop))
-                continue;
-
-            const auto zoneIndex = static_cast<int>(node.getProperty(kZoneIndex, -1));
-            const auto loopStart = static_cast<int>(node.getProperty(kLoopStart, 0));
-            const auto loopEnd = static_cast<int>(node.getProperty(kLoopEnd, 1));
-            updateImportedZoneLoopPoints(zoneIndex, loopStart, loopEnd);
+            const auto entry = mappingsNode.getChild(i);
+            if (entry.hasType(kCcEntry))
+            {
+                const auto ccNum = static_cast<int>(entry.getProperty(kCcNumber, -1));
+                const auto paramId = entry.getProperty(kCcParam).toString();
+                if (ccNum >= 0 && ccNum <= 127 && paramId.isNotEmpty())
+                    ccToParam_[ccNum] = paramId;
+            }
         }
-    }
-
-    const auto browserState = state.getChildWithName(kBrowserState);
-    if (browserState.isValid())
-    {
-        juce::StringArray watchedFolders;
-        juce::StringArray favorites;
-        juce::StringArray recent;
-
-        for (int i = 0; i < browserState.getNumChildren(); ++i)
-        {
-            const auto child = browserState.getChild(i);
-            const auto path = child.getProperty(kPath).toString();
-            if (path.isEmpty())
-                continue;
-
-            if (child.hasType(kWatchedFolder))
-                watchedFolders.add(path);
-            else if (child.hasType(kFavorite))
-                favorites.add(path);
-            else if (child.hasType(kRecent))
-                recent.add(path);
-        }
-
-        if (!watchedFolders.isEmpty())
-            browserIndex_.setWatchedFolders(watchedFolders);
-
-        browserIndex_.setFavoritePaths(favorites);
-        browserIndex_.setRecentPaths(recent);
     }
 }
 
@@ -312,81 +229,6 @@ juce::String AudiocityAudioProcessor::getLoadedSamplePath() const
     return engine_.getSamplePath();
 }
 
-bool AudiocityAudioProcessor::importSfzFile(const juce::File& file)
-{
-    audiocity::engine::sfz::Importer importer;
-    sfzProgram_ = importer.importFromFile(file);
-    zoneSelector_.setZones(sfzProgram_.zones);
-    importedSfzPath_ = file.getFullPathName();
-
-    if (!sfzProgram_.zones.empty())
-    {
-        const auto& zone = sfzProgram_.zones.front();
-        engine_.setRootMidiNote(zone.pitchKeycenter);
-
-        engine_.loadSampleFromFile(juce::File(zone.resolvedSamplePath));
-        engine_.setLoopPoints(zone.loopStart, zone.loopEnd);
-
-        if (zone.loopMode == "loop_continuous")
-        {
-            engine_.setSfzLoopMode(audiocity::engine::EngineCore::SfzLoopMode::loopContinuous);
-            engine_.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
-        }
-        else if (zone.loopMode == "loop_sustain")
-        {
-            engine_.setSfzLoopMode(audiocity::engine::EngineCore::SfzLoopMode::loopSustain);
-            engine_.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
-        }
-        else
-        {
-            engine_.setSfzLoopMode(audiocity::engine::EngineCore::SfzLoopMode::noLoop);
-            engine_.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::gate);
-        }
-    }
-
-    if (sfzProgram_.zones.empty())
-        importedSfzPath_.clear();
-
-    return !sfzProgram_.zones.empty();
-}
-
-const std::vector<audiocity::engine::sfz::Zone>& AudiocityAudioProcessor::getImportedZones() const noexcept
-{
-    return sfzProgram_.zones;
-}
-
-const std::vector<audiocity::engine::sfz::Diagnostic>& AudiocityAudioProcessor::getImportDiagnostics() const noexcept
-{
-    return sfzProgram_.diagnostics;
-}
-
-bool AudiocityAudioProcessor::updateImportedZoneLoopPoints(const int zoneIndex, const int loopStart, const int loopEnd)
-{
-    if (zoneIndex < 0 || zoneIndex >= static_cast<int>(sfzProgram_.zones.size()))
-        return false;
-
-    auto& zone = sfzProgram_.zones[static_cast<std::size_t>(zoneIndex)];
-    zone.loopStart = juce::jmax(0, loopStart);
-    zone.loopEnd = juce::jmax(zone.loopStart + 1, loopEnd);
-
-    zoneSelector_.setZones(sfzProgram_.zones);
-
-    if (zoneIndex == 0)
-        engine_.setLoopPoints(zone.loopStart, zone.loopEnd);
-
-    return true;
-}
-
-void AudiocityAudioProcessor::setRoundRobinMode(const RoundRobinMode mode) noexcept
-{
-    zoneSelector_.setRoundRobinMode(mode);
-}
-
-AudiocityAudioProcessor::RoundRobinMode AudiocityAudioProcessor::getRoundRobinMode() const noexcept
-{
-    return zoneSelector_.getRoundRobinMode();
-}
-
 void AudiocityAudioProcessor::setPlaybackMode(const PlaybackMode mode) noexcept
 {
     engine_.setPlaybackMode(mode);
@@ -397,23 +239,89 @@ AudiocityAudioProcessor::PlaybackMode AudiocityAudioProcessor::getPlaybackMode()
     return engine_.getPlaybackMode();
 }
 
-bool AudiocityAudioProcessor::startPreviewFromPath(const juce::String& path)
+// ─── CC FIFO ───────────────────────────────────────────────────────────────────
+
+void AudiocityAudioProcessor::pushCcEvent(const int ccNumber, const int value)
 {
-    const juce::File file(path);
-    if (!loadSampleFromFile(file))
+    const auto writePos = ccFifoWritePos_.load(std::memory_order_relaxed);
+    const auto nextWrite = (writePos + 1) % kCcFifoSize;
+
+    // If full, drop oldest by advancing read pos
+    if (nextWrite == ccFifoReadPos_.load(std::memory_order_acquire))
+        ccFifoReadPos_.store((ccFifoReadPos_.load(std::memory_order_relaxed) + 1) % kCcFifoSize,
+                             std::memory_order_release);
+
+    ccFifo_[static_cast<std::size_t>(writePos)] = { ccNumber, value };
+    ccFifoWritePos_.store(nextWrite, std::memory_order_release);
+}
+
+bool AudiocityAudioProcessor::popCcEvent(CcEvent& out)
+{
+    const auto readPos = ccFifoReadPos_.load(std::memory_order_relaxed);
+    if (readPos == ccFifoWritePos_.load(std::memory_order_acquire))
         return false;
 
-    browserIndex_.markRecent(path);
-    previewStartRequested_.store(true);
-    previewStopRequested_.store(false);
-    previewPlaying_.store(true);
+    out = ccFifo_[static_cast<std::size_t>(readPos)];
+    ccFifoReadPos_.store((readPos + 1) % kCcFifoSize, std::memory_order_release);
     return true;
 }
 
-void AudiocityAudioProcessor::stopPreview()
+// ─── CC Mapping ────────────────────────────────────────────────────────────────
+
+void AudiocityAudioProcessor::setCcMapping(const int ccNumber, const juce::String& paramId)
 {
-    previewStopRequested_.store(true);
-    previewPlaying_.store(false);
+    std::lock_guard<std::mutex> lock(ccMappingMutex_);
+    // Remove any existing mapping to this param
+    for (auto it = ccToParam_.begin(); it != ccToParam_.end(); )
+    {
+        if (it->second == paramId)
+            it = ccToParam_.erase(it);
+        else
+            ++it;
+    }
+    ccToParam_[ccNumber] = paramId;
+}
+
+void AudiocityAudioProcessor::clearCcMapping(const int ccNumber)
+{
+    std::lock_guard<std::mutex> lock(ccMappingMutex_);
+    ccToParam_.erase(ccNumber);
+}
+
+void AudiocityAudioProcessor::clearCcMappingByParam(const juce::String& paramId)
+{
+    std::lock_guard<std::mutex> lock(ccMappingMutex_);
+    for (auto it = ccToParam_.begin(); it != ccToParam_.end(); )
+    {
+        if (it->second == paramId)
+            it = ccToParam_.erase(it);
+        else
+            ++it;
+    }
+}
+
+int AudiocityAudioProcessor::getCcForParam(const juce::String& paramId) const
+{
+    std::lock_guard<std::mutex> lock(ccMappingMutex_);
+    for (const auto& [ccNum, pid] : ccToParam_)
+    {
+        if (pid == paramId)
+            return ccNum;
+    }
+    return -1;
+}
+
+juce::String AudiocityAudioProcessor::getParamForCc(const int ccNumber) const
+{
+    std::lock_guard<std::mutex> lock(ccMappingMutex_);
+    const auto it = ccToParam_.find(ccNumber);
+    return it != ccToParam_.end() ? it->second : juce::String{};
+}
+
+std::map<int, juce::String> AudiocityAudioProcessor::getAllCcMappings() const
+{
+    std::lock_guard<std::mutex> lock(ccMappingMutex_);
+    return ccToParam_;
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

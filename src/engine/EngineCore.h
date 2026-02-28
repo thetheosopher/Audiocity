@@ -4,6 +4,9 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
 
+#include <atomic>
+#include <memory>
+
 #include "VoicePool.h"
 
 namespace audiocity::engine
@@ -11,13 +14,6 @@ namespace audiocity::engine
 class EngineCore
 {
 public:
-    enum class SfzLoopMode
-    {
-        noLoop,
-        loopSustain,
-        loopContinuous
-    };
-
     enum class PlaybackMode
     {
         gate,
@@ -43,6 +39,7 @@ public:
     {
         float baseCutoffHz = 1200.0f;
         float envAmountHz = 2400.0f;
+        float resonance = 0.0f;  // 0..1, mapped to Q internally
     };
 
     void prepare(double sampleRate, int maxSamplesPerBlock, int outputChannels) noexcept;
@@ -52,9 +49,10 @@ public:
     void setSampleData(const juce::AudioBuffer<float>& sampleData, double sampleRate, int rootNote) noexcept;
     void setPreloadSamples(int preloadSamples) noexcept;
     [[nodiscard]] int getPreloadSamples() const noexcept { return preloadSamples_; }
-    [[nodiscard]] int getLoadedPreloadSamples() const noexcept { return preloadData_.getNumSamples(); }
-    [[nodiscard]] int getLoadedStreamSamples() const noexcept { return streamData_.getNumSamples(); }
+    [[nodiscard]] int getLoadedPreloadSamples() const noexcept;
+    [[nodiscard]] int getLoadedStreamSamples() const noexcept;
     [[nodiscard]] int getLoadedSampleLength() const noexcept;
+    [[nodiscard]] std::vector<float> buildDisplayPeaks(int maxPeaks) const noexcept;
     [[nodiscard]] int getSegmentRebuildCount() const noexcept { return segmentRebuildCount_; }
     void setQualityTier(QualityTier tier) noexcept { qualityTier_ = tier; }
     [[nodiscard]] QualityTier getQualityTier() const noexcept { return qualityTier_; }
@@ -107,15 +105,14 @@ public:
     [[nodiscard]] int getLoopStart() const noexcept { return loopStartSample_; }
     [[nodiscard]] int getLoopEnd() const noexcept { return loopEndSample_; }
 
-    void setSfzLoopMode(SfzLoopMode mode) noexcept { sfzLoopMode_ = mode; }
-    [[nodiscard]] SfzLoopMode getSfzLoopMode() const noexcept { return sfzLoopMode_; }
-
     [[nodiscard]] int activeVoiceCount() const noexcept;
     [[nodiscard]] int stealCount() const noexcept;
     void resetStealCount() noexcept;
     [[nodiscard]] bool isNoteActive(int noteNumber) const noexcept;
 
 private:
+    struct SampleSegments;
+
     struct VoiceState
     {
         float samplePosition = 0.0f;
@@ -153,12 +150,19 @@ private:
     void applyEnvelopeParamsToVoices() noexcept;
     [[nodiscard]] float computeSampleIncrementForNote(int noteNumber) const noexcept;
     void rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData) noexcept;
+    [[nodiscard]] std::shared_ptr<const SampleSegments> getSampleSegmentsSnapshot() const noexcept;
+    [[nodiscard]] static std::shared_ptr<const SampleSegments> buildSampleSegments(const juce::AudioBuffer<float>& monoSampleData,
+        int preloadSamples) noexcept;
+    [[nodiscard]] int getTotalSampleLength(const SampleSegments& segments) const noexcept;
     [[nodiscard]] int getTotalSampleLength() const noexcept;
+    [[nodiscard]] int getEffectivePlaybackLength(const SampleSegments& segments) const noexcept;
     [[nodiscard]] int getEffectivePlaybackLength() const noexcept;
-    [[nodiscard]] int mapPlaybackIndexToSampleIndex(int playbackIndex) const noexcept;
-    [[nodiscard]] float computeEditGain(float playbackPosition) const noexcept;
+    [[nodiscard]] int mapPlaybackIndexToSampleIndex(const SampleSegments& segments, int playbackIndex) const noexcept;
+    [[nodiscard]] float computeEditGain(float playbackPosition, int playbackLength) const noexcept;
+    [[nodiscard]] float readSampleAt(const SampleSegments& segments, int index) const noexcept;
     [[nodiscard]] float readSampleAt(int index) const noexcept;
 
+    [[nodiscard]] float readSampleLinear(const SampleSegments& segments, float position) const noexcept;
     [[nodiscard]] float readSampleLinear(float position) const noexcept;
     [[nodiscard]] float computeLpf(float inputSample, float envValue, float& state) const noexcept;
 
@@ -167,8 +171,7 @@ private:
     std::array<PendingEvent, 1024> pendingEvents_{};
     int pendingEventCount_ = 0;
 
-    juce::AudioBuffer<float> preloadData_;
-    juce::AudioBuffer<float> streamData_;
+    std::atomic<std::shared_ptr<const SampleSegments>> sampleSegments_{};
     juce::String samplePath_;
     double sampleDataRate_ = 44100.0;
     int rootMidiNote_ = 60;
@@ -179,7 +182,6 @@ private:
     AdsrSettings filterEnvelopeSettings_{ 0.001f, 0.120f, 0.0f, 0.100f };
     FilterSettings filterSettings_{};
     PlaybackMode playbackMode_ = PlaybackMode::gate;
-    SfzLoopMode sfzLoopMode_ = SfzLoopMode::noLoop;
     bool monoMode_ = false;
     bool legatoMode_ = false;
     float glideSeconds_ = 0.0f;

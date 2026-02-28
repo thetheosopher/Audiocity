@@ -42,13 +42,9 @@ target_sources(Audiocity
     PRIVATE
         src/plugin/PluginProcessor.cpp
         src/plugin/PluginEditor.cpp
-        src/plugin/BrowserIndex.cpp
-        src/plugin/ZoneModel.cpp
+        src/plugin/CcLearnDial.cpp
         src/engine/EngineCore.cpp
-        src/engine/VoicePool.cpp
-        src/engine/ZoneMap.cpp
-        src/engine/ZoneSelector.cpp
-        src/engine/sfz/SfzImport.cpp)
+        src/engine/VoicePool.cpp)
 
 target_include_directories(Audiocity
     PRIVATE
@@ -69,7 +65,7 @@ target_link_libraries(Audiocity
         juce::juce_recommended_warning_flags)
 
 if (MSVC)
-    target_compile_options(Audiocity PRIVATE /W4 /permissive-)
+    target_compile_options(Audiocity PRIVATE /W4 /WX /permissive-)
 endif ()
 
 include(CTest)

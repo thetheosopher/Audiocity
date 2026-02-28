@@ -9,286 +9,161 @@
 #include <string>
 #include <vector>
 
-#include "CommandStack.h"
-#include "EditorViewModel.h"
-#include "SelectionModel.h"
-#include "ZoneModel.h"
 #include "../engine/SettingsUndoHistory.h"
-#include "../engine/sfz/SfzModel.h"
-#include "BrowserIndex.h"
+#include "CcLearnDial.h"
+#include "DialLookAndFeel.h"
 
 class AudiocityAudioProcessor;
 
-class AudiocityAudioProcessorEditor final : public juce::AudioProcessorEditor
+class AudiocityAudioProcessorEditor final : public juce::AudioProcessorEditor,
+                                            public juce::FileDragAndDropTarget,
+                                            private juce::Timer
 {
 public:
     explicit AudiocityAudioProcessorEditor(AudiocityAudioProcessor& processor);
     ~AudiocityAudioProcessorEditor() override;
 
     void resized() override;
-    bool keyPressed(const juce::KeyPress& key) override;
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void fileDragEnter(const juce::StringArray& files, int x, int y) override;
+    void fileDragMove(const juce::StringArray& files, int x, int y) override;
+    void fileDragExit(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int x, int y) override;
+    void paint(juce::Graphics& g) override;
 
 private:
-    class BrowserPanel final : public juce::Component,
-                               private juce::Timer
+    void timerCallback() override;
+
+    // ── Custom theme ──
+    DialLookAndFeel dialLaf_;
+
+    // ── Group box painting helper ──
+    struct GroupBox
     {
-    public:
-        class WaveformView final : public juce::Component
-        {
-        public:
-            void setPeaks(std::vector<float> peaks);
-            void setPlayheadProgress(float progress);
-            void paint(juce::Graphics& g) override;
-
-        private:
-            std::vector<float> peaks_;
-            float playheadProgress_ = 0.0f;
-        };
-
-        BrowserPanel();
-
-        std::function<void(const juce::String&)> onLoadSample;
-        std::function<void()> onImportSfz;
-        std::function<void()> onAddWatchedFolder;
-        std::function<void()> onRescan;
-        std::function<void(const juce::String&)> onSearchChanged;
-        std::function<void(const juce::String&)> onSelectionChanged;
-        std::function<void(const juce::String&)> onToggleFavorite;
-        std::function<void(const juce::String&, bool)> onPreviewToggle;
-
-        void setSamplePath(const juce::String& path);
-        void setWatchedFolders(const juce::StringArray& folders);
-        void setSearchText(const juce::String& text);
-        void setSearchResults(const std::vector<BrowserIndex::EntrySnapshot>& results);
-        void setFavorites(const std::vector<BrowserIndex::EntrySnapshot>& favorites);
-        void setRecent(const std::vector<BrowserIndex::EntrySnapshot>& recent);
-        void setSelectedPath(const juce::String& path);
-        void setWaveformPeaks(std::vector<float> peaks);
-        void setPreviewState(bool isPlaying, double durationSeconds);
-        [[nodiscard]] juce::String getSelectedPath() const;
-
-        void resized() override;
-        void paint(juce::Graphics& g) override;
-
-    private:
-        void timerCallback() override;
-        void refreshResultCombo();
-        static juce::String listToText(const std::vector<BrowserIndex::EntrySnapshot>& entries);
-
-        juce::TextButton addFolderButton_{ "Add Watched Folder" };
-        juce::TextButton rescanButton_{ "Rescan" };
-        juce::TextButton loadButton_{ "Load Sample (WAV/AIFF)" };
-        juce::TextButton importSfzButton_{ "Import SFZ" };
-        juce::TextButton favoriteButton_{ "Toggle Favorite" };
-        juce::TextButton previewButton_{ "Preview" };
-
-        juce::Label searchLabel_{ {}, "Search" };
-        juce::TextEditor searchEditor_;
-
-        juce::Label resultsLabel_{ {}, "Results" };
-        juce::ComboBox resultCombo_;
-
-        juce::Label watchedLabel_{ {}, "Watched Folders" };
-        juce::TextEditor watchedView_;
-
-        juce::Label favoritesLabel_{ {}, "Favorites" };
-        juce::TextEditor favoritesView_;
-
-        juce::Label recentLabel_{ {}, "Recent" };
-        juce::TextEditor recentView_;
-
-        WaveformView waveformView_;
-
-        juce::Label samplePathLabel_;
-        std::vector<BrowserIndex::EntrySnapshot> results_;
-        juce::String selectedPath_;
-        bool previewPlaying_ = false;
-        double previewDurationSeconds_ = 0.0;
-        double previewStartedSeconds_ = 0.0;
+        juce::String title;
+        juce::Rectangle<int> bounds;
     };
+    std::vector<GroupBox> groupBoxes_;
+    void paintGroupBoxes(juce::Graphics& g) const;
 
-    class MappingPanel final : public juce::Component,
-                               private juce::TableListBoxModel
+    class WaveformView final : public juce::Component
     {
     public:
-        MappingPanel();
-        std::function<void(int)> onRrModeChanged;
-        std::function<void(int)> onPlaybackModeChanged;
-        std::function<void(int, int, int)> onLoopPointsApply;
-        std::function<void(int)> onZoneSelectionChanged;
-        std::function<void(bool)> onMonoModeChanged;
-        std::function<void(bool)> onLegatoModeChanged;
-        std::function<void(float)> onGlideSecondsChanged;
-        std::function<void(int)> onChokeGroupChanged;
-        void setZones(const std::vector<audiocity::engine::sfz::Zone>& zones);
-        void setRrMode(int modeIndex);
-        void setPlaybackMode(int modeIndex);
-        void setPerformanceControls(bool monoEnabled, bool legatoEnabled, float glideSeconds, int chokeGroup);
-        void resized() override;
+        void setState(int totalSamples, std::vector<float> peaks,
+                      int playbackStart, int playbackEnd,
+                      int loopStart, int loopEnd);
+        void resetView();
+
+        std::function<void(int, int)> onLoopPreview;
+        std::function<void(int, int)> onLoopCommitted;
+        std::function<void(int, int)> onPlaybackPreview;
+        std::function<void(int, int)> onPlaybackCommitted;
+
         void paint(juce::Graphics& g) override;
+        void mouseDown(const juce::MouseEvent& event) override;
+        void mouseDrag(const juce::MouseEvent& event) override;
+        void mouseUp(const juce::MouseEvent& event) override;
+        void mouseDoubleClick(const juce::MouseEvent& event) override;
+        void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
 
     private:
-        int getNumRows() override;
-        void paintRowBackground(juce::Graphics& g,
-            int rowNumber,
-            int width,
-            int height,
-            bool rowIsSelected) override;
-        void paintCell(juce::Graphics& g,
-            int rowNumber,
-            int columnId,
-            int width,
-            int height,
-            bool rowIsSelected) override;
-        void selectedRowsChanged(int lastRowSelected) override;
+        enum class DragMode { none, dragLoopStart, dragLoopEnd,
+                              dragPlaybackStart, dragPlaybackEnd, pan };
 
-        void updateLoopEditorsFromSelection();
-        void updatePerformanceControlAvailability();
+        [[nodiscard]] int sampleFromX(float x) const noexcept;
+        [[nodiscard]] float xFromSample(int sample) const noexcept;
+        void clampView();
+        void zoomAround(float anchorX, float zoomFactor);
+        void panByPixels(float deltaX);
 
-        juce::TableListBox table_{ "zones", this };
-        juce::Label rrModeLabel_{ {}, "RR Mode" };
-        juce::ComboBox rrModeCombo_;
-        juce::Label playbackModeLabel_{ {}, "Playback" };
-        juce::ComboBox playbackModeCombo_;
-        juce::ToggleButton monoToggle_{ "Mono" };
-        juce::ToggleButton legatoToggle_{ "Legato" };
-        juce::Label glideLabel_{ {}, "Glide (ms)" };
-        juce::TextEditor glideEditor_;
-        juce::Label chokeGroupLabel_{ {}, "Choke Group" };
-        juce::TextEditor chokeGroupEditor_;
-        juce::Label zoneSummaryLabel_{ {}, "No zone selected" };
-        juce::Label loopStartLabel_{ {}, "Loop Start" };
-        juce::TextEditor loopStartEditor_;
-        juce::Label loopEndLabel_{ {}, "Loop End" };
-        juce::TextEditor loopEndEditor_;
-        juce::TextButton applyLoopButton_{ "Apply" };
-        std::vector<audiocity::engine::sfz::Zone> zones_;
-        int selectedRow_ = -1;
-    };
+        int totalSamples_ = 0;
+        std::vector<float> peaks_;
+        int playbackStart_ = 0;
+        int playbackEnd_ = 0;
+        int loopStart_ = 0;
+        int loopEnd_ = 0;
 
-    class DiagnosticsPanel final : public juce::Component
-    {
-    public:
-        DiagnosticsPanel();
-        void setDiagnostics(
-            const std::vector<audiocity::engine::sfz::Diagnostic>& diagnostics,
-            const juce::String& streamingInfo,
-            const juce::String& streamingTooltip);
-        void resized() override;
-        void paint(juce::Graphics& g) override;
+        int viewStartSample_ = 0;
+        int viewSampleCount_ = 0;
 
-    private:
-        juce::TextEditor text_;
-    };
-
-    class SettingsPanel final : public juce::Component
-    {
-    public:
-        SettingsPanel();
-        std::function<void(int)> onPreloadSamplesChanged;
-        std::function<void(int)> onQualityTierChanged;
-        std::function<void()> onCopyDiagnostics;
-        std::function<void()> onUndoSettings;
-        std::function<void()> onRedoSettings;
-        void setPreloadSamples(int samples);
-        void setQualityTier(int qualityTierIndex);
-        void setPreloadSplit(int preloadSamples, int streamSamples);
-        void setUndoRedoEnabled(bool canUndo, bool canRedo);
-        void resized() override;
-        void paint(juce::Graphics& g) override;
-
-    private:
-        juce::Label preloadLabel_{ {}, "Preload Samples" };
-        juce::TextEditor preloadEditor_;
-        juce::TextButton applyButton_{ "Apply" };
-        juce::Label qualityTierLabel_{ {}, "Quality Tier" };
-        juce::ComboBox qualityTierCombo_;
-        juce::Label qualityDescriptionLabel_;
-        juce::TextButton copyDiagnosticsButton_{ "Copy Diagnostics" };
-        juce::TextButton undoButton_{ "Undo" };
-        juce::TextButton redoButton_{ "Redo" };
-        juce::Label splitInfoLabel_;
-    };
-
-    class EditorPanel final : public juce::Component
-    {
-    public:
-        EditorPanel();
-        std::function<void(int, int)> onApplyZoneLoopPoints;
-        std::function<void()> onUndo;
-        std::function<void()> onRedo;
-        void setSelectedZoneLoopState(int selectedZoneIndex, int loopStart, int loopEnd, bool hasSelection);
-        void setUndoRedoStatus(bool canUndo, bool canRedo, const juce::String& undoLabel, const juce::String& redoLabel);
-        void resized() override;
-        void paint(juce::Graphics& g) override;
-
-    private:
-        juce::Label selectedZoneLabel_{ {}, "Selected Zone" };
-        juce::Label selectedZoneValue_;
-        juce::Label undoRedoStatusLabel_{ {}, "Undo: (none) | Redo: (none)" };
-        juce::Label loopStartLabel_{ {}, "Loop Start" };
-        juce::TextEditor loopStartEditor_;
-        juce::Label loopEndLabel_{ {}, "Loop End" };
-        juce::TextEditor loopEndEditor_;
-        juce::TextButton undoButton_{ "Undo" };
-        juce::TextButton redoButton_{ "Redo" };
-        juce::TextButton applyButton_{ "Apply" };
-    };
-
-    class PlaceholderPanel final : public juce::Component
-    {
-    public:
-        explicit PlaceholderPanel(juce::String title) : title_(std::move(title)) {}
-
-        void paint(juce::Graphics& g) override
-        {
-            g.fillAll(juce::Colours::black.withAlpha(0.9f));
-            g.setColour(juce::Colours::white.withAlpha(0.35f));
-            g.drawRect(getLocalBounds().reduced(8), 1);
-            g.setColour(juce::Colours::white.withAlpha(0.8f));
-            g.setFont(18.0f);
-            g.drawText(title_ + " panel (stub)", getLocalBounds(), juce::Justification::centred);
-        }
-
-    private:
-        juce::String title_;
+        DragMode dragMode_ = DragMode::none;
+        int dragAnchorViewStart_ = 0;
     };
 
     AudiocityAudioProcessor& processor_;
-    SelectionModel selectionModel_{};
-    ProcessorZoneModel zoneModel_;
-    CommandStack commandStack_{};
-    EditorViewModel editorViewModel_;
-    juce::TabbedComponent tabs_{ juce::TabbedButtonBar::TabsAtTop };
     std::unique_ptr<juce::FileChooser> fileChooser_;
+    audiocity::engine::SettingsUndoHistory settingsUndoHistory_;
+    bool isHoveringValidDrop_ = false;
 
-    BrowserPanel browserPanel_{};
-    MappingPanel mappingPanel_{};
-    EditorPanel editorPanel_{};
-    SettingsPanel settingsPanel_{};
-    DiagnosticsPanel diagnosticsPanel_{};
+    // ── Sample ──
+    juce::Label samplePathLabel_;
+    juce::TextButton loadButton_{ "Load Sample" };
+    CcLearnDial rootNoteDial_{ "Root", 0, 127, 1, {}, 60 };
+
+    // ── Waveform ──
+    WaveformView waveformView_;
+
+    // ── Playback ──
+    juce::Label playbackModeLabel_{ {}, "Mode" };
+    juce::ComboBox playbackModeCombo_;
+    juce::ToggleButton reverseToggle_{ "Reverse" };
+
+    // ── Trim ──
+    CcLearnDial playbackStartDial_{ "Start", 0, 1000000, 1 };
+    CcLearnDial playbackEndDial_{ "End", 0, 1000000, 1 };
+
+    // ── Loop ──
+    CcLearnDial loopStartDial_{ "Start", 0, 1000000, 1 };
+    CcLearnDial loopEndDial_{ "End", 0, 1000000, 1 };
+
+    // ── Performance ──
+    juce::ToggleButton monoToggle_{ "Mono" };
+    juce::ToggleButton legatoToggle_{ "Legato" };
+    CcLearnDial glideDial_{ "Glide", 0, 2000, 0.1, "ms" };
+    CcLearnDial chokeGroupDial_{ "Choke", 0, 16, 1 };
+
+    // ── Amp Envelope ──
+    CcLearnDial ampAttackDial_{ "Atk", 0.1, 5000, 0.1, "ms", 0.1 };
+    CcLearnDial ampDecayDial_{ "Dec", 0.1, 5000, 0.1, "ms", 1 };
+    CcLearnDial ampSustainDial_{ "Sus", 0, 1.0, 0.01, {}, 1.0 };
+    CcLearnDial ampReleaseDial_{ "Rel", 0.1, 5000, 0.1, "ms", 5 };
+
+    // ── Filter ──
+    CcLearnDial filterCutoffDial_{ "Cutoff", 20, 20000, 1, "Hz", 18000 };
+    CcLearnDial filterResDial_{ "Res", 0, 100, 1, "%", 0 };
+    CcLearnDial filterEnvAmtDial_{ "Env", 0, 20000, 1, "Hz", 0 };
+
+    // ── Output ──
+    CcLearnDial fadeInDial_{ "Fade In", 0, 10000, 1 };
+    CcLearnDial fadeOutDial_{ "Fade Out", 0, 10000, 1 };
+    juce::Label qualityLabel_{ {}, "Quality" };
+    juce::ComboBox qualityCombo_;
+    CcLearnDial preloadDial_{ "Preload", 256, 131072, 1, {}, 32768 };
+
+    // ── Diagnostics ──
+    juce::Label diagnosticsLabel_;
+
+    // ── CC routing ──
+    struct DialMapping
+    {
+        CcLearnDial* dial = nullptr;
+        juce::String paramId;
+    };
+    std::vector<DialMapping> allDials_;
 
     void openSampleChooser();
-    void openSfzChooser();
-    void openWatchedFolderChooser();
-    void refreshImportedSfzViews();
-    void refreshBrowserPanel();
-    void refreshEditorPanel();
-    void refreshSettingsPanel();
-    [[nodiscard]] juce::String buildStreamingDiagnosticsLine(bool includeFullSamplePath) const;
-    [[nodiscard]] juce::String buildStreamingDiagnosticsTooltip() const;
+    void refreshUI();
+    void pushPlaybackWindow();
+    void applyLoopPoints();
+    void enforcePlaybackLoopConstraints();
+    void pushAmpEnvelope();
+    void pushFilterSettings();
+    void pushPerformanceControls();
+    void syncCcMappingsFromProcessor();
+    void setupTooltips();
     [[nodiscard]] audiocity::engine::SettingsSnapshot captureSettingsSnapshot() const;
-    void applySettingsSnapshot(
-        const audiocity::engine::SettingsSnapshot& snapshot,
-        bool recordHistory,
-        int coalesceKey = -1,
-        const std::string& changeLabel = {});
-    void updateSettingsUndoRedoAvailability();
-    void performSettingsUndo();
-    void performSettingsRedo();
-    void refreshDiagnosticsTabTitle();
-
-    audiocity::engine::SettingsUndoHistory settingsUndoHistory_;
+    void applySettingsSnapshot(const audiocity::engine::SettingsSnapshot& snapshot);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudiocityAudioProcessorEditor)
 };
+

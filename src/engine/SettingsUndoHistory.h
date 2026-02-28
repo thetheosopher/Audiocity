@@ -9,30 +9,17 @@ namespace audiocity::engine
 {
 struct SettingsSnapshot
 {
-    struct LoopPointSnapshot
-    {
-        int loopStart = 0;
-        int loopEnd = 0;
-
-        [[nodiscard]] bool operator==(const LoopPointSnapshot& other) const noexcept
-        {
-            return loopStart == other.loopStart && loopEnd == other.loopEnd;
-        }
-    };
-
     int preloadSamples = 32768;
     int qualityTierIndex = 1;
-    int rrModeIndex = 0;
     int playbackModeIndex = 0;
     bool monoEnabled = false;
     bool legatoEnabled = false;
     float glideSeconds = 0.0f;
     int chokeGroup = 0;
-    std::vector<LoopPointSnapshot> importedZoneLoopPoints;
     int sampleWindowStart = 0;
     int sampleWindowEnd = 0;
-    int editorLoopStart = 0;
-    int editorLoopEnd = 0;
+    int loopStart = 0;
+    int loopEnd = 0;
     int fadeInSamples = 0;
     int fadeOutSamples = 0;
     bool reversePlayback = false;
@@ -41,17 +28,15 @@ struct SettingsSnapshot
     {
         return preloadSamples == other.preloadSamples
             && qualityTierIndex == other.qualityTierIndex
-            && rrModeIndex == other.rrModeIndex
             && playbackModeIndex == other.playbackModeIndex
             && monoEnabled == other.monoEnabled
             && legatoEnabled == other.legatoEnabled
             && glideSeconds == other.glideSeconds
             && chokeGroup == other.chokeGroup
-            && importedZoneLoopPoints == other.importedZoneLoopPoints
             && sampleWindowStart == other.sampleWindowStart
             && sampleWindowEnd == other.sampleWindowEnd
-            && editorLoopStart == other.editorLoopStart
-            && editorLoopEnd == other.editorLoopEnd
+            && loopStart == other.loopStart
+            && loopEnd == other.loopEnd
             && fadeInSamples == other.fadeInSamples
             && fadeOutSamples == other.fadeOutSamples
             && reversePlayback == other.reversePlayback;

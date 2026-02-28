@@ -1,10 +1,7 @@
 add_executable(audiocity_offline_tests
     OfflineRenderTests.cpp
     ../src/engine/EngineCore.cpp
-    ../src/engine/VoicePool.cpp
-    ../src/engine/ZoneMap.cpp
-    ../src/engine/ZoneSelector.cpp
-    ../src/engine/sfz/SfzImport.cpp)
+    ../src/engine/VoicePool.cpp)
 
 target_include_directories(audiocity_offline_tests
     PRIVATE
@@ -22,7 +19,7 @@ target_link_libraries(audiocity_offline_tests
         juce::juce_core)
 
 if (MSVC)
-    target_compile_options(audiocity_offline_tests PRIVATE /W4 /permissive-)
+    target_compile_options(audiocity_offline_tests PRIVATE /W4 /WX /permissive-)
 endif ()
 
 if (MSVC)
