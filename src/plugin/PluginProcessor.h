@@ -50,6 +50,8 @@ public:
 
     bool loadSampleFromFile(const juce::File& file);
     [[nodiscard]] juce::String getLoadedSamplePath() const;
+    void setSampleBrowserRootFolder(const juce::String& folderPath) { sampleBrowserRootFolderPath_ = folderPath; }
+    [[nodiscard]] juce::String getSampleBrowserRootFolder() const { return sampleBrowserRootFolderPath_; }
 
     using PlaybackMode = audiocity::engine::EngineCore::PlaybackMode;
     void setPlaybackMode(PlaybackMode mode) noexcept;
@@ -141,6 +143,7 @@ private:
     // CC mapping storage
     mutable std::mutex ccMappingMutex_;
     std::map<int, juce::String> ccToParam_;
+    juce::String sampleBrowserRootFolderPath_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudiocityAudioProcessor)
 };

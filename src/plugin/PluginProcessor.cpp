@@ -6,6 +6,7 @@ namespace
 {
 constexpr auto kPatchRoot = "AudiocityPatch";
 constexpr auto kSamplePath = "samplePath";
+constexpr auto kSampleBrowserRootFolder = "sampleBrowserRootFolder";
 constexpr auto kRootMidiNote = "rootMidiNote";
 
 constexpr auto kAmpAttack = "ampAttack";
@@ -92,6 +93,7 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     auto state = juce::ValueTree(kPatchRoot);
 
     state.setProperty(kSamplePath, engine_.getSamplePath(), nullptr);
+    state.setProperty(kSampleBrowserRootFolder, sampleBrowserRootFolderPath_, nullptr);
     state.setProperty(kRootMidiNote, engine_.getRootMidiNote(), nullptr);
 
     const auto amp = engine_.getAmpEnvelope();
@@ -158,6 +160,8 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     const auto samplePath = state.getProperty(kSamplePath).toString();
     if (samplePath.isNotEmpty())
         loadSampleFromFile(juce::File(samplePath));
+
+    sampleBrowserRootFolderPath_ = state.getProperty(kSampleBrowserRootFolder, {}).toString();
 
     engine_.setRootMidiNote(static_cast<int>(state.getProperty(kRootMidiNote, engine_.getRootMidiNote())));
 

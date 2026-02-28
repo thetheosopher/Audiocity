@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <optional>
 
 namespace audiocity::engine
 {
@@ -10,9 +11,80 @@ namespace
 {
 constexpr float kPi = 3.14159265358979323846f;
 
+std::optional<juce::String> getMetadataValueCaseInsensitive(const juce::StringPairArray& metadata,
+                                                            const juce::String& key)
+{
+    const auto keys = metadata.getAllKeys();
+    for (int i = 0; i < keys.size(); ++i)
+    {
+        if (keys[i].equalsIgnoreCase(key))
+            return metadata.getValue(keys[i], {});
+    }
+
+    return std::nullopt;
+}
+
+std::optional<int> parseMidiNoteFromMetadataString(const juce::String& raw)
+{
+    const auto trimmed = raw.trim();
+    if (trimmed.isEmpty())
+        return std::nullopt;
+
+    if (trimmed.containsOnly("-0123456789"))
+        return juce::jlimit(0, 127, trimmed.getIntValue());
+
+    const juce::String upper = trimmed.toUpperCase();
+    static constexpr const char* noteNames[] =
+    {
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+    };
+
+    for (int n = 0; n < 12; ++n)
+    {
+        const juce::String noteName(noteNames[n]);
+        if (!upper.startsWith(noteName))
+            continue;
+
+        const auto octavePart = upper.substring(noteName.length()).trim();
+        if (!octavePart.containsOnly("-0123456789"))
+            continue;
+
+        const auto octave = octavePart.getIntValue();
+        const auto midi = (octave + 2) * 12 + n;
+        return juce::jlimit(0, 127, midi);
+    }
+
+    return std::nullopt;
+}
+
+std::optional<int> findEmbeddedRootMidiNote(const juce::StringPairArray& metadata)
+{
+    static const juce::StringArray candidateKeys
+    {
+        "MidiUnityNote",
+        "RootNote",
+        "ACID Root Note",
+        "AcidRootNote",
+        "acidrootnote"
+    };
+
+    for (const auto& key : candidateKeys)
+    {
+        const auto maybeValue = getMetadataValueCaseInsensitive(metadata, key);
+        if (!maybeValue.has_value())
+            continue;
+
+        const auto parsed = parseMidiNoteFromMetadataString(*maybeValue);
+        if (parsed.has_value())
+            return parsed;
+    }
+
+    return std::nullopt;
+}
+
 juce::String detectLoopFormatBadge(const juce::File& file, const juce::StringPairArray& metadata)
 {
-    const auto hasRootNote = metadata.containsKey("MidiUnityNote");
+    const auto hasRootNote = findEmbeddedRootMidiNote(metadata).has_value();
     const auto loopStart = metadata.getValue("Loop0Start", "-1").getIntValue();
     const auto loopEnd = metadata.getValue("Loop0End", "-1").getIntValue();
     const auto hasLoop = loopStart >= 0 && loopEnd > loopStart;
@@ -106,8 +178,8 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
     int embeddedRootNote = rootMidiNote_;
     const auto& metadata = reader->metadataValues;
     const auto loadedLoopFormatBadge = detectLoopFormatBadge(file, metadata);
-    if (metadata.containsKey("MidiUnityNote"))
-        embeddedRootNote = juce::jlimit(0, 127, metadata.getValue("MidiUnityNote", juce::String(rootMidiNote_)).getIntValue());
+    if (const auto parsedRootNote = findEmbeddedRootMidiNote(metadata); parsedRootNote.has_value())
+        embeddedRootNote = *parsedRootNote;
 
     setSampleData(mono, reader->sampleRate, embeddedRootNote);
     displaySampleData_ = loaded;

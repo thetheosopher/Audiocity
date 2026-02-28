@@ -126,16 +126,19 @@ private:
         juce::String relativePathLower;
         juce::String loopFormatBadge;
         juce::String metadataLine;
+        juce::String loopMetadataLine;
         std::vector<float> previewPeaks;
     };
     std::vector<SampleListEntry> allSampleEntries_;
     std::vector<int> visibleSampleEntryIndices_;
     juce::String sampleRootFolderPath_;
     juce::String lastWaveformSamplePath_;
+    std::vector<std::vector<float>> cachedWaveformPeaksByChannel_;
+    int cachedWaveformPeakResolution_ = 0;
 
     // ── Sample Browser ──
-    juce::Label sampleBrowserRootLabel_{ {}, "Source Folder" };
-    juce::TextButton sampleBrowserChooseRootButton_{ "Choose Root Folder" };
+    juce::Label sampleBrowserRootLabel_{ {}, "< Select Folder >" };
+    juce::TextButton sampleBrowserChooseRootButton_{ "..." };
     juce::TextEditor sampleBrowserFilterEditor_;
     juce::ComboBox sampleBrowserSortCombo_;
     juce::ListBox sampleBrowserListBox_;

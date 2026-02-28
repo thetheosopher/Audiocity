@@ -10,6 +10,74 @@
 
 namespace
 {
+class TabTextLookAndFeel final : public juce::LookAndFeel_V4
+{
+public:
+    void drawTabButton(juce::TabBarButton& button, juce::Graphics& g,
+                       bool isMouseOver, bool isMouseDown) override
+    {
+        auto area = button.getActiveArea().toFloat().reduced(0.5f, 0.5f);
+        const bool isFront = button.isFrontTab();
+
+        auto fill = isFront ? juce::Colour(0xff2f3550) : juce::Colour(0xff1f2438);
+        if (!isFront && isMouseOver)
+            fill = fill.brighter(0.08f);
+        if (!isFront && isMouseDown)
+            fill = fill.brighter(0.14f);
+
+        auto border = isFront ? juce::Colour(0xff6d89c4) : juce::Colour(0xff454a62);
+
+        g.setColour(fill);
+        g.fillRoundedRectangle(area, 4.0f);
+
+        g.setColour(border);
+        g.drawRoundedRectangle(area, 4.0f, isFront ? 1.5f : 1.0f);
+
+        if (isFront)
+        {
+            g.setColour(juce::Colour(0xff61d9ff));
+            g.fillRect(area.removeFromBottom(2.0f));
+        }
+
+        drawTabButtonText(button, g, isMouseOver, isMouseDown);
+    }
+
+    void drawTabButtonText(juce::TabBarButton& button, juce::Graphics& g,
+                           bool isMouseOver, bool isMouseDown) override
+    {
+        juce::ignoreUnused(isMouseOver, isMouseDown);
+
+        auto colour = juce::Colours::white.withAlpha(button.isFrontTab() ? 0.98f : 0.70f);
+        if (auto* bar = button.findParentComponentOfClass<juce::TabbedButtonBar>())
+        {
+            const auto colourId = button.isFrontTab()
+                ? juce::TabbedButtonBar::frontTextColourId
+                : juce::TabbedButtonBar::tabTextColourId;
+
+            if (bar->isColourSpecified(colourId))
+                colour = bar->findColour(colourId);
+            else if (isColourSpecified(colourId))
+                colour = findColour(colourId);
+        }
+
+        auto font = juce::Font(juce::FontOptions(14.0f));
+        if (button.isFrontTab())
+            font = font.boldened();
+
+        g.setColour(colour);
+        g.setFont(font);
+        g.drawText(button.getButtonText(), button.getTextArea(), juce::Justification::centred, false);
+    }
+};
+
+TabTextLookAndFeel tabTextLookAndFeel;
+
+int computeWaveformPeakResolution(const int waveformWidthPixels)
+{
+    const auto width = juce::jmax(1, waveformWidthPixels);
+    return juce::jlimit(2048, 32768, juce::jmax(4096, width * 8));
+}
+
 juce::String formatMidiNoteName(const int midiNote)
 {
     static constexpr const char* kNoteNames[] = {
@@ -27,15 +95,88 @@ struct SamplePreviewData
     std::vector<float> peaks;
     juce::String metadataLine;
     juce::String loopFormatBadge;
+    juce::String loopMetadataLine;
 };
 
 auto buildPreviewAndMetadata(const juce::File& file) -> SamplePreviewData
 {
-    auto detectLoopFormatBadge = [](const juce::File& sampleFile, const juce::StringPairArray& metadata) -> juce::String
+    auto getMetadataValueCaseInsensitive = [](const juce::StringPairArray& metadata,
+                                              const juce::String& key) -> juce::String
     {
-        const auto hasRootNote = metadata.containsKey("MidiUnityNote");
-        const auto loopStart = metadata.getValue("Loop0Start", "-1").getIntValue();
-        const auto loopEnd = metadata.getValue("Loop0End", "-1").getIntValue();
+        const auto keys = metadata.getAllKeys();
+        for (int i = 0; i < keys.size(); ++i)
+        {
+            if (keys[i].equalsIgnoreCase(key))
+                return metadata.getValue(keys[i], {});
+        }
+        return {};
+    };
+
+    auto parseEmbeddedRootNote = [&getMetadataValueCaseInsensitive](const juce::StringPairArray& metadata) -> int
+    {
+        static const juce::StringArray candidateKeys
+        {
+            "MidiUnityNote",
+            "RootNote",
+            "ACID Root Note",
+            "AcidRootNote",
+            "acidrootnote"
+        };
+
+        for (const auto& key : candidateKeys)
+        {
+            const auto value = getMetadataValueCaseInsensitive(metadata, key).trim();
+            if (value.isEmpty())
+                continue;
+
+            if (value.containsOnly("-0123456789"))
+                return juce::jlimit(0, 127, value.getIntValue());
+        }
+
+        return -1;
+    };
+
+    auto parseLoopPoint = [&getMetadataValueCaseInsensitive](const juce::StringPairArray& metadata,
+                                                              const juce::String& key) -> int
+    {
+        const auto value = getMetadataValueCaseInsensitive(metadata, key).trim();
+        if (value.isEmpty() || !value.containsOnly("-0123456789"))
+            return -1;
+
+        return value.getIntValue();
+    };
+
+    auto parseTempo = [&getMetadataValueCaseInsensitive](const juce::StringPairArray& metadata) -> double
+    {
+        static const juce::StringArray candidateKeys
+        {
+            "Tempo",
+            "BPM",
+            "ACID Tempo",
+            "AcidTempo",
+            "acidtempo"
+        };
+
+        for (const auto& key : candidateKeys)
+        {
+            const auto value = getMetadataValueCaseInsensitive(metadata, key).trim();
+            if (value.isEmpty())
+                continue;
+
+            const auto bpm = value.getDoubleValue();
+            if (bpm > 0.0)
+                return bpm;
+        }
+
+        return 0.0;
+    };
+
+    auto detectLoopFormatBadge = [&parseEmbeddedRootNote, &parseLoopPoint](
+        const juce::File& sampleFile, const juce::StringPairArray& metadata) -> juce::String
+    {
+        const auto hasRootNote = parseEmbeddedRootNote(metadata) >= 0;
+        const auto loopStart = parseLoopPoint(metadata, "Loop0Start");
+        const auto loopEnd = parseLoopPoint(metadata, "Loop0End");
         const auto hasLoop = loopStart >= 0 && loopEnd > loopStart;
         if (!(hasRootNote && hasLoop))
             return {};
@@ -48,9 +189,10 @@ auto buildPreviewAndMetadata(const juce::File& file) -> SamplePreviewData
         return {};
     };
 
-    auto buildData = [&detectLoopFormatBadge](const juce::File& sampleFile) -> SamplePreviewData
+    auto buildData = [&detectLoopFormatBadge, &parseEmbeddedRootNote, &parseLoopPoint, &parseTempo](
+        const juce::File& sampleFile) -> SamplePreviewData
     {
-        constexpr int kPeakCount = 96;
+        constexpr int kPeakCount = 256;
         SamplePreviewData out;
         out.peaks.assign(static_cast<std::size_t>(kPeakCount), 0.0f);
 
@@ -64,6 +206,24 @@ auto buildPreviewAndMetadata(const juce::File& file) -> SamplePreviewData
         }
 
         out.loopFormatBadge = detectLoopFormatBadge(sampleFile, reader->metadataValues);
+
+        if (out.loopFormatBadge.isNotEmpty())
+        {
+            const auto root = parseEmbeddedRootNote(reader->metadataValues);
+            const auto loopStart = parseLoopPoint(reader->metadataValues, "Loop0Start");
+            const auto loopEnd = parseLoopPoint(reader->metadataValues, "Loop0End");
+            const auto tempoBpm = parseTempo(reader->metadataValues);
+
+            juce::StringArray parts;
+            if (root >= 0)
+                parts.add("Root: " + formatMidiNoteName(root));
+            if (loopStart >= 0 && loopEnd > loopStart)
+                parts.add("Loop: " + juce::String(loopStart) + "-" + juce::String(loopEnd));
+            if (tempoBpm > 0.0)
+                parts.add("Tempo: " + juce::String(tempoBpm, 2) + " BPM");
+
+            out.loopMetadataLine = parts.joinIntoString("  |  ");
+        }
 
         const auto totalSamples = static_cast<int64_t>(reader->lengthInSamples);
         const auto sampleRateHz = static_cast<int>(std::round(reader->sampleRate));
@@ -254,26 +414,88 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
             juce::Justification::centredLeft, false);
 
         const auto& peaks = peaksByChannel_[static_cast<std::size_t>(juce::jlimit(0, static_cast<int>(peaksByChannel_.size()) - 1, channel))];
-        g.setColour(juce::Colours::deepskyblue.withAlpha(0.85f));
         const auto peakCount = static_cast<int>(peaks.size());
-        for (int i = 0; i < peakCount; ++i)
+        if (peakCount > 0)
         {
-            const auto sample = (i * totalSamples_) / juce::jmax(1, peakCount);
-            if (sample < viewStartSample_ || sample > (viewStartSample_ + viewSampleCount_))
-                continue;
+            const auto pixelCount = juce::jmax(1, static_cast<int>(std::round(lane.getWidth())));
+            std::vector<float> topYs(static_cast<std::size_t>(pixelCount + 1), centerY);
+            std::vector<float> bottomYs(static_cast<std::size_t>(pixelCount + 1), centerY);
+            juce::Path topPath;
+            juce::Path bottomPath;
 
-            const auto x = xFromSample(sample);
-            const auto amp = juce::jlimit(0.0f, 1.0f, peaks[static_cast<std::size_t>(i)]) * lane.getHeight() * 0.42f;
-            g.drawLine(x, centerY - amp, x, centerY + amp, 1.0f);
+            for (int px = 0; px <= pixelCount; ++px)
+            {
+                const auto t = static_cast<float>(px) / static_cast<float>(pixelCount);
+                const auto x = lane.getX() + t * lane.getWidth();
+                const auto sample = sampleFromX(x);
+
+                const auto norm = static_cast<float>(juce::jlimit(0, juce::jmax(1, totalSamples_ - 1), sample))
+                    / static_cast<float>(juce::jmax(1, totalSamples_ - 1));
+                const auto peakPos = norm * static_cast<float>(juce::jmax(0, peakCount - 1));
+                const auto i0 = juce::jlimit(0, peakCount - 1, static_cast<int>(std::floor(peakPos)));
+                const auto i1 = juce::jlimit(0, peakCount - 1, i0 + 1);
+                const auto frac = peakPos - static_cast<float>(i0);
+
+                const auto a0 = peaks[static_cast<std::size_t>(i0)];
+                const auto a1 = peaks[static_cast<std::size_t>(i1)];
+                const auto ampNorm = juce::jlimit(0.0f, 1.0f, a0 + (a1 - a0) * frac);
+                const auto amp = ampNorm * lane.getHeight() * 0.42f;
+
+                const auto topY = centerY - amp;
+                const auto bottomY = centerY + amp;
+                topYs[static_cast<std::size_t>(px)] = topY;
+                bottomYs[static_cast<std::size_t>(px)] = bottomY;
+
+                if (px == 0)
+                {
+                    topPath.startNewSubPath(x, topY);
+                    bottomPath.startNewSubPath(x, bottomY);
+                }
+                else
+                {
+                    topPath.lineTo(x, topY);
+                    bottomPath.lineTo(x, bottomY);
+                }
+            }
+
+            juce::Path fillPath;
+            fillPath.startNewSubPath(lane.getX(), topYs.front());
+            for (int px = 1; px <= pixelCount; ++px)
+            {
+                const auto t = static_cast<float>(px) / static_cast<float>(pixelCount);
+                const auto x = lane.getX() + t * lane.getWidth();
+                fillPath.lineTo(x, topYs[static_cast<std::size_t>(px)]);
+            }
+
+            for (int px = pixelCount; px >= 0; --px)
+            {
+                const auto t = static_cast<float>(px) / static_cast<float>(pixelCount);
+                const auto x = lane.getX() + t * lane.getWidth();
+                fillPath.lineTo(x, bottomYs[static_cast<std::size_t>(px)]);
+            }
+            fillPath.closeSubPath();
+
+            juce::ColourGradient fillGradient(
+                juce::Colours::deepskyblue.withAlpha(0.32f), lane.getCentreX(), lane.getY(),
+                juce::Colours::deepskyblue.withAlpha(0.08f), lane.getCentreX(), lane.getBottom(),
+                false);
+            fillGradient.addColour(0.5, juce::Colours::deepskyblue.withAlpha(0.20f));
+            g.setGradientFill(fillGradient);
+            g.fillPath(fillPath);
+
+            g.setColour(juce::Colours::deepskyblue.withAlpha(0.9f));
+            g.strokePath(topPath, juce::PathStrokeType(1.35f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            g.setColour(juce::Colours::deepskyblue.withAlpha(0.7f));
+            g.strokePath(bottomPath, juce::PathStrokeType(1.35f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
 
         g.setColour(juce::Colours::limegreen.withAlpha(0.9f));
-        g.drawVerticalLine(static_cast<int>(pbX1), lane.getY(), lane.getBottom());
-        g.drawVerticalLine(static_cast<int>(pbX2), lane.getY(), lane.getBottom());
+        g.drawLine(pbX1, lane.getY(), pbX1, lane.getBottom(), 1.5f);
+        g.drawLine(pbX2, lane.getY(), pbX2, lane.getBottom(), 1.5f);
 
         g.setColour(juce::Colours::orange.withAlpha(0.9f));
-        g.drawVerticalLine(static_cast<int>(loopLeft), lane.getY(), lane.getBottom());
-        g.drawVerticalLine(static_cast<int>(loopRight), lane.getY(), lane.getBottom());
+        g.drawLine(loopLeft, lane.getY(), loopLeft, lane.getBottom(), 1.5f);
+        g.drawLine(loopRight, lane.getY(), loopRight, lane.getBottom(), 1.5f);
     }
 
     // ── Labels on handles ──
@@ -430,6 +652,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     setLookAndFeel(&dialLaf_);
 
     addAndMakeVisible(tabBar_);
+    tabBar_.setLookAndFeel(&tabTextLookAndFeel);
     tabBar_.setTabBarDepth(30);
     tabBar_.addTab("Sample", juce::Colour(0xff252538), &tabSamplePage_, false);
     tabBar_.addTab("Library", juce::Colour(0xff252538), &tabLibraryPage_, false);
@@ -439,6 +662,8 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     // Sample browser pane
     addAndMakeVisible(sampleBrowserRootLabel_);
     sampleBrowserRootLabel_.setJustificationType(juce::Justification::centredLeft);
+    sampleBrowserRootLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8a8aa0));
+    sampleBrowserRootLabel_.setText("< Select Folder >", juce::dontSendNotification);
 
     addAndMakeVisible(sampleBrowserChooseRootButton_);
     sampleBrowserChooseRootButton_.onClick = [this] { chooseSampleRootFolder(); };
@@ -455,7 +680,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 
     addAndMakeVisible(sampleBrowserListBox_);
     sampleBrowserListBox_.setModel(this);
-    sampleBrowserListBox_.setRowHeight(68);
+    sampleBrowserListBox_.setRowHeight(66);
     sampleBrowserListBox_.setMultipleSelectionEnabled(false);
 
     addAndMakeVisible(sampleBrowserCountLabel_);
@@ -655,6 +880,17 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 
     setupTooltips();
     rebuildVisibleSampleList();
+
+    const auto restoredSampleRoot = processor_.getSampleBrowserRootFolder();
+    if (restoredSampleRoot.isNotEmpty())
+    {
+        const juce::File restoredFolder(restoredSampleRoot);
+        if (restoredFolder.isDirectory())
+            scanSampleRootFolder(restoredFolder);
+        else
+            sampleBrowserRootLabel_.setText("< Select Folder >", juce::dontSendNotification);
+    }
+
     updateTabVisibility();
     refreshUI();
     syncCcMappingsFromProcessor();
@@ -664,6 +900,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 AudiocityAudioProcessorEditor::~AudiocityAudioProcessorEditor()
 {
     stopTimer();
+    tabBar_.setLookAndFeel(nullptr);
     setLookAndFeel(nullptr);
 }
 
@@ -827,8 +1064,8 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
         g.fillRoundedRectangle(rowBounds.toFloat(), 4.0f);
     }
 
-    auto content = rowBounds.reduced(6, 5);
-    auto thumbBounds = content.removeFromLeft(132).withTrimmedBottom(2);
+    auto content = rowBounds.reduced(6, 4);
+    auto thumbBounds = content.removeFromLeft(120).withTrimmedBottom(1);
     content.removeFromLeft(8);
 
     g.setColour(juce::Colour(0xff1f2f4d));
@@ -838,21 +1075,77 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
 
     if (!entry.previewPeaks.empty())
     {
-        const auto centerY = thumbBounds.getCentreY();
-        const auto bars = static_cast<int>(entry.previewPeaks.size());
-        g.setColour(juce::Colour(0xff61d9ff));
+        const auto centerY = static_cast<float>(thumbBounds.getCentreY());
+        const auto peakCount = static_cast<int>(entry.previewPeaks.size());
+        const auto pixelCount = juce::jmax(1, thumbBounds.getWidth() - 2);
 
-        for (int i = 0; i < bars; ++i)
+        std::vector<float> topYs(static_cast<std::size_t>(pixelCount + 1), centerY);
+        std::vector<float> bottomYs(static_cast<std::size_t>(pixelCount + 1), centerY);
+        juce::Path topPath;
+        juce::Path bottomPath;
+
+        for (int px = 0; px <= pixelCount; ++px)
         {
-            const auto x = thumbBounds.getX()
-                + (i * juce::jmax(1, thumbBounds.getWidth() - 1)) / juce::jmax(1, bars - 1);
-            const auto amp = juce::jlimit(0.0f, 1.0f, entry.previewPeaks[static_cast<std::size_t>(i)])
-                * (thumbBounds.getHeight() * 0.45f);
-            g.drawVerticalLine(x, centerY - amp, centerY + amp);
+            const auto t = static_cast<float>(px) / static_cast<float>(pixelCount);
+            const auto x = static_cast<float>(thumbBounds.getX()) + t * static_cast<float>(thumbBounds.getWidth() - 1);
+
+            const auto peakPos = t * static_cast<float>(juce::jmax(0, peakCount - 1));
+            const auto i0 = juce::jlimit(0, peakCount - 1, static_cast<int>(std::floor(peakPos)));
+            const auto i1 = juce::jlimit(0, peakCount - 1, i0 + 1);
+            const auto frac = peakPos - static_cast<float>(i0);
+
+            const auto a0 = entry.previewPeaks[static_cast<std::size_t>(i0)];
+            const auto a1 = entry.previewPeaks[static_cast<std::size_t>(i1)];
+            const auto ampNorm = juce::jlimit(0.0f, 1.0f, a0 + (a1 - a0) * frac);
+            const auto amp = ampNorm * (thumbBounds.getHeight() * 0.44f);
+
+            const auto topY = centerY - amp;
+            const auto bottomY = centerY + amp;
+            topYs[static_cast<std::size_t>(px)] = topY;
+            bottomYs[static_cast<std::size_t>(px)] = bottomY;
+
+            if (px == 0)
+            {
+                topPath.startNewSubPath(x, topY);
+                bottomPath.startNewSubPath(x, bottomY);
+            }
+            else
+            {
+                topPath.lineTo(x, topY);
+                bottomPath.lineTo(x, bottomY);
+            }
         }
+
+        juce::Path fillPath;
+        fillPath.startNewSubPath(static_cast<float>(thumbBounds.getX()), topYs.front());
+        for (int px = 1; px <= pixelCount; ++px)
+        {
+            const auto t = static_cast<float>(px) / static_cast<float>(pixelCount);
+            const auto x = static_cast<float>(thumbBounds.getX()) + t * static_cast<float>(thumbBounds.getWidth() - 1);
+            fillPath.lineTo(x, topYs[static_cast<std::size_t>(px)]);
+        }
+        for (int px = pixelCount; px >= 0; --px)
+        {
+            const auto t = static_cast<float>(px) / static_cast<float>(pixelCount);
+            const auto x = static_cast<float>(thumbBounds.getX()) + t * static_cast<float>(thumbBounds.getWidth() - 1);
+            fillPath.lineTo(x, bottomYs[static_cast<std::size_t>(px)]);
+        }
+        fillPath.closeSubPath();
+
+        juce::ColourGradient fillGradient(
+            juce::Colour(0xff61d9ff).withAlpha(0.35f), static_cast<float>(thumbBounds.getCentreX()), static_cast<float>(thumbBounds.getY()),
+            juce::Colour(0xff61d9ff).withAlpha(0.10f), static_cast<float>(thumbBounds.getCentreX()), static_cast<float>(thumbBounds.getBottom()),
+            false);
+        g.setGradientFill(fillGradient);
+        g.fillPath(fillPath);
+
+        g.setColour(juce::Colour(0xff61d9ff).withAlpha(0.9f));
+        g.strokePath(topPath, juce::PathStrokeType(1.15f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour(juce::Colour(0xff61d9ff).withAlpha(0.65f));
+        g.strokePath(bottomPath, juce::PathStrokeType(1.15f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 
-    auto firstLine = content.removeFromTop(18);
+    auto firstLine = content.removeFromTop(17);
     auto pathArea = firstLine;
     if (entry.loopFormatBadge.isNotEmpty())
     {
@@ -872,16 +1165,20 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
     auto fileArea = pathArea.removeFromLeft(juce::jmax(40, pathArea.getWidth() - pathWidth - 6));
 
     g.setColour(juce::Colour(0xffe5e5ef));
-    g.setFont(juce::Font(juce::FontOptions(14.0f)));
+    g.setFont(juce::Font(juce::FontOptions(13.0f)));
     g.drawText(entry.fileName, fileArea, juce::Justification::centredLeft, true);
 
     g.setColour(juce::Colour(0xffa5a5b8));
-    g.setFont(juce::Font(juce::FontOptions(11.0f)));
+    g.setFont(juce::Font(juce::FontOptions(10.5f)));
     g.drawText(entry.relativePath, pathArea, juce::Justification::centredRight, true);
 
+    auto detailsLine = entry.metadataLine;
+    if (entry.loopMetadataLine.isNotEmpty())
+        detailsLine += "  |  " + entry.loopMetadataLine;
+
     g.setColour(juce::Colour(0xffc7c7d8));
-    g.setFont(juce::Font(juce::FontOptions(12.0f)));
-    g.drawText(entry.metadataLine, content.removeFromTop(16), juce::Justification::centredLeft, true);
+    g.setFont(juce::Font(juce::FontOptions(11.0f)));
+    g.drawText(detailsLine, content.removeFromTop(15), juce::Justification::centredLeft, true);
 
 }
 
@@ -930,16 +1227,46 @@ void AudiocityAudioProcessorEditor::chooseSampleRootFolder()
 void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootFolder)
 {
     sampleRootFolderPath_ = rootFolder.getFullPathName();
-    sampleBrowserRootLabel_.setText("Source Folder: " + sampleRootFolderPath_, juce::dontSendNotification);
+    processor_.setSampleBrowserRootFolder(sampleRootFolderPath_);
+    sampleBrowserRootLabel_.setText(sampleRootFolderPath_, juce::dontSendNotification);
     sampleBrowserCountLabel_.setText("Scanning...", juce::dontSendNotification);
+
+    allSampleEntries_.clear();
+    visibleSampleEntryIndices_.clear();
+    sampleBrowserListBox_.updateContent();
+    sampleBrowserListBox_.repaint();
 
     const auto scanGeneration = ++sampleScanGeneration_;
     auto safeThis = juce::Component::SafePointer<AudiocityAudioProcessorEditor>(this);
 
     std::thread([safeThis, rootFolder, scanGeneration]()
     {
-        std::vector<SampleListEntry> scanned;
-        scanned.reserve(1024);
+        std::vector<SampleListEntry> batch;
+        batch.reserve(24);
+
+        auto flushBatchToUi = [safeThis, scanGeneration](std::vector<SampleListEntry>& batchToFlush)
+        {
+            if (batchToFlush.empty())
+                return;
+
+            auto uiBatch = std::move(batchToFlush);
+            batchToFlush.clear();
+
+            juce::MessageManager::callAsync([safeThis, scanGeneration, batch = std::move(uiBatch)]() mutable
+            {
+                if (safeThis == nullptr)
+                    return;
+
+                auto* self = safeThis.getComponent();
+                if (scanGeneration != self->sampleScanGeneration_.load())
+                    return;
+
+                self->allSampleEntries_.insert(self->allSampleEntries_.end(),
+                    std::make_move_iterator(batch.begin()),
+                    std::make_move_iterator(batch.end()));
+                self->rebuildVisibleSampleList();
+            });
+        };
 
         for (const auto& entry : juce::RangedDirectoryIterator(rootFolder, true, "*", juce::File::findFiles))
         {
@@ -964,21 +1291,14 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
             item.previewPeaks = std::move(previewData.peaks);
             item.metadataLine = std::move(previewData.metadataLine);
             item.loopFormatBadge = std::move(previewData.loopFormatBadge);
-            scanned.push_back(std::move(item));
+            item.loopMetadataLine = std::move(previewData.loopMetadataLine);
+            batch.push_back(std::move(item));
+
+            if (batch.size() >= 24)
+                flushBatchToUi(batch);
         }
 
-        juce::MessageManager::callAsync([safeThis, scanGeneration, scanned = std::move(scanned)]() mutable
-        {
-            if (safeThis == nullptr)
-                return;
-
-            auto* self = safeThis.getComponent();
-            if (scanGeneration != self->sampleScanGeneration_.load())
-                return;
-
-            self->allSampleEntries_ = std::move(scanned);
-            self->rebuildVisibleSampleList();
-        });
+        flushBatchToUi(batch);
     }).detach();
 }
 
@@ -1082,11 +1402,11 @@ void AudiocityAudioProcessorEditor::resized()
 
     if (currentTabIndex_ == 1)
     {
-        auto browserArea = area;
+        auto browserArea = area.reduced(8, 6);
 
         auto header = browserArea.removeFromTop(28);
-        sampleBrowserChooseRootButton_.setBounds(header.removeFromLeft(170));
-        header.removeFromLeft(6);
+        sampleBrowserChooseRootButton_.setBounds(header.removeFromRight(30));
+        header.removeFromRight(6);
         sampleBrowserRootLabel_.setBounds(header);
 
         browserArea.removeFromTop(6);
@@ -1097,9 +1417,10 @@ void AudiocityAudioProcessorEditor::resized()
         sampleBrowserSortCombo_.setBounds(filterRow.removeFromLeft(104));
 
         browserArea.removeFromTop(6);
-        sampleBrowserCountLabel_.setBounds(browserArea.removeFromTop(20));
-        browserArea.removeFromTop(4);
-        sampleBrowserListBox_.setBounds(browserArea);
+        auto listArea = browserArea;
+        sampleBrowserCountLabel_.setBounds(listArea.removeFromBottom(20));
+        listArea.removeFromBottom(4);
+        sampleBrowserListBox_.setBounds(listArea);
         return;
     }
 
@@ -1299,7 +1620,7 @@ void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const
 void AudiocityAudioProcessorEditor::setupTooltips()
 {
     sampleBrowserChooseRootButton_.setTooltip(
-        "Choose Root Folder - Select a source folder to scan recursively for samples");
+        "Select Sample Folder...");
     sampleBrowserFilterEditor_.setTooltip(
         "Search Samples - Filter by sample name or relative path");
     sampleBrowserSortCombo_.setTooltip(
@@ -1455,7 +1776,26 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     loopStartDial_.setRange(0.0, static_cast<double>(maxSampleIndex), 1.0);
     loopEndDial_.setRange(0.0, static_cast<double>(maxSampleIndex), 1.0);
 
-    waveformView_.setState(sampleLength, processor_.getLoadedSamplePeaksByChannel(),
+    const auto targetPeakResolution = computeWaveformPeakResolution(waveformView_.getWidth());
+    const auto shouldRefreshPeaks = sampleLength <= 0
+        ? false
+        : (isNewLoadedSample
+            || forceWaveformReset
+            || cachedWaveformPeaksByChannel_.empty()
+            || cachedWaveformPeakResolution_ != targetPeakResolution);
+
+    if (sampleLength <= 0)
+    {
+        cachedWaveformPeaksByChannel_.clear();
+        cachedWaveformPeakResolution_ = 0;
+    }
+    else if (shouldRefreshPeaks)
+    {
+        cachedWaveformPeaksByChannel_ = processor_.getLoadedSamplePeaksByChannel(targetPeakResolution);
+        cachedWaveformPeakResolution_ = targetPeakResolution;
+    }
+
+    waveformView_.setState(sampleLength, cachedWaveformPeaksByChannel_,
         processor_.getSampleWindowStart(), processor_.getSampleWindowEnd(),
         processor_.getLoopStart(), processor_.getLoopEnd(),
         processor_.getLoadedSampleLoopFormatBadge());
