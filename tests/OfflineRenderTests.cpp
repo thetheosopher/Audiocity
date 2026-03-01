@@ -1847,6 +1847,53 @@ bool runFilterLfoDifferenceTest()
     return !buffersAreEqual(noLfo, withLfo, 1.0e-6f);
 }
 
+bool runAmpLfoTremoloSettingsTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr int blocks = 48;
+    constexpr double sampleRate = 48000.0;
+
+    auto renderWithAmpLfo = [&](const float rateHz,
+                                const float depth,
+                                const audiocity::engine::EngineCore::FilterSettings::LfoShape shape)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(createOneCycleSine(128), sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+
+        audiocity::engine::EngineCore::AdsrSettings heldAdsr;
+        heldAdsr.attackSeconds = 0.0001f;
+        heldAdsr.decaySeconds = 0.0001f;
+        heldAdsr.sustainLevel = 1.0f;
+        heldAdsr.releaseSeconds = 0.5f;
+        engine.setAmpEnvelope(heldAdsr);
+
+        auto ampLfo = engine.getAmpLfoSettings();
+        ampLfo.rateHz = rateHz;
+        ampLfo.depth = depth;
+        ampLfo.shape = shape;
+        engine.setAmpLfoSettings(ampLfo);
+
+        return renderHeldNote(engine, 60, blockSize, blocks, channels);
+    };
+
+    const auto dry = renderWithAmpLfo(0.0f, 0.0f, audiocity::engine::EngineCore::FilterSettings::LfoShape::sine);
+    const auto tremolo = renderWithAmpLfo(5.0f, 1.0f, audiocity::engine::EngineCore::FilterSettings::LfoShape::sine);
+    if (buffersAreEqual(dry, tremolo, 1.0e-6f))
+        return false;
+
+    const auto sineShape = renderWithAmpLfo(4.0f, 0.8f, audiocity::engine::EngineCore::FilterSettings::LfoShape::sine);
+    const auto squareShape = renderWithAmpLfo(4.0f, 0.8f, audiocity::engine::EngineCore::FilterSettings::LfoShape::square);
+    if (buffersAreEqual(sineShape, squareShape, 1.0e-6f))
+        return false;
+
+    const auto slowRate = renderWithAmpLfo(1.5f, 0.8f, audiocity::engine::EngineCore::FilterSettings::LfoShape::sine);
+    const auto fastRate = renderWithAmpLfo(8.0f, 0.8f, audiocity::engine::EngineCore::FilterSettings::LfoShape::sine);
+    return !buffersAreEqual(slowRate, fastRate, 1.0e-6f);
+}
+
 bool runFilterLfoShapeDifferenceTest()
 {
     constexpr int channels = 2;
@@ -2873,6 +2920,9 @@ int main()
 
     if (!runFilterLfoShapeDifferenceTest())
         return 32;
+
+    if (!runAmpLfoTremoloSettingsTest())
+        return 52;
 
     if (!runFilterLfoTempoSyncSettingsTest())
         return 33;

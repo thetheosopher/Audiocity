@@ -87,6 +87,13 @@ public:
         int lfoSyncDivision = 6;
     };
 
+    struct AmpLfoSettings
+    {
+        float rateHz = 0.0f;
+        float depth = 0.0f;
+        FilterSettings::LfoShape shape = FilterSettings::LfoShape::sine;
+    };
+
     void prepare(double sampleRate, int maxSamplesPerBlock, int outputChannels) noexcept;
     void release() noexcept;
 
@@ -143,10 +150,12 @@ public:
     void panic() noexcept;
 
     void setAmpEnvelope(const AdsrSettings& settings) noexcept;
+    void setAmpLfoSettings(const AmpLfoSettings& settings) noexcept;
     void setFilterEnvelope(const AdsrSettings& settings) noexcept;
     void setFilterSettings(const FilterSettings& settings) noexcept;
 
     [[nodiscard]] AdsrSettings getAmpEnvelope() const noexcept { return ampEnvelopeSettings_; }
+    [[nodiscard]] AmpLfoSettings getAmpLfoSettings() const noexcept { return ampLfoSettings_; }
     [[nodiscard]] AdsrSettings getFilterEnvelope() const noexcept { return filterEnvelopeSettings_; }
     [[nodiscard]] FilterSettings getFilterSettings() const noexcept { return filterSettings_; }
 
@@ -274,6 +283,7 @@ private:
     int segmentRebuildCount_ = 0;
 
     AdsrSettings ampEnvelopeSettings_{};
+    AmpLfoSettings ampLfoSettings_{};
     AdsrSettings filterEnvelopeSettings_{ 0.001f, 0.120f, 0.0f, 0.100f };
     FilterSettings filterSettings_{};
     PlaybackMode playbackMode_ = PlaybackMode::gate;
@@ -281,6 +291,7 @@ private:
     bool legatoMode_ = false;
     float glideSeconds_ = 0.0f;
     float globalFilterLfoPhase_ = 0.0f;
+    float globalAmpLfoPhase_ = 0.0f;
     QualityTier qualityTier_ = QualityTier::fidelity;
     VelocityCurve velocityCurve_ = VelocityCurve::linear;
     float reverbMix_ = 0.0f;

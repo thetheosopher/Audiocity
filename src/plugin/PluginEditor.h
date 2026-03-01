@@ -386,6 +386,10 @@ private:
     CcLearnDial ampDecayDial_{ "Decay", 0.1, 5000, 0.1, "ms", 1 };
     CcLearnDial ampSustainDial_{ "Sustain", 0, 1.0, 0.01, {}, 1.0 };
     CcLearnDial ampReleaseDial_{ "Release", 0.1, 5000, 0.1, "ms", 5 };
+    CcLearnDial ampLfoRateDial_{ "A LFO Hz", 0, 40, 0.001, "Hz", 0 };
+    CcLearnDial ampLfoDepthDial_{ "A LFO D", 0, 100, 1, "%", 0 };
+    juce::Label ampLfoShapeLabel_{ {}, "A LFO Shape" };
+    juce::ComboBox ampLfoShapeCombo_;
     AmpEnvelopeGraph ampEnvelopeGraph_;
 
     // ── Filter ──
@@ -451,6 +455,7 @@ private:
     void applyLoopPoints();
     void enforcePlaybackLoopConstraints();
     void pushAmpEnvelope();
+    void pushAmpLfoSettings();
     void pushFilterEnvelope();
     void pushFilterSettings();
     void pushPerformanceControls();

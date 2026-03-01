@@ -21,6 +21,9 @@ constexpr auto kAmpAttack = "ampAttack";
 constexpr auto kAmpDecay = "ampDecay";
 constexpr auto kAmpSustain = "ampSustain";
 constexpr auto kAmpRelease = "ampRelease";
+constexpr auto kAmpLfoRate = "ampLfoRate";
+constexpr auto kAmpLfoDepth = "ampLfoDepth";
+constexpr auto kAmpLfoShape = "ampLfoShape";
 
 constexpr auto kFilterAttack = "filterAttack";
 constexpr auto kFilterDecay = "filterDecay";
@@ -98,6 +101,9 @@ constexpr auto kParamAmpAttack = "p_ampAttack";
 constexpr auto kParamAmpDecay = "p_ampDecay";
 constexpr auto kParamAmpSustain = "p_ampSustain";
 constexpr auto kParamAmpRelease = "p_ampRelease";
+constexpr auto kParamAmpLfoRate = "p_ampLfoRate";
+constexpr auto kParamAmpLfoDepth = "p_ampLfoDepth";
+constexpr auto kParamAmpLfoShape = "p_ampLfoShape";
 constexpr auto kParamPlaybackMode = "p_playbackMode";
 constexpr auto kParamMonoMode = "p_mono";
 constexpr auto kParamLegatoMode = "p_legato";
@@ -131,6 +137,7 @@ AudiocityAudioProcessor::AudiocityAudioProcessor()
 
     setFilterSettings(engine_.getFilterSettings());
     setAmpEnvelope(engine_.getAmpEnvelope());
+    setAmpLfoSettings(engine_.getAmpLfoSettings());
     setFilterEnvelope(engine_.getFilterEnvelope());
     setPlaybackMode(engine_.getPlaybackMode());
     setMonoMode(engine_.getMonoMode());
@@ -214,6 +221,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout AudiocityAudioProcessor::cre
         juce::NormalisableRange<float>(0.0f, 1.0f), 0.85f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamAmpRelease, "Amp Release",
         juce::NormalisableRange<float>(0.0001f, 5.0f, 0.0001f, 0.4f), 0.150f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamAmpLfoRate, "Amp LFO Rate",
+        juce::NormalisableRange<float>(0.0f, 40.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamAmpLfoDepth, "Amp LFO Depth",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(kParamAmpLfoShape, "Amp LFO Shape",
+        juce::StringArray{ "Sine", "Triangle", "Square", "Saw Up", "Saw Down" },
+        static_cast<int>(FilterSettings::LfoShape::sine)));
     params.push_back(std::make_unique<juce::AudioParameterChoice>(kParamPlaybackMode, "Playback Mode",
         juce::StringArray{ "Gate", "One-shot", "Loop" }, 0));
     params.push_back(std::make_unique<juce::AudioParameterBool>(kParamMonoMode, "Mono", false));
@@ -281,6 +295,13 @@ void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
     amp.sustainLevel = apvts_.getRawParameterValue(kParamAmpSustain)->load();
     amp.releaseSeconds = apvts_.getRawParameterValue(kParamAmpRelease)->load();
     engine_.setAmpEnvelope(amp);
+
+    auto ampLfo = engine_.getAmpLfoSettings();
+    ampLfo.rateHz = apvts_.getRawParameterValue(kParamAmpLfoRate)->load();
+    ampLfo.depth = apvts_.getRawParameterValue(kParamAmpLfoDepth)->load();
+    ampLfo.shape = static_cast<FilterSettings::LfoShape>(juce::jlimit(0, 4,
+        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamAmpLfoShape)->load()))));
+    engine_.setAmpLfoSettings(ampLfo);
 
     auto filter = engine_.getFilterSettings();
     filter.baseCutoffHz = apvts_.getRawParameterValue(kParamFilterCutoff)->load();
@@ -514,6 +535,10 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kAmpDecay, amp.decaySeconds, nullptr);
     state.setProperty(kAmpSustain, amp.sustainLevel, nullptr);
     state.setProperty(kAmpRelease, amp.releaseSeconds, nullptr);
+    const auto ampLfo = engine_.getAmpLfoSettings();
+    state.setProperty(kAmpLfoRate, ampLfo.rateHz, nullptr);
+    state.setProperty(kAmpLfoDepth, ampLfo.depth, nullptr);
+    state.setProperty(kAmpLfoShape, static_cast<int>(ampLfo.shape), nullptr);
 
     const auto filterAdsr = engine_.getFilterEnvelope();
     state.setProperty(kFilterAttack, filterAdsr.attackSeconds, nullptr);
@@ -632,6 +657,13 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     amp.releaseSeconds = static_cast<float>(state.getProperty(kAmpRelease, amp.releaseSeconds));
     setAmpEnvelope(amp);
 
+    auto ampLfo = engine_.getAmpLfoSettings();
+    ampLfo.rateHz = static_cast<float>(state.getProperty(kAmpLfoRate, ampLfo.rateHz));
+    ampLfo.depth = static_cast<float>(state.getProperty(kAmpLfoDepth, ampLfo.depth));
+    ampLfo.shape = static_cast<FilterSettings::LfoShape>(juce::jlimit(0, 4,
+        static_cast<int>(state.getProperty(kAmpLfoShape, static_cast<int>(ampLfo.shape)))));
+    setAmpLfoSettings(ampLfo);
+
     auto filterAdsr = engine_.getFilterEnvelope();
     filterAdsr.attackSeconds = static_cast<float>(state.getProperty(kFilterAttack, filterAdsr.attackSeconds));
     filterAdsr.decaySeconds = static_cast<float>(state.getProperty(kFilterDecay, filterAdsr.decaySeconds));
@@ -747,6 +779,7 @@ bool AudiocityAudioProcessor::loadSampleFromFile(const juce::File& file)
     suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
 
     setAmpEnvelope(engine_.getAmpEnvelope());
+    setAmpLfoSettings(engine_.getAmpLfoSettings());
     setFilterEnvelope(engine_.getFilterEnvelope());
     setFilterSettings(engine_.getFilterSettings());
 
@@ -840,6 +873,15 @@ void AudiocityAudioProcessor::setAmpEnvelope(const AdsrSettings& settings) noexc
     updateParameterFromPlainValue(kParamAmpDecay, settings.decaySeconds);
     updateParameterFromPlainValue(kParamAmpSustain, settings.sustainLevel);
     updateParameterFromPlainValue(kParamAmpRelease, settings.releaseSeconds);
+}
+
+void AudiocityAudioProcessor::setAmpLfoSettings(const AmpLfoSettings& settings) noexcept
+{
+    engine_.setAmpLfoSettings(settings);
+    const auto applied = engine_.getAmpLfoSettings();
+    updateParameterFromPlainValue(kParamAmpLfoRate, applied.rateHz);
+    updateParameterFromPlainValue(kParamAmpLfoDepth, applied.depth);
+    updateParameterFromPlainValue(kParamAmpLfoShape, static_cast<float>(applied.shape));
 }
 
 void AudiocityAudioProcessor::setRootMidiNote(const int rootNote) noexcept

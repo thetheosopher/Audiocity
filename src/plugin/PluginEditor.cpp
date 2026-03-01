@@ -1783,11 +1783,27 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     ampSustainDial_.setDoubleClickResetValue(1.0);
     addAndMakeVisible(ampReleaseDial_);
     ampReleaseDial_.setDoubleClickResetValue(5.0);
+    addAndMakeVisible(ampLfoRateDial_);
+    ampLfoRateDial_.setDoubleClickResetValue(0.0);
+    addAndMakeVisible(ampLfoDepthDial_);
+    ampLfoDepthDial_.setDoubleClickResetValue(0.0);
+    addAndMakeVisible(ampLfoShapeLabel_);
+    ampLfoShapeLabel_.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(ampLfoShapeCombo_);
+    ampLfoShapeCombo_.addItem("Sine", 1);
+    ampLfoShapeCombo_.addItem("Triangle", 2);
+    ampLfoShapeCombo_.addItem("Square", 3);
+    ampLfoShapeCombo_.addItem("Saw Up", 4);
+    ampLfoShapeCombo_.addItem("Saw Down", 5);
+    ampLfoShapeCombo_.setSelectedId(1, juce::dontSendNotification);
+    ampLfoShapeCombo_.onChange = [this] { pushAmpLfoSettings(); };
     addAndMakeVisible(ampEnvelopeGraph_);
     ampAttackDial_.onValueChange = [this] { pushAmpEnvelope(); updateAmpEnvelopeGraphFromDials(); };
     ampDecayDial_.onValueChange = [this] { pushAmpEnvelope(); updateAmpEnvelopeGraphFromDials(); };
     ampSustainDial_.onValueChange = [this] { pushAmpEnvelope(); updateAmpEnvelopeGraphFromDials(); };
     ampReleaseDial_.onValueChange = [this] { pushAmpEnvelope(); updateAmpEnvelopeGraphFromDials(); };
+    ampLfoRateDial_.onValueChange = [this] { pushAmpLfoSettings(); };
+    ampLfoDepthDial_.onValueChange = [this] { pushAmpLfoSettings(); };
 
     // Filter
     addAndMakeVisible(filterCutoffDial_);
@@ -2020,6 +2036,8 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         { &ampDecayDial_,       "ampDecay" },
         { &ampSustainDial_,     "ampSustain" },
         { &ampReleaseDial_,     "ampRelease" },
+        { &ampLfoRateDial_,     "ampLfoRate" },
+        { &ampLfoDepthDial_,    "ampLfoDepth" },
         { &filterCutoffDial_,   "filterCutoff" },
         { &filterResDial_,      "filterRes" },
         { &filterEnvAmtDial_,   "filterEnvAmt" },
@@ -2077,6 +2095,10 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addToSampleControls(ampDecayDial_);
     addToSampleControls(ampSustainDial_);
     addToSampleControls(ampReleaseDial_);
+    addToSampleControls(ampLfoRateDial_);
+    addToSampleControls(ampLfoDepthDial_);
+    addToSampleControls(ampLfoShapeLabel_);
+    addToSampleControls(ampLfoShapeCombo_);
     addToSampleControls(ampEnvelopeGraph_);
     addToSampleControls(filterCutoffDial_);
     addToSampleControls(filterResDial_);
@@ -2349,6 +2371,10 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
     ampDecayDial_.setValue(amp.decaySeconds * 1000.0f, juce::dontSendNotification);
     ampSustainDial_.setValue(amp.sustainLevel, juce::dontSendNotification);
     ampReleaseDial_.setValue(amp.releaseSeconds * 1000.0f, juce::dontSendNotification);
+    const auto ampLfo = processor_.getAmpLfoSettings();
+    ampLfoRateDial_.setValue(ampLfo.rateHz, juce::dontSendNotification);
+    ampLfoDepthDial_.setValue(ampLfo.depth * 100.0f, juce::dontSendNotification);
+    ampLfoShapeCombo_.setSelectedId(static_cast<int>(ampLfo.shape) + 1, juce::dontSendNotification);
 
     const auto filter = processor_.getFilterSettings();
     filterCutoffDial_.setValue(filter.baseCutoffHz, juce::dontSendNotification);
@@ -2451,6 +2477,10 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     ampDecayDial_.setVisible(showSampleTab);
     ampSustainDial_.setVisible(showSampleTab);
     ampReleaseDial_.setVisible(showSampleTab);
+    ampLfoRateDial_.setVisible(showSampleTab);
+    ampLfoDepthDial_.setVisible(showSampleTab);
+    ampLfoShapeLabel_.setVisible(showSampleTab);
+    ampLfoShapeCombo_.setVisible(showSampleTab);
     filterCutoffDial_.setVisible(showSampleTab);
     filterResDial_.setVisible(showSampleTab);
     filterEnvAmtDial_.setVisible(showSampleTab);
@@ -3209,6 +3239,15 @@ void AudiocityAudioProcessorEditor::resized()
         ampSustainDial_.setBounds(ampInner.removeFromLeft(kDial));
         ampInner.removeFromLeft(kDialGap);
         ampReleaseDial_.setBounds(ampInner.removeFromLeft(kDial));
+        ampInner.removeFromLeft(kDialGap);
+        ampLfoRateDial_.setBounds(ampInner.removeFromLeft(kDial));
+        ampInner.removeFromLeft(kDialGap);
+        ampLfoDepthDial_.setBounds(ampInner.removeFromLeft(kDial));
+        ampInner.removeFromLeft(kDialGap);
+        auto ampLfoShapeArea = ampInner.removeFromLeft(kDial + 24);
+        ampLfoShapeLabel_.setBounds(ampLfoShapeArea.removeFromTop(16));
+        ampLfoShapeArea.removeFromTop(2);
+        ampLfoShapeCombo_.setBounds(ampLfoShapeArea.removeFromTop(24));
         ampInner.removeFromLeft(10);
         ampEnvelopeGraph_.setBounds(ampInner.reduced(0, 8));
     }
@@ -3627,6 +3666,14 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Sustain - Amplitude envelope sustain level (0 to 1)");
     ampReleaseDial_.setLabelTooltip(
         "Release - Amplitude envelope release time in milliseconds");
+    ampLfoRateDial_.setLabelTooltip(
+        "Amp LFO Rate - Tremolo speed in Hz");
+    ampLfoDepthDial_.setLabelTooltip(
+        "Amp LFO Depth - Tremolo amount from 0% (off) to 100% (full)");
+    ampLfoShapeLabel_.setTooltip(
+        "Amp LFO Shape - Waveform used for tremolo modulation");
+    ampLfoShapeCombo_.setTooltip(
+        "Amp LFO Shape - Choose Sine, Triangle, Square, Saw Up, or Saw Down");
     filterCutoffDial_.setLabelTooltip(
         "Filter Cutoff - Low-pass filter frequency in Hz");
     filterResDial_.setLabelTooltip(
@@ -3957,6 +4004,10 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     ampDecayDial_.setValue(amp.decaySeconds * 1000.0f);
     ampSustainDial_.setValue(amp.sustainLevel);
     ampReleaseDial_.setValue(amp.releaseSeconds * 1000.0f);
+    const auto ampLfo = processor_.getAmpLfoSettings();
+    ampLfoRateDial_.setValue(ampLfo.rateHz);
+    ampLfoDepthDial_.setValue(ampLfo.depth * 100.0f);
+    ampLfoShapeCombo_.setSelectedId(static_cast<int>(ampLfo.shape) + 1, juce::dontSendNotification);
     updateAmpEnvelopeGraphFromDials();
 
     // Filter
@@ -4119,6 +4170,15 @@ void AudiocityAudioProcessorEditor::pushAmpEnvelope()
     adsr.sustainLevel = juce::jlimit(0.0f, 1.0f, static_cast<float>(ampSustainDial_.getValue()));
     adsr.releaseSeconds = juce::jmax(0.0001f, static_cast<float>(ampReleaseDial_.getValue()) / 1000.0f);
     processor_.setAmpEnvelope(adsr);
+}
+
+void AudiocityAudioProcessorEditor::pushAmpLfoSettings()
+{
+    AudiocityAudioProcessor::AmpLfoSettings settings;
+    settings.rateHz = juce::jlimit(0.0f, 40.0f, static_cast<float>(ampLfoRateDial_.getValue()));
+    settings.depth = juce::jlimit(0.0f, 1.0f, static_cast<float>(ampLfoDepthDial_.getValue()) / 100.0f);
+    settings.shape = comboIdToLfoShape(ampLfoShapeCombo_.getSelectedId());
+    processor_.setAmpLfoSettings(settings);
 }
 
 void AudiocityAudioProcessorEditor::pushFilterSettings()

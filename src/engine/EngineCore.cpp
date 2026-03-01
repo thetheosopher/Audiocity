@@ -146,6 +146,11 @@ EngineCore::AdsrSettings defaultAmpEnvelopeForLoadedSample() noexcept
     return {};
 }
 
+EngineCore::AmpLfoSettings defaultAmpLfoSettingsForLoadedSample() noexcept
+{
+    return {};
+}
+
 EngineCore::AdsrSettings defaultFilterEnvelopeForLoadedSample() noexcept
 {
     return { 0.001f, 0.120f, 0.0f, 0.100f };
@@ -193,6 +198,7 @@ void EngineCore::prepare(const double sampleRate, const int maxSamplesPerBlock, 
     voicePool_.prepare(maxSamplesPerBlock_);
     pendingEventCount_ = 0;
     globalFilterLfoPhase_ = 0.0f;
+    globalAmpLfoPhase_ = 0.0f;
     currentPitchBendSemitones_ = 0.0f;
 
     juce::dsp::ProcessSpec spec;
@@ -284,6 +290,7 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
 
     setSampleData(mono, reader->sampleRate, embeddedRootNote);
     setAmpEnvelope(defaultAmpEnvelopeForLoadedSample());
+    setAmpLfoSettings(defaultAmpLfoSettingsForLoadedSample());
     setFilterEnvelope(defaultFilterEnvelopeForLoadedSample());
     setFilterSettings(defaultFilterSettingsForLoadedSample());
     displaySampleData_ = loaded;
@@ -472,6 +479,19 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
                 globalFilterLfoPhase_ -= std::floor(globalFilterLfoPhase_);
         }
 
+        float ampLfoGain = 1.0f;
+        const bool hasActiveAmpLfo = ampLfoSettings_.rateHz > 0.0f && ampLfoSettings_.depth > 0.0001f;
+        if (hasActiveAmpLfo)
+        {
+            const auto ampLfoWave = computeLfoWave(ampLfoSettings_.shape, globalAmpLfoPhase_);
+            const auto ampLfoUnipolar = 0.5f * (ampLfoWave + 1.0f);
+            ampLfoGain = (1.0f - ampLfoSettings_.depth) + (ampLfoSettings_.depth * ampLfoUnipolar);
+
+            globalAmpLfoPhase_ += ampLfoSettings_.rateHz / static_cast<float>(sampleRate_);
+            if (globalAmpLfoPhase_ >= 1.0f)
+                globalAmpLfoPhase_ -= std::floor(globalAmpLfoPhase_);
+        }
+
         float mixed = 0.0f;
 
         for (int voiceIndex = 0; voiceIndex < static_cast<int>(VoicePool::maxVoices); ++voiceIndex)
@@ -540,7 +560,7 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
             }
 
             const float mappedVelocity = mapVelocity(voice.velocity);
-            const float ampLevel = voice.ampEnvelope.getNextSample() * mappedVelocity;
+            const float ampLevel = voice.ampEnvelope.getNextSample() * mappedVelocity * ampLfoGain;
 
             if (!voice.ampEnvelope.isActive())
             {
@@ -712,6 +732,13 @@ void EngineCore::setAmpEnvelope(const AdsrSettings& settings) noexcept
 {
     ampEnvelopeSettings_ = settings;
     applyEnvelopeParamsToVoices();
+}
+
+void EngineCore::setAmpLfoSettings(const AmpLfoSettings& settings) noexcept
+{
+    ampLfoSettings_.rateHz = juce::jlimit(0.0f, 40.0f, settings.rateHz);
+    ampLfoSettings_.depth = juce::jlimit(0.0f, 1.0f, settings.depth);
+    ampLfoSettings_.shape = settings.shape;
 }
 
 void EngineCore::setFilterEnvelope(const AdsrSettings& settings) noexcept

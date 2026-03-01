@@ -168,6 +168,9 @@ public:
     using AdsrSettings = audiocity::engine::EngineCore::AdsrSettings;
     void setAmpEnvelope(const AdsrSettings& settings) noexcept;
     [[nodiscard]] AdsrSettings getAmpEnvelope() const noexcept { return engine_.getAmpEnvelope(); }
+    using AmpLfoSettings = audiocity::engine::EngineCore::AmpLfoSettings;
+    void setAmpLfoSettings(const AmpLfoSettings& settings) noexcept;
+    [[nodiscard]] AmpLfoSettings getAmpLfoSettings() const noexcept { return engine_.getAmpLfoSettings(); }
     void setFilterEnvelope(const AdsrSettings& settings) noexcept;
     [[nodiscard]] AdsrSettings getFilterEnvelope() const noexcept { return engine_.getFilterEnvelope(); }
 
