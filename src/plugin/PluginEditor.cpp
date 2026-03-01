@@ -2387,6 +2387,8 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
     masterVolumeDial_.setValue(processor_.getMasterVolume() * 100.0f, juce::dontSendNotification);
     panDial_.setValue(processor_.getPan() * 100.0f, juce::dontSendNotification);
     reverbMixDial_.setValue(processor_.getReverbMix() * 100.0f, juce::dontSendNotification);
+
+    updateDiagnosticsStatusText();
 }
 
 void AudiocityAudioProcessorEditor::updateTabVisibility()
@@ -3944,15 +3946,19 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     fadeInDial_.setValue(processor_.getFadeInSamples());
     fadeOutDial_.setValue(processor_.getFadeOutSamples());
 
-    // Diagnostics
+    updateDiagnosticsStatusText();
+}
+
+void AudiocityAudioProcessorEditor::updateDiagnosticsStatusText()
+{
     diagnosticsLabel_.setText(
         "Preload: " + juce::String(processor_.getLoadedPreloadSamples())
             + " | Stream: " + juce::String(processor_.getLoadedStreamSamples())
             + " | Rebuilds: " + juce::String(processor_.getSegmentRebuildCount())
-            + " | Poly: " + juce::String(processor_.getPolyphonyLimit())
             + " | Voices: " + juce::String(processor_.getActiveVoiceCount())
+            + "/" + juce::String(processor_.getPolyphonyLimit())
             + " | Root: " + juce::String(processor_.getRootMidiNote())
-            + " | Length: " + juce::String(sampleLength),
+            + " | Length: " + juce::String(processor_.getLoadedSampleLength()),
         juce::dontSendNotification);
 }
 

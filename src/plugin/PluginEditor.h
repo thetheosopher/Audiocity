@@ -464,6 +464,7 @@ private:
     void updateTabVisibility();
     void updateGeneratePreviewButtonText();
     void updateGeneratePulseWidthControlState();
+    void updateDiagnosticsStatusText();
     void updateAmpEnvelopeGraphFromDials();
     void updateFilterEnvelopeGraphFromDials();
     void updateFilterResponseGraphFromControls();

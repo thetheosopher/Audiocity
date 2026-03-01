@@ -761,6 +761,8 @@ void AudiocityAudioProcessor::loadGeneratedWaveformAsSample(const std::vector<fl
     engine_.setSampleData(buffer, generatedSampleRate, clampedRoot);
     engine_.setRootMidiNote(clampedRoot);
     engine_.clearSamplePath();
+    if (getPlaybackMode() != PlaybackMode::loop)
+        setPlaybackMode(PlaybackMode::loop);
     generatedWaveformLoaded_.store(true, std::memory_order_relaxed);
     stopGeneratedWaveformPreview();
     suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);

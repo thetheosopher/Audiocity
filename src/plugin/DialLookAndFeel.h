@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <cmath>
 
 // Custom LookAndFeel for rotary dials: large diameter knob, thin arc track.
 class DialLookAndFeel final : public juce::LookAndFeel_V4
@@ -46,6 +47,39 @@ public:
     }
 
     ~DialLookAndFeel() override = default;
+
+    juce::Rectangle<int> getTooltipBounds(const juce::String& tipText,
+                                          juce::Point<int> screenPos,
+                                          juce::Rectangle<int> parentArea) override
+    {
+        const auto font = juce::Font(juce::FontOptions(12.0f));
+        constexpr int padX = 8;
+        constexpr int padY = 5;
+        constexpr int border = 4;
+        constexpr int minTextWidth = 120;
+        constexpr int maxTooltipWidth = 560;
+
+        const auto availableWidth = juce::jmax(minTextWidth,
+            juce::jmin(maxTooltipWidth, parentArea.getWidth() - (border + padX) * 2));
+
+        const auto estimatedCharWidth = font.getHeight() * 0.58f;
+        const auto singleLineWidth = static_cast<int>(std::ceil(estimatedCharWidth * static_cast<float>(tipText.length())));
+        const auto targetTextWidth = juce::jlimit(minTextWidth, availableWidth, singleLineWidth);
+
+        juce::AttributedString attributed;
+        attributed.setJustification(juce::Justification::centredLeft);
+        attributed.append(tipText, font, findColour(juce::TooltipWindow::textColourId));
+
+        juce::TextLayout layout;
+        layout.createLayout(attributed, static_cast<float>(targetTextWidth));
+
+        const auto textHeight = static_cast<int>(std::ceil(layout.getHeight()));
+        const auto width = targetTextWidth + (padX + border) * 2;
+        const auto height = juce::jmax(22, textHeight + (padY + border) * 2);
+
+        auto bounds = juce::Rectangle<int>(width, height).withPosition(screenPos.x + 18, screenPos.y + 22);
+        return bounds.constrainedWithin(parentArea);
+    }
 
     void drawRotarySlider(juce::Graphics& g,
                           int x, int y, int width, int height,
@@ -123,8 +157,9 @@ public:
 
     void drawTooltip(juce::Graphics& g, const juce::String& text, int width, int height) override
     {
-        constexpr int padX = 12;
-        constexpr int padY = 9;
+        constexpr int padX = 8;
+        constexpr int padY = 5;
+        constexpr int border = 4;
 
         const auto bounds = juce::Rectangle<float>(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
 
@@ -135,10 +170,16 @@ public:
         g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.0f);
 
         g.setColour(findColour(juce::TooltipWindow::textColourId));
-        g.setFont(juce::Font(juce::FontOptions(13.5f)));
+        const auto font = juce::Font(juce::FontOptions(12.0f));
 
-        const auto textBounds = juce::Rectangle<int>(0, 0, width, height).reduced(padX, padY);
-        g.drawFittedText(text, textBounds, juce::Justification::centredLeft, 8);
+        juce::AttributedString attributed;
+        attributed.setJustification(juce::Justification::centredLeft);
+        attributed.append(text, font, findColour(juce::TooltipWindow::textColourId));
+
+        juce::TextLayout layout;
+        const auto textBounds = juce::Rectangle<int>(0, 0, width, height).reduced(padX + border, padY + border);
+        layout.createLayout(attributed, static_cast<float>(textBounds.getWidth()));
+        layout.draw(g, textBounds.toFloat());
     }
 
 private:
