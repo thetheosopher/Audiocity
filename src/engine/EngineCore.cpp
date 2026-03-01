@@ -11,6 +11,26 @@ namespace
 {
 constexpr float kPi = 3.14159265358979323846f;
 
+float computeLfoWave(const audiocity::engine::EngineCore::FilterSettings::LfoShape shape,
+                     const float phase) noexcept
+{
+    const auto p = phase - std::floor(phase);
+    switch (shape)
+    {
+        case audiocity::engine::EngineCore::FilterSettings::LfoShape::triangle:
+            return 1.0f - 4.0f * std::abs(p - 0.5f);
+        case audiocity::engine::EngineCore::FilterSettings::LfoShape::square:
+            return p < 0.5f ? 1.0f : -1.0f;
+        case audiocity::engine::EngineCore::FilterSettings::LfoShape::sawUp:
+            return (2.0f * p) - 1.0f;
+        case audiocity::engine::EngineCore::FilterSettings::LfoShape::sawDown:
+            return 1.0f - (2.0f * p);
+        case audiocity::engine::EngineCore::FilterSettings::LfoShape::sine:
+        default:
+            return std::sin(2.0f * kPi * p);
+    }
+}
+
 std::optional<juce::String> getMetadataValueCaseInsensitive(const juce::StringPairArray& metadata,
                                                             const juce::String& key)
 {
@@ -117,7 +137,24 @@ void EngineCore::prepare(const double sampleRate, const int maxSamplesPerBlock, 
 
     voicePool_.prepare(maxSamplesPerBlock_);
     pendingEventCount_ = 0;
+
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = sampleRate_;
+    spec.maximumBlockSize = static_cast<juce::uint32>(juce::jmax(1, maxSamplesPerBlock_));
+    spec.numChannels = 1;
+
+    for (auto& voice : voices_)
+    {
+        voice.filterA.prepare(spec);
+        voice.filterB.prepare(spec);
+        voice.filterA.reset();
+        voice.filterB.reset();
+    }
+
     applyEnvelopeParamsToVoices();
+    applyFilterParamsToVoices();
+    reverb_.setSampleRate(sampleRate_);
+    updateReverbParameters();
 
     if (getTotalSampleLength() == 0)
         generateFallbackSample();
@@ -128,6 +165,12 @@ void EngineCore::release() noexcept
     stopAllVoicesImmediate();
     voicePool_.reset();
     pendingEventCount_ = 0;
+}
+
+void EngineCore::setReverbMix(const float mix) noexcept
+{
+    reverbMix_ = juce::jlimit(0.0f, 1.0f, mix);
+    updateReverbParameters();
 }
 
 int EngineCore::getLoadedPreloadSamples() const noexcept
@@ -380,6 +423,7 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
 
             const auto loopEnabled = playbackMode_ == PlaybackMode::loop;
             const auto shouldLoopNow = loopEnabled && voice.noteHeld;
+            const auto loopLength = juce::jmax(1, effectiveLoopEnd - effectiveLoopStart + 1);
 
             if (voice.samplePosition >= static_cast<float>(sampleLength - 1))
             {
@@ -398,9 +442,16 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
             }
 
             if (shouldLoopNow && voice.samplePosition >= static_cast<float>(effectiveLoopEnd))
-                voice.samplePosition = static_cast<float>(effectiveLoopStart);
+            {
+                while (voice.samplePosition >= static_cast<float>(effectiveLoopEnd))
+                    voice.samplePosition -= static_cast<float>(loopLength);
 
-            const float ampLevel = voice.ampEnvelope.getNextSample() * voice.velocity;
+                while (voice.samplePosition < static_cast<float>(effectiveLoopStart))
+                    voice.samplePosition += static_cast<float>(loopLength);
+            }
+
+            const float mappedVelocity = mapVelocity(voice.velocity);
+            const float ampLevel = voice.ampEnvelope.getNextSample() * mappedVelocity;
 
             if (!voice.ampEnvelope.isActive())
             {
@@ -410,9 +461,43 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
                 continue;
             }
 
-            const float rawSample = readSampleLinear(*segments, voice.samplePosition);
+            float lfoValue = 0.0f;
+            if (filterSettings_.lfoRateHz > 0.0f && std::abs(filterSettings_.lfoAmountHz) > 0.0001f)
+            {
+                lfoValue = computeLfoWave(filterSettings_.lfoShape, voice.filterLfoPhase);
+                voice.filterLfoPhase += filterSettings_.lfoRateHz / static_cast<float>(sampleRate_);
+                if (voice.filterLfoPhase >= 1.0f)
+                    voice.filterLfoPhase -= std::floor(voice.filterLfoPhase);
+            }
+
+            float rawSample = readSampleLinear(*segments, voice.samplePosition);
+            if (shouldLoopNow && loopCrossfadeSamples_ > 0)
+            {
+                const auto crossfadeSamples = juce::jlimit(0, juce::jmax(0, loopLength / 2), loopCrossfadeSamples_);
+                if (crossfadeSamples > 0)
+                {
+                    const auto crossfadeStart = static_cast<float>(effectiveLoopEnd - crossfadeSamples);
+                    if (voice.samplePosition >= crossfadeStart)
+                    {
+                        const auto progress = juce::jlimit(0.0f, 1.0f,
+                            (voice.samplePosition - crossfadeStart) / static_cast<float>(crossfadeSamples));
+
+                        const auto headPosition = static_cast<float>(effectiveLoopStart)
+                            + progress * static_cast<float>(crossfadeSamples);
+
+                        const auto headSample = readSampleLinear(*segments, headPosition);
+                        rawSample = rawSample + (headSample - rawSample) * progress;
+                    }
+                }
+            }
             const float filterEnvValue = voice.filterEnvelope.getNextSample();
-            const float filteredSample = computeLpf(rawSample, filterEnvValue, voice.lpfState);
+            const float filteredSample = computeFilterSample(
+                rawSample,
+                filterEnvValue,
+                lfoValue,
+                voicePool_.noteAt(voiceIndex),
+                voice.velocity,
+                voice);
             mixed += filteredSample * ampLevel;
 
             voice.lastAmpLevel = ampLevel;
@@ -431,6 +516,14 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
 
         for (int channel = 0; channel < numChannels; ++channel)
             outputs[channel][sampleIndex] += mixed;
+    }
+
+    if (reverbMix_ > 0.0001f)
+    {
+        if (numChannels >= 2)
+            reverb_.processStereo(outputs[0], outputs[1], numSamples);
+        else if (numChannels == 1)
+            reverb_.processMono(outputs[0], numSamples);
     }
 
     pendingEventCount_ = 0;
@@ -477,7 +570,16 @@ void EngineCore::setFilterEnvelope(const AdsrSettings& settings) noexcept
 
 void EngineCore::setFilterSettings(const FilterSettings& settings) noexcept
 {
-    filterSettings_ = settings;
+    filterSettings_.baseCutoffHz = juce::jlimit(20.0f, 20000.0f, settings.baseCutoffHz);
+    filterSettings_.envAmountHz = juce::jmax(0.0f, settings.envAmountHz);
+    filterSettings_.resonance = juce::jlimit(0.0f, 1.0f, settings.resonance);
+    filterSettings_.mode = settings.mode;
+    filterSettings_.keyTracking = juce::jlimit(-1.0f, 2.0f, settings.keyTracking);
+    filterSettings_.velocityAmountHz = juce::jmax(0.0f, settings.velocityAmountHz);
+    filterSettings_.lfoRateHz = juce::jlimit(0.0f, 40.0f, settings.lfoRateHz);
+    filterSettings_.lfoAmountHz = juce::jlimit(-20000.0f, 20000.0f, settings.lfoAmountHz);
+    filterSettings_.lfoShape = settings.lfoShape;
+    applyFilterParamsToVoices();
 }
 
 void EngineCore::setRootMidiNote(const int rootMidiNote) noexcept
@@ -495,6 +597,15 @@ void EngineCore::setLoopPoints(const int loopStart, const int loopEnd) noexcept
 
     if (loopEndSample_ <= loopStartSample_)
         loopEndSample_ = maxValid;
+
+    setLoopCrossfadeSamples(loopCrossfadeSamples_);
+}
+
+void EngineCore::setLoopCrossfadeSamples(const int crossfadeSamples) noexcept
+{
+    const auto loopLength = juce::jmax(0, loopEndSample_ - loopStartSample_ + 1);
+    const auto maxCrossfade = juce::jmax(0, loopLength / 2);
+    loopCrossfadeSamples_ = juce::jlimit(0, maxCrossfade, crossfadeSamples);
 }
 
 int EngineCore::activeVoiceCount() const noexcept
@@ -584,7 +695,9 @@ void EngineCore::startVoice(const int voiceIndex, const int noteNumber, const fl
     voice.velocity = velocity;
     voice.noteHeld = true;
     voice.lastAmpLevel = 0.0f;
-    voice.lpfState = 0.0f;
+    voice.filterA.reset();
+    voice.filterB.reset();
+    voice.filterLfoPhase = 0.0f;
 
     voice.ampEnvelope.reset();
     voice.ampEnvelope.noteOn();
@@ -627,7 +740,9 @@ void EngineCore::stopAllVoicesImmediate() noexcept
     {
         voice.noteHeld = false;
         voice.lastAmpLevel = 0.0f;
-        voice.lpfState = 0.0f;
+        voice.filterA.reset();
+        voice.filterB.reset();
+        voice.filterLfoPhase = 0.0f;
         voice.glideSamplesRemaining = 0;
         voice.ampEnvelope.reset();
         voice.filterEnvelope.reset();
@@ -639,18 +754,45 @@ void EngineCore::releaseVoicesForNote(const int noteNumber) noexcept
     std::array<int, VoicePool::maxVoices> indices{};
     const auto count = voicePool_.findActiveVoicesForNote(noteNumber, indices.data(), static_cast<int>(indices.size()));
 
-    for (int index = 0; index < count; ++index)
+    if (count <= 0)
+        return;
+
+    auto releaseVoiceByIndex = [this](const int voiceIndex)
     {
-        auto& voice = voices_[static_cast<std::size_t>(indices[static_cast<std::size_t>(index)])];
+        auto& voice = voices_[static_cast<std::size_t>(voiceIndex)];
 
         if (playbackMode_ == PlaybackMode::oneShot)
-            continue;
+            return;
 
         voice.noteHeld = false;
 
         voice.ampEnvelope.noteOff();
         voice.filterEnvelope.noteOff();
+    };
+
+    if (monoMode_)
+    {
+        for (int index = 0; index < count; ++index)
+            releaseVoiceByIndex(indices[static_cast<std::size_t>(index)]);
+        return;
     }
+
+    int selectedVoice = indices[0];
+    std::uint64_t oldestStartOrder = voicePool_.startOrderAt(selectedVoice);
+
+    for (int index = 1; index < count; ++index)
+    {
+        const auto candidateVoice = indices[static_cast<std::size_t>(index)];
+        const auto candidateStartOrder = voicePool_.startOrderAt(candidateVoice);
+
+        if (candidateStartOrder < oldestStartOrder)
+        {
+            oldestStartOrder = candidateStartOrder;
+            selectedVoice = candidateVoice;
+        }
+    }
+
+    releaseVoiceByIndex(selectedVoice);
 }
 
 void EngineCore::applyEnvelopeParamsToVoices() noexcept
@@ -677,6 +819,42 @@ void EngineCore::applyEnvelopeParamsToVoices() noexcept
     }
 }
 
+void EngineCore::applyFilterParamsToVoices() noexcept
+{
+    auto juceType = juce::dsp::StateVariableTPTFilterType::lowpass;
+    switch (filterSettings_.mode)
+    {
+        case FilterSettings::Mode::highPass12:
+        case FilterSettings::Mode::highPass24:
+            juceType = juce::dsp::StateVariableTPTFilterType::highpass;
+            break;
+        case FilterSettings::Mode::bandPass12:
+            juceType = juce::dsp::StateVariableTPTFilterType::bandpass;
+            break;
+        case FilterSettings::Mode::notch12:
+            juceType = juce::dsp::StateVariableTPTFilterType::bandpass;
+            break;
+        case FilterSettings::Mode::lowPass12:
+        case FilterSettings::Mode::lowPass24:
+        default:
+            juceType = juce::dsp::StateVariableTPTFilterType::lowpass;
+            break;
+    }
+
+    const auto defaultCutoff = juce::jlimit(20.0f, static_cast<float>(sampleRate_ * 0.45), filterSettings_.baseCutoffHz);
+    const auto q = juce::jlimit(0.5f, 20.0f, 0.5f + filterSettings_.resonance * 19.5f);
+
+    for (auto& voice : voices_)
+    {
+        voice.filterA.setType(juceType);
+        voice.filterB.setType(juceType);
+        voice.filterA.setCutoffFrequency(defaultCutoff);
+        voice.filterB.setCutoffFrequency(defaultCutoff);
+        voice.filterA.setResonance(q);
+        voice.filterB.setResonance(q);
+    }
+}
+
 float EngineCore::computeSampleIncrementForNote(const int noteNumber) const noexcept
 {
     const auto semitoneOffset = static_cast<float>(noteNumber - rootMidiNote_);
@@ -700,6 +878,9 @@ float EngineCore::readSampleLinear(const SampleSegments& segments, const float p
     if (qualityTier_ == QualityTier::cpu)
         return readSampleAt(segments, mappedIndex) * editGain;
 
+    if (qualityTier_ == QualityTier::ultra)
+        return readSampleCubic(segments, clampedPosition) * editGain;
+
     const auto nextIndex = juce::jmin(sampleIndex + 1, sampleLength - 1);
     const auto fraction = clampedPosition - static_cast<float>(sampleIndex);
 
@@ -707,6 +888,32 @@ float EngineCore::readSampleLinear(const SampleSegments& segments, const float p
     const auto sampleB = readSampleAt(segments, mapPlaybackIndexToSampleIndex(segments, nextIndex));
 
     return (sampleA + (sampleB - sampleA) * fraction) * editGain;
+}
+
+float EngineCore::readSampleCubic(const SampleSegments& segments, const float position) const noexcept
+{
+    const auto sampleLength = getEffectivePlaybackLength(segments);
+    if (sampleLength <= 1)
+        return 0.0f;
+
+    const auto clampedPosition = juce::jlimit(0.0f, static_cast<float>(sampleLength - 1), position);
+    const auto i1 = static_cast<int>(std::floor(clampedPosition));
+    const auto i0 = juce::jmax(0, i1 - 1);
+    const auto i2 = juce::jmin(sampleLength - 1, i1 + 1);
+    const auto i3 = juce::jmin(sampleLength - 1, i1 + 2);
+    const auto t = clampedPosition - static_cast<float>(i1);
+
+    const auto y0 = readSampleAt(segments, mapPlaybackIndexToSampleIndex(segments, i0));
+    const auto y1 = readSampleAt(segments, mapPlaybackIndexToSampleIndex(segments, i1));
+    const auto y2 = readSampleAt(segments, mapPlaybackIndexToSampleIndex(segments, i2));
+    const auto y3 = readSampleAt(segments, mapPlaybackIndexToSampleIndex(segments, i3));
+
+    const auto a0 = -0.5f * y0 + 1.5f * y1 - 1.5f * y2 + 0.5f * y3;
+    const auto a1 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
+    const auto a2 = -0.5f * y0 + 0.5f * y2;
+    const auto a3 = y1;
+
+    return ((a0 * t + a1) * t + a2) * t + a3;
 }
 
 float EngineCore::readSampleLinear(const float position) const noexcept
@@ -886,16 +1093,67 @@ std::vector<std::vector<float>> EngineCore::buildDisplayPeaksByChannel(const int
     return allPeaks;
 }
 
-float EngineCore::computeLpf(const float inputSample, const float envValue, float& state) const noexcept
+float EngineCore::computeFilterSample(const float inputSample,
+                                      const float envValue,
+                                      const float lfoValue,
+                                      const int noteNumber,
+                                      const float velocity,
+                                      VoiceState& voice) const noexcept
 {
-    const auto cutoff = juce::jlimit(20.0f, static_cast<float>(sampleRate_ * 0.45),
-        filterSettings_.baseCutoffHz + envValue * filterSettings_.envAmountHz);
+    auto cutoff = filterSettings_.baseCutoffHz
+        + envValue * filterSettings_.envAmountHz
+        + velocity * filterSettings_.velocityAmountHz
+        + lfoValue * filterSettings_.lfoAmountHz;
 
-    // Resonant one-pole: feedback drives self-oscillation toward cutoff
-    const auto fb = filterSettings_.resonance * 0.95f;
-    const auto alpha = std::exp(-2.0f * kPi * cutoff / static_cast<float>(sampleRate_));
-    const auto filtered = (1.0f - alpha) * (inputSample + fb * (state - inputSample)) + alpha * state;
-    state = filtered;
-    return filtered;
+    const auto semitoneOffset = static_cast<float>(noteNumber - rootMidiNote_);
+    const auto keyTrackRatio = std::pow(2.0f, (semitoneOffset / 12.0f) * filterSettings_.keyTracking);
+    cutoff *= keyTrackRatio;
+    cutoff = juce::jlimit(20.0f, static_cast<float>(sampleRate_ * 0.45), cutoff);
+
+    const auto q = juce::jlimit(0.5f, 20.0f, 0.5f + filterSettings_.resonance * 19.5f);
+    voice.filterA.setCutoffFrequency(cutoff);
+    voice.filterA.setResonance(q);
+
+    auto out = voice.filterA.processSample(0, inputSample);
+
+    if (filterSettings_.mode == FilterSettings::Mode::notch12)
+        out = inputSample - out;
+
+    if (filterSettings_.mode == FilterSettings::Mode::lowPass24
+        || filterSettings_.mode == FilterSettings::Mode::highPass24)
+    {
+        voice.filterB.setCutoffFrequency(cutoff);
+        voice.filterB.setResonance(q);
+        out = voice.filterB.processSample(0, out);
+    }
+
+    return out;
+}
+
+float EngineCore::mapVelocity(const float velocity) const noexcept
+{
+    const auto clamped = juce::jlimit(0.0f, 1.0f, velocity);
+    switch (velocityCurve_)
+    {
+        case VelocityCurve::soft:
+            return std::sqrt(clamped);
+        case VelocityCurve::hard:
+            return clamped * clamped;
+        case VelocityCurve::linear:
+        default:
+            return clamped;
+    }
+}
+
+void EngineCore::updateReverbParameters() noexcept
+{
+    juce::Reverb::Parameters params;
+    params.roomSize = 0.55f;
+    params.damping = 0.40f;
+    params.wetLevel = reverbMix_;
+    params.dryLevel = 1.0f - (reverbMix_ * 0.65f);
+    params.width = 1.0f;
+    params.freezeMode = 0.0f;
+    reverb_.setParameters(params);
 }
 }

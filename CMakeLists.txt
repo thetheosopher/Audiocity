@@ -42,6 +42,7 @@ target_sources(Audiocity
     PRIVATE
         src/plugin/PluginProcessor.cpp
         src/plugin/PluginEditor.cpp
+        src/plugin/PlayerPadState.cpp
         src/plugin/CcLearnDial.cpp
         src/engine/EngineCore.cpp
         src/engine/VoicePool.cpp)
@@ -58,6 +59,7 @@ target_compile_definitions(Audiocity
 target_link_libraries(Audiocity
     PRIVATE
         juce::juce_audio_utils
+        juce::juce_data_structures
         juce::juce_dsp
     PUBLIC
         juce::juce_recommended_config_flags

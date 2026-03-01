@@ -3,6 +3,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
+#include <juce_dsp/juce_dsp.h>
 
 #include <atomic>
 #include <memory>
@@ -24,7 +25,15 @@ public:
     enum class QualityTier
     {
         cpu,
-        fidelity
+        fidelity,
+        ultra
+    };
+
+    enum class VelocityCurve
+    {
+        linear,
+        soft,
+        hard
     };
 
     struct AdsrSettings
@@ -37,9 +46,34 @@ public:
 
     struct FilterSettings
     {
+        enum class Mode
+        {
+            lowPass12,
+            lowPass24,
+            highPass12,
+            highPass24,
+            bandPass12,
+            notch12
+        };
+
+        enum class LfoShape
+        {
+            sine,
+            triangle,
+            square,
+            sawUp,
+            sawDown
+        };
+
         float baseCutoffHz = 1200.0f;
         float envAmountHz = 2400.0f;
         float resonance = 0.0f;  // 0..1, mapped to Q internally
+        Mode mode = Mode::lowPass12;
+        float keyTracking = 0.0f;      // -1..2 (-100%..200%)
+        float velocityAmountHz = 0.0f; // Hz at velocity=1.0
+        float lfoRateHz = 0.0f;        // 0 disables LFO
+        float lfoAmountHz = 0.0f;      // bipolar modulation depth
+        LfoShape lfoShape = LfoShape::sine;
     };
 
     void prepare(double sampleRate, int maxSamplesPerBlock, int outputChannels) noexcept;
@@ -59,6 +93,10 @@ public:
     [[nodiscard]] int getSegmentRebuildCount() const noexcept { return segmentRebuildCount_; }
     void setQualityTier(QualityTier tier) noexcept { qualityTier_ = tier; }
     [[nodiscard]] QualityTier getQualityTier() const noexcept { return qualityTier_; }
+    void setVelocityCurve(VelocityCurve curve) noexcept { velocityCurve_ = curve; }
+    [[nodiscard]] VelocityCurve getVelocityCurve() const noexcept { return velocityCurve_; }
+    void setReverbMix(float mix) noexcept;
+    [[nodiscard]] float getReverbMix() const noexcept { return reverbMix_; }
 
     void setSampleWindow(int startSample, int endSample) noexcept;
     [[nodiscard]] int getSampleWindowStart() const noexcept { return sampleWindowStart_; }
@@ -107,6 +145,8 @@ public:
     void setLoopPoints(int loopStart, int loopEnd) noexcept;
     [[nodiscard]] int getLoopStart() const noexcept { return loopStartSample_; }
     [[nodiscard]] int getLoopEnd() const noexcept { return loopEndSample_; }
+    void setLoopCrossfadeSamples(int crossfadeSamples) noexcept;
+    [[nodiscard]] int getLoopCrossfadeSamples() const noexcept { return loopCrossfadeSamples_; }
 
     [[nodiscard]] int activeVoiceCount() const noexcept;
     [[nodiscard]] int stealCount() const noexcept;
@@ -123,7 +163,9 @@ private:
         float velocity = 0.0f;
         bool noteHeld = false;
         float lastAmpLevel = 0.0f;
-        float lpfState = 0.0f;
+        juce::dsp::StateVariableTPTFilter<float> filterA;
+        juce::dsp::StateVariableTPTFilter<float> filterB;
+        float filterLfoPhase = 0.0f;
         float glideTargetIncrement = 1.0f;
         int glideSamplesRemaining = 0;
         juce::ADSR ampEnvelope;
@@ -151,6 +193,7 @@ private:
     void stopAllVoicesImmediate() noexcept;
     void releaseVoicesForNote(int noteNumber) noexcept;
     void applyEnvelopeParamsToVoices() noexcept;
+    void applyFilterParamsToVoices() noexcept;
     [[nodiscard]] float computeSampleIncrementForNote(int noteNumber) const noexcept;
     void rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData) noexcept;
     [[nodiscard]] std::shared_ptr<const SampleSegments> getSampleSegmentsSnapshot() const noexcept;
@@ -167,7 +210,15 @@ private:
 
     [[nodiscard]] float readSampleLinear(const SampleSegments& segments, float position) const noexcept;
     [[nodiscard]] float readSampleLinear(float position) const noexcept;
-    [[nodiscard]] float computeLpf(float inputSample, float envValue, float& state) const noexcept;
+    [[nodiscard]] float readSampleCubic(const SampleSegments& segments, float position) const noexcept;
+    [[nodiscard]] float computeFilterSample(float inputSample,
+                                            float envValue,
+                                            float lfoValue,
+                                            int noteNumber,
+                                            float velocity,
+                                            VoiceState& voice) const noexcept;
+    [[nodiscard]] float mapVelocity(float velocity) const noexcept;
+    void updateReverbParameters() noexcept;
 
     VoicePool voicePool_;
     std::array<VoiceState, VoicePool::maxVoices> voices_{};
@@ -192,9 +243,13 @@ private:
     float glideSeconds_ = 0.0f;
     int chokeGroup_ = 0;
     QualityTier qualityTier_ = QualityTier::fidelity;
+    VelocityCurve velocityCurve_ = VelocityCurve::linear;
+    float reverbMix_ = 0.0f;
+    juce::Reverb reverb_;
 
     int loopStartSample_ = 0;
     int loopEndSample_ = 0;
+    int loopCrossfadeSamples_ = 0;
     int sampleWindowStart_ = 0;
     int sampleWindowEnd_ = 0;
     int fadeInSamples_ = 0;

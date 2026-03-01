@@ -1,5 +1,6 @@
 add_executable(audiocity_offline_tests
     OfflineRenderTests.cpp
+    ../src/plugin/PlayerPadState.cpp
     ../src/engine/EngineCore.cpp
     ../src/engine/VoicePool.cpp)
 
@@ -15,6 +16,8 @@ target_link_libraries(audiocity_offline_tests
     PRIVATE
         juce::juce_audio_basics
         juce::juce_audio_formats
+        juce::juce_data_structures
+        juce::juce_dsp
         juce::juce_events
         juce::juce_core)
 

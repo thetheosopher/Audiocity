@@ -4,6 +4,7 @@
 #include <juce_core/juce_core.h>
 
 #include "../engine/EngineCore.h"
+#include "PlayerPadState.h"
 
 #include <array>
 #include <atomic>
@@ -53,13 +54,32 @@ public:
     void setSampleBrowserRootFolder(const juce::String& folderPath) { sampleBrowserRootFolderPath_ = folderPath; }
     [[nodiscard]] juce::String getSampleBrowserRootFolder() const { return sampleBrowserRootFolderPath_; }
 
+    using PlayerPadAssignment = audiocity::plugin::PlayerPadAssignment;
+    static constexpr int kPlayerPadCount = audiocity::plugin::kPlayerPadCount;
+    void setPlayerPadAssignment(int padIndex, int noteNumber, int velocity) noexcept;
+    [[nodiscard]] PlayerPadAssignment getPlayerPadAssignment(int padIndex) const noexcept;
+    [[nodiscard]] std::array<PlayerPadAssignment, kPlayerPadCount> getAllPlayerPadAssignments() const noexcept
+    {
+        return playerPadAssignments_;
+    }
+
+    void enqueueUiMidiNoteOn(int noteNumber, int velocity) noexcept;
+    void enqueueUiMidiNoteOff(int noteNumber) noexcept;
+
     using PlaybackMode = audiocity::engine::EngineCore::PlaybackMode;
     void setPlaybackMode(PlaybackMode mode) noexcept;
     [[nodiscard]] PlaybackMode getPlaybackMode() const noexcept;
 
     using QualityTier = audiocity::engine::EngineCore::QualityTier;
-    void setQualityTier(QualityTier tier) noexcept { engine_.setQualityTier(tier); }
+    void setQualityTier(QualityTier tier) noexcept;
     [[nodiscard]] QualityTier getQualityTier() const noexcept { return engine_.getQualityTier(); }
+
+    using VelocityCurve = audiocity::engine::EngineCore::VelocityCurve;
+    void setVelocityCurve(VelocityCurve curve) noexcept;
+    [[nodiscard]] VelocityCurve getVelocityCurve() const noexcept { return engine_.getVelocityCurve(); }
+
+    void setReverbMix(float mix) noexcept;
+    [[nodiscard]] float getReverbMix() const noexcept { return engine_.getReverbMix(); }
 
     void setPreloadSamples(int preloadSamples) noexcept { engine_.setPreloadSamples(preloadSamples); }
     [[nodiscard]] int getPreloadSamples() const noexcept { return engine_.getPreloadSamples(); }
@@ -67,31 +87,33 @@ public:
     [[nodiscard]] int getLoadedStreamSamples() const noexcept { return engine_.getLoadedStreamSamples(); }
     [[nodiscard]] int getSegmentRebuildCount() const noexcept { return engine_.getSegmentRebuildCount(); }
 
-    void setMonoMode(bool enabled) noexcept { engine_.setMonoMode(enabled); }
+    void setMonoMode(bool enabled) noexcept;
     [[nodiscard]] bool getMonoMode() const noexcept { return engine_.getMonoMode(); }
 
-    void setLegatoMode(bool enabled) noexcept { engine_.setLegatoMode(enabled); }
+    void setLegatoMode(bool enabled) noexcept;
     [[nodiscard]] bool getLegatoMode() const noexcept { return engine_.getLegatoMode(); }
 
-    void setGlideSeconds(float seconds) noexcept { engine_.setGlideSeconds(seconds); }
+    void setGlideSeconds(float seconds) noexcept;
     [[nodiscard]] float getGlideSeconds() const noexcept { return engine_.getGlideSeconds(); }
 
-    void setChokeGroup(int chokeGroup) noexcept { engine_.setChokeGroup(chokeGroup); }
+    void setChokeGroup(int chokeGroup) noexcept;
     [[nodiscard]] int getChokeGroup() const noexcept { return engine_.getChokeGroup(); }
 
-    void setSampleWindow(int startSample, int endSample) noexcept { engine_.setSampleWindow(startSample, endSample); }
+    void setSampleWindow(int startSample, int endSample) noexcept;
     [[nodiscard]] int getSampleWindowStart() const noexcept { return engine_.getSampleWindowStart(); }
     [[nodiscard]] int getSampleWindowEnd() const noexcept { return engine_.getSampleWindowEnd(); }
 
-    void setLoopPoints(int loopStart, int loopEnd) noexcept { engine_.setLoopPoints(loopStart, loopEnd); }
+    void setLoopPoints(int loopStart, int loopEnd) noexcept;
     [[nodiscard]] int getLoopStart() const noexcept { return engine_.getLoopStart(); }
     [[nodiscard]] int getLoopEnd() const noexcept { return engine_.getLoopEnd(); }
+    void setLoopCrossfadeSamples(int crossfadeSamples) noexcept;
+    [[nodiscard]] int getLoopCrossfadeSamples() const noexcept { return engine_.getLoopCrossfadeSamples(); }
 
-    void setFadeSamples(int fadeInSamples, int fadeOutSamples) noexcept { engine_.setFadeSamples(fadeInSamples, fadeOutSamples); }
+    void setFadeSamples(int fadeInSamples, int fadeOutSamples) noexcept;
     [[nodiscard]] int getFadeInSamples() const noexcept { return engine_.getFadeInSamples(); }
     [[nodiscard]] int getFadeOutSamples() const noexcept { return engine_.getFadeOutSamples(); }
 
-    void setReversePlayback(bool enabled) noexcept { engine_.setReversePlayback(enabled); }
+    void setReversePlayback(bool enabled) noexcept;
     [[nodiscard]] bool getReversePlayback() const noexcept { return engine_.getReversePlayback(); }
     [[nodiscard]] int getLoadedSampleLength() const noexcept { return engine_.getLoadedSampleLength(); }
     [[nodiscard]] int getLoadedSampleChannels() const noexcept { return engine_.getLoadedSampleChannels(); }
@@ -100,17 +122,20 @@ public:
     [[nodiscard]] std::vector<std::vector<float>> getLoadedSamplePeaksByChannel(int maxPeaks = 2048) const noexcept { return engine_.buildDisplayPeaksByChannel(maxPeaks); }
 
     [[nodiscard]] int getRootMidiNote() const noexcept { return engine_.getRootMidiNote(); }
-    void setRootMidiNote(int rootNote) noexcept { engine_.setRootMidiNote(rootNote); }
+    void setRootMidiNote(int rootNote) noexcept;
 
     using AdsrSettings = audiocity::engine::EngineCore::AdsrSettings;
-    void setAmpEnvelope(const AdsrSettings& settings) noexcept { engine_.setAmpEnvelope(settings); }
+    void setAmpEnvelope(const AdsrSettings& settings) noexcept;
     [[nodiscard]] AdsrSettings getAmpEnvelope() const noexcept { return engine_.getAmpEnvelope(); }
-    void setFilterEnvelope(const AdsrSettings& settings) noexcept { engine_.setFilterEnvelope(settings); }
+    void setFilterEnvelope(const AdsrSettings& settings) noexcept;
     [[nodiscard]] AdsrSettings getFilterEnvelope() const noexcept { return engine_.getFilterEnvelope(); }
 
     using FilterSettings = audiocity::engine::EngineCore::FilterSettings;
-    void setFilterSettings(const FilterSettings& settings) noexcept { engine_.setFilterSettings(settings); }
+    void setFilterSettings(const FilterSettings& settings) noexcept;
     [[nodiscard]] FilterSettings getFilterSettings() const noexcept { return engine_.getFilterSettings(); }
+
+    [[nodiscard]] juce::AudioProcessorValueTreeState& getValueTreeState() noexcept { return apvts_; }
+    [[nodiscard]] const juce::AudioProcessorValueTreeState& getValueTreeState() const noexcept { return apvts_; }
 
     // ── MIDI CC mapping ──────────────────────────────────────────────────────
     struct CcEvent
@@ -132,7 +157,21 @@ public:
     [[nodiscard]] std::map<int, juce::String> getAllCcMappings() const;
 
 private:
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    void syncEngineFromAutomatableParameters() noexcept;
+    void updateParameterFromPlainValue(const juce::String& parameterId, float plainValue) noexcept;
+
+    struct UiMidiEvent
+    {
+        int noteNumber = 0;
+        int velocity = 0;
+        bool isNoteOn = false;
+    };
+
+    static constexpr int kUiMidiFifoSize = 256;
+
     audiocity::engine::EngineCore engine_;
+    juce::AudioProcessorValueTreeState apvts_;
 
     // Ring buffer for CC events
     std::array<CcEvent, kCcFifoSize> ccFifo_{};
@@ -144,6 +183,13 @@ private:
     mutable std::mutex ccMappingMutex_;
     std::map<int, juce::String> ccToParam_;
     juce::String sampleBrowserRootFolderPath_;
+    std::array<PlayerPadAssignment, kPlayerPadCount> playerPadAssignments_{};
+
+    std::array<UiMidiEvent, kUiMidiFifoSize> uiMidiFifo_{};
+    std::atomic<int> uiMidiWritePos_{ 0 };
+    std::atomic<int> uiMidiReadPos_{ 0 };
+    void pushUiMidiEvent(int noteNumber, int velocity, bool isNoteOn) noexcept;
+    [[nodiscard]] bool popUiMidiEvent(UiMidiEvent& out) noexcept;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudiocityAudioProcessor)
 };

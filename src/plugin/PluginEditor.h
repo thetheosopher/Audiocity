@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_core/juce_core.h>
 
@@ -13,11 +14,13 @@
 #include "../engine/SettingsUndoHistory.h"
 #include "CcLearnDial.h"
 #include "DialLookAndFeel.h"
+#include "PlayerPadState.h"
 
 class AudiocityAudioProcessor;
 
 class AudiocityAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                             public juce::FileDragAndDropTarget,
+                                            private juce::MidiKeyboardStateListener,
                                             private juce::ListBoxModel,
                                             private juce::Timer
 {
@@ -41,6 +44,9 @@ public:
     void mouseUp(const juce::MouseEvent& event) override;
 
 private:
+    void handleNoteOn(juce::MidiKeyboardState* source, int midiChannel, int midiNoteNumber, float velocity) override;
+    void handleNoteOff(juce::MidiKeyboardState* source, int midiChannel, int midiNoteNumber, float velocity) override;
+
     int getNumRows() override;
     void paintListBoxItem(int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected) override;
     void listBoxItemClicked(int row, const juce::MouseEvent& event) override;
@@ -116,6 +122,7 @@ private:
     juce::TabbedComponent tabBar_{ juce::TabbedButtonBar::TabsAtTop };
     juce::Component tabSamplePage_;
     juce::Component tabLibraryPage_;
+    juce::Component tabPlayerPage_;
     int currentTabIndex_ = 0;
 
     struct SampleListEntry
@@ -145,6 +152,21 @@ private:
     juce::ListBox sampleBrowserListBox_;
     juce::Label sampleBrowserCountLabel_;
 
+    // ── Player ──
+    juce::Label playerKeyboardLabel_{ {}, "Piano" };
+    juce::TextButton playerKeyboardScrollLeft_{ "<" };
+    juce::TextButton playerKeyboardScrollRight_{ ">" };
+    juce::Viewport playerKeyboardViewport_;
+    juce::MidiKeyboardState playerKeyboardState_;
+    juce::MidiKeyboardComponent playerKeyboard_{ playerKeyboardState_, juce::MidiKeyboardComponent::horizontalKeyboard };
+    juce::Label playerPadsLabel_{ {}, "Drum Pads" };
+    static constexpr int kPlayerPadCount = audiocity::plugin::kPlayerPadCount;
+    std::array<juce::TextButton, kPlayerPadCount> playerPadButtons_;
+    std::array<juce::TextButton, kPlayerPadCount> playerPadAssignButtons_;
+    std::array<int, kPlayerPadCount> playerPadPendingOffTicks_{};
+    std::array<int, kPlayerPadCount> playerPadPendingOffNotes_{};
+    std::array<audiocity::plugin::PlayerPadAssignment, kPlayerPadCount> playerPadAssignments_{};
+
     // ── Sample ──
     juce::Label samplePathLabel_;
     juce::TextButton loadButton_{ "..." };
@@ -168,10 +190,13 @@ private:
     // ── Loop ──
     CcLearnDial loopStartDial_{ "Start", 0, 1000000, 1 };
     CcLearnDial loopEndDial_{ "End", 0, 1000000, 1 };
+    CcLearnDial loopCrossfadeDial_{ "XFade", 0, 5000, 1 };
 
     // ── Performance ──
     juce::ToggleButton monoToggle_{ "Mono" };
     juce::ToggleButton legatoToggle_{ "Legato" };
+    juce::Label velocityCurveLabel_{ {}, "Velocity" };
+    juce::ComboBox velocityCurveCombo_;
     CcLearnDial glideDial_{ "Glide", 0, 2000, 0.1, "ms" };
     CcLearnDial chokeGroupDial_{ "Choke", 0, 16, 1 };
 
@@ -185,6 +210,20 @@ private:
     CcLearnDial filterCutoffDial_{ "Cutoff", 20, 20000, 1, "Hz", 18000 };
     CcLearnDial filterResDial_{ "Res", 0, 100, 1, "%", 0 };
     CcLearnDial filterEnvAmtDial_{ "Env", 0, 20000, 1, "Hz", 0 };
+    juce::Label filterTypeLabel_{ {}, "Type" };
+    juce::ComboBox filterTypeCombo_;
+    CcLearnDial filterAttackDial_{ "F Attack", 0.1, 5000, 0.1, "ms", 0.1 };
+    CcLearnDial filterDecayDial_{ "F Decay", 0.1, 5000, 0.1, "ms", 1 };
+    CcLearnDial filterSustainDial_{ "F Sustain", 0, 1.0, 0.01, {}, 1.0 };
+    CcLearnDial filterReleaseDial_{ "F Release", 0.1, 5000, 0.1, "ms", 5 };
+    CcLearnDial filterKeytrackDial_{ "Key %", -100, 200, 1, "%", 0 };
+    CcLearnDial filterVelDial_{ "Vel Hz", 0, 12000, 1, "Hz", 0 };
+    juce::Label filterKeytrackSnapLabel_{ {}, "Key Snap" };
+    juce::ComboBox filterKeytrackSnapCombo_;
+    CcLearnDial filterLfoRateDial_{ "LFO Hz", 0, 40, 0.01, "Hz", 0 };
+    CcLearnDial filterLfoAmtDial_{ "LFO Amt", -20000, 20000, 1, "Hz", 0 };
+    juce::Label filterLfoShapeLabel_{ {}, "LFO Shape" };
+    juce::ComboBox filterLfoShapeCombo_;
 
     // ── Output ──
     CcLearnDial fadeInDial_{ "Fade In", 0, 10000, 1 };
@@ -192,7 +231,9 @@ private:
     juce::Label qualityLabel_{ {}, "Quality" };
     juce::ToggleButton qualityCpuButton_{ "CPU" };
     juce::ToggleButton qualityFidelityButton_{ "Fidelity" };
+    juce::ToggleButton qualityUltraButton_{ "Ultra" };
     CcLearnDial preloadDial_{ "Preload", 256, 131072, 1, {}, 32768 };
+    CcLearnDial reverbMixDial_{ "Reverb", 0, 100, 1, "%", 0 };
 
     // ── Diagnostics ──
     juce::Label diagnosticsLabel_;
@@ -211,6 +252,7 @@ private:
     void applyLoopPoints();
     void enforcePlaybackLoopConstraints();
     void pushAmpEnvelope();
+    void pushFilterEnvelope();
     void pushFilterSettings();
     void pushPerformanceControls();
     void syncCcMappingsFromProcessor();
@@ -219,6 +261,11 @@ private:
     void scanSampleRootFolder(const juce::File& rootFolder);
     void rebuildVisibleSampleList();
     void loadSampleFromBrowserRow(int row);
+    void updatePlayerKeyboardSizing();
+    void refreshPlayerPadButtons();
+    void showPadAssignmentDialog(int padIndex);
+    void syncAutomatedControlsFromProcessor();
+    void paintPlayerPane(juce::Graphics& g, juce::Rectangle<int> area) const;
     void paintSampleBrowserPane(juce::Graphics& g, juce::Rectangle<int> browserArea) const;
     void updateTabVisibility();
     [[nodiscard]] bool isSupportedSampleFile(const juce::File& file) const;
