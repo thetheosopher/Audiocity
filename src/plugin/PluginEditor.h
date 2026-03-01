@@ -8,6 +8,7 @@
 #include <functional>
 #include <atomic>
 #include <memory>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -138,6 +139,7 @@ private:
     juce::Component tabSamplePage_;
     juce::Component tabLibraryPage_;
     juce::Component tabPlayerPage_;
+    juce::Component tabGeneratePage_;
     int currentTabIndex_ = 0;
 
     struct SampleListEntry
@@ -192,6 +194,75 @@ private:
     WaveformView waveformView_;
     juce::Viewport sampleControlsViewport_;
     PaintCallbackComponent sampleControlsContent_;
+
+    // ── Generate ──
+    class GeneratedWaveformView final : public juce::Component
+    {
+    public:
+        using WaveChangedCallback = std::function<void(const std::vector<float>&)>;
+
+        void setWaveform(const std::vector<float>& waveform)
+        {
+            waveform_ = waveform;
+            repaint();
+        }
+
+        void setWaveChangedCallback(WaveChangedCallback callback)
+        {
+            onWaveChanged_ = std::move(callback);
+        }
+
+        void paint(juce::Graphics& g) override;
+        void mouseDown(const juce::MouseEvent& event) override;
+        void mouseDrag(const juce::MouseEvent& event) override;
+        void mouseUp(const juce::MouseEvent& event) override;
+
+    private:
+        void applyPoint(const juce::Point<float>& position, bool interpolateFromLast);
+        [[nodiscard]] int sampleIndexFromX(float x) const;
+        [[nodiscard]] float sampleValueFromY(float y) const;
+
+        std::vector<float> waveform_;
+        WaveChangedCallback onWaveChanged_;
+        bool drawing_ = false;
+        int lastDrawIndex_ = -1;
+        float lastDrawValue_ = 0.0f;
+    };
+
+    GeneratedWaveformView generateWaveformView_;
+    juce::TextButton generateSineButton_{ "Sine" };
+    juce::TextButton generateRampButton_{ "Ramp" };
+    juce::TextButton generateSquareButton_{ "Square" };
+    juce::TextButton generateTriangleButton_{ "Triangle" };
+    juce::TextButton generatePulseButton_{ "Pulse" };
+    juce::Label generateSamplesLabel_{ {}, "Samples" };
+    juce::ComboBox generateSamplesCombo_;
+    juce::Label generateBitDepthLabel_{ {}, "Bit Depth" };
+    juce::ComboBox generateBitDepthCombo_;
+    juce::Label generateSketchSmoothingLabel_{ {}, "Sketch" };
+    juce::ComboBox generateSketchSmoothingCombo_;
+    juce::Label generatePulseWidthLabel_{ {}, "Pulse Width" };
+    juce::Slider generatePulseWidthSlider_{ juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+    juce::TextButton generatePreviewButton_{ "Play" };
+    juce::Label generateFrequencyLabel_{ {}, "Frequency" };
+    juce::ComboBox generateFrequencyCombo_;
+    juce::TextButton generateLoadAsSampleButton_{ "Load as Sample" };
+    std::vector<float> generatedWaveform_;
+    enum class GeneratedWaveType
+    {
+        sine,
+        ramp,
+        square,
+        triangle,
+        pulse
+    };
+    enum class SketchedWaveSmoothing
+    {
+        line,
+        curve
+    };
+    GeneratedWaveType selectedGeneratedWaveType_ = GeneratedWaveType::sine;
+    SketchedWaveSmoothing selectedSketchSmoothing_ = SketchedWaveSmoothing::line;
 
     // ── Playback ──
     juce::Label playbackModeLabel_{ {}, "Mode" };
@@ -296,6 +367,15 @@ private:
     void paintPlayerPane(juce::Graphics& g, juce::Rectangle<int> area) const;
     void paintSampleBrowserPane(juce::Graphics& g, juce::Rectangle<int> browserArea) const;
     void updateTabVisibility();
+    void updateGeneratePreviewButtonText();
+    void updateGeneratePulseWidthControlState();
+    void regenerateWaveform();
+    [[nodiscard]] int getSelectedGenerateSampleCount() const;
+    [[nodiscard]] int getSelectedGenerateBitDepth() const;
+    [[nodiscard]] int getSelectedGenerateMidiNote() const;
+    [[nodiscard]] float quantizeWaveSample(float value, int bitDepth) const;
+    void applySketchedWaveform(const std::vector<float>& sketchedWave);
+    void enforceWaveBoundaryZeroCrossings(std::vector<float>& waveform) const;
     [[nodiscard]] bool isSupportedSampleFile(const juce::File& file) const;
     [[nodiscard]] audiocity::engine::SettingsSnapshot captureSettingsSnapshot() const;
     void applySettingsSnapshot(const audiocity::engine::SettingsSnapshot& snapshot);

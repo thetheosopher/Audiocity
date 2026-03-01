@@ -406,6 +406,134 @@ auto buildPreviewAndMetadata(const juce::File& file) -> SamplePreviewData
 }
 }
 
+void AudiocityAudioProcessorEditor::GeneratedWaveformView::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colour(0xff121629));
+    g.setColour(juce::Colours::white.withAlpha(0.22f));
+    g.drawRect(getLocalBounds(), 1);
+
+    if (waveform_.empty())
+    {
+        g.setColour(juce::Colours::white.withAlpha(0.45f));
+        g.drawText("Generate a waveform", getLocalBounds(), juce::Justification::centred);
+        return;
+    }
+
+    const auto bounds = getLocalBounds().toFloat().reduced(8.0f, 8.0f);
+    const auto midY = bounds.getCentreY();
+
+    g.setColour(juce::Colours::white.withAlpha(0.07f));
+    constexpr int kGridDivisionsX = 8;
+    constexpr int kGridDivisionsY = 4;
+    for (int i = 1; i < kGridDivisionsX; ++i)
+    {
+        const auto x = bounds.getX() + bounds.getWidth() * (static_cast<float>(i) / static_cast<float>(kGridDivisionsX));
+        g.drawLine(x, bounds.getY(), x, bounds.getBottom(), 1.0f);
+    }
+    for (int i = 1; i < kGridDivisionsY; ++i)
+    {
+        const auto y = bounds.getY() + bounds.getHeight() * (static_cast<float>(i) / static_cast<float>(kGridDivisionsY));
+        g.drawLine(bounds.getX(), y, bounds.getRight(), y, 1.0f);
+    }
+
+    g.setColour(juce::Colours::white.withAlpha(0.18f));
+    g.drawLine(bounds.getX(), midY, bounds.getRight(), midY, 1.0f);
+
+    juce::Path path;
+    const auto count = static_cast<int>(waveform_.size());
+    for (int i = 0; i < count; ++i)
+    {
+        const auto x = bounds.getX() + (static_cast<float>(i) / static_cast<float>(juce::jmax(1, count - 1))) * bounds.getWidth();
+        const auto y = midY - juce::jlimit(-1.0f, 1.0f, waveform_[static_cast<std::size_t>(i)]) * (bounds.getHeight() * 0.45f);
+        if (i == 0)
+            path.startNewSubPath(x, y);
+        else
+            path.lineTo(x, y);
+    }
+
+    g.setColour(juce::Colour(0xff59ddff));
+    g.strokePath(path, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
+
+int AudiocityAudioProcessorEditor::GeneratedWaveformView::sampleIndexFromX(const float x) const
+{
+    if (waveform_.empty())
+        return 0;
+
+    const auto bounds = getLocalBounds().toFloat().reduced(8.0f, 8.0f);
+    const auto norm = juce::jlimit(0.0f, 1.0f, (x - bounds.getX()) / juce::jmax(1.0f, bounds.getWidth()));
+    return juce::jlimit(0, static_cast<int>(waveform_.size()) - 1,
+        static_cast<int>(std::round(norm * static_cast<float>(juce::jmax(1, static_cast<int>(waveform_.size()) - 1)))));
+}
+
+float AudiocityAudioProcessorEditor::GeneratedWaveformView::sampleValueFromY(const float y) const
+{
+    const auto bounds = getLocalBounds().toFloat().reduced(8.0f, 8.0f);
+    const auto norm = juce::jlimit(0.0f, 1.0f, (y - bounds.getY()) / juce::jmax(1.0f, bounds.getHeight()));
+    return juce::jlimit(-1.0f, 1.0f, 1.0f - norm * 2.0f);
+}
+
+void AudiocityAudioProcessorEditor::GeneratedWaveformView::applyPoint(const juce::Point<float>& position, const bool interpolateFromLast)
+{
+    if (waveform_.empty())
+        return;
+
+    const auto currentIndex = sampleIndexFromX(position.x);
+    const auto currentValue = sampleValueFromY(position.y);
+
+    if (interpolateFromLast && lastDrawIndex_ >= 0)
+    {
+        const auto startIndex = juce::jmin(lastDrawIndex_, currentIndex);
+        const auto endIndex = juce::jmax(lastDrawIndex_, currentIndex);
+        const auto distance = juce::jmax(1, endIndex - startIndex);
+
+        for (int i = startIndex; i <= endIndex; ++i)
+        {
+            const auto t = static_cast<float>(i - startIndex) / static_cast<float>(distance);
+            const auto value = (lastDrawIndex_ <= currentIndex)
+                ? juce::jmap(t, lastDrawValue_, currentValue)
+                : juce::jmap(t, currentValue, lastDrawValue_);
+            waveform_[static_cast<std::size_t>(i)] = value;
+        }
+    }
+    else
+    {
+        waveform_[static_cast<std::size_t>(currentIndex)] = currentValue;
+    }
+
+    lastDrawIndex_ = currentIndex;
+    lastDrawValue_ = currentValue;
+
+    if (onWaveChanged_)
+        onWaveChanged_(waveform_);
+
+    repaint();
+}
+
+void AudiocityAudioProcessorEditor::GeneratedWaveformView::mouseDown(const juce::MouseEvent& event)
+{
+    if (!event.mods.isLeftButtonDown())
+        return;
+
+    drawing_ = true;
+    lastDrawIndex_ = -1;
+    applyPoint(event.position, false);
+}
+
+void AudiocityAudioProcessorEditor::GeneratedWaveformView::mouseDrag(const juce::MouseEvent& event)
+{
+    if (!drawing_)
+        return;
+
+    applyPoint(event.position, true);
+}
+
+void AudiocityAudioProcessorEditor::GeneratedWaveformView::mouseUp(const juce::MouseEvent&)
+{
+    drawing_ = false;
+    lastDrawIndex_ = -1;
+}
+
 // ─── WaveformView ──────────────────────────────────────────────────────────────
 
 void AudiocityAudioProcessorEditor::WaveformView::setState(
@@ -943,6 +1071,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     tabBar_.addTab("Sample", juce::Colour(0xff252538), &tabSamplePage_, false);
     tabBar_.addTab("Library", juce::Colour(0xff252538), &tabLibraryPage_, false);
     tabBar_.addTab("Player", juce::Colour(0xff252538), &tabPlayerPage_, false);
+    tabBar_.addTab("Generate", juce::Colour(0xff252538), &tabGeneratePage_, false);
     tabBar_.setCurrentTabIndex(0);
     currentTabIndex_ = 0;
 
@@ -1008,6 +1137,125 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         };
     }
     refreshPlayerPadButtons();
+
+    // Generate pane
+    addAndMakeVisible(generateWaveformView_);
+    addAndMakeVisible(generateSineButton_);
+    addAndMakeVisible(generateRampButton_);
+    addAndMakeVisible(generateSquareButton_);
+    addAndMakeVisible(generateTriangleButton_);
+    addAndMakeVisible(generatePulseButton_);
+    addAndMakeVisible(generateSamplesLabel_);
+    addAndMakeVisible(generateSamplesCombo_);
+    addAndMakeVisible(generateBitDepthLabel_);
+    addAndMakeVisible(generateBitDepthCombo_);
+    addAndMakeVisible(generateSketchSmoothingLabel_);
+    addAndMakeVisible(generateSketchSmoothingCombo_);
+    addAndMakeVisible(generatePulseWidthLabel_);
+    addAndMakeVisible(generatePulseWidthSlider_);
+    addAndMakeVisible(generatePreviewButton_);
+    addAndMakeVisible(generateFrequencyLabel_);
+    addAndMakeVisible(generateFrequencyCombo_);
+    addAndMakeVisible(generateLoadAsSampleButton_);
+
+    generateSamplesLabel_.setJustificationType(juce::Justification::centredLeft);
+    generateBitDepthLabel_.setJustificationType(juce::Justification::centredLeft);
+    generateSketchSmoothingLabel_.setJustificationType(juce::Justification::centredLeft);
+    generatePulseWidthLabel_.setJustificationType(juce::Justification::centredLeft);
+    generateFrequencyLabel_.setJustificationType(juce::Justification::centredLeft);
+
+    for (int power = 4; power <= 11; ++power)
+    {
+        const auto sampleCount = 1 << power;
+        generateSamplesCombo_.addItem(juce::String(sampleCount), sampleCount);
+    }
+    generateSamplesCombo_.setSelectedId(512, juce::dontSendNotification);
+    generateSamplesCombo_.onChange = [this] { regenerateWaveform(); };
+
+    generateBitDepthCombo_.addItem("8 bit", 8);
+    generateBitDepthCombo_.addItem("16 bit", 16);
+    generateBitDepthCombo_.addItem("24 bit", 24);
+    generateBitDepthCombo_.setSelectedId(16, juce::dontSendNotification);
+    generateBitDepthCombo_.onChange = [this] { regenerateWaveform(); };
+
+    generateSketchSmoothingCombo_.addItem("Line", 1);
+    generateSketchSmoothingCombo_.addItem("Curve", 2);
+    generateSketchSmoothingCombo_.setSelectedId(1, juce::dontSendNotification);
+    generateSketchSmoothingCombo_.onChange = [this]
+    {
+        selectedSketchSmoothing_ = generateSketchSmoothingCombo_.getSelectedId() == 2
+            ? SketchedWaveSmoothing::curve
+            : SketchedWaveSmoothing::line;
+    };
+
+    generatePulseWidthSlider_.setRange(10.0, 90.0, 1.0);
+    generatePulseWidthSlider_.setValue(20.0, juce::dontSendNotification);
+    generatePulseWidthSlider_.setTextValueSuffix(" %");
+    generatePulseWidthSlider_.onValueChange = [this]
+    {
+        regenerateWaveform();
+    };
+
+    for (int midi = 0; midi <= 127; ++midi)
+        generateFrequencyCombo_.addItem(formatMidiNoteName(midi), midi + 1);
+    generateFrequencyCombo_.setSelectedId(61, juce::dontSendNotification);
+    generateFrequencyCombo_.onChange = [this]
+    {
+        processor_.setGeneratedWaveformPreviewMidiNote(getSelectedGenerateMidiNote());
+    };
+
+    auto bindWaveButton = [this](juce::TextButton& button, const GeneratedWaveType type)
+    {
+        button.onClick = [this, type]
+        {
+            selectedGeneratedWaveType_ = type;
+            updateGeneratePulseWidthControlState();
+            regenerateWaveform();
+        };
+    };
+
+    bindWaveButton(generateSineButton_, GeneratedWaveType::sine);
+    bindWaveButton(generateRampButton_, GeneratedWaveType::ramp);
+    bindWaveButton(generateSquareButton_, GeneratedWaveType::square);
+    bindWaveButton(generateTriangleButton_, GeneratedWaveType::triangle);
+    bindWaveButton(generatePulseButton_, GeneratedWaveType::pulse);
+
+    generatePreviewButton_.onClick = [this]
+    {
+        if (processor_.isGeneratedWaveformPreviewPlaying())
+            processor_.stopGeneratedWaveformPreview();
+        else
+        {
+            processor_.setGeneratedWaveformPreview(generatedWaveform_);
+            processor_.setGeneratedWaveformPreviewMidiNote(getSelectedGenerateMidiNote());
+            processor_.startGeneratedWaveformPreview();
+        }
+        updateGeneratePreviewButtonText();
+    };
+
+    generateLoadAsSampleButton_.onClick = [this]
+    {
+        processor_.stopGeneratedWaveformPreview();
+        updateGeneratePreviewButtonText();
+
+        const auto selectedMidiNote = getSelectedGenerateMidiNote();
+        processor_.loadGeneratedWaveformAsSample(generatedWaveform_, selectedMidiNote);
+        processor_.setRootMidiNote(selectedMidiNote);
+        tabBar_.setCurrentTabIndex(0);
+        currentTabIndex_ = 0;
+        updateTabVisibility();
+        resized();
+        refreshUI(true);
+    };
+
+    generateWaveformView_.setWaveChangedCallback([this](const std::vector<float>& sketchedWave)
+    {
+        applySketchedWaveform(sketchedWave);
+    });
+
+    updateGeneratePulseWidthControlState();
+
+    regenerateWaveform();
 
     // Sample browser pane
     addAndMakeVisible(sampleBrowserRootLabel_);
@@ -1535,6 +1783,8 @@ void AudiocityAudioProcessorEditor::handleNoteOff(juce::MidiKeyboardState* sourc
 
 void AudiocityAudioProcessorEditor::timerCallback()
 {
+    updateGeneratePreviewButtonText();
+
     for (int i = 0; i < kPlayerPadCount; ++i)
     {
         auto& ticks = playerPadPendingOffTicks_[static_cast<std::size_t>(i)];
@@ -1746,6 +1996,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     const bool showSampleTab = (currentTabIndex_ == 0);
     const bool showLibraryTab = (currentTabIndex_ == 1);
     const bool showPlayerTab = (currentTabIndex_ == 2);
+    const bool showGenerateTab = (currentTabIndex_ == 3);
 
     sampleBrowserRootLabel_.setVisible(showLibraryTab);
     sampleBrowserChooseRootButton_.setVisible(showLibraryTab);
@@ -1828,6 +2079,25 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
         playerPadButtons_[static_cast<std::size_t>(i)].setVisible(showPlayerTab);
         playerPadAssignButtons_[static_cast<std::size_t>(i)].setVisible(showPlayerTab);
     }
+
+    generateWaveformView_.setVisible(showGenerateTab);
+    generateSineButton_.setVisible(showGenerateTab);
+    generateRampButton_.setVisible(showGenerateTab);
+    generateSquareButton_.setVisible(showGenerateTab);
+    generateTriangleButton_.setVisible(showGenerateTab);
+    generatePulseButton_.setVisible(showGenerateTab);
+    generateSamplesLabel_.setVisible(showGenerateTab);
+    generateSamplesCombo_.setVisible(showGenerateTab);
+    generateBitDepthLabel_.setVisible(showGenerateTab);
+    generateBitDepthCombo_.setVisible(showGenerateTab);
+    generateSketchSmoothingLabel_.setVisible(showGenerateTab);
+    generateSketchSmoothingCombo_.setVisible(showGenerateTab);
+    generatePulseWidthLabel_.setVisible(showGenerateTab);
+    generatePulseWidthSlider_.setVisible(showGenerateTab);
+    generatePreviewButton_.setVisible(showGenerateTab);
+    generateFrequencyLabel_.setVisible(showGenerateTab);
+    generateFrequencyCombo_.setVisible(showGenerateTab);
+    generateLoadAsSampleButton_.setVisible(showGenerateTab);
 }
 
 int AudiocityAudioProcessorEditor::getNumRows()
@@ -2292,6 +2562,53 @@ void AudiocityAudioProcessorEditor::resized()
         return;
     }
 
+    if (currentTabIndex_ == 3)
+    {
+        auto genArea = area.reduced(8, 6);
+
+        auto waveformArea = genArea.removeFromTop(juce::jmax(200, genArea.getHeight() / 2));
+        generateWaveformView_.setBounds(waveformArea);
+        genArea.removeFromTop(12);
+
+        auto waveButtons = genArea.removeFromTop(32);
+        constexpr int kBtnW = 88;
+        constexpr int kBtnGap = 8;
+        generateSineButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
+        waveButtons.removeFromLeft(kBtnGap);
+        generateRampButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
+        waveButtons.removeFromLeft(kBtnGap);
+        generateSquareButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
+        waveButtons.removeFromLeft(kBtnGap);
+        generateTriangleButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
+        waveButtons.removeFromLeft(kBtnGap);
+        generatePulseButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
+
+        genArea.removeFromTop(10);
+        auto settingsRow = genArea.removeFromTop(32);
+        generateSamplesLabel_.setBounds(settingsRow.removeFromLeft(64));
+        generateSamplesCombo_.setBounds(settingsRow.removeFromLeft(98));
+        settingsRow.removeFromLeft(16);
+        generateBitDepthLabel_.setBounds(settingsRow.removeFromLeft(72));
+        generateBitDepthCombo_.setBounds(settingsRow.removeFromLeft(96));
+        settingsRow.removeFromLeft(16);
+        generateSketchSmoothingLabel_.setBounds(settingsRow.removeFromLeft(58));
+        generateSketchSmoothingCombo_.setBounds(settingsRow.removeFromLeft(100));
+        settingsRow.removeFromLeft(16);
+        generatePulseWidthLabel_.setBounds(settingsRow.removeFromLeft(86));
+        generatePulseWidthSlider_.setBounds(settingsRow.removeFromLeft(172));
+
+        genArea.removeFromTop(10);
+        auto actionsRow = genArea.removeFromTop(32);
+        generatePreviewButton_.setBounds(actionsRow.removeFromLeft(96));
+        actionsRow.removeFromLeft(12);
+        generateFrequencyLabel_.setBounds(actionsRow.removeFromLeft(72));
+        generateFrequencyCombo_.setBounds(actionsRow.removeFromLeft(190));
+        actionsRow.removeFromLeft(12);
+        generateLoadAsSampleButton_.setBounds(actionsRow.removeFromLeft(160));
+
+        return;
+    }
+
     // ── Top bar: Load button + file path ──
     {
         auto topRow = area.removeFromTop(kTopBarH);
@@ -2538,6 +2855,11 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
         paintSampleBrowserPane(g, content);
     else if (currentTabIndex_ == 2)
         paintPlayerPane(g, content);
+    else if (currentTabIndex_ == 3)
+    {
+        g.setColour(juce::Colour(0xff252538));
+        g.fillRoundedRectangle(content.reduced(6).toFloat(), 8.0f);
+    }
 
     if (!isHoveringValidDrop_)
         return;
@@ -2551,6 +2873,131 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colours::white.withAlpha(0.95f));
     g.setFont(14.0f);
     g.drawText("Drop .wav or .aiff to load", overlay, juce::Justification::centred);
+}
+
+void AudiocityAudioProcessorEditor::updateGeneratePreviewButtonText()
+{
+    generatePreviewButton_.setButtonText(processor_.isGeneratedWaveformPreviewPlaying() ? "Stop" : "Play");
+}
+
+int AudiocityAudioProcessorEditor::getSelectedGenerateSampleCount() const
+{
+    const auto selected = generateSamplesCombo_.getSelectedId();
+    return juce::jlimit(16, 2048, selected > 0 ? selected : 512);
+}
+
+int AudiocityAudioProcessorEditor::getSelectedGenerateBitDepth() const
+{
+    const auto selected = generateBitDepthCombo_.getSelectedId();
+    return (selected == 8 || selected == 24) ? selected : 16;
+}
+
+int AudiocityAudioProcessorEditor::getSelectedGenerateMidiNote() const
+{
+    const auto selected = generateFrequencyCombo_.getSelectedId();
+    return juce::jlimit(0, 127, selected - 1);
+}
+
+float AudiocityAudioProcessorEditor::quantizeWaveSample(const float value, const int bitDepth) const
+{
+    const auto clamped = juce::jlimit(-1.0f, 1.0f, value);
+    if (bitDepth >= 24)
+        return std::round(clamped * 8388607.0f) / 8388607.0f;
+    if (bitDepth <= 8)
+        return std::round(clamped * 127.0f) / 127.0f;
+    return std::round(clamped * 32767.0f) / 32767.0f;
+}
+
+void AudiocityAudioProcessorEditor::enforceWaveBoundaryZeroCrossings(std::vector<float>& waveform) const
+{
+    if (waveform.empty())
+        return;
+
+    waveform.front() = 0.0f;
+    waveform.back() = 0.0f;
+
+    if (waveform.size() > 2)
+    {
+        waveform[1] *= 0.5f;
+        waveform[waveform.size() - 2] *= 0.5f;
+    }
+}
+
+void AudiocityAudioProcessorEditor::applySketchedWaveform(const std::vector<float>& sketchedWave)
+{
+    if (sketchedWave.empty())
+        return;
+
+    auto processed = sketchedWave;
+
+    if (selectedSketchSmoothing_ == SketchedWaveSmoothing::curve && processed.size() >= 3)
+    {
+        auto smoothed = processed;
+        for (std::size_t i = 1; i + 1 < processed.size(); ++i)
+            smoothed[i] = (processed[i - 1] + processed[i] * 2.0f + processed[i + 1]) * 0.25f;
+        processed.swap(smoothed);
+    }
+
+    enforceWaveBoundaryZeroCrossings(processed);
+
+    const auto bitDepth = getSelectedGenerateBitDepth();
+    for (auto& sample : processed)
+        sample = quantizeWaveSample(sample, bitDepth);
+
+    generatedWaveform_ = std::move(processed);
+    generateWaveformView_.setWaveform(generatedWaveform_);
+    processor_.setGeneratedWaveformPreview(generatedWaveform_);
+}
+
+void AudiocityAudioProcessorEditor::updateGeneratePulseWidthControlState()
+{
+    const auto enabled = selectedGeneratedWaveType_ == GeneratedWaveType::pulse;
+    generatePulseWidthLabel_.setEnabled(enabled);
+    generatePulseWidthSlider_.setEnabled(enabled);
+}
+
+void AudiocityAudioProcessorEditor::regenerateWaveform()
+{
+    const auto sampleCount = getSelectedGenerateSampleCount();
+    const auto bitDepth = getSelectedGenerateBitDepth();
+
+    generatedWaveform_.assign(static_cast<std::size_t>(sampleCount), 0.0f);
+
+    for (int i = 0; i < sampleCount; ++i)
+    {
+        const auto phase = static_cast<float>(i) / static_cast<float>(sampleCount);
+        float value = 0.0f;
+
+        switch (selectedGeneratedWaveType_)
+        {
+            case GeneratedWaveType::sine:
+                value = std::sin(phase * 2.0f * juce::MathConstants<float>::pi);
+                break;
+            case GeneratedWaveType::ramp:
+                value = (phase * 2.0f) - 1.0f;
+                break;
+            case GeneratedWaveType::square:
+                value = phase < 0.5f ? 1.0f : -1.0f;
+                break;
+            case GeneratedWaveType::triangle:
+                value = 1.0f - 4.0f * std::abs(phase - 0.5f);
+                break;
+            case GeneratedWaveType::pulse:
+            {
+                const auto pulseWidth = static_cast<float>(generatePulseWidthSlider_.getValue() * 0.01);
+                value = phase < pulseWidth ? 1.0f : -1.0f;
+                break;
+            }
+        }
+
+        generatedWaveform_[static_cast<std::size_t>(i)] = quantizeWaveSample(value, bitDepth);
+    }
+
+    enforceWaveBoundaryZeroCrossings(generatedWaveform_);
+
+    generateWaveformView_.setWaveform(generatedWaveform_);
+    processor_.setGeneratedWaveformPreview(generatedWaveform_);
+    processor_.setGeneratedWaveformPreviewMidiNote(getSelectedGenerateMidiNote());
 }
 
 // ─── Group box rendering ───────────────────────────────────────────────────────
@@ -2865,7 +3312,10 @@ void AudiocityAudioProcessorEditor::showPadAssignmentDialog(const int padIndex)
 void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
 {
     const auto path = processor_.getLoadedSamplePath();
-    samplePathLabel_.setText(path.isNotEmpty() ? path : "No sample loaded", juce::dontSendNotification);
+    const auto sampleLabel = path.isNotEmpty()
+        ? path
+        : (processor_.isGeneratedWaveformLoaded() ? juce::String("Generated Waveform") : juce::String("No sample loaded"));
+    samplePathLabel_.setText(sampleLabel, juce::dontSendNotification);
     const auto isNewLoadedSample = path.isNotEmpty() && path != lastWaveformSamplePath_;
 
     rootNoteCombo_.setSelectedId(processor_.getRootMidiNote() + 1, juce::dontSendNotification);

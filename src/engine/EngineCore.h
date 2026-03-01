@@ -135,6 +135,7 @@ public:
     [[nodiscard]] FilterSettings getFilterSettings() const noexcept { return filterSettings_; }
 
     [[nodiscard]] juce::String getSamplePath() const { return samplePath_; }
+    void clearSamplePath() noexcept { samplePath_.clear(); }
     [[nodiscard]] int getRootMidiNote() const noexcept { return rootMidiNote_; }
     void setRootMidiNote(int rootMidiNote) noexcept;
 

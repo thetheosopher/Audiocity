@@ -346,6 +346,13 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
             pushCcEvent(msg.getControllerNumber(), msg.getControllerValue());
     }
 
+    if (previewWavePlaying_.load(std::memory_order_relaxed)
+        && previewWaveSamples_.load(std::memory_order_relaxed) > 0)
+    {
+        renderGeneratedWavePreview(buffer);
+        return;
+    }
+
     UiMidiEvent uiEvent{};
     while (popUiMidiEvent(uiEvent))
     {
@@ -649,21 +656,40 @@ bool AudiocityAudioProcessor::loadSampleFromFile(const juce::File& file)
     if (!engine_.loadSampleFromFile(file))
         return false;
 
+    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+
     suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
 
     setAmpEnvelope(engine_.getAmpEnvelope());
     setFilterEnvelope(engine_.getFilterEnvelope());
     setFilterSettings(engine_.getFilterSettings());
 
-    updateParameterFromPlainValue(kParamRootMidiNote, static_cast<float>(engine_.getRootMidiNote()));
-    updateParameterFromPlainValue(kParamPlaybackMode, static_cast<float>(engine_.getPlaybackMode()));
-    updateParameterFromPlainValue(kParamPlaybackStart, static_cast<float>(engine_.getSampleWindowStart()));
-    updateParameterFromPlainValue(kParamPlaybackEnd, static_cast<float>(engine_.getSampleWindowEnd()));
-    updateParameterFromPlainValue(kParamLoopStart, static_cast<float>(engine_.getLoopStart()));
-    updateParameterFromPlainValue(kParamLoopEnd, static_cast<float>(engine_.getLoopEnd()));
-    updateParameterFromPlainValue(kParamLoopCrossfade, static_cast<float>(engine_.getLoopCrossfadeSamples()));
+    syncSampleDerivedParametersFromEngine();
 
     return true;
+}
+
+void AudiocityAudioProcessor::loadGeneratedWaveformAsSample(const std::vector<float>& waveform, const int rootMidiNote)
+{
+    if (waveform.empty())
+        return;
+
+    juce::AudioBuffer<float> buffer(1, static_cast<int>(waveform.size()));
+    auto* write = buffer.getWritePointer(0);
+    for (int i = 0; i < buffer.getNumSamples(); ++i)
+        write[i] = waveform[static_cast<std::size_t>(i)];
+
+    const auto clampedRoot = juce::jlimit(0, 127, rootMidiNote);
+    const auto targetHz = juce::MidiMessage::getMidiNoteInHertz(clampedRoot);
+    const auto generatedSampleRate = juce::jmax(1.0, targetHz * static_cast<double>(buffer.getNumSamples()));
+
+    engine_.setSampleData(buffer, generatedSampleRate, clampedRoot);
+    engine_.setRootMidiNote(clampedRoot);
+    engine_.clearSamplePath();
+    generatedWaveformLoaded_.store(true, std::memory_order_relaxed);
+    stopGeneratedWaveformPreview();
+    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
+    syncSampleDerivedParametersFromEngine();
 }
 
 juce::String AudiocityAudioProcessor::getLoadedSamplePath() const
@@ -746,6 +772,36 @@ void AudiocityAudioProcessor::setLoopCrossfadeSamples(const int crossfadeSamples
 {
     engine_.setLoopCrossfadeSamples(crossfadeSamples);
     updateParameterFromPlainValue(kParamLoopCrossfade, static_cast<float>(engine_.getLoopCrossfadeSamples()));
+}
+
+void AudiocityAudioProcessor::setGeneratedWaveformPreview(const std::vector<float>& waveform) noexcept
+{
+    const auto count = juce::jlimit(0, kPreviewWaveMaxSamples, static_cast<int>(waveform.size()));
+    for (int i = 0; i < count; ++i)
+        previewWaveData_[static_cast<std::size_t>(i)] = juce::jlimit(-1.0f, 1.0f, waveform[static_cast<std::size_t>(i)]);
+
+    previewWaveSamples_.store(count, std::memory_order_relaxed);
+    if (count == 0)
+        previewWavePlaying_.store(false, std::memory_order_relaxed);
+}
+
+void AudiocityAudioProcessor::setGeneratedWaveformPreviewMidiNote(const int midiNote) noexcept
+{
+    previewWaveMidiNote_.store(juce::jlimit(0, 127, midiNote), std::memory_order_relaxed);
+}
+
+void AudiocityAudioProcessor::startGeneratedWaveformPreview() noexcept
+{
+    if (previewWaveSamples_.load(std::memory_order_relaxed) <= 0)
+        return;
+
+    previewWavePhase_ = 0.0f;
+    previewWavePlaying_.store(true, std::memory_order_relaxed);
+}
+
+void AudiocityAudioProcessor::stopGeneratedWaveformPreview() noexcept
+{
+    previewWavePlaying_.store(false, std::memory_order_relaxed);
 }
 
 void AudiocityAudioProcessor::setPlayerPadAssignment(const int padIndex, const int noteNumber, const int velocity) noexcept
@@ -923,6 +979,45 @@ std::map<int, juce::String> AudiocityAudioProcessor::getAllCcMappings() const
 {
     std::lock_guard<std::mutex> lock(ccMappingMutex_);
     return ccToParam_;
+}
+
+void AudiocityAudioProcessor::syncSampleDerivedParametersFromEngine() noexcept
+{
+    updateParameterFromPlainValue(kParamRootMidiNote, static_cast<float>(engine_.getRootMidiNote()));
+    updateParameterFromPlainValue(kParamPlaybackMode, static_cast<float>(engine_.getPlaybackMode()));
+    updateParameterFromPlainValue(kParamPlaybackStart, static_cast<float>(engine_.getSampleWindowStart()));
+    updateParameterFromPlainValue(kParamPlaybackEnd, static_cast<float>(engine_.getSampleWindowEnd()));
+    updateParameterFromPlainValue(kParamLoopStart, static_cast<float>(engine_.getLoopStart()));
+    updateParameterFromPlainValue(kParamLoopEnd, static_cast<float>(engine_.getLoopEnd()));
+    updateParameterFromPlainValue(kParamLoopCrossfade, static_cast<float>(engine_.getLoopCrossfadeSamples()));
+}
+
+void AudiocityAudioProcessor::renderGeneratedWavePreview(juce::AudioBuffer<float>& buffer) noexcept
+{
+    const auto count = previewWaveSamples_.load(std::memory_order_relaxed);
+    if (count <= 0)
+    {
+        buffer.clear();
+        return;
+    }
+
+    const auto midiNote = previewWaveMidiNote_.load(std::memory_order_relaxed);
+    const auto hz = 440.0 * std::pow(2.0, (static_cast<double>(midiNote) - 69.0) / 12.0);
+    const auto phaseIncrement = static_cast<float>((hz * static_cast<double>(count)) / getSampleRate());
+    const auto channels = buffer.getNumChannels();
+    const auto samples = buffer.getNumSamples();
+
+    for (int sample = 0; sample < samples; ++sample)
+    {
+        const auto readIndex = juce::jlimit(0, count - 1, static_cast<int>(previewWavePhase_));
+        const auto value = previewWaveData_[static_cast<std::size_t>(readIndex)] * 0.25f;
+        for (int channel = 0; channel < channels; ++channel)
+            buffer.setSample(channel, sample, value);
+
+        previewWavePhase_ += phaseIncrement;
+        while (previewWavePhase_ >= static_cast<float>(count))
+            previewWavePhase_ -= static_cast<float>(count);
+    }
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

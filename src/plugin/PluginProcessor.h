@@ -50,7 +50,12 @@ public:
     void setStateInformation(const void* data, int sizeInBytes) override;
 
     bool loadSampleFromFile(const juce::File& file);
+    void loadGeneratedWaveformAsSample(const std::vector<float>& waveform, int rootMidiNote = 60);
     [[nodiscard]] juce::String getLoadedSamplePath() const;
+    [[nodiscard]] bool isGeneratedWaveformLoaded() const noexcept
+    {
+        return generatedWaveformLoaded_.load(std::memory_order_relaxed);
+    }
     void setSampleBrowserRootFolder(const juce::String& folderPath) { sampleBrowserRootFolderPath_ = folderPath; }
     [[nodiscard]] juce::String getSampleBrowserRootFolder() const { return sampleBrowserRootFolderPath_; }
 
@@ -65,6 +70,14 @@ public:
 
     void enqueueUiMidiNoteOn(int noteNumber, int velocity) noexcept;
     void enqueueUiMidiNoteOff(int noteNumber) noexcept;
+    void setGeneratedWaveformPreview(const std::vector<float>& waveform) noexcept;
+    void setGeneratedWaveformPreviewMidiNote(int midiNote) noexcept;
+    void startGeneratedWaveformPreview() noexcept;
+    void stopGeneratedWaveformPreview() noexcept;
+    [[nodiscard]] bool isGeneratedWaveformPreviewPlaying() const noexcept
+    {
+        return previewWavePlaying_.load(std::memory_order_relaxed);
+    }
 
     using PlaybackMode = audiocity::engine::EngineCore::PlaybackMode;
     void setPlaybackMode(PlaybackMode mode) noexcept;
@@ -159,6 +172,8 @@ private:
     void updateParameterFromPlainValue(const juce::String& parameterId, float plainValue) noexcept;
     void updateHostTempoFromPlayHead() noexcept;
     [[nodiscard]] float lfoRateHzFromTempoSync(int divisionIndex) const noexcept;
+    void syncSampleDerivedParametersFromEngine() noexcept;
+    void renderGeneratedWavePreview(juce::AudioBuffer<float>& buffer) noexcept;
 
     struct UiMidiEvent
     {
@@ -189,6 +204,13 @@ private:
     std::atomic<int> uiMidiReadPos_{ 0 };
     std::atomic<int> suspendParamSyncBlocks_{ 0 };
     std::atomic<float> hostBpm_{ 120.0f };
+    std::atomic<bool> generatedWaveformLoaded_{ false };
+    static constexpr int kPreviewWaveMaxSamples = 2048;
+    std::array<float, kPreviewWaveMaxSamples> previewWaveData_{};
+    std::atomic<int> previewWaveSamples_{ 0 };
+    std::atomic<int> previewWaveMidiNote_{ 60 };
+    std::atomic<bool> previewWavePlaying_{ false };
+    float previewWavePhase_ = 0.0f;
     void pushUiMidiEvent(int noteNumber, int velocity, bool isNoteOn) noexcept;
     [[nodiscard]] bool popUiMidiEvent(UiMidiEvent& out) noexcept;
 

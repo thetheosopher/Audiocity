@@ -140,6 +140,110 @@ float blockEnergy(const juce::AudioBuffer<float>& block)
     return energy;
 }
 
+juce::AudioBuffer<float> createOneCycleSine(const int sampleCount)
+{
+    juce::AudioBuffer<float> buffer(1, sampleCount);
+    for (int i = 0; i < sampleCount; ++i)
+    {
+        const auto phase = static_cast<float>(2.0 * juce::MathConstants<double>::pi
+            * static_cast<double>(i) / static_cast<double>(juce::jmax(1, sampleCount)));
+        buffer.setSample(0, i, std::sin(phase));
+    }
+
+    return buffer;
+}
+
+juce::AudioBuffer<float> renderHeldNote(audiocity::engine::EngineCore& engine,
+                                        const int midiNote,
+                                        const int blockSize,
+                                        const int blocks,
+                                        const int channels)
+{
+    juce::AudioBuffer<float> output(channels, blockSize * blocks);
+
+    for (int block = 0; block < blocks; ++block)
+    {
+        juce::AudioBuffer<float> blockBuffer(channels, blockSize);
+        juce::MidiBuffer midi;
+        if (block == 0)
+            midi.addEvent(juce::MidiMessage::noteOn(1, midiNote, 1.0f), 0);
+
+        engine.render(blockBuffer, midi);
+        for (int ch = 0; ch < channels; ++ch)
+            output.copyFrom(ch, block * blockSize, blockBuffer, ch, 0, blockSize);
+    }
+
+    return output;
+}
+
+float estimateFrequencyFromPositiveCrossings(const juce::AudioBuffer<float>& audio,
+                                             const double sampleRate,
+                                             const int skipSamples)
+{
+    if (audio.getNumChannels() <= 0)
+        return 0.0f;
+
+    const auto* data = audio.getReadPointer(0);
+    const auto total = audio.getNumSamples();
+    const auto start = juce::jlimit(1, juce::jmax(1, total - 1), skipSamples);
+    int crossings = 0;
+
+    for (int i = start; i < total; ++i)
+    {
+        const auto previous = data[i - 1];
+        const auto current = data[i];
+        if (previous <= 0.0f && current > 0.0f)
+            ++crossings;
+    }
+
+    const auto measuredSamples = juce::jmax(1, total - start);
+    const auto seconds = static_cast<float>(measuredSamples / sampleRate);
+    return seconds > 0.0f ? static_cast<float>(crossings) / seconds : 0.0f;
+}
+
+bool runGeneratedCyclePitchInvariantAcrossSampleCountsTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 256;
+    constexpr int blocks = 64;
+    constexpr double outputSampleRate = 48000.0;
+    constexpr int rootMidiNote = 36;
+
+    const auto targetHz = juce::MidiMessage::getMidiNoteInHertz(rootMidiNote);
+
+    auto renderFrequency = [&](const int cycleSamples) -> float
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(outputSampleRate, blockSize, channels);
+
+        audiocity::engine::EngineCore::AdsrSettings fastSustain;
+        fastSustain.attackSeconds = 0.0001f;
+        fastSustain.decaySeconds = 0.0001f;
+        fastSustain.sustainLevel = 1.0f;
+        fastSustain.releaseSeconds = 0.25f;
+        engine.setAmpEnvelope(fastSustain);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+
+        const auto sourceSampleRate = targetHz * static_cast<double>(cycleSamples);
+        engine.setSampleData(createOneCycleSine(cycleSamples), sourceSampleRate, rootMidiNote);
+
+        const auto rendered = renderHeldNote(engine, rootMidiNote, blockSize, blocks, channels);
+        return estimateFrequencyFromPositiveCrossings(rendered, outputSampleRate, blockSize * 2);
+    };
+
+    const auto freq64 = renderFrequency(64);
+    const auto freq1024 = renderFrequency(1024);
+
+    if (freq64 <= 0.0f || freq1024 <= 0.0f)
+        return false;
+
+    const auto targetError64 = std::abs(freq64 - static_cast<float>(targetHz));
+    const auto targetError1024 = std::abs(freq1024 - static_cast<float>(targetHz));
+    const auto crossCountDelta = std::abs(freq64 - freq1024);
+
+    return targetError64 < 1.5f && targetError1024 < 1.5f && crossCountDelta < 0.8f;
+}
+
 bool runPlaybackModesTest()
 {
     constexpr int channels = 2;
@@ -2336,6 +2440,9 @@ int main()
 
     if (!runLoadSampleResetsEnvelopeAndFilterDefaultsTest())
         return 45;
+
+    if (!runGeneratedCyclePitchInvariantAcrossSampleCountsTest())
+        return 46;
 
     if (!runEditorSampleEditControlsTest())
         return 5;
