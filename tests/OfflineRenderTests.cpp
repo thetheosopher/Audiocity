@@ -244,6 +244,33 @@ bool runGeneratedCyclePitchInvariantAcrossSampleCountsTest()
     return targetError64 < 1.5f && targetError1024 < 1.5f && crossCountDelta < 0.8f;
 }
 
+bool runDisplayMinMaxPreservesPolarityTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> shaped(1, 16);
+    for (int i = 0; i < 8; ++i)
+        shaped.setSample(0, i, -0.95f + static_cast<float>(i) * 0.05f);
+    for (int i = 8; i < 16; ++i)
+        shaped.setSample(0, i, 0.15f + static_cast<float>(i - 8) * 0.08f);
+
+    audiocity::engine::EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setSampleData(shaped, sampleRate, 60);
+
+    const auto minMax = engine.buildDisplayMinMaxByChannel(4);
+    if (minMax.size() != 1 || minMax.front().size() != 4)
+        return false;
+
+    const auto& buckets = minMax.front();
+    const bool hasNegativeOnlyBucket = buckets[0].maxValue < 0.0f && buckets[1].maxValue < 0.0f;
+    const bool hasPositiveOnlyBucket = buckets[2].minValue > 0.0f && buckets[3].minValue > 0.0f;
+
+    return hasNegativeOnlyBucket && hasPositiveOnlyBucket;
+}
+
 bool runPlaybackModesTest()
 {
     constexpr int channels = 2;
@@ -2470,6 +2497,9 @@ int main()
 
     if (!runGeneratedCyclePitchInvariantAcrossSampleCountsTest())
         return 46;
+
+    if (!runDisplayMinMaxPreservesPolarityTest())
+        return 48;
 
     if (!runEditorSampleEditControlsTest())
         return 5;

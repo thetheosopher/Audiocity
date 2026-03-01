@@ -131,6 +131,11 @@ public:
     [[nodiscard]] juce::String getLoadedSampleLoopFormatBadge() const noexcept { return engine_.getLoadedSampleLoopFormatBadge(); }
     [[nodiscard]] std::vector<float> getLoadedSamplePeaks(int maxPeaks = 2048) const noexcept { return engine_.buildDisplayPeaks(maxPeaks); }
     [[nodiscard]] std::vector<std::vector<float>> getLoadedSamplePeaksByChannel(int maxPeaks = 2048) const noexcept { return engine_.buildDisplayPeaksByChannel(maxPeaks); }
+    [[nodiscard]] std::vector<std::vector<audiocity::engine::EngineCore::DisplayMinMax>>
+        getLoadedSampleMinMaxByChannel(int maxPeaks = 2048) const noexcept
+    {
+        return engine_.buildDisplayMinMaxByChannel(maxPeaks);
+    }
 
     [[nodiscard]] int getRootMidiNote() const noexcept { return engine_.getRootMidiNote(); }
     void setRootMidiNote(int rootNote) noexcept;

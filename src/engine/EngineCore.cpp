@@ -1230,14 +1230,36 @@ std::vector<float> EngineCore::buildDisplayPeaks(const int maxPeaks) const noexc
 
 std::vector<std::vector<float>> EngineCore::buildDisplayPeaksByChannel(const int maxPeaks) const noexcept
 {
+    const auto minMaxByChannel = buildDisplayMinMaxByChannel(maxPeaks);
+    if (minMaxByChannel.empty())
+        return {};
+
+    std::vector<std::vector<float>> allPeaks(minMaxByChannel.size());
+    for (std::size_t channel = 0; channel < minMaxByChannel.size(); ++channel)
+    {
+        const auto& minMax = minMaxByChannel[channel];
+        auto& peaks = allPeaks[channel];
+        peaks.resize(minMax.size(), 0.0f);
+        for (std::size_t i = 0; i < minMax.size(); ++i)
+        {
+            const auto magnitude = juce::jmax(std::abs(minMax[i].minValue), std::abs(minMax[i].maxValue));
+            peaks[i] = juce::jlimit(0.0f, 1.0f, magnitude);
+        }
+    }
+
+    return allPeaks;
+}
+
+std::vector<std::vector<EngineCore::DisplayMinMax>> EngineCore::buildDisplayMinMaxByChannel(const int maxPeaks) const noexcept
+{
     const auto channels = juce::jmax(1, displaySampleData_.getNumChannels());
     const auto total = juce::jmax(0, displaySampleData_.getNumSamples());
     if (total <= 0 || maxPeaks <= 0)
         return {};
 
     const auto peakCount = juce::jmax(1, juce::jmin(maxPeaks, total));
-    std::vector<std::vector<float>> allPeaks(static_cast<std::size_t>(channels),
-        std::vector<float>(static_cast<std::size_t>(peakCount), 0.0f));
+    std::vector<std::vector<DisplayMinMax>> allMinMax(static_cast<std::size_t>(channels),
+        std::vector<DisplayMinMax>(static_cast<std::size_t>(peakCount)));
 
     for (int channel = 0; channel < channels; ++channel)
     {
@@ -1249,15 +1271,21 @@ std::vector<std::vector<float>> EngineCore::buildDisplayPeaksByChannel(const int
             const auto endExclusive = juce::jmax(start + 1,
                 static_cast<int>((static_cast<int64_t>(i + 1) * total) / peakCount));
 
-            float maxAbs = 0.0f;
+            float minValue = 1.0f;
+            float maxValue = -1.0f;
             for (int s = start; s < endExclusive; ++s)
-                maxAbs = juce::jmax(maxAbs, std::abs(samples[s]));
+            {
+                minValue = juce::jmin(minValue, samples[s]);
+                maxValue = juce::jmax(maxValue, samples[s]);
+            }
 
-            allPeaks[static_cast<std::size_t>(channel)][static_cast<std::size_t>(i)] = juce::jlimit(0.0f, 1.0f, maxAbs);
+            auto& bucket = allMinMax[static_cast<std::size_t>(channel)][static_cast<std::size_t>(i)];
+            bucket.minValue = juce::jlimit(-1.0f, 1.0f, minValue);
+            bucket.maxValue = juce::jlimit(-1.0f, 1.0f, maxValue);
         }
     }
 
-    return allPeaks;
+    return allMinMax;
 }
 
 float EngineCore::computeFilterSample(const float inputSample,

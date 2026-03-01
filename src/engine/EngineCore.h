@@ -90,6 +90,12 @@ public:
     void prepare(double sampleRate, int maxSamplesPerBlock, int outputChannels) noexcept;
     void release() noexcept;
 
+    struct DisplayMinMax
+    {
+        float minValue = 0.0f;
+        float maxValue = 0.0f;
+    };
+
     bool loadSampleFromFile(const juce::File& file);
     void setSampleData(const juce::AudioBuffer<float>& sampleData, double sampleRate, int rootNote) noexcept;
     void setPreloadSamples(int preloadSamples) noexcept;
@@ -101,6 +107,7 @@ public:
     [[nodiscard]] juce::String getLoadedSampleLoopFormatBadge() const noexcept { return loadedSampleLoopFormatBadge_; }
     [[nodiscard]] std::vector<float> buildDisplayPeaks(int maxPeaks) const noexcept;
     [[nodiscard]] std::vector<std::vector<float>> buildDisplayPeaksByChannel(int maxPeaks) const noexcept;
+    [[nodiscard]] std::vector<std::vector<DisplayMinMax>> buildDisplayMinMaxByChannel(int maxPeaks) const noexcept;
     [[nodiscard]] int getSegmentRebuildCount() const noexcept { return segmentRebuildCount_; }
     void setQualityTier(QualityTier tier) noexcept { qualityTier_ = tier; }
     [[nodiscard]] QualityTier getQualityTier() const noexcept { return qualityTier_; }

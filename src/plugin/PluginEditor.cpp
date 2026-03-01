@@ -728,13 +728,13 @@ void AudiocityAudioProcessorEditor::FilterResponseGraph::paint(juce::Graphics& g
 // ─── WaveformView ──────────────────────────────────────────────────────────────
 
 void AudiocityAudioProcessorEditor::WaveformView::setState(
-    const int totalSamples, std::vector<std::vector<float>> peaksByChannel,
+    const int totalSamples, std::vector<std::vector<MinMax>> waveformByChannel,
     const int playbackStart, const int playbackEnd,
     const int loopStart, const int loopEnd,
     juce::String loopFormatBadge)
 {
     totalSamples_ = juce::jmax(0, totalSamples);
-    peaksByChannel_ = std::move(peaksByChannel);
+    waveformByChannel_ = std::move(waveformByChannel);
     playbackStart_ = playbackStart;
     playbackEnd_ = playbackEnd;
     loopStart_ = loopStart;
@@ -814,7 +814,7 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
     g.setColour(juce::Colours::white.withAlpha(0.25f));
     g.drawRect(getLocalBounds(), 1);
 
-    if (totalSamples_ <= 0 || peaksByChannel_.empty())
+    if (totalSamples_ <= 0 || waveformByChannel_.empty())
     {
         g.setColour(juce::Colours::white.withAlpha(0.4f));
         g.drawText("Load a sample (WAV/AIFF)", getLocalBounds(), juce::Justification::centred);
@@ -822,7 +822,7 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
     }
 
     const auto bounds = getLocalBounds().toFloat();
-    const auto channelCount = juce::jmax(1, static_cast<int>(peaksByChannel_.size()));
+    const auto channelCount = juce::jmax(1, static_cast<int>(waveformByChannel_.size()));
     const auto channelHeight = bounds.getHeight() / static_cast<float>(channelCount);
 
     // ── Playback region markers ──
@@ -878,13 +878,18 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
         g.drawText(channelName, lane.withTrimmedLeft(6.0f).withTrimmedTop(2.0f).removeFromTop(12.0f),
             juce::Justification::centredLeft, false);
 
-        const auto& peaks = peaksByChannel_[static_cast<std::size_t>(juce::jlimit(0, static_cast<int>(peaksByChannel_.size()) - 1, channel))];
-        const auto peakCount = static_cast<int>(peaks.size());
-        if (peakCount > 0)
+        const auto& waveform = waveformByChannel_[static_cast<std::size_t>(juce::jlimit(0, static_cast<int>(waveformByChannel_.size()) - 1, channel))];
+        const auto bucketCount = static_cast<int>(waveform.size());
+        if (bucketCount > 0)
         {
             const auto samplesPerPixel = static_cast<float>(juce::jmax(1, viewSampleCount_))
                 / juce::jmax(1.0f, lane.getWidth());
             const auto drawDiscreteSamples = samplesPerPixel <= 2.5f && viewSampleCount_ <= 4096;
+            const auto yFromSample = [&](const float sampleValue)
+            {
+                const auto clamped = juce::jlimit(-1.0f, 1.0f, sampleValue);
+                return centerY - clamped * lane.getHeight() * 0.45f;
+            };
 
             if (drawDiscreteSamples)
             {
@@ -901,13 +906,18 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
                     const auto x = xFromSample(sample);
                     const auto norm = static_cast<float>(sample)
                         / static_cast<float>(juce::jmax(1, totalSamples_ - 1));
-                    const auto peakIndex = juce::jlimit(0, peakCount - 1,
-                        static_cast<int>(std::round(norm * static_cast<float>(juce::jmax(0, peakCount - 1)))));
+                    const auto bucketIndex = juce::jlimit(0, bucketCount - 1,
+                        static_cast<int>(std::round(norm * static_cast<float>(juce::jmax(0, bucketCount - 1)))));
 
-                    const auto ampNorm = juce::jlimit(0.0f, 1.0f, peaks[static_cast<std::size_t>(peakIndex)]);
-                    const auto amp = ampNorm * lane.getHeight() * 0.42f;
-                    const auto topY = centerY - amp;
-                    const auto bottomY = centerY + amp;
+                    const auto& range = waveform[static_cast<std::size_t>(bucketIndex)];
+                    const auto topSample = displayMode_ == DisplayMode::symmetricEnvelope
+                        ? juce::jmax(std::abs(range.max), std::abs(range.min))
+                        : range.max;
+                    const auto bottomSample = displayMode_ == DisplayMode::symmetricEnvelope
+                        ? -juce::jmax(std::abs(range.max), std::abs(range.min))
+                        : range.min;
+                    const auto topY = yFromSample(topSample);
+                    const auto bottomY = yFromSample(bottomSample);
 
                     if (!started)
                     {
@@ -947,18 +957,24 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
 
                     const auto norm = static_cast<float>(juce::jlimit(0, juce::jmax(1, totalSamples_ - 1), sample))
                         / static_cast<float>(juce::jmax(1, totalSamples_ - 1));
-                    const auto peakPos = norm * static_cast<float>(juce::jmax(0, peakCount - 1));
-                    const auto i0 = juce::jlimit(0, peakCount - 1, static_cast<int>(std::floor(peakPos)));
-                    const auto i1 = juce::jlimit(0, peakCount - 1, i0 + 1);
+                    const auto peakPos = norm * static_cast<float>(juce::jmax(0, bucketCount - 1));
+                    const auto i0 = juce::jlimit(0, bucketCount - 1, static_cast<int>(std::floor(peakPos)));
+                    const auto i1 = juce::jlimit(0, bucketCount - 1, i0 + 1);
                     const auto frac = peakPos - static_cast<float>(i0);
 
-                    const auto a0 = peaks[static_cast<std::size_t>(i0)];
-                    const auto a1 = peaks[static_cast<std::size_t>(i1)];
-                    const auto ampNorm = juce::jlimit(0.0f, 1.0f, a0 + (a1 - a0) * frac);
-                    const auto amp = ampNorm * lane.getHeight() * 0.42f;
+                    const auto& r0 = waveform[static_cast<std::size_t>(i0)];
+                    const auto& r1 = waveform[static_cast<std::size_t>(i1)];
+                    const auto interpMax = r0.max + (r1.max - r0.max) * frac;
+                    const auto interpMin = r0.min + (r1.min - r0.min) * frac;
+                    const auto topSample = displayMode_ == DisplayMode::symmetricEnvelope
+                        ? juce::jmax(std::abs(interpMax), std::abs(interpMin))
+                        : interpMax;
+                    const auto bottomSample = displayMode_ == DisplayMode::symmetricEnvelope
+                        ? -juce::jmax(std::abs(interpMax), std::abs(interpMin))
+                        : interpMin;
 
-                    const auto topY = centerY - amp;
-                    const auto bottomY = centerY + amp;
+                    const auto topY = yFromSample(topSample);
+                    const auto bottomY = yFromSample(bottomSample);
                     topYs[static_cast<std::size_t>(px)] = topY;
                     bottomYs[static_cast<std::size_t>(px)] = bottomY;
 
@@ -1490,6 +1506,19 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     loadButton_.setTooltip("Load Sample");
     loadButton_.onClick = [this] { openSampleChooser(); };
 
+    addAndMakeVisible(waveformDisplayModeCombo_);
+    waveformDisplayModeCombo_.addItem("Signed", 1);
+    waveformDisplayModeCombo_.addItem("Symmetric", 2);
+    waveformDisplayModeCombo_.setSelectedId(1, juce::dontSendNotification);
+    waveformDisplayModeCombo_.setTooltip("Waveform Display Mode");
+    waveformDisplayModeCombo_.onChange = [this]
+    {
+        const auto selected = waveformDisplayModeCombo_.getSelectedId();
+        waveformView_.setDisplayMode(selected == 2
+            ? WaveformView::DisplayMode::symmetricEnvelope
+            : WaveformView::DisplayMode::signedWaveform);
+    };
+
     addAndMakeVisible(rootNoteLabel_);
     rootNoteLabel_.setJustificationType(juce::Justification::centredLeft);
 
@@ -1548,7 +1577,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         processor_.setSampleWindow(defaultStart, defaultEnd);
         processor_.setLoopPoints(defaultStart, defaultEnd);
 
-        waveformView_.setState(sampleLength, processor_.getLoadedSamplePeaksByChannel(),
+        waveformView_.setState(sampleLength, getLoadedSampleWaveformMinMaxByChannel(),
             defaultStart, defaultEnd, defaultStart, defaultEnd,
             processor_.getLoadedSampleLoopFormatBadge());
         waveformView_.resetView();
@@ -2221,6 +2250,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
 
     samplePathLabel_.setVisible(showSampleTab);
     loadButton_.setVisible(showSampleTab);
+    waveformDisplayModeCombo_.setVisible(showSampleTab);
     sampleControlsViewport_.setVisible(showSampleTab);
     rootNoteLabel_.setVisible(showSampleTab);
     rootNoteCombo_.setVisible(showSampleTab);
@@ -2831,6 +2861,8 @@ void AudiocityAudioProcessorEditor::resized()
         auto topRow = area.removeFromTop(kTopBarH);
         loadButton_.setBounds(topRow.removeFromRight(32));
         topRow.removeFromRight(8);
+        waveformDisplayModeCombo_.setBounds(topRow.removeFromRight(132));
+        topRow.removeFromRight(8);
         samplePathLabel_.setBounds(topRow);
     }
 
@@ -3087,6 +3119,28 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 void AudiocityAudioProcessorEditor::updateGeneratePreviewButtonText()
 {
     generatePreviewButton_.setButtonText(processor_.isGeneratedWaveformPreviewPlaying() ? "Stop" : "Play");
+}
+
+std::vector<std::vector<AudiocityAudioProcessorEditor::WaveformView::MinMax>>
+AudiocityAudioProcessorEditor::getLoadedSampleWaveformMinMaxByChannel(const int maxPeaks) const
+{
+    const auto source = processor_.getLoadedSampleMinMaxByChannel(maxPeaks);
+    std::vector<std::vector<WaveformView::MinMax>> converted;
+    converted.resize(source.size());
+
+    for (std::size_t channel = 0; channel < source.size(); ++channel)
+    {
+        const auto& srcChannel = source[channel];
+        auto& dstChannel = converted[channel];
+        dstChannel.resize(srcChannel.size());
+        for (std::size_t i = 0; i < srcChannel.size(); ++i)
+        {
+            dstChannel[i].min = srcChannel[i].minValue;
+            dstChannel[i].max = srcChannel[i].maxValue;
+        }
+    }
+
+    return converted;
 }
 
 int AudiocityAudioProcessorEditor::getSelectedGenerateSampleCount() const
@@ -3573,21 +3627,21 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
         ? false
         : (isNewLoadedSample
             || forceWaveformReset
-            || cachedWaveformPeaksByChannel_.empty()
+            || cachedWaveformMinMaxByChannel_.empty()
             || cachedWaveformPeakResolution_ != targetPeakResolution);
 
     if (sampleLength <= 0)
     {
-        cachedWaveformPeaksByChannel_.clear();
+        cachedWaveformMinMaxByChannel_.clear();
         cachedWaveformPeakResolution_ = 0;
     }
     else if (shouldRefreshPeaks)
     {
-        cachedWaveformPeaksByChannel_ = processor_.getLoadedSamplePeaksByChannel(targetPeakResolution);
+        cachedWaveformMinMaxByChannel_ = getLoadedSampleWaveformMinMaxByChannel(targetPeakResolution);
         cachedWaveformPeakResolution_ = targetPeakResolution;
     }
 
-    waveformView_.setState(sampleLength, cachedWaveformPeaksByChannel_,
+    waveformView_.setState(sampleLength, cachedWaveformMinMaxByChannel_,
         processor_.getSampleWindowStart(), processor_.getSampleWindowEnd(),
         processor_.getLoopStart(), processor_.getLoopEnd(),
         processor_.getLoadedSampleLoopFormatBadge());
@@ -3723,7 +3777,7 @@ void AudiocityAudioProcessorEditor::pushPlaybackWindow()
 
     // Update waveform view to show new playback bounds
     const auto sampleLength = processor_.getLoadedSampleLength();
-    waveformView_.setState(sampleLength, processor_.getLoadedSamplePeaksByChannel(),
+    waveformView_.setState(sampleLength, getLoadedSampleWaveformMinMaxByChannel(cachedWaveformPeakResolution_ > 0 ? cachedWaveformPeakResolution_ : 2048),
         ps, pe, processor_.getLoopStart(), processor_.getLoopEnd(),
         processor_.getLoadedSampleLoopFormatBadge());
 }
@@ -3763,7 +3817,7 @@ void AudiocityAudioProcessorEditor::applyLoopPoints()
     }
 
     const auto sampleLength = processor_.getLoadedSampleLength();
-    waveformView_.setState(sampleLength, processor_.getLoadedSamplePeaksByChannel(),
+    waveformView_.setState(sampleLength, getLoadedSampleWaveformMinMaxByChannel(cachedWaveformPeakResolution_ > 0 ? cachedWaveformPeakResolution_ : 2048),
         processor_.getSampleWindowStart(), processor_.getSampleWindowEnd(),
         appliedLoopStart, appliedLoopEnd,
         processor_.getLoadedSampleLoopFormatBadge());

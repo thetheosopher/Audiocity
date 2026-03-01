@@ -83,11 +83,28 @@ private:
     class WaveformView final : public juce::Component
     {
     public:
-        void setState(int totalSamples, std::vector<std::vector<float>> peaksByChannel,
+        enum class DisplayMode
+        {
+            signedWaveform,
+            symmetricEnvelope
+        };
+
+        struct MinMax
+        {
+            float min = 0.0f;
+            float max = 0.0f;
+        };
+
+        void setState(int totalSamples, std::vector<std::vector<MinMax>> waveformByChannel,
                       int playbackStart, int playbackEnd,
                       int loopStart, int loopEnd,
                       juce::String loopFormatBadge);
         void resetView();
+        void setDisplayMode(DisplayMode mode)
+        {
+            displayMode_ = mode;
+            repaint();
+        }
 
         std::function<void(int, int)> onLoopPreview;
         std::function<void(int, int)> onLoopCommitted;
@@ -113,7 +130,7 @@ private:
         void panByPixels(float deltaX);
 
         int totalSamples_ = 0;
-        std::vector<std::vector<float>> peaksByChannel_;
+        std::vector<std::vector<MinMax>> waveformByChannel_;
         int playbackStart_ = 0;
         int playbackEnd_ = 0;
         int loopStart_ = 0;
@@ -126,6 +143,7 @@ private:
         DragMode dragMode_ = DragMode::none;
         int dragAnchorViewStart_ = 0;
         bool linkedPlaybackDuringLoopDrag_ = false;
+        DisplayMode displayMode_ = DisplayMode::signedWaveform;
     };
 
     AudiocityAudioProcessor& processor_;
@@ -159,7 +177,7 @@ private:
     std::vector<int> visibleSampleEntryIndices_;
     juce::String sampleRootFolderPath_;
     juce::String lastWaveformSamplePath_;
-    std::vector<std::vector<float>> cachedWaveformPeaksByChannel_;
+    std::vector<std::vector<WaveformView::MinMax>> cachedWaveformMinMaxByChannel_;
     int cachedWaveformPeakResolution_ = 0;
 
     // ── Sample Browser ──
@@ -188,6 +206,7 @@ private:
     // ── Sample ──
     juce::Label samplePathLabel_;
     juce::TextButton loadButton_{ "..." };
+    juce::ComboBox waveformDisplayModeCombo_;
     juce::Label rootNoteLabel_{ {}, "Root Note" };
     juce::ComboBox rootNoteCombo_;
 
@@ -423,6 +442,8 @@ private:
     void updateAmpEnvelopeGraphFromDials();
     void updateFilterEnvelopeGraphFromDials();
     void updateFilterResponseGraphFromControls();
+    [[nodiscard]] std::vector<std::vector<WaveformView::MinMax>>
+        getLoadedSampleWaveformMinMaxByChannel(int maxPeaks = 2048) const;
     void regenerateWaveform();
     [[nodiscard]] int getSelectedGenerateSampleCount() const;
     [[nodiscard]] int getSelectedGenerateBitDepth() const;
