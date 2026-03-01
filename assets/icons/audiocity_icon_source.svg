@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#191e3a"/>
+      <stop offset="100%" stop-color="#090b15"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#48b3ff" stop-opacity="0.36"/>
+      <stop offset="100%" stop-color="#48b3ff" stop-opacity="0.04"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <ellipse cx="512" cy="300" rx="390" ry="240" fill="url(#glow)"/>
+  <rect y="798" width="1024" height="226" fill="#0e111f"/>
+  <g fill="#222a54">
+    <rect x="82" y="512" width="92" height="286"/>
+    <rect x="184" y="590" width="60" height="208"/>
+    <rect x="256" y="430" width="112" height="368"/>
+    <rect x="379" y="552" width="72" height="246"/>
+    <rect x="460" y="370" width="104" height="428"/>
+    <rect x="574" y="488" width="72" height="310"/>
+    <rect x="656" y="450" width="96" height="348"/>
+    <rect x="766" y="566" width="60" height="232"/>
+    <rect x="836" y="390" width="112" height="408"/>
+  </g>
+  <polyline fill="none" stroke="#54e1ff" stroke-opacity="0.32" stroke-width="56" stroke-linecap="round" stroke-linejoin="round"
+    points="82,483 124,455 166,408 208,363 250,336 292,334 334,359 376,407 418,469 460,529 502,571 544,582 586,561 628,516 670,463 712,419 754,397 796,402 838,433 880,482 922,537"/>
+  <polyline fill="none" stroke="#54e1ff" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"
+    points="82,483 124,455 166,408 208,363 250,336 292,334 334,359 376,407 418,469 460,529 502,571 544,582 586,561 628,516 670,463 712,419 754,397 796,402 838,433 880,482 922,537"/>
+</svg>

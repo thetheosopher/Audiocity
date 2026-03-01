@@ -34,6 +34,8 @@ juce_add_plugin(Audiocity
     PLUGIN_MANUFACTURER_CODE AuCt
     PLUGIN_CODE AuCy
     FORMATS VST3 Standalone
+    ICON_BIG "${CMAKE_SOURCE_DIR}/assets/icons/audiocity_icon_512.png"
+    ICON_SMALL "${CMAKE_SOURCE_DIR}/assets/icons/audiocity_icon_128.png"
     PRODUCT_NAME "Audiocity")
 
 juce_generate_juce_header(Audiocity)
