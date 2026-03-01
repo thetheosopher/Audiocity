@@ -2473,6 +2473,46 @@ bool runReverbMixTailTest()
     const auto wetTail = renderTailEnergy(0.35f);
     return wetTail > dryTail * 1.05f;
 }
+
+bool runMasterVolumeGainTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    auto sample = createTestSample(2048);
+
+    auto renderPeakForVolume = [&](const float volume)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(sample, sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::oneShot);
+        engine.setReverbMix(0.0f);
+        engine.setMasterVolume(volume);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+
+        float peak = 0.0f;
+        for (int channel = 0; channel < channels; ++channel)
+            peak = juce::jmax(peak, block.getMagnitude(channel, 0, block.getNumSamples()));
+
+        return peak;
+    };
+
+    const auto peakUnity = renderPeakForVolume(1.0f);
+    const auto peakHalf = renderPeakForVolume(0.5f);
+    const auto peakMute = renderPeakForVolume(0.0f);
+
+    if (peakUnity <= 1.0e-6f)
+        return false;
+
+    const auto ratio = peakHalf / peakUnity;
+    return ratio > 0.45f && ratio < 0.55f && peakMute < 1.0e-7f;
+}
 }
 
 int main()
@@ -2611,6 +2651,9 @@ int main()
 
     if (!runReverbMixTailTest())
         return 28;
+
+    if (!runMasterVolumeGainTest())
+        return 47;
 
     if (!runLoopCrossfadeSmoothsBoundaryTest())
         return 29;

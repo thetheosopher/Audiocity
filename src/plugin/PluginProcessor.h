@@ -94,6 +94,15 @@ public:
 
     void setReverbMix(float mix) noexcept;
     [[nodiscard]] float getReverbMix() const noexcept { return engine_.getReverbMix(); }
+    void setMasterVolume(float volume) noexcept;
+    [[nodiscard]] float getMasterVolume() const noexcept { return engine_.getMasterVolume(); }
+
+    struct OutputPeakLevels
+    {
+        float left = 0.0f;
+        float right = 0.0f;
+    };
+    [[nodiscard]] OutputPeakLevels consumeOutputPeakLevels() noexcept;
 
     void setPreloadSamples(int preloadSamples) noexcept { engine_.setPreloadSamples(preloadSamples); }
     [[nodiscard]] int getPreloadSamples() const noexcept { return engine_.getPreloadSamples(); }
@@ -180,6 +189,7 @@ private:
     [[nodiscard]] float lfoRateHzFromTempoSync(int divisionIndex) const noexcept;
     void syncSampleDerivedParametersFromEngine() noexcept;
     void renderGeneratedWavePreview(juce::AudioBuffer<float>& buffer) noexcept;
+    void updateOutputPeakLevels(const juce::AudioBuffer<float>& buffer) noexcept;
 
     struct UiMidiEvent
     {
@@ -211,6 +221,8 @@ private:
     std::atomic<int> suspendParamSyncBlocks_{ 0 };
     std::atomic<float> hostBpm_{ 120.0f };
     std::atomic<bool> generatedWaveformLoaded_{ false };
+    std::atomic<float> outputPeakLeft_{ 0.0f };
+    std::atomic<float> outputPeakRight_{ 0.0f };
     static constexpr int kPreviewWaveMaxSamples = 2048;
     std::array<float, kPreviewWaveMaxSamples> previewWaveData_{};
     std::atomic<int> previewWaveSamples_{ 0 };

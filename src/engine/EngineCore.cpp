@@ -633,6 +633,12 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
             reverb_.processMono(outputs[0], numSamples);
     }
 
+    if (masterVolume_ < 0.9999f)
+    {
+        for (int channel = 0; channel < numChannels; ++channel)
+            juce::FloatVectorOperations::multiply(outputs[channel], masterVolume_, numSamples);
+    }
+
     pendingEventCount_ = 0;
 }
 

@@ -44,6 +44,7 @@ constexpr auto kPlaybackMode = "playbackMode";
 constexpr auto kQualityTier = "qualityTier";
 constexpr auto kVelocityCurve = "velocityCurve";
 constexpr auto kReverbMix = "reverbMix";
+constexpr auto kMasterVolume = "masterVolume";
 constexpr auto kPreloadSamples = "preloadSamples";
 constexpr auto kMonoMode = "monoMode";
 constexpr auto kLegatoMode = "legatoMode";
@@ -105,6 +106,7 @@ constexpr auto kParamLoopCrossfade = "p_loopCrossfade";
 constexpr auto kParamVelocityCurve = "p_velocityCurve";
 constexpr auto kParamQualityTier = "p_qualityTier";
 constexpr auto kParamReverbMix = "p_reverbMix";
+constexpr auto kParamMasterVolume = "p_masterVolume";
 constexpr float kMaxSamplePositionParam = 16000000.0f;
 }
 
@@ -130,6 +132,7 @@ AudiocityAudioProcessor::AudiocityAudioProcessor()
     setQualityTier(engine_.getQualityTier());
     setVelocityCurve(engine_.getVelocityCurve());
     setReverbMix(engine_.getReverbMix());
+    setMasterVolume(engine_.getMasterVolume());
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout AudiocityAudioProcessor::createParameterLayout()
@@ -222,6 +225,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout AudiocityAudioProcessor::cre
         juce::StringArray{ "CPU", "Fidelity", "Ultra" }, 1));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamReverbMix, "Reverb Mix",
         juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamMasterVolume, "Master Volume",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 1.0f));
 
     return { params.begin(), params.end() };
 }
@@ -303,6 +308,7 @@ void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
     engine_.setQualityTier(static_cast<QualityTier>(juce::jlimit(0, 2,
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamQualityTier)->load())))));
     engine_.setReverbMix(apvts_.getRawParameterValue(kParamReverbMix)->load());
+    engine_.setMasterVolume(apvts_.getRawParameterValue(kParamMasterVolume)->load());
 }
 
 void AudiocityAudioProcessor::prepareToPlay(const double sampleRate, const int samplesPerBlock)
@@ -350,6 +356,7 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         && previewWaveSamples_.load(std::memory_order_relaxed) > 0)
     {
         renderGeneratedWavePreview(buffer);
+        updateOutputPeakLevels(buffer);
         return;
     }
 
@@ -363,6 +370,7 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     }
 
     engine_.render(buffer, midiMessages);
+    updateOutputPeakLevels(buffer);
 }
 
 void AudiocityAudioProcessor::setQualityTier(const QualityTier tier) noexcept
@@ -381,6 +389,20 @@ void AudiocityAudioProcessor::setReverbMix(const float mix) noexcept
 {
     engine_.setReverbMix(mix);
     updateParameterFromPlainValue(kParamReverbMix, mix);
+}
+
+void AudiocityAudioProcessor::setMasterVolume(const float volume) noexcept
+{
+    engine_.setMasterVolume(volume);
+    updateParameterFromPlainValue(kParamMasterVolume, engine_.getMasterVolume());
+}
+
+AudiocityAudioProcessor::OutputPeakLevels AudiocityAudioProcessor::consumeOutputPeakLevels() noexcept
+{
+    OutputPeakLevels levels;
+    levels.left = outputPeakLeft_.exchange(0.0f, std::memory_order_acq_rel);
+    levels.right = outputPeakRight_.exchange(0.0f, std::memory_order_acq_rel);
+    return levels;
 }
 
 void AudiocityAudioProcessor::setFilterEnvelope(const AdsrSettings& settings) noexcept
@@ -477,6 +499,7 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kQualityTier, qualityTierIndex, nullptr);
     state.setProperty(kVelocityCurve, static_cast<int>(getVelocityCurve()), nullptr);
     state.setProperty(kReverbMix, getReverbMix(), nullptr);
+    state.setProperty(kMasterVolume, getMasterVolume(), nullptr);
     state.setProperty(kPreloadSamples, getPreloadSamples(), nullptr);
     state.setProperty(kMonoMode, getMonoMode() ? 1 : 0, nullptr);
     state.setProperty(kLegatoMode, getLegatoMode() ? 1 : 0, nullptr);
@@ -592,6 +615,7 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     setVelocityCurve(static_cast<VelocityCurve>(static_cast<int>(state.getProperty(kVelocityCurve,
         static_cast<int>(getVelocityCurve())))));
     setReverbMix(static_cast<float>(state.getProperty(kReverbMix, getReverbMix())));
+    setMasterVolume(static_cast<float>(state.getProperty(kMasterVolume, getMasterVolume())));
     setPreloadSamples(static_cast<int>(state.getProperty(kPreloadSamples, getPreloadSamples())));
     setMonoMode(static_cast<int>(state.getProperty(kMonoMode, getMonoMode() ? 1 : 0)) == 1);
     setLegatoMode(static_cast<int>(state.getProperty(kLegatoMode, getLegatoMode() ? 1 : 0)) == 1);
@@ -1012,11 +1036,13 @@ void AudiocityAudioProcessor::renderGeneratedWavePreview(juce::AudioBuffer<float
     const auto phaseIncrement = static_cast<float>((hz * static_cast<double>(count)) / getSampleRate());
     const auto channels = buffer.getNumChannels();
     const auto samples = buffer.getNumSamples();
+    const auto masterVolume = juce::jlimit(0.0f, 1.0f,
+        apvts_.getRawParameterValue(kParamMasterVolume)->load());
 
     for (int sample = 0; sample < samples; ++sample)
     {
         const auto readIndex = juce::jlimit(0, count - 1, static_cast<int>(previewWavePhase_));
-        const auto value = previewWaveData_[static_cast<std::size_t>(readIndex)] * 0.25f;
+        const auto value = previewWaveData_[static_cast<std::size_t>(readIndex)] * 0.25f * masterVolume;
         for (int channel = 0; channel < channels; ++channel)
             buffer.setSample(channel, sample, value);
 
@@ -1024,6 +1050,30 @@ void AudiocityAudioProcessor::renderGeneratedWavePreview(juce::AudioBuffer<float
         while (previewWavePhase_ >= static_cast<float>(count))
             previewWavePhase_ -= static_cast<float>(count);
     }
+}
+
+void AudiocityAudioProcessor::updateOutputPeakLevels(const juce::AudioBuffer<float>& buffer) noexcept
+{
+    const auto channels = buffer.getNumChannels();
+    const auto samples = buffer.getNumSamples();
+    if (channels <= 0 || samples <= 0)
+        return;
+
+    const auto leftPeak = buffer.getMagnitude(0, 0, samples);
+    const auto rightPeak = channels > 1 ? buffer.getMagnitude(1, 0, samples) : leftPeak;
+
+    auto accumulatePeak = [](std::atomic<float>& atomicPeak, const float candidate)
+    {
+        auto current = atomicPeak.load(std::memory_order_relaxed);
+        while (candidate > current
+            && !atomicPeak.compare_exchange_weak(current, candidate,
+                std::memory_order_release, std::memory_order_relaxed))
+        {
+        }
+    };
+
+    accumulatePeak(outputPeakLeft_, leftPeak);
+    accumulatePeak(outputPeakRight_, rightPeak);
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

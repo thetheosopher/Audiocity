@@ -725,6 +725,48 @@ void AudiocityAudioProcessorEditor::FilterResponseGraph::paint(juce::Graphics& g
     g.drawLine(envX, area.getY(), envX, area.getBottom(), 1.0f);
 }
 
+void AudiocityAudioProcessorEditor::StereoPeakMeter::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colour(0xff202234));
+    g.setColour(juce::Colour(0xff3a3a52));
+    g.drawRect(getLocalBounds(), 1);
+
+    auto area = getLocalBounds().reduced(6, 6);
+    if (area.getWidth() <= 8 || area.getHeight() <= 8)
+        return;
+
+    constexpr int labelWidth = 10;
+    auto leftRow = area.removeFromTop(juce::jmax(10, area.getHeight() / 2 - 2));
+    area.removeFromTop(4);
+    auto rightRow = area;
+
+    auto drawRow = [&](juce::Rectangle<int> row, const juce::String& label, const float level)
+    {
+        g.setColour(juce::Colour(0xff8f96af));
+        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.drawText(label, row.removeFromLeft(labelWidth), juce::Justification::centredLeft);
+
+        const auto meterArea = row.reduced(2, 1);
+        g.setColour(juce::Colours::white.withAlpha(0.08f));
+        g.fillRoundedRectangle(meterArea.toFloat(), 2.0f);
+
+        auto fillArea = meterArea;
+        fillArea.setWidth(static_cast<int>(std::round(meterArea.getWidth() * juce::jlimit(0.0f, 1.0f, level))));
+
+        auto meterColour = juce::Colour(0xff61d9ff);
+        if (level >= 0.98f)
+            meterColour = juce::Colour(0xffef6b73);
+        else if (level >= 0.85f)
+            meterColour = juce::Colour(0xfff5b76b);
+
+        g.setColour(meterColour);
+        g.fillRoundedRectangle(fillArea.toFloat(), 2.0f);
+    };
+
+    drawRow(leftRow, "L", leftLevel_);
+    drawRow(rightRow, "R", rightLevel_);
+}
+
 // ─── WaveformView ──────────────────────────────────────────────────────────────
 
 void AudiocityAudioProcessorEditor::WaveformView::setState(
@@ -1840,11 +1882,17 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     };
 
     addAndMakeVisible(preloadDial_);
+    addAndMakeVisible(masterVolumeDial_);
+    addAndMakeVisible(outputLevelMeter_);
     addAndMakeVisible(reverbMixDial_);
     preloadDial_.onValueChange = [this]
     {
         processor_.setPreloadSamples(juce::jmax(256, static_cast<int>(preloadDial_.getValue())));
         refreshUI();
+    };
+    masterVolumeDial_.onValueChange = [this]
+    {
+        processor_.setMasterVolume(static_cast<float>(masterVolumeDial_.getValue()) / 100.0f);
     };
     reverbMixDial_.onValueChange = [this]
     {
@@ -1903,6 +1951,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         { &filterLfoStartRandDial_, "filterLfoStartRand" },
         { &filterLfoFadeInDial_, "filterLfoFadeIn" },
         { &preloadDial_,        "preload" },
+        { &masterVolumeDial_,   "masterVolume" },
         { &reverbMixDial_,      "reverbMix" },
         { &fadeInDial_,         "fadeIn" },
         { &fadeOutDial_,        "fadeOut" },
@@ -1973,6 +2022,8 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addToSampleControls(qualityFidelityButton_);
     addToSampleControls(qualityUltraButton_);
     addToSampleControls(preloadDial_);
+    addToSampleControls(masterVolumeDial_);
+    addToSampleControls(outputLevelMeter_);
     addToSampleControls(reverbMixDial_);
     addToSampleControls(diagnosticsLabel_);
 
@@ -2027,6 +2078,9 @@ void AudiocityAudioProcessorEditor::handleNoteOff(juce::MidiKeyboardState* sourc
 void AudiocityAudioProcessorEditor::timerCallback()
 {
     updateGeneratePreviewButtonText();
+
+    const auto outputPeaks = processor_.consumeOutputPeakLevels();
+    outputLevelMeter_.pushLevels(outputPeaks.left, outputPeaks.right);
 
     for (int i = 0; i < kPlayerPadCount; ++i)
     {
@@ -2231,6 +2285,7 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
     qualityUltraButton_.setToggleState(
         processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::ultra,
         juce::dontSendNotification);
+    masterVolumeDial_.setValue(processor_.getMasterVolume() * 100.0f, juce::dontSendNotification);
     reverbMixDial_.setValue(processor_.getReverbMix() * 100.0f, juce::dontSendNotification);
 }
 
@@ -2310,6 +2365,8 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     qualityFidelityButton_.setVisible(showSampleTab);
     qualityUltraButton_.setVisible(showSampleTab);
     preloadDial_.setVisible(showSampleTab);
+    masterVolumeDial_.setVisible(showSampleTab);
+    outputLevelMeter_.setVisible(showSampleTab);
     reverbMixDial_.setVisible(showSampleTab);
     diagnosticsLabel_.setVisible(showSampleTab);
 
@@ -3044,6 +3101,13 @@ void AudiocityAudioProcessorEditor::resized()
         outInner.removeFromLeft(kStackColGap);
 
         reverbMixDial_.setBounds(outInner.removeFromLeft(kDial));
+        outInner.removeFromLeft(kDialGap);
+
+        masterVolumeDial_.setBounds(outInner.removeFromLeft(kDial));
+        outInner.removeFromLeft(kDialGap);
+
+        auto meterBounds = outInner.removeFromLeft(84);
+        outputLevelMeter_.setBounds(meterBounds.reduced(0, 8));
         outInner.removeFromLeft(kStackColGap);
 
         preloadDial_.setBounds(outInner.removeFromLeft(kDial));
@@ -3425,6 +3489,8 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Fade Out - Number of samples to fade out at playback end");
     preloadDial_.setLabelTooltip(
         "Preload - Number of samples buffered before streaming begins");
+    masterVolumeDial_.setLabelTooltip(
+        "Master Volume - Final output gain after engine processing");
     qualityCpuButton_.setTooltip(
         "Quality - Prioritize lower CPU usage");
     qualityFidelityButton_.setTooltip(
@@ -3729,6 +3795,7 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
         processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::ultra,
         juce::dontSendNotification);
     preloadDial_.setValue(processor_.getPreloadSamples());
+    masterVolumeDial_.setValue(processor_.getMasterVolume() * 100.0f);
     reverbMixDial_.setValue(processor_.getReverbMix() * 100.0f);
 
     const auto velCurve = processor_.getVelocityCurve();

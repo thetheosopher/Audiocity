@@ -294,6 +294,24 @@ private:
         float envAmountHz_ = 0.0f;
     };
 
+    class StereoPeakMeter final : public juce::Component
+    {
+    public:
+        void pushLevels(float left, float right)
+        {
+            constexpr float kDecayPerTick = 0.92f;
+            leftLevel_ = juce::jmax(juce::jlimit(0.0f, 1.0f, left), leftLevel_ * kDecayPerTick);
+            rightLevel_ = juce::jmax(juce::jlimit(0.0f, 1.0f, right), rightLevel_ * kDecayPerTick);
+            repaint();
+        }
+
+        void paint(juce::Graphics& g) override;
+
+    private:
+        float leftLevel_ = 0.0f;
+        float rightLevel_ = 0.0f;
+    };
+
     GeneratedWaveformView generateWaveformView_;
     juce::TextButton generateSineButton_{ "Sine" };
     juce::TextButton generateRampButton_{ "Ramp" };
@@ -402,6 +420,8 @@ private:
     juce::ToggleButton qualityFidelityButton_{ "Fidelity" };
     juce::ToggleButton qualityUltraButton_{ "Ultra" };
     CcLearnDial preloadDial_{ "Preload", 256, 131072, 1, {}, 32768 };
+    CcLearnDial masterVolumeDial_{ "Master", 0, 100, 1, "%", 100 };
+    StereoPeakMeter outputLevelMeter_;
     CcLearnDial reverbMixDial_{ "Reverb", 0, 100, 1, "%", 0 };
 
     // ── Diagnostics ──

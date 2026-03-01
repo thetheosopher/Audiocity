@@ -115,6 +115,8 @@ public:
     [[nodiscard]] VelocityCurve getVelocityCurve() const noexcept { return velocityCurve_; }
     void setReverbMix(float mix) noexcept;
     [[nodiscard]] float getReverbMix() const noexcept { return reverbMix_; }
+    void setMasterVolume(float volume) noexcept { masterVolume_ = juce::jlimit(0.0f, 1.0f, volume); }
+    [[nodiscard]] float getMasterVolume() const noexcept { return masterVolume_; }
 
     void setSampleWindow(int startSample, int endSample) noexcept;
     [[nodiscard]] int getSampleWindowStart() const noexcept { return sampleWindowStart_; }
@@ -265,6 +267,7 @@ private:
     QualityTier qualityTier_ = QualityTier::fidelity;
     VelocityCurve velocityCurve_ = VelocityCurve::linear;
     float reverbMix_ = 0.0f;
+    float masterVolume_ = 1.0f;
     juce::Reverb reverb_;
 
     int loopStartSample_ = 0;
