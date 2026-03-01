@@ -358,6 +358,151 @@ bool runLoopCrossfadeSmoothsBoundaryTest()
     return crossfadedDelta < (noCrossfadeDelta * 0.85f);
 }
 
+bool runLoadSampleResetsPlaybackAndLoopRangesTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 512;
+
+    const auto tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_load_reset_test", ".wav");
+
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(tempFile.createOutputStream());
+        if (output == nullptr)
+            return false;
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+            return false;
+
+        output.release();
+
+        juce::AudioBuffer<float> buffer(1, sampleLength);
+        for (int i = 0; i < sampleLength; ++i)
+        {
+            const float phase = static_cast<float>(2.0 * juce::MathConstants<double>::pi * i * 440.0 / sampleRate);
+            buffer.setSample(0, i, 0.3f * std::sin(phase));
+        }
+
+        if (!writer->writeFromAudioSampleBuffer(buffer, 0, sampleLength))
+            return false;
+    }
+
+    audiocity::engine::EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setSampleData(createTestSample(4096), sampleRate, 60);
+    engine.setSampleWindow(64, 192);
+    engine.setLoopPoints(80, 160);
+
+    const auto loaded = engine.loadSampleFromFile(tempFile);
+    tempFile.deleteFile();
+
+    if (!loaded)
+        return false;
+
+    return engine.getSampleWindowStart() == 0
+        && engine.getSampleWindowEnd() == sampleLength - 1
+        && engine.getLoopStart() == 0
+        && engine.getLoopEnd() == sampleLength - 1;
+}
+
+bool runLoadSampleResetsEnvelopeAndFilterDefaultsTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 512;
+
+    const auto tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_load_defaults_test", ".wav");
+
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(tempFile.createOutputStream());
+        if (output == nullptr)
+            return false;
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+            return false;
+
+        output.release();
+
+        juce::AudioBuffer<float> buffer(1, sampleLength);
+        for (int i = 0; i < sampleLength; ++i)
+        {
+            const float phase = static_cast<float>(2.0 * juce::MathConstants<double>::pi * i * 330.0 / sampleRate);
+            buffer.setSample(0, i, 0.3f * std::sin(phase));
+        }
+
+        if (!writer->writeFromAudioSampleBuffer(buffer, 0, sampleLength))
+            return false;
+    }
+
+    audiocity::engine::EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+
+    audiocity::engine::EngineCore::AdsrSettings customAmp;
+    customAmp.attackSeconds = 0.320f;
+    customAmp.decaySeconds = 0.410f;
+    customAmp.sustainLevel = 0.23f;
+    customAmp.releaseSeconds = 0.580f;
+    engine.setAmpEnvelope(customAmp);
+
+    audiocity::engine::EngineCore::AdsrSettings customFilterEnv;
+    customFilterEnv.attackSeconds = 0.420f;
+    customFilterEnv.decaySeconds = 0.530f;
+    customFilterEnv.sustainLevel = 0.64f;
+    customFilterEnv.releaseSeconds = 0.710f;
+    engine.setFilterEnvelope(customFilterEnv);
+
+    auto customFilter = engine.getFilterSettings();
+    customFilter.baseCutoffHz = 420.0f;
+    customFilter.envAmountHz = 9500.0f;
+    customFilter.resonance = 0.77f;
+    customFilter.mode = audiocity::engine::EngineCore::FilterSettings::Mode::highPass24;
+    customFilter.lfoRateHz = 12.0f;
+    customFilter.lfoAmountHz = 3200.0f;
+    customFilter.lfoTempoSync = true;
+    engine.setFilterSettings(customFilter);
+
+    const auto loaded = engine.loadSampleFromFile(tempFile);
+    tempFile.deleteFile();
+
+    if (!loaded)
+        return false;
+
+    const auto amp = engine.getAmpEnvelope();
+    if (std::abs(amp.attackSeconds - 0.005f) > 1.0e-6f
+        || std::abs(amp.decaySeconds - 0.150f) > 1.0e-6f
+        || std::abs(amp.sustainLevel - 0.85f) > 1.0e-6f
+        || std::abs(amp.releaseSeconds - 0.150f) > 1.0e-6f)
+    {
+        return false;
+    }
+
+    const auto filterEnv = engine.getFilterEnvelope();
+    if (std::abs(filterEnv.attackSeconds - 0.001f) > 1.0e-6f
+        || std::abs(filterEnv.decaySeconds - 0.120f) > 1.0e-6f
+        || std::abs(filterEnv.sustainLevel - 0.0f) > 1.0e-6f
+        || std::abs(filterEnv.releaseSeconds - 0.100f) > 1.0e-6f)
+    {
+        return false;
+    }
+
+    const auto filter = engine.getFilterSettings();
+    return std::abs(filter.baseCutoffHz - 18000.0f) <= 1.0e-6f
+        && std::abs(filter.envAmountHz - 0.0f) <= 1.0e-6f
+        && std::abs(filter.resonance - 0.0f) <= 1.0e-6f
+        && filter.mode == audiocity::engine::EngineCore::FilterSettings::Mode::lowPass12
+        && std::abs(filter.lfoRateHz - 0.0f) <= 1.0e-6f
+        && std::abs(filter.lfoAmountHz - 0.0f) <= 1.0e-6f
+        && !filter.lfoTempoSync;
+}
+
 bool runEditorSampleEditControlsTest()
 {
     constexpr int channels = 2;
@@ -457,7 +602,7 @@ bool runEditorSampleEditControlsTest()
     return true;
 }
 
-bool runChokeGroupStopsPreviousVoiceTest()
+bool runPolyphonicDifferentNotesLayerWhenMonoOffTest()
 {
     constexpr int channels = 2;
     constexpr int blockSize = 128;
@@ -466,7 +611,7 @@ bool runChokeGroupStopsPreviousVoiceTest()
     audiocity::engine::EngineCore engine;
     engine.prepare(sampleRate, blockSize, channels);
     engine.setSampleData(createTestSample(4096), sampleRate, 60);
-    engine.setChokeGroup(1);
+    engine.setMonoMode(false);
 
     juce::MidiBuffer midi;
     midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
@@ -475,7 +620,7 @@ bool runChokeGroupStopsPreviousVoiceTest()
     juce::AudioBuffer<float> block(channels, blockSize);
     engine.render(block, midi);
 
-    return engine.activeVoiceCount() == 1 && !engine.isNoteActive(60) && engine.isNoteActive(64);
+    return engine.activeVoiceCount() >= 2 && engine.isNoteActive(60) && engine.isNoteActive(64);
 }
 
 bool runMonoLegatoUsesSingleVoiceTest()
@@ -2186,11 +2331,17 @@ int main()
     if (!runLoopMarkersTest())
         return 4;
 
+    if (!runLoadSampleResetsPlaybackAndLoopRangesTest())
+        return 44;
+
+    if (!runLoadSampleResetsEnvelopeAndFilterDefaultsTest())
+        return 45;
+
     if (!runEditorSampleEditControlsTest())
         return 5;
 
-    if (!runChokeGroupStopsPreviousVoiceTest())
-        return 6;
+    if (!runPolyphonicDifferentNotesLayerWhenMonoOffTest())
+        return 43;
 
     if (!runMonoLegatoUsesSingleVoiceTest())
         return 7;

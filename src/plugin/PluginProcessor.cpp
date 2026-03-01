@@ -48,7 +48,6 @@ constexpr auto kPreloadSamples = "preloadSamples";
 constexpr auto kMonoMode = "monoMode";
 constexpr auto kLegatoMode = "legatoMode";
 constexpr auto kGlideSeconds = "glideSeconds";
-constexpr auto kChokeGroup = "chokeGroup";
 constexpr auto kSampleWindowStart = "sampleWindowStart";
 constexpr auto kSampleWindowEnd = "sampleWindowEnd";
 constexpr auto kLoopStart = "loopStart";
@@ -94,7 +93,6 @@ constexpr auto kParamPlaybackMode = "p_playbackMode";
 constexpr auto kParamMonoMode = "p_mono";
 constexpr auto kParamLegatoMode = "p_legato";
 constexpr auto kParamGlideSeconds = "p_glideSeconds";
-constexpr auto kParamChokeGroup = "p_chokeGroup";
 constexpr auto kParamFadeIn = "p_fadeIn";
 constexpr auto kParamFadeOut = "p_fadeOut";
 constexpr auto kParamReversePlayback = "p_reverse";
@@ -107,6 +105,7 @@ constexpr auto kParamLoopCrossfade = "p_loopCrossfade";
 constexpr auto kParamVelocityCurve = "p_velocityCurve";
 constexpr auto kParamQualityTier = "p_qualityTier";
 constexpr auto kParamReverbMix = "p_reverbMix";
+constexpr float kMaxSamplePositionParam = 16000000.0f;
 }
 
 AudiocityAudioProcessor::AudiocityAudioProcessor()
@@ -122,7 +121,6 @@ AudiocityAudioProcessor::AudiocityAudioProcessor()
     setMonoMode(engine_.getMonoMode());
     setLegatoMode(engine_.getLegatoMode());
     setGlideSeconds(engine_.getGlideSeconds());
-    setChokeGroup(engine_.getChokeGroup());
     setFadeSamples(engine_.getFadeInSamples(), engine_.getFadeOutSamples());
     setReversePlayback(engine_.getReversePlayback());
     setRootMidiNote(engine_.getRootMidiNote());
@@ -201,8 +199,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout AudiocityAudioProcessor::cre
     params.push_back(std::make_unique<juce::AudioParameterBool>(kParamLegatoMode, "Legato", false));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamGlideSeconds, "Glide Seconds",
         juce::NormalisableRange<float>(0.0f, 2.0f), 0.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamChokeGroup, "Choke Group",
-        juce::NormalisableRange<float>(0.0f, 16.0f, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamFadeIn, "Fade In",
         juce::NormalisableRange<float>(0.0f, 10000.0f, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamFadeOut, "Fade Out",
@@ -211,13 +207,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout AudiocityAudioProcessor::cre
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamRootMidiNote, "Root MIDI Note",
         juce::NormalisableRange<float>(0.0f, 127.0f, 1.0f), 60.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPlaybackStart, "Playback Start",
-        juce::NormalisableRange<float>(0.0f, 1000000.0f, 1.0f), 0.0f));
+        juce::NormalisableRange<float>(0.0f, kMaxSamplePositionParam, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPlaybackEnd, "Playback End",
-        juce::NormalisableRange<float>(0.0f, 1000000.0f, 1.0f), 1000000.0f));
+        juce::NormalisableRange<float>(0.0f, kMaxSamplePositionParam, 1.0f), kMaxSamplePositionParam));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamLoopStart, "Loop Start",
-        juce::NormalisableRange<float>(0.0f, 1000000.0f, 1.0f), 0.0f));
+        juce::NormalisableRange<float>(0.0f, kMaxSamplePositionParam, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamLoopEnd, "Loop End",
-        juce::NormalisableRange<float>(0.0f, 1000000.0f, 1.0f), 1000000.0f));
+        juce::NormalisableRange<float>(0.0f, kMaxSamplePositionParam, 1.0f), kMaxSamplePositionParam));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamLoopCrossfade, "Loop Crossfade",
         juce::NormalisableRange<float>(0.0f, 5000.0f, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterChoice>(kParamVelocityCurve, "Velocity Curve",
@@ -288,7 +284,6 @@ void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
     engine_.setMonoMode(apvts_.getRawParameterValue(kParamMonoMode)->load() >= 0.5f);
     engine_.setLegatoMode(apvts_.getRawParameterValue(kParamLegatoMode)->load() >= 0.5f);
     engine_.setGlideSeconds(apvts_.getRawParameterValue(kParamGlideSeconds)->load());
-    engine_.setChokeGroup(static_cast<int>(std::round(apvts_.getRawParameterValue(kParamChokeGroup)->load())));
     engine_.setFadeSamples(
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamFadeIn)->load())),
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamFadeOut)->load())));
@@ -337,7 +332,11 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         buffer.clear(channel, 0, buffer.getNumSamples());
 
     updateHostTempoFromPlayHead();
-    syncEngineFromAutomatableParameters();
+    const auto suspendedBlocks = suspendParamSyncBlocks_.load(std::memory_order_relaxed);
+    if (suspendedBlocks > 0)
+        suspendParamSyncBlocks_.store(suspendedBlocks - 1, std::memory_order_relaxed);
+    else
+        syncEngineFromAutomatableParameters();
 
     // Extract CC messages and push to FIFO for the editor to consume
     for (const auto metadata : midiMessages)
@@ -475,7 +474,6 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kMonoMode, getMonoMode() ? 1 : 0, nullptr);
     state.setProperty(kLegatoMode, getLegatoMode() ? 1 : 0, nullptr);
     state.setProperty(kGlideSeconds, getGlideSeconds(), nullptr);
-    state.setProperty(kChokeGroup, getChokeGroup(), nullptr);
     state.setProperty(kSampleWindowStart, getSampleWindowStart(), nullptr);
     state.setProperty(kSampleWindowEnd, getSampleWindowEnd(), nullptr);
     state.setProperty(kLoopStart, getLoopStart(), nullptr);
@@ -591,7 +589,6 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     setMonoMode(static_cast<int>(state.getProperty(kMonoMode, getMonoMode() ? 1 : 0)) == 1);
     setLegatoMode(static_cast<int>(state.getProperty(kLegatoMode, getLegatoMode() ? 1 : 0)) == 1);
     setGlideSeconds(static_cast<float>(state.getProperty(kGlideSeconds, getGlideSeconds())));
-    setChokeGroup(static_cast<int>(state.getProperty(kChokeGroup, getChokeGroup())));
     setSampleWindow(
         static_cast<int>(state.getProperty(kSampleWindowStart, getSampleWindowStart())),
         static_cast<int>(state.getProperty(kSampleWindowEnd, getSampleWindowEnd())));
@@ -649,7 +646,24 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
 
 bool AudiocityAudioProcessor::loadSampleFromFile(const juce::File& file)
 {
-    return engine_.loadSampleFromFile(file);
+    if (!engine_.loadSampleFromFile(file))
+        return false;
+
+    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
+
+    setAmpEnvelope(engine_.getAmpEnvelope());
+    setFilterEnvelope(engine_.getFilterEnvelope());
+    setFilterSettings(engine_.getFilterSettings());
+
+    updateParameterFromPlainValue(kParamRootMidiNote, static_cast<float>(engine_.getRootMidiNote()));
+    updateParameterFromPlainValue(kParamPlaybackMode, static_cast<float>(engine_.getPlaybackMode()));
+    updateParameterFromPlainValue(kParamPlaybackStart, static_cast<float>(engine_.getSampleWindowStart()));
+    updateParameterFromPlainValue(kParamPlaybackEnd, static_cast<float>(engine_.getSampleWindowEnd()));
+    updateParameterFromPlainValue(kParamLoopStart, static_cast<float>(engine_.getLoopStart()));
+    updateParameterFromPlainValue(kParamLoopEnd, static_cast<float>(engine_.getLoopEnd()));
+    updateParameterFromPlainValue(kParamLoopCrossfade, static_cast<float>(engine_.getLoopCrossfadeSamples()));
+
+    return true;
 }
 
 juce::String AudiocityAudioProcessor::getLoadedSamplePath() const
@@ -684,12 +698,6 @@ void AudiocityAudioProcessor::setGlideSeconds(const float seconds) noexcept
 {
     engine_.setGlideSeconds(seconds);
     updateParameterFromPlainValue(kParamGlideSeconds, engine_.getGlideSeconds());
-}
-
-void AudiocityAudioProcessor::setChokeGroup(const int chokeGroup) noexcept
-{
-    engine_.setChokeGroup(chokeGroup);
-    updateParameterFromPlainValue(kParamChokeGroup, static_cast<float>(engine_.getChokeGroup()));
 }
 
 void AudiocityAudioProcessor::setFadeSamples(const int fadeInSamples, const int fadeOutSamples) noexcept

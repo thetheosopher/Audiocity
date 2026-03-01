@@ -140,6 +140,42 @@ juce::String detectLoopFormatBadge(const juce::File& file, const juce::StringPai
 
     return {};
 }
+
+EngineCore::AdsrSettings defaultAmpEnvelopeForLoadedSample() noexcept
+{
+    return {};
+}
+
+EngineCore::AdsrSettings defaultFilterEnvelopeForLoadedSample() noexcept
+{
+    return { 0.001f, 0.120f, 0.0f, 0.100f };
+}
+
+EngineCore::FilterSettings defaultFilterSettingsForLoadedSample() noexcept
+{
+    EngineCore::FilterSettings settings;
+    settings.baseCutoffHz = 18000.0f;
+    settings.envAmountHz = 0.0f;
+    settings.resonance = 0.0f;
+    settings.mode = EngineCore::FilterSettings::Mode::lowPass12;
+    settings.keyTracking = 0.0f;
+    settings.velocityAmountHz = 0.0f;
+    settings.lfoRateHz = 0.0f;
+    settings.lfoRateKeyTracking = 0.0f;
+    settings.lfoAmountHz = 0.0f;
+    settings.lfoAmountKeyTracking = 0.0f;
+    settings.lfoStartPhaseDegrees = 0.0f;
+    settings.lfoStartPhaseRandomDegrees = 0.0f;
+    settings.lfoFadeInMs = 0.0f;
+    settings.lfoKeytrackLinear = false;
+    settings.lfoUnipolar = false;
+    settings.lfoShape = EngineCore::FilterSettings::LfoShape::sine;
+    settings.lfoRetrigger = true;
+    settings.lfoTempoSync = false;
+    settings.lfoRateKeytrackInTempoSync = true;
+    settings.lfoSyncDivision = 6;
+    return settings;
+}
 }
 
 struct EngineCore::SampleSegments
@@ -245,6 +281,9 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
         embeddedRootNote = *parsedRootNote;
 
     setSampleData(mono, reader->sampleRate, embeddedRootNote);
+    setAmpEnvelope(defaultAmpEnvelopeForLoadedSample());
+    setFilterEnvelope(defaultFilterEnvelopeForLoadedSample());
+    setFilterSettings(defaultFilterSettingsForLoadedSample());
     displaySampleData_ = loaded;
     samplePath_ = file.getFullPathName();
     loadedSampleLoopFormatBadge_ = {};
@@ -255,6 +294,7 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
 
     if (loadedLoopFormatBadge.isNotEmpty() && embeddedLoopStart >= 0 && embeddedLoopEnd > embeddedLoopStart)
     {
+        setSampleWindow(embeddedLoopStart, embeddedLoopEnd);
         setLoopPoints(embeddedLoopStart, embeddedLoopEnd);
         setPlaybackMode(PlaybackMode::loop);
         loadedSampleLoopFormatBadge_ = loadedLoopFormatBadge;
@@ -263,6 +303,7 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
     {
         // No embedded loop metadata: reset loop region to full file
         const auto fullEnd = juce::jmax(0, getTotalSampleLength() - 1);
+        setSampleWindow(0, fullEnd);
         setLoopPoints(0, fullEnd);
     }
 
@@ -731,9 +772,6 @@ void EngineCore::flushPendingEventsAtOffset(const int offset) noexcept
 
         if (event.type == EventType::noteOn)
         {
-            if (chokeGroup_ > 0)
-                stopAllVoicesImmediate();
-
             if (monoMode_)
             {
                 const auto activeIndex = voicePool_.firstActiveVoiceIndex();
@@ -835,6 +873,30 @@ void EngineCore::stopAllVoicesImmediate() noexcept
 
     for (auto& voice : voices_)
     {
+        voice.noteHeld = false;
+        voice.lastAmpLevel = 0.0f;
+        voice.filterA.reset();
+        voice.filterB.reset();
+        voice.filterLfoPhase = 0.0f;
+        voice.filterLfoFadeSamplesTotal = 0;
+        voice.filterLfoFadeSamplesRemaining = 0;
+        voice.glideSamplesRemaining = 0;
+        voice.ampEnvelope.reset();
+        voice.filterEnvelope.reset();
+    }
+}
+
+void EngineCore::stopVoicesForNoteImmediate(const int noteNumber) noexcept
+{
+    std::array<int, VoicePool::maxVoices> indices{};
+    const auto count = voicePool_.findActiveVoicesForNote(noteNumber, indices.data(), static_cast<int>(indices.size()));
+
+    for (int index = 0; index < count; ++index)
+    {
+        const auto voiceIndex = indices[static_cast<std::size_t>(index)];
+        voicePool_.stopVoiceAtIndex(voiceIndex);
+
+        auto& voice = voices_[static_cast<std::size_t>(voiceIndex)];
         voice.noteHeld = false;
         voice.lastAmpLevel = 0.0f;
         voice.filterA.reset();

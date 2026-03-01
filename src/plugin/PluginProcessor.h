@@ -96,9 +96,6 @@ public:
     void setGlideSeconds(float seconds) noexcept;
     [[nodiscard]] float getGlideSeconds() const noexcept { return engine_.getGlideSeconds(); }
 
-    void setChokeGroup(int chokeGroup) noexcept;
-    [[nodiscard]] int getChokeGroup() const noexcept { return engine_.getChokeGroup(); }
-
     void setSampleWindow(int startSample, int endSample) noexcept;
     [[nodiscard]] int getSampleWindowStart() const noexcept { return engine_.getSampleWindowStart(); }
     [[nodiscard]] int getSampleWindowEnd() const noexcept { return engine_.getSampleWindowEnd(); }
@@ -190,6 +187,7 @@ private:
     std::array<UiMidiEvent, kUiMidiFifoSize> uiMidiFifo_{};
     std::atomic<int> uiMidiWritePos_{ 0 };
     std::atomic<int> uiMidiReadPos_{ 0 };
+    std::atomic<int> suspendParamSyncBlocks_{ 0 };
     std::atomic<float> hostBpm_{ 120.0f };
     void pushUiMidiEvent(int noteNumber, int velocity, bool isNoteOn) noexcept;
     [[nodiscard]] bool popUiMidiEvent(UiMidiEvent& out) noexcept;

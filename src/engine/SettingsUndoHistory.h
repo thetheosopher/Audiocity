@@ -15,7 +15,6 @@ struct SettingsSnapshot
     bool monoEnabled = false;
     bool legatoEnabled = false;
     float glideSeconds = 0.0f;
-    int chokeGroup = 0;
     int sampleWindowStart = 0;
     int sampleWindowEnd = 0;
     int loopStart = 0;
@@ -32,7 +31,6 @@ struct SettingsSnapshot
             && monoEnabled == other.monoEnabled
             && legatoEnabled == other.legatoEnabled
             && glideSeconds == other.glideSeconds
-            && chokeGroup == other.chokeGroup
             && sampleWindowStart == other.sampleWindowStart
             && sampleWindowEnd == other.sampleWindowEnd
             && loopStart == other.loopStart

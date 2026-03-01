@@ -62,6 +62,19 @@ private:
         juce::String title;
         juce::Rectangle<int> bounds;
     };
+
+    class PaintCallbackComponent final : public juce::Component
+    {
+    public:
+        std::function<void(juce::Graphics&)> onPaint;
+
+        void paint(juce::Graphics& g) override
+        {
+            if (onPaint)
+                onPaint(g);
+        }
+    };
+
     std::vector<GroupBox> groupBoxes_;
     void paintGroupBoxes(juce::Graphics& g) const;
 
@@ -78,6 +91,7 @@ private:
         std::function<void(int, int)> onLoopCommitted;
         std::function<void(int, int)> onPlaybackPreview;
         std::function<void(int, int)> onPlaybackCommitted;
+        std::function<void()> onResetRangesRequested;
 
         void paint(juce::Graphics& g) override;
         void mouseDown(const juce::MouseEvent& event) override;
@@ -109,6 +123,7 @@ private:
 
         DragMode dragMode_ = DragMode::none;
         int dragAnchorViewStart_ = 0;
+        bool linkedPlaybackDuringLoopDrag_ = false;
     };
 
     AudiocityAudioProcessor& processor_;
@@ -175,6 +190,8 @@ private:
 
     // ── Waveform ──
     WaveformView waveformView_;
+    juce::Viewport sampleControlsViewport_;
+    PaintCallbackComponent sampleControlsContent_;
 
     // ── Playback ──
     juce::Label playbackModeLabel_{ {}, "Mode" };
@@ -184,12 +201,12 @@ private:
     juce::ToggleButton reverseToggle_{ "Reverse" };
 
     // ── Trim ──
-    CcLearnDial playbackStartDial_{ "Start", 0, 1000000, 1 };
-    CcLearnDial playbackEndDial_{ "End", 0, 1000000, 1 };
+    CcLearnDial playbackStartDial_{ "Start", 0, 16000000, 1 };
+    CcLearnDial playbackEndDial_{ "End", 0, 16000000, 1 };
 
     // ── Loop ──
-    CcLearnDial loopStartDial_{ "Start", 0, 1000000, 1 };
-    CcLearnDial loopEndDial_{ "End", 0, 1000000, 1 };
+    CcLearnDial loopStartDial_{ "Start", 0, 16000000, 1 };
+    CcLearnDial loopEndDial_{ "End", 0, 16000000, 1 };
     CcLearnDial loopCrossfadeDial_{ "XFade", 0, 5000, 1 };
 
     // ── Performance ──
@@ -198,7 +215,6 @@ private:
     juce::Label velocityCurveLabel_{ {}, "Velocity" };
     juce::ComboBox velocityCurveCombo_;
     CcLearnDial glideDial_{ "Glide", 0, 2000, 0.1, "ms" };
-    CcLearnDial chokeGroupDial_{ "Choke", 0, 16, 1 };
 
     // ── Amp Envelope ──
     CcLearnDial ampAttackDial_{ "Attack", 0.1, 5000, 0.1, "ms", 0.1 };

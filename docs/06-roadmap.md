@@ -93,10 +93,9 @@
 
 ---
 
-### Epic F — Choke groups + mono/legato + glide
+### Epic F — Mono/legato + glide
 
 **Scope**
-- Choke groups.
 - Mono/legato.
 - Glide.
 

@@ -150,9 +150,6 @@ public:
     void setGlideSeconds(float seconds) noexcept { glideSeconds_ = juce::jmax(0.0f, seconds); }
     [[nodiscard]] float getGlideSeconds() const noexcept { return glideSeconds_; }
 
-    void setChokeGroup(int chokeGroup) noexcept { chokeGroup_ = juce::jmax(0, chokeGroup); }
-    [[nodiscard]] int getChokeGroup() const noexcept { return chokeGroup_; }
-
     void setLoopPoints(int loopStart, int loopEnd) noexcept;
     [[nodiscard]] int getLoopStart() const noexcept { return loopStartSample_; }
     [[nodiscard]] int getLoopEnd() const noexcept { return loopEndSample_; }
@@ -204,6 +201,7 @@ private:
     void startVoice(int voiceIndex, int noteNumber, float velocity) noexcept;
     void retargetVoiceLegato(int voiceIndex, int noteNumber, float velocity) noexcept;
     void stopAllVoicesImmediate() noexcept;
+    void stopVoicesForNoteImmediate(int noteNumber) noexcept;
     void releaseVoicesForNote(int noteNumber) noexcept;
     void applyEnvelopeParamsToVoices() noexcept;
     void applyFilterParamsToVoices() noexcept;
@@ -254,7 +252,6 @@ private:
     bool monoMode_ = false;
     bool legatoMode_ = false;
     float glideSeconds_ = 0.0f;
-    int chokeGroup_ = 0;
     float globalFilterLfoPhase_ = 0.0f;
     QualityTier qualityTier_ = QualityTier::fidelity;
     VelocityCurve velocityCurve_ = VelocityCurve::linear;
