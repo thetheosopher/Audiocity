@@ -193,6 +193,7 @@ void EngineCore::prepare(const double sampleRate, const int maxSamplesPerBlock, 
     voicePool_.prepare(maxSamplesPerBlock_);
     pendingEventCount_ = 0;
     globalFilterLfoPhase_ = 0.0f;
+    currentPitchBendSemitones_ = 0.0f;
 
     juce::dsp::ProcessSpec spec;
     spec.sampleRate = sampleRate_;
@@ -221,6 +222,7 @@ void EngineCore::release() noexcept
     stopAllVoicesImmediate();
     voicePool_.reset();
     pendingEventCount_ = 0;
+    currentPitchBendSemitones_ = 0.0f;
 }
 
 void EngineCore::setReverbMix(const float mix) noexcept
@@ -422,6 +424,21 @@ void EngineCore::noteOff(const int noteNumber, const int sampleOffsetInBlock) no
     event.offset = juce::jmax(0, sampleOffsetInBlock);
 }
 
+void EngineCore::pitchBend(const int pitchWheelValue, const int sampleOffsetInBlock) noexcept
+{
+    if (pendingEventCount_ >= static_cast<int>(pendingEvents_.size()))
+        return;
+
+    auto& event = pendingEvents_[static_cast<std::size_t>(pendingEventCount_++)];
+    event.type = EventType::pitchBend;
+    event.noteNumber = 0;
+
+    const auto clamped = juce::jlimit(0, 16383, pitchWheelValue);
+    const auto normalized = (static_cast<float>(clamped) - 8192.0f) / 8192.0f;
+    event.velocity = juce::jlimit(-1.0f, 1.0f, normalized);
+    event.offset = juce::jmax(0, sampleOffsetInBlock);
+}
+
 void EngineCore::render(float** outputs, const int numChannels, const int numSamples) noexcept
 {
     if (outputs == nullptr || numChannels <= 0 || numSamples <= 0)
@@ -443,6 +460,7 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     for (int sampleIndex = 0; sampleIndex < numSamples; ++sampleIndex)
     {
         flushPendingEventsAtOffset(sampleIndex);
+        const auto pitchBendRatio = std::pow(2.0f, currentPitchBendSemitones_ / 12.0f);
 
         float globalLfoValue = 0.0f;
         const bool hasActiveLfo = filterSettings_.lfoRateHz > 0.0f && std::abs(filterSettings_.lfoAmountHz) > 0.0001f;
@@ -618,11 +636,23 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
                 --voice.glideSamplesRemaining;
             }
 
-            voice.samplePosition += voice.sampleIncrement;
+            voice.samplePosition += voice.sampleIncrement * pitchBendRatio;
         }
 
         for (int channel = 0; channel < numChannels; ++channel)
             outputs[channel][sampleIndex] += mixed;
+    }
+
+    if (numChannels >= 2)
+    {
+        const auto clampedPan = juce::jlimit(-1.0f, 1.0f, pan_);
+        const auto leftGain = clampedPan > 0.0f ? (1.0f - clampedPan) : 1.0f;
+        const auto rightGain = clampedPan < 0.0f ? (1.0f + clampedPan) : 1.0f;
+
+        if (leftGain < 0.9999f)
+            juce::FloatVectorOperations::multiply(outputs[0], leftGain, numSamples);
+        if (rightGain < 0.9999f)
+            juce::FloatVectorOperations::multiply(outputs[1], rightGain, numSamples);
     }
 
     if (reverbMix_ > 0.0001f)
@@ -658,6 +688,8 @@ void EngineCore::render(juce::AudioBuffer<float>& audioBuffer, const juce::MidiB
             noteOn(message.getNoteNumber(), message.getFloatVelocity(), offset);
         else if (message.isNoteOff())
             noteOff(message.getNoteNumber(), offset);
+        else if (message.isPitchWheel())
+            pitchBend(message.getPitchWheelValue(), offset);
     }
 
     std::array<float*, 32> outputPointers{};
@@ -673,6 +705,7 @@ void EngineCore::panic() noexcept
 {
     stopAllVoicesImmediate();
     pendingEventCount_ = 0;
+    currentPitchBendSemitones_ = 0.0f;
 }
 
 void EngineCore::setAmpEnvelope(const AdsrSettings& settings) noexcept
@@ -729,6 +762,27 @@ void EngineCore::setLoopPoints(const int loopStart, const int loopEnd) noexcept
         loopEndSample_ = maxValid;
 
     setLoopCrossfadeSamples(loopCrossfadeSamples_);
+}
+
+void EngineCore::setPolyphonyLimit(const int voices) noexcept
+{
+    const auto clamped = juce::jlimit(1, static_cast<int>(VoicePool::maxVoices), voices);
+    voicePool_.setVoiceLimit(clamped);
+
+    for (int i = clamped; i < static_cast<int>(VoicePool::maxVoices); ++i)
+    {
+        auto& voice = voices_[static_cast<std::size_t>(i)];
+        voice.noteHeld = false;
+        voice.lastAmpLevel = 0.0f;
+        voice.filterA.reset();
+        voice.filterB.reset();
+        voice.filterLfoPhase = 0.0f;
+        voice.filterLfoFadeSamplesTotal = 0;
+        voice.filterLfoFadeSamplesRemaining = 0;
+        voice.glideSamplesRemaining = 0;
+        voice.ampEnvelope.reset();
+        voice.filterEnvelope.reset();
+    }
 }
 
 void EngineCore::setLoopCrossfadeSamples(const int crossfadeSamples) noexcept
@@ -800,9 +854,14 @@ void EngineCore::flushPendingEventsAtOffset(const int offset) noexcept
             const auto voiceIndex = voicePool_.startVoiceForNote(event.noteNumber);
             startVoice(voiceIndex, event.noteNumber, event.velocity);
         }
-        else
+        else if (event.type == EventType::noteOff)
         {
             releaseVoicesForNote(event.noteNumber);
+        }
+        else
+        {
+            currentPitchBendSemitones_ = juce::jlimit(-pitchBendRangeSemitones_, pitchBendRangeSemitones_,
+                event.velocity * pitchBendRangeSemitones_);
         }
     }
 }

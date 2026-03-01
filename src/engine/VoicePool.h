@@ -13,6 +13,8 @@ public:
 
     void prepare(int blockSize) noexcept;
     void reset() noexcept;
+    void setVoiceLimit(int voiceLimit) noexcept;
+    [[nodiscard]] int getVoiceLimit() const noexcept { return voiceLimit_; }
 
     [[nodiscard]] int startVoiceForNote(int noteNumber) noexcept;
     void stopVoiceAtIndex(int index) noexcept;
@@ -46,6 +48,7 @@ private:
 
     std::array<VoiceSlot, maxVoices> voices_{};
     int preparedBlockSize_ = 0;
+    int voiceLimit_ = static_cast<int>(maxVoices);
     std::uint64_t startCounter_ = 0;
     int stealCount_ = 0;
 };

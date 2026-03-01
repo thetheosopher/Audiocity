@@ -12,6 +12,7 @@ constexpr auto kSampleBrowserRootFolder = "sampleBrowserRootFolder";
 constexpr auto kRootMidiNote = "rootMidiNote";
 constexpr auto kCoarseTuneSemitones = "coarseTuneSemitones";
 constexpr auto kFineTuneCents = "fineTuneCents";
+constexpr auto kPitchBendRangeSemitones = "pitchBendRangeSemitones";
 
 constexpr auto kAmpAttack = "ampAttack";
 constexpr auto kAmpDecay = "ampDecay";
@@ -46,11 +47,13 @@ constexpr auto kPlaybackMode = "playbackMode";
 constexpr auto kQualityTier = "qualityTier";
 constexpr auto kVelocityCurve = "velocityCurve";
 constexpr auto kReverbMix = "reverbMix";
+constexpr auto kPan = "pan";
 constexpr auto kMasterVolume = "masterVolume";
 constexpr auto kPreloadSamples = "preloadSamples";
 constexpr auto kMonoMode = "monoMode";
 constexpr auto kLegatoMode = "legatoMode";
 constexpr auto kGlideSeconds = "glideSeconds";
+constexpr auto kPolyphonyLimit = "polyphonyLimit";
 constexpr auto kSampleWindowStart = "sampleWindowStart";
 constexpr auto kSampleWindowEnd = "sampleWindowEnd";
 constexpr auto kLoopStart = "loopStart";
@@ -96,12 +99,14 @@ constexpr auto kParamPlaybackMode = "p_playbackMode";
 constexpr auto kParamMonoMode = "p_mono";
 constexpr auto kParamLegatoMode = "p_legato";
 constexpr auto kParamGlideSeconds = "p_glideSeconds";
+constexpr auto kParamPolyphonyLimit = "p_polyphonyLimit";
 constexpr auto kParamFadeIn = "p_fadeIn";
 constexpr auto kParamFadeOut = "p_fadeOut";
 constexpr auto kParamReversePlayback = "p_reverse";
 constexpr auto kParamRootMidiNote = "p_rootMidiNote";
 constexpr auto kParamTuneCoarse = "p_tuneCoarse";
 constexpr auto kParamTuneFine = "p_tuneFine";
+constexpr auto kParamPitchBendRange = "p_pitchBendRange";
 constexpr auto kParamPlaybackStart = "p_playbackStart";
 constexpr auto kParamPlaybackEnd = "p_playbackEnd";
 constexpr auto kParamLoopStart = "p_loopStart";
@@ -110,6 +115,7 @@ constexpr auto kParamLoopCrossfade = "p_loopCrossfade";
 constexpr auto kParamVelocityCurve = "p_velocityCurve";
 constexpr auto kParamQualityTier = "p_qualityTier";
 constexpr auto kParamReverbMix = "p_reverbMix";
+constexpr auto kParamPan = "p_pan";
 constexpr auto kParamMasterVolume = "p_masterVolume";
 constexpr float kMaxSamplePositionParam = 16000000.0f;
 }
@@ -127,17 +133,20 @@ AudiocityAudioProcessor::AudiocityAudioProcessor()
     setMonoMode(engine_.getMonoMode());
     setLegatoMode(engine_.getLegatoMode());
     setGlideSeconds(engine_.getGlideSeconds());
+    setPolyphonyLimit(engine_.getPolyphonyLimit());
     setFadeSamples(engine_.getFadeInSamples(), engine_.getFadeOutSamples());
     setReversePlayback(engine_.getReversePlayback());
     setRootMidiNote(engine_.getRootMidiNote());
     setCoarseTuneSemitones(engine_.getCoarseTuneSemitones());
     setFineTuneCents(engine_.getFineTuneCents());
+    setPitchBendRangeSemitones(engine_.getPitchBendRangeSemitones());
     setSampleWindow(engine_.getSampleWindowStart(), engine_.getSampleWindowEnd());
     setLoopPoints(engine_.getLoopStart(), engine_.getLoopEnd());
     setLoopCrossfadeSamples(engine_.getLoopCrossfadeSamples());
     setQualityTier(engine_.getQualityTier());
     setVelocityCurve(engine_.getVelocityCurve());
     setReverbMix(engine_.getReverbMix());
+    setPan(engine_.getPan());
     setMasterVolume(engine_.getMasterVolume());
 }
 
@@ -208,6 +217,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout AudiocityAudioProcessor::cre
     params.push_back(std::make_unique<juce::AudioParameterBool>(kParamLegatoMode, "Legato", false));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamGlideSeconds, "Glide Seconds",
         juce::NormalisableRange<float>(0.0f, 2.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPolyphonyLimit, "Polyphony Limit",
+        juce::NormalisableRange<float>(1.0f, static_cast<float>(audiocity::engine::VoicePool::maxVoices), 1.0f),
+        static_cast<float>(audiocity::engine::VoicePool::maxVoices)));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamFadeIn, "Fade In",
         juce::NormalisableRange<float>(0.0f, 10000.0f, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamFadeOut, "Fade Out",
@@ -219,6 +231,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout AudiocityAudioProcessor::cre
         juce::NormalisableRange<float>(-24.0f, 24.0f, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamTuneFine, "Tune Fine",
         juce::NormalisableRange<float>(-100.0f, 100.0f, 1.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPitchBendRange, "Pitch Bend Range",
+        juce::NormalisableRange<float>(0.0f, 24.0f, 1.0f), 2.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPlaybackStart, "Playback Start",
         juce::NormalisableRange<float>(0.0f, kMaxSamplePositionParam, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPlaybackEnd, "Playback End",
@@ -235,6 +249,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout AudiocityAudioProcessor::cre
         juce::StringArray{ "CPU", "Fidelity", "Ultra" }, 1));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamReverbMix, "Reverb Mix",
         juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPan, "Pan",
+        juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamMasterVolume, "Master Volume",
         juce::NormalisableRange<float>(0.0f, 1.0f), 1.0f));
 
@@ -247,6 +263,10 @@ void AudiocityAudioProcessor::updateParameterFromPlainValue(const juce::String& 
     {
         const auto normalised = parameter->convertTo0to1(plainValue);
         parameter->setValueNotifyingHost(normalised);
+
+        const auto current = suspendParamSyncBlocks_.load(std::memory_order_relaxed);
+        if (current < 2)
+            suspendParamSyncBlocks_.store(2, std::memory_order_relaxed);
     }
 }
 
@@ -299,6 +319,7 @@ void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
     engine_.setMonoMode(apvts_.getRawParameterValue(kParamMonoMode)->load() >= 0.5f);
     engine_.setLegatoMode(apvts_.getRawParameterValue(kParamLegatoMode)->load() >= 0.5f);
     engine_.setGlideSeconds(apvts_.getRawParameterValue(kParamGlideSeconds)->load());
+    engine_.setPolyphonyLimit(static_cast<int>(std::round(apvts_.getRawParameterValue(kParamPolyphonyLimit)->load())));
     engine_.setFadeSamples(
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamFadeIn)->load())),
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamFadeOut)->load())));
@@ -306,6 +327,7 @@ void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
     engine_.setRootMidiNote(static_cast<int>(std::round(apvts_.getRawParameterValue(kParamRootMidiNote)->load())));
     engine_.setCoarseTuneSemitones(apvts_.getRawParameterValue(kParamTuneCoarse)->load());
     engine_.setFineTuneCents(apvts_.getRawParameterValue(kParamTuneFine)->load());
+    engine_.setPitchBendRangeSemitones(apvts_.getRawParameterValue(kParamPitchBendRange)->load());
     engine_.setSampleWindow(
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamPlaybackStart)->load())),
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamPlaybackEnd)->load())));
@@ -320,6 +342,7 @@ void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
     engine_.setQualityTier(static_cast<QualityTier>(juce::jlimit(0, 2,
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamQualityTier)->load())))));
     engine_.setReverbMix(apvts_.getRawParameterValue(kParamReverbMix)->load());
+    engine_.setPan(apvts_.getRawParameterValue(kParamPan)->load());
     engine_.setMasterVolume(apvts_.getRawParameterValue(kParamMasterVolume)->load());
 }
 
@@ -403,6 +426,12 @@ void AudiocityAudioProcessor::setReverbMix(const float mix) noexcept
     updateParameterFromPlainValue(kParamReverbMix, mix);
 }
 
+void AudiocityAudioProcessor::setPan(const float pan) noexcept
+{
+    engine_.setPan(pan);
+    updateParameterFromPlainValue(kParamPan, engine_.getPan());
+}
+
 void AudiocityAudioProcessor::setMasterVolume(const float volume) noexcept
 {
     engine_.setMasterVolume(volume);
@@ -467,6 +496,7 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kRootMidiNote, engine_.getRootMidiNote(), nullptr);
     state.setProperty(kCoarseTuneSemitones, engine_.getCoarseTuneSemitones(), nullptr);
     state.setProperty(kFineTuneCents, engine_.getFineTuneCents(), nullptr);
+    state.setProperty(kPitchBendRangeSemitones, engine_.getPitchBendRangeSemitones(), nullptr);
 
     const auto amp = engine_.getAmpEnvelope();
     state.setProperty(kAmpAttack, amp.attackSeconds, nullptr);
@@ -513,11 +543,13 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kQualityTier, qualityTierIndex, nullptr);
     state.setProperty(kVelocityCurve, static_cast<int>(getVelocityCurve()), nullptr);
     state.setProperty(kReverbMix, getReverbMix(), nullptr);
+    state.setProperty(kPan, getPan(), nullptr);
     state.setProperty(kMasterVolume, getMasterVolume(), nullptr);
     state.setProperty(kPreloadSamples, getPreloadSamples(), nullptr);
     state.setProperty(kMonoMode, getMonoMode() ? 1 : 0, nullptr);
     state.setProperty(kLegatoMode, getLegatoMode() ? 1 : 0, nullptr);
     state.setProperty(kGlideSeconds, getGlideSeconds(), nullptr);
+    state.setProperty(kPolyphonyLimit, getPolyphonyLimit(), nullptr);
     state.setProperty(kSampleWindowStart, getSampleWindowStart(), nullptr);
     state.setProperty(kSampleWindowEnd, getSampleWindowEnd(), nullptr);
     state.setProperty(kLoopStart, getLoopStart(), nullptr);
@@ -580,6 +612,7 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     setRootMidiNote(static_cast<int>(state.getProperty(kRootMidiNote, engine_.getRootMidiNote())));
     setCoarseTuneSemitones(static_cast<float>(state.getProperty(kCoarseTuneSemitones, engine_.getCoarseTuneSemitones())));
     setFineTuneCents(static_cast<float>(state.getProperty(kFineTuneCents, engine_.getFineTuneCents())));
+    setPitchBendRangeSemitones(static_cast<float>(state.getProperty(kPitchBendRangeSemitones, engine_.getPitchBendRangeSemitones())));
 
     auto amp = engine_.getAmpEnvelope();
     amp.attackSeconds = static_cast<float>(state.getProperty(kAmpAttack, amp.attackSeconds));
@@ -631,11 +664,13 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     setVelocityCurve(static_cast<VelocityCurve>(static_cast<int>(state.getProperty(kVelocityCurve,
         static_cast<int>(getVelocityCurve())))));
     setReverbMix(static_cast<float>(state.getProperty(kReverbMix, getReverbMix())));
+    setPan(static_cast<float>(state.getProperty(kPan, getPan())));
     setMasterVolume(static_cast<float>(state.getProperty(kMasterVolume, getMasterVolume())));
     setPreloadSamples(static_cast<int>(state.getProperty(kPreloadSamples, getPreloadSamples())));
     setMonoMode(static_cast<int>(state.getProperty(kMonoMode, getMonoMode() ? 1 : 0)) == 1);
     setLegatoMode(static_cast<int>(state.getProperty(kLegatoMode, getLegatoMode() ? 1 : 0)) == 1);
     setGlideSeconds(static_cast<float>(state.getProperty(kGlideSeconds, getGlideSeconds())));
+    setPolyphonyLimit(static_cast<int>(state.getProperty(kPolyphonyLimit, getPolyphonyLimit())));
     setSampleWindow(
         static_cast<int>(state.getProperty(kSampleWindowStart, getSampleWindowStart())),
         static_cast<int>(state.getProperty(kSampleWindowEnd, getSampleWindowEnd())));
@@ -766,6 +801,12 @@ void AudiocityAudioProcessor::setGlideSeconds(const float seconds) noexcept
     updateParameterFromPlainValue(kParamGlideSeconds, engine_.getGlideSeconds());
 }
 
+void AudiocityAudioProcessor::setPolyphonyLimit(const int voices) noexcept
+{
+    engine_.setPolyphonyLimit(voices);
+    updateParameterFromPlainValue(kParamPolyphonyLimit, static_cast<float>(engine_.getPolyphonyLimit()));
+}
+
 void AudiocityAudioProcessor::setFadeSamples(const int fadeInSamples, const int fadeOutSamples) noexcept
 {
     engine_.setFadeSamples(fadeInSamples, fadeOutSamples);
@@ -804,6 +845,12 @@ void AudiocityAudioProcessor::setFineTuneCents(const float cents) noexcept
 {
     engine_.setFineTuneCents(cents);
     updateParameterFromPlainValue(kParamTuneFine, engine_.getFineTuneCents());
+}
+
+void AudiocityAudioProcessor::setPitchBendRangeSemitones(const float semitones) noexcept
+{
+    engine_.setPitchBendRangeSemitones(semitones);
+    updateParameterFromPlainValue(kParamPitchBendRange, engine_.getPitchBendRangeSemitones());
 }
 
 void AudiocityAudioProcessor::setSampleWindow(const int startSample, const int endSample) noexcept

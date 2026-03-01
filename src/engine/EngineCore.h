@@ -115,6 +115,8 @@ public:
     [[nodiscard]] VelocityCurve getVelocityCurve() const noexcept { return velocityCurve_; }
     void setReverbMix(float mix) noexcept;
     [[nodiscard]] float getReverbMix() const noexcept { return reverbMix_; }
+    void setPan(float pan) noexcept { pan_ = juce::jlimit(-1.0f, 1.0f, pan); }
+    [[nodiscard]] float getPan() const noexcept { return pan_; }
     void setMasterVolume(float volume) noexcept { masterVolume_ = juce::jlimit(0.0f, 1.0f, volume); }
     [[nodiscard]] float getMasterVolume() const noexcept { return masterVolume_; }
 
@@ -131,6 +133,10 @@ public:
 
     void noteOn(int noteNumber, float velocity, int sampleOffsetInBlock) noexcept;
     void noteOff(int noteNumber, int sampleOffsetInBlock) noexcept;
+    void pitchBend(int pitchWheelValue, int sampleOffsetInBlock) noexcept;
+
+    void setPitchBendRangeSemitones(float semitones) noexcept { pitchBendRangeSemitones_ = juce::jlimit(0.0f, 24.0f, semitones); }
+    [[nodiscard]] float getPitchBendRangeSemitones() const noexcept { return pitchBendRangeSemitones_; }
 
     void render(float** outputs, int numChannels, int numSamples) noexcept;
     void render(juce::AudioBuffer<float>& audioBuffer, const juce::MidiBuffer& midiBuffer) noexcept;
@@ -164,6 +170,8 @@ public:
 
     void setGlideSeconds(float seconds) noexcept { glideSeconds_ = juce::jmax(0.0f, seconds); }
     [[nodiscard]] float getGlideSeconds() const noexcept { return glideSeconds_; }
+    void setPolyphonyLimit(int voices) noexcept;
+    [[nodiscard]] int getPolyphonyLimit() const noexcept { return voicePool_.getVoiceLimit(); }
 
     void setLoopPoints(int loopStart, int loopEnd) noexcept;
     [[nodiscard]] int getLoopStart() const noexcept { return loopStartSample_; }
@@ -200,7 +208,8 @@ private:
     enum class EventType
     {
         noteOn,
-        noteOff
+        noteOff,
+        pitchBend
     };
 
     struct PendingEvent
@@ -259,6 +268,8 @@ private:
     int rootMidiNote_ = 60;
     float coarseTuneSemitones_ = 0.0f;
     float fineTuneCents_ = 0.0f;
+    float pitchBendRangeSemitones_ = 2.0f;
+    float currentPitchBendSemitones_ = 0.0f;
     int preloadSamples_ = 32768;
     int segmentRebuildCount_ = 0;
 
@@ -273,6 +284,7 @@ private:
     QualityTier qualityTier_ = QualityTier::fidelity;
     VelocityCurve velocityCurve_ = VelocityCurve::linear;
     float reverbMix_ = 0.0f;
+    float pan_ = 0.0f;
     float masterVolume_ = 1.0f;
     juce::Reverb reverb_;
 

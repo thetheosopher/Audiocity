@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace
 {
@@ -124,6 +125,53 @@ bool runVoiceStealingEdgeCaseTest()
         return false;
 
     return !engine.isNoteActive(36) && engine.isNoteActive(36 + static_cast<int>(audiocity::engine::VoicePool::maxVoices));
+}
+
+bool runPolyphonyLimitControlTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 256;
+    constexpr double sampleRate = 48000.0;
+
+    audiocity::engine::EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setSampleData(createTestSample(4096), sampleRate, 60);
+    engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::gate);
+
+    audiocity::engine::EngineCore::AdsrSettings sustain;
+    sustain.attackSeconds = 0.0001f;
+    sustain.decaySeconds = 0.0001f;
+    sustain.sustainLevel = 1.0f;
+    sustain.releaseSeconds = 0.5f;
+    engine.setAmpEnvelope(sustain);
+
+    engine.setPolyphonyLimit(1);
+
+    {
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        midi.addEvent(juce::MidiMessage::noteOn(1, 64, 1.0f), 1);
+        engine.render(block, midi);
+    }
+
+    if (engine.activeVoiceCount() != 1 || !engine.isNoteActive(64))
+        return false;
+
+    engine.panic();
+    engine.setPolyphonyLimit(3);
+
+    {
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        midi.addEvent(juce::MidiMessage::noteOn(1, 62, 1.0f), 1);
+        midi.addEvent(juce::MidiMessage::noteOn(1, 64, 1.0f), 2);
+        midi.addEvent(juce::MidiMessage::noteOn(1, 67, 1.0f), 3);
+        engine.render(block, midi);
+    }
+
+    return engine.activeVoiceCount() == 3;
 }
 
 float blockEnergy(const juce::AudioBuffer<float>& block)
@@ -1393,9 +1441,11 @@ bool runSettingsUndoHistoryTest()
     initial.preloadSamples = 32768;
     initial.qualityTierIndex = 1;
     initial.playbackModeIndex = 0;
+    initial.pitchBendRangeSemitones = 2.0f;
     initial.monoEnabled = false;
     initial.legatoEnabled = false;
     initial.glideSeconds = 0.0f;
+    initial.polyphonyLimit = 64;
     initial.sampleWindowStart = 0;
 
     auto changedPreload = initial;
@@ -1404,9 +1454,11 @@ bool runSettingsUndoHistoryTest()
     auto changedTierAndMapping = changedPreload;
     changedTierAndMapping.qualityTierIndex = 0;
     changedTierAndMapping.playbackModeIndex = 1;
+    changedTierAndMapping.pitchBendRangeSemitones = 12.0f;
     changedTierAndMapping.monoEnabled = true;
     changedTierAndMapping.legatoEnabled = true;
     changedTierAndMapping.glideSeconds = 0.04f;
+    changedTierAndMapping.polyphonyLimit = 8;
     changedTierAndMapping.sampleWindowStart = 2;
 
     history.recordChange(initial, changedPreload);
@@ -2559,6 +2611,47 @@ bool runMasterVolumeGainTest()
     return ratio > 0.45f && ratio < 0.55f && peakMute < 1.0e-7f;
 }
 
+bool runPanBalanceTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    auto sample = createTestSample(2048);
+
+    auto renderChannelPeaks = [&](const float pan)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(sample, sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::oneShot);
+        engine.setReverbMix(0.0f);
+        engine.setMasterVolume(1.0f);
+        engine.setPan(pan);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+
+        const auto leftPeak = block.getMagnitude(0, 0, block.getNumSamples());
+        const auto rightPeak = block.getMagnitude(1, 0, block.getNumSamples());
+        return std::pair<float, float>{ leftPeak, rightPeak };
+    };
+
+    const auto [centerLeft, centerRight] = renderChannelPeaks(0.0f);
+    const auto [fullLeft, fullLeftRight] = renderChannelPeaks(-1.0f);
+    const auto [fullRightLeft, fullRight] = renderChannelPeaks(1.0f);
+
+    if (centerLeft <= 1.0e-6f || centerRight <= 1.0e-6f)
+        return false;
+
+    return fullLeft > centerLeft * 0.85f
+        && fullLeftRight < centerRight * 0.05f
+        && fullRight > centerRight * 0.85f
+        && fullRightLeft < centerLeft * 0.05f;
+}
+
 bool runTuneCoarseFinePitchShiftTest()
 {
     constexpr int channels = 2;
@@ -2609,6 +2702,72 @@ bool runTuneCoarseFinePitchShiftTest()
         && std::abs(coarseDownRatio - 0.5f) < 0.06f
         && std::abs(fineUpRatio - expectedFineRatio) < 0.04f;
 }
+
+bool runPitchBendRangeAndRealtimeModulationTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 256;
+    constexpr int blocks = 56;
+    constexpr double outputSampleRate = 48000.0;
+    constexpr int rootMidiNote = 60;
+    constexpr int cycleSamples = 512;
+
+    const auto targetHz = juce::MidiMessage::getMidiNoteInHertz(rootMidiNote);
+    const auto sourceSampleRate = targetHz * static_cast<double>(cycleSamples);
+
+    auto renderFrequency = [&](const float bendRangeSemitones, const bool bendUp) -> float
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(outputSampleRate, blockSize, channels);
+
+        audiocity::engine::EngineCore::AdsrSettings sustain;
+        sustain.attackSeconds = 0.0001f;
+        sustain.decaySeconds = 0.0001f;
+        sustain.sustainLevel = 1.0f;
+        sustain.releaseSeconds = 0.25f;
+        engine.setAmpEnvelope(sustain);
+
+        engine.setSampleData(createOneCycleSine(cycleSamples), sourceSampleRate, rootMidiNote);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+        engine.setPitchBendRangeSemitones(bendRangeSemitones);
+
+        juce::AudioBuffer<float> output(channels, blockSize * blocks);
+        for (int block = 0; block < blocks; ++block)
+        {
+            juce::AudioBuffer<float> blockBuffer(channels, blockSize);
+            juce::MidiBuffer midi;
+
+            if (block == 0)
+                midi.addEvent(juce::MidiMessage::noteOn(1, rootMidiNote, 1.0f), 0);
+
+            if (bendUp && block == 8)
+                midi.addEvent(juce::MidiMessage::pitchWheel(1, 16383), 0);
+
+            engine.render(blockBuffer, midi);
+
+            for (int ch = 0; ch < channels; ++ch)
+                output.copyFrom(ch, block * blockSize, blockBuffer, ch, 0, blockSize);
+        }
+
+        return estimateFrequencyFromPositiveCrossings(output, outputSampleRate, blockSize * 20);
+    };
+
+    const auto baseHz = renderFrequency(2.0f, false);
+    const auto bend2Hz = renderFrequency(2.0f, true);
+    const auto bend12Hz = renderFrequency(12.0f, true);
+
+    if (baseHz <= 0.0f || bend2Hz <= 0.0f || bend12Hz <= 0.0f)
+        return false;
+
+    const auto ratio2 = bend2Hz / baseHz;
+    const auto ratio12 = bend12Hz / baseHz;
+    const auto expected2 = std::pow(2.0f, 2.0f / 12.0f);
+    const auto expected12 = 2.0f;
+
+    return std::abs(ratio2 - expected2) < 0.05f
+        && std::abs(ratio12 - expected12) < 0.12f
+        && ratio12 > ratio2 * 1.5f;
+}
 }
 
 int main()
@@ -2618,6 +2777,9 @@ int main()
 
     if (!runVoiceStealingEdgeCaseTest())
         return 2;
+
+    if (!runPolyphonyLimitControlTest())
+        return 52;
 
     if (!runPlaybackModesTest())
         return 3;
@@ -2751,8 +2913,14 @@ int main()
     if (!runMasterVolumeGainTest())
         return 47;
 
+    if (!runPanBalanceTest())
+        return 51;
+
     if (!runTuneCoarseFinePitchShiftTest())
         return 49;
+
+    if (!runPitchBendRangeAndRealtimeModulationTest())
+        return 50;
 
     if (!runLoopCrossfadeSmoothsBoundaryTest())
         return 29;

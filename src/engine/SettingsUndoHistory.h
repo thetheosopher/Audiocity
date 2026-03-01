@@ -14,9 +14,11 @@ struct SettingsSnapshot
     int playbackModeIndex = 0;
     float coarseTuneSemitones = 0.0f;
     float fineTuneCents = 0.0f;
+    float pitchBendRangeSemitones = 2.0f;
     bool monoEnabled = false;
     bool legatoEnabled = false;
     float glideSeconds = 0.0f;
+    int polyphonyLimit = 64;
     int sampleWindowStart = 0;
     int sampleWindowEnd = 0;
     int loopStart = 0;
@@ -32,9 +34,11 @@ struct SettingsSnapshot
             && playbackModeIndex == other.playbackModeIndex
             && coarseTuneSemitones == other.coarseTuneSemitones
             && fineTuneCents == other.fineTuneCents
+            && pitchBendRangeSemitones == other.pitchBendRangeSemitones
             && monoEnabled == other.monoEnabled
             && legatoEnabled == other.legatoEnabled
             && glideSeconds == other.glideSeconds
+            && polyphonyLimit == other.polyphonyLimit
             && sampleWindowStart == other.sampleWindowStart
             && sampleWindowEnd == other.sampleWindowEnd
             && loopStart == other.loopStart

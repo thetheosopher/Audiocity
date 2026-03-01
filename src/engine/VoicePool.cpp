@@ -26,6 +26,14 @@ void VoicePool::reset() noexcept
     stealCount_ = 0;
 }
 
+void VoicePool::setVoiceLimit(const int voiceLimit) noexcept
+{
+    voiceLimit_ = std::clamp(voiceLimit, 1, static_cast<int>(maxVoices));
+
+    for (int i = voiceLimit_; i < static_cast<int>(maxVoices); ++i)
+        stopVoiceAtIndex(i);
+}
+
 int VoicePool::startVoiceForNote(const int noteNumber) noexcept
 {
     auto voiceIndex = findInactiveSlot();
@@ -33,8 +41,12 @@ int VoicePool::startVoiceForNote(const int noteNumber) noexcept
     if (voiceIndex < 0)
     {
         voiceIndex = findStealCandidate();
-        ++stealCount_;
+        if (voiceIndex >= 0)
+            ++stealCount_;
     }
+
+    if (voiceIndex < 0)
+        return -1;
 
     auto& voice = voices_[static_cast<std::size_t>(voiceIndex)];
     voice.active = true;
@@ -164,7 +176,7 @@ bool VoicePool::isNoteActive(const int noteNumber) const noexcept
 
 int VoicePool::findInactiveSlot() const noexcept
 {
-    for (int voiceIndex = 0; voiceIndex < static_cast<int>(maxVoices); ++voiceIndex)
+    for (int voiceIndex = 0; voiceIndex < voiceLimit_; ++voiceIndex)
     {
         if (!voices_[static_cast<std::size_t>(voiceIndex)].active)
             return voiceIndex;
@@ -175,11 +187,11 @@ int VoicePool::findInactiveSlot() const noexcept
 
 int VoicePool::findStealCandidate() const noexcept
 {
-    int candidate = 0;
+    int candidate = -1;
     float minLevel = std::numeric_limits<float>::max();
     std::uint64_t oldestOrder = std::numeric_limits<std::uint64_t>::max();
 
-    for (int voiceIndex = 0; voiceIndex < static_cast<int>(maxVoices); ++voiceIndex)
+    for (int voiceIndex = 0; voiceIndex < voiceLimit_; ++voiceIndex)
     {
         const auto& voice = voices_[static_cast<std::size_t>(voiceIndex)];
 

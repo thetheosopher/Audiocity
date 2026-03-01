@@ -94,6 +94,8 @@ public:
 
     void setReverbMix(float mix) noexcept;
     [[nodiscard]] float getReverbMix() const noexcept { return engine_.getReverbMix(); }
+    void setPan(float pan) noexcept;
+    [[nodiscard]] float getPan() const noexcept { return engine_.getPan(); }
     void setMasterVolume(float volume) noexcept;
     [[nodiscard]] float getMasterVolume() const noexcept { return engine_.getMasterVolume(); }
 
@@ -109,6 +111,7 @@ public:
     [[nodiscard]] int getLoadedPreloadSamples() const noexcept { return engine_.getLoadedPreloadSamples(); }
     [[nodiscard]] int getLoadedStreamSamples() const noexcept { return engine_.getLoadedStreamSamples(); }
     [[nodiscard]] int getSegmentRebuildCount() const noexcept { return engine_.getSegmentRebuildCount(); }
+    [[nodiscard]] int getActiveVoiceCount() const noexcept { return engine_.activeVoiceCount(); }
 
     void setMonoMode(bool enabled) noexcept;
     [[nodiscard]] bool getMonoMode() const noexcept { return engine_.getMonoMode(); }
@@ -118,6 +121,8 @@ public:
 
     void setGlideSeconds(float seconds) noexcept;
     [[nodiscard]] float getGlideSeconds() const noexcept { return engine_.getGlideSeconds(); }
+    void setPolyphonyLimit(int voices) noexcept;
+    [[nodiscard]] int getPolyphonyLimit() const noexcept { return engine_.getPolyphonyLimit(); }
 
     void setSampleWindow(int startSample, int endSample) noexcept;
     [[nodiscard]] int getSampleWindowStart() const noexcept { return engine_.getSampleWindowStart(); }
@@ -152,6 +157,8 @@ public:
     [[nodiscard]] float getCoarseTuneSemitones() const noexcept { return engine_.getCoarseTuneSemitones(); }
     void setFineTuneCents(float cents) noexcept;
     [[nodiscard]] float getFineTuneCents() const noexcept { return engine_.getFineTuneCents(); }
+    void setPitchBendRangeSemitones(float semitones) noexcept;
+    [[nodiscard]] float getPitchBendRangeSemitones() const noexcept { return engine_.getPitchBendRangeSemitones(); }
 
     using AdsrSettings = audiocity::engine::EngineCore::AdsrSettings;
     void setAmpEnvelope(const AdsrSettings& settings) noexcept;

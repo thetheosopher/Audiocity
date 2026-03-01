@@ -211,6 +211,7 @@ private:
     juce::ComboBox rootNoteCombo_;
     CcLearnDial tuneCoarseDial_{ "Coarse", -24, 24, 1, "st", 0 };
     CcLearnDial tuneFineDial_{ "Fine", -100, 100, 1, "ct", 0 };
+    CcLearnDial pitchBendRangeDial_{ "PB Range", 0, 24, 1, "st", 2 };
 
     // ── Waveform ──
     WaveformView waveformView_;
@@ -373,6 +374,7 @@ private:
     juce::Label velocityCurveLabel_{ {}, "Velocity" };
     juce::ComboBox velocityCurveCombo_;
     CcLearnDial glideDial_{ "Glide", 0, 2000, 0.1, "ms" };
+    CcLearnDial polyphonyDial_{ "Poly", 1, 64, 1, {}, 64 };
 
     // ── Amp Envelope ──
     CcLearnDial ampAttackDial_{ "Attack", 0.1, 5000, 0.1, "ms", 0.1 };
@@ -423,6 +425,7 @@ private:
     juce::ToggleButton qualityUltraButton_{ "Ultra" };
     CcLearnDial preloadDial_{ "Preload", 256, 131072, 1, {}, 32768 };
     CcLearnDial masterVolumeDial_{ "Master", 0, 100, 1, "%", 100 };
+    CcLearnDial panDial_{ "Pan", -100, 100, 1, {}, 0 };
     StereoPeakMeter outputLevelMeter_;
     CcLearnDial reverbMixDial_{ "Reverb", 0, 100, 1, "%", 0 };
 

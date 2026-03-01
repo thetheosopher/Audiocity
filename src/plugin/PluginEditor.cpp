@@ -727,40 +727,64 @@ void AudiocityAudioProcessorEditor::FilterResponseGraph::paint(juce::Graphics& g
 
 void AudiocityAudioProcessorEditor::StereoPeakMeter::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xff202234));
-    g.setColour(juce::Colour(0xff3a3a52));
-    g.drawRect(getLocalBounds(), 1);
+    const auto bounds = getLocalBounds();
+    g.fillAll(juce::Colour(0xff1f2336));
+    g.setColour(juce::Colour(0xff3a3f55));
+    g.drawRect(bounds, 1);
 
-    auto area = getLocalBounds().reduced(6, 6);
-    if (area.getWidth() <= 8 || area.getHeight() <= 8)
+    auto area = bounds.reduced(8, 6);
+    if (area.getWidth() < 80 || area.getHeight() < 20)
         return;
 
-    constexpr int labelWidth = 10;
-    auto leftRow = area.removeFromTop(juce::jmax(10, area.getHeight() / 2 - 2));
-    area.removeFromTop(4);
-    auto rightRow = area;
+    constexpr int labelWidth = 14;
+    constexpr int rowGap = 5;
+    const int rowHeight = juce::jmax(8, (area.getHeight() - rowGap) / 2);
+
+    auto leftRow = area.removeFromTop(rowHeight);
+    area.removeFromTop(rowGap);
+    auto rightRow = area.removeFromTop(rowHeight);
 
     auto drawRow = [&](juce::Rectangle<int> row, const juce::String& label, const float level)
     {
-        g.setColour(juce::Colour(0xff8f96af));
-        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.setColour(juce::Colour(0xffaab2cf));
+        g.setFont(juce::Font(juce::FontOptions(10.0f)).boldened());
         g.drawText(label, row.removeFromLeft(labelWidth), juce::Justification::centredLeft);
 
-        const auto meterArea = row.reduced(2, 1);
-        g.setColour(juce::Colours::white.withAlpha(0.08f));
+        auto meterArea = row.reduced(1, 1);
+        g.setColour(juce::Colour(0xff111523));
         g.fillRoundedRectangle(meterArea.toFloat(), 2.0f);
+        g.setColour(juce::Colour(0xff434a66));
+        g.drawRoundedRectangle(meterArea.toFloat(), 2.0f, 1.0f);
 
+        const int segmentCount = 20;
+        for (int i = 1; i < segmentCount; ++i)
+        {
+            const auto x = meterArea.getX() + static_cast<int>(std::round((meterArea.getWidth() * i) / static_cast<float>(segmentCount)));
+            g.setColour(juce::Colours::white.withAlpha(i % 5 == 0 ? 0.20f : 0.10f));
+            g.drawVerticalLine(x, static_cast<float>(meterArea.getY() + 1), static_cast<float>(meterArea.getBottom() - 1));
+        }
+
+        const auto clampedLevel = juce::jlimit(0.0f, 1.0f, level);
         auto fillArea = meterArea;
-        fillArea.setWidth(static_cast<int>(std::round(meterArea.getWidth() * juce::jlimit(0.0f, 1.0f, level))));
+        fillArea.setWidth(static_cast<int>(std::round(static_cast<float>(meterArea.getWidth()) * clampedLevel)));
 
-        auto meterColour = juce::Colour(0xff61d9ff);
-        if (level >= 0.98f)
-            meterColour = juce::Colour(0xffef6b73);
-        else if (level >= 0.85f)
-            meterColour = juce::Colour(0xfff5b76b);
+        if (fillArea.getWidth() > 0)
+        {
+            auto gradient = juce::ColourGradient(juce::Colour(0xff74d56a),
+                                                 static_cast<float>(meterArea.getX()),
+                                                 static_cast<float>(meterArea.getCentreY()),
+                                                 juce::Colour(0xffef6b73),
+                                                 static_cast<float>(meterArea.getRight()),
+                                                 static_cast<float>(meterArea.getCentreY()),
+                                                 false);
+            gradient.addColour(0.72, juce::Colour(0xfff2c66a));
+            g.setGradientFill(gradient);
+            g.fillRoundedRectangle(fillArea.toFloat(), 2.0f);
 
-        g.setColour(meterColour);
-        g.fillRoundedRectangle(fillArea.toFloat(), 2.0f);
+            const int peakX = juce::jlimit(meterArea.getX(), meterArea.getRight() - 1, fillArea.getRight() - 1);
+            g.setColour(juce::Colours::white.withAlpha(0.7f));
+            g.drawVerticalLine(peakX, static_cast<float>(meterArea.getY()), static_cast<float>(meterArea.getBottom()));
+        }
     };
 
     drawRow(leftRow, "L", leftLevel_);
@@ -1589,6 +1613,13 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         processor_.setFineTuneCents(static_cast<float>(tuneFineDial_.getValue()));
     };
 
+    addAndMakeVisible(pitchBendRangeDial_);
+    pitchBendRangeDial_.setDoubleClickResetValue(2.0);
+    pitchBendRangeDial_.onValueChange = [this]
+    {
+        processor_.setPitchBendRangeSemitones(static_cast<float>(pitchBendRangeDial_.getValue()));
+    };
+
     // Waveform
     addAndMakeVisible(waveformView_);
     waveformView_.onLoopPreview = [this](const int ls, const int le)
@@ -1729,6 +1760,13 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     glideDial_.onValueChange = [this]
     {
         processor_.setGlideSeconds(static_cast<float>(glideDial_.getValue()) / 1000.0f);
+    };
+
+    addAndMakeVisible(polyphonyDial_);
+    polyphonyDial_.setDoubleClickResetValue(64.0);
+    polyphonyDial_.onValueChange = [this]
+    {
+        processor_.setPolyphonyLimit(juce::jlimit(1, 64, static_cast<int>(std::round(polyphonyDial_.getValue()))));
     };
 
     // Amp ADSR
@@ -1915,9 +1953,11 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(preloadDial_);
     preloadDial_.setDoubleClickResetValue(32768.0);
     addAndMakeVisible(masterVolumeDial_);
+    addAndMakeVisible(panDial_);
     addAndMakeVisible(outputLevelMeter_);
     addAndMakeVisible(reverbMixDial_);
     masterVolumeDial_.setDoubleClickResetValue(100.0);
+    panDial_.setDoubleClickResetValue(0.0);
     reverbMixDial_.setDoubleClickResetValue(0.0);
     preloadDial_.onValueChange = [this]
     {
@@ -1927,6 +1967,10 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     masterVolumeDial_.onValueChange = [this]
     {
         processor_.setMasterVolume(static_cast<float>(masterVolumeDial_.getValue()) / 100.0f);
+    };
+    panDial_.onValueChange = [this]
+    {
+        processor_.setPan(static_cast<float>(panDial_.getValue()) / 100.0f);
     };
     reverbMixDial_.onValueChange = [this]
     {
@@ -1966,6 +2010,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         { &loopEndDial_,        "loopEnd" },
         { &loopCrossfadeDial_,  "loopCrossfade" },
         { &glideDial_,          "glide" },
+        { &polyphonyDial_,      "polyphony" },
         { &ampAttackDial_,      "ampAttack" },
         { &ampDecayDial_,       "ampDecay" },
         { &ampSustainDial_,     "ampSustain" },
@@ -1988,8 +2033,10 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         { &filterLfoFadeInDial_, "filterLfoFadeIn" },
         { &tuneCoarseDial_,     "tuneCoarse" },
         { &tuneFineDial_,       "tuneFine" },
+        { &pitchBendRangeDial_, "pitchBendRange" },
         { &preloadDial_,        "preload" },
         { &masterVolumeDial_,   "masterVolume" },
+        { &panDial_,            "pan" },
         { &reverbMixDial_,      "reverbMix" },
         { &fadeInDial_,         "fadeIn" },
         { &fadeOutDial_,        "fadeOut" },
@@ -2015,10 +2062,12 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addToSampleControls(velocityCurveLabel_);
     addToSampleControls(velocityCurveCombo_);
     addToSampleControls(glideDial_);
+    addToSampleControls(polyphonyDial_);
     addToSampleControls(rootNoteLabel_);
     addToSampleControls(rootNoteCombo_);
     addToSampleControls(tuneCoarseDial_);
     addToSampleControls(tuneFineDial_);
+    addToSampleControls(pitchBendRangeDial_);
     addToSampleControls(ampAttackDial_);
     addToSampleControls(ampDecayDial_);
     addToSampleControls(ampSustainDial_);
@@ -2063,6 +2112,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addToSampleControls(qualityUltraButton_);
     addToSampleControls(preloadDial_);
     addToSampleControls(masterVolumeDial_);
+    addToSampleControls(panDial_);
     addToSampleControls(outputLevelMeter_);
     addToSampleControls(reverbMixDial_);
     addToSampleControls(diagnosticsLabel_);
@@ -2254,10 +2304,12 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
         loopCrossfadeDial_.setValue(loopXfade, juce::dontSendNotification);
 
     const auto rootId = processor_.getRootMidiNote() + 1;
-    if (rootNoteCombo_.getSelectedId() != rootId)
+    const bool isEditingRootNote = rootNoteCombo_.hasKeyboardFocus(true) || rootNoteCombo_.isPopupActive();
+    if (!isEditingRootNote && rootNoteCombo_.getSelectedId() != rootId)
         rootNoteCombo_.setSelectedId(rootId, juce::dontSendNotification);
     tuneCoarseDial_.setValue(processor_.getCoarseTuneSemitones(), juce::dontSendNotification);
     tuneFineDial_.setValue(processor_.getFineTuneCents(), juce::dontSendNotification);
+    pitchBendRangeDial_.setValue(processor_.getPitchBendRangeSemitones(), juce::dontSendNotification);
 
     const auto playbackMode = processor_.getPlaybackMode();
     playbackModeGateButton_.setToggleState(playbackMode == AudiocityAudioProcessor::PlaybackMode::gate,
@@ -2273,6 +2325,7 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
     reverseToggle_.setToggleState(processor_.getReversePlayback(), juce::dontSendNotification);
 
     glideDial_.setValue(processor_.getGlideSeconds() * 1000.0f, juce::dontSendNotification);
+    polyphonyDial_.setValue(static_cast<double>(processor_.getPolyphonyLimit()), juce::dontSendNotification);
     fadeInDial_.setValue(processor_.getFadeInSamples(), juce::dontSendNotification);
     fadeOutDial_.setValue(processor_.getFadeOutSamples(), juce::dontSendNotification);
 
@@ -2313,10 +2366,14 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
     filterReleaseDial_.setValue(filterEnv.releaseSeconds * 1000.0f, juce::dontSendNotification);
 
     const auto velCurve = processor_.getVelocityCurve();
-    velocityCurveCombo_.setSelectedId(
-        velCurve == AudiocityAudioProcessor::VelocityCurve::soft ? 2
-            : (velCurve == AudiocityAudioProcessor::VelocityCurve::hard ? 3 : 1),
-        juce::dontSendNotification);
+    const bool isEditingVelocityCurve = velocityCurveCombo_.hasKeyboardFocus(true) || velocityCurveCombo_.isPopupActive();
+    if (!isEditingVelocityCurve)
+    {
+        velocityCurveCombo_.setSelectedId(
+            velCurve == AudiocityAudioProcessor::VelocityCurve::soft ? 2
+                : (velCurve == AudiocityAudioProcessor::VelocityCurve::hard ? 3 : 1),
+            juce::dontSendNotification);
+    }
 
     qualityCpuButton_.setToggleState(
         processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::cpu,
@@ -2328,6 +2385,7 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
         processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::ultra,
         juce::dontSendNotification);
     masterVolumeDial_.setValue(processor_.getMasterVolume() * 100.0f, juce::dontSendNotification);
+    panDial_.setValue(processor_.getPan() * 100.0f, juce::dontSendNotification);
     reverbMixDial_.setValue(processor_.getReverbMix() * 100.0f, juce::dontSendNotification);
 }
 
@@ -2353,6 +2411,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     rootNoteCombo_.setVisible(showSampleTab);
     tuneCoarseDial_.setVisible(showSampleTab);
     tuneFineDial_.setVisible(showSampleTab);
+    pitchBendRangeDial_.setVisible(showSampleTab);
     waveformView_.setVisible(showSampleTab);
     playbackModeLabel_.setVisible(showSampleTab);
     playbackModeGateButton_.setVisible(showSampleTab);
@@ -2369,6 +2428,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     velocityCurveLabel_.setVisible(showSampleTab);
     velocityCurveCombo_.setVisible(showSampleTab);
     glideDial_.setVisible(showSampleTab);
+    polyphonyDial_.setVisible(showSampleTab);
     ampAttackDial_.setVisible(showSampleTab);
     ampDecayDial_.setVisible(showSampleTab);
     ampSustainDial_.setVisible(showSampleTab);
@@ -2410,6 +2470,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     qualityUltraButton_.setVisible(showSampleTab);
     preloadDial_.setVisible(showSampleTab);
     masterVolumeDial_.setVisible(showSampleTab);
+    panDial_.setVisible(showSampleTab);
     outputLevelMeter_.setVisible(showSampleTab);
     reverbMixDial_.setVisible(showSampleTab);
     diagnosticsLabel_.setVisible(showSampleTab);
@@ -3035,19 +3096,22 @@ void AudiocityAudioProcessorEditor::resized()
 
         glideDial_.setBounds(perfInner.removeFromLeft(kDial));
         perfInner.removeFromLeft(kDialGap);
-        auto rootArea = perfInner.removeFromLeft(136);
-        rootNoteLabel_.setBounds(rootArea.removeFromTop(16));
-        rootArea.removeFromTop(2);
-        rootNoteCombo_.setBounds(rootArea.removeFromTop(28));
+        polyphonyDial_.setBounds(perfInner.removeFromLeft(kDial));
         perfInner.removeFromLeft(kDialGap);
         tuneCoarseDial_.setBounds(perfInner.removeFromLeft(kDial));
         perfInner.removeFromLeft(kDialGap);
         tuneFineDial_.setBounds(perfInner.removeFromLeft(kDial));
         perfInner.removeFromLeft(kDialGap);
-        auto velArea = perfInner.removeFromLeft(120);
-        velocityCurveLabel_.setBounds(velArea.removeFromTop(16));
-        velArea.removeFromTop(2);
-        velocityCurveCombo_.setBounds(velArea.removeFromTop(24));
+        pitchBendRangeDial_.setBounds(perfInner.removeFromLeft(kDial));
+        perfInner.removeFromLeft(kDialGap);
+        auto rightStack = perfInner.removeFromLeft(136);
+        rootNoteLabel_.setBounds(rightStack.removeFromTop(16));
+        rightStack.removeFromTop(2);
+        rootNoteCombo_.setBounds(rightStack.removeFromTop(28));
+        rightStack.removeFromTop(6);
+        velocityCurveLabel_.setBounds(rightStack.removeFromTop(16));
+        rightStack.removeFromTop(2);
+        velocityCurveCombo_.setBounds(rightStack.removeFromTop(24));
     }
 
     // ── Panel 2: Trim and Loop ──
@@ -3154,19 +3218,21 @@ void AudiocityAudioProcessorEditor::resized()
         masterVolumeDial_.setBounds(outInner.removeFromLeft(kDial));
         outInner.removeFromLeft(kDialGap);
 
-        auto meterBounds = outInner.removeFromLeft(84);
-        outputLevelMeter_.setBounds(meterBounds.reduced(0, 8));
-        outInner.removeFromLeft(kStackColGap);
+        panDial_.setBounds(outInner.removeFromLeft(kDial));
+        outInner.removeFromLeft(kDialGap);
 
         preloadDial_.setBounds(outInner.removeFromLeft(kDial));
         outInner.removeFromLeft(kStackColGap);
 
         auto qualArea = outInner.removeFromRight(kModeStackW);
         layoutThreeButtonStack(qualArea,
-                     qualityLabel_,
-                     qualityCpuButton_,
-                     qualityFidelityButton_,
-                     qualityUltraButton_);
+                 qualityLabel_,
+                 qualityCpuButton_,
+                 qualityFidelityButton_,
+                 qualityUltraButton_);
+
+        outInner.removeFromRight(kStackColGap);
+        outputLevelMeter_.setBounds(outInner.reduced(0, 6));
     }
 
     // ── Panel 8: Diagnostics ──
@@ -3457,6 +3523,8 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Tune Coarse - Shift playback pitch in semitones (-24 to +24)");
     tuneFineDial_.setLabelTooltip(
         "Tune Fine - Shift playback pitch in cents (-100 to +100)");
+    pitchBendRangeDial_.setLabelTooltip(
+        "Pitch Bend Range - Maximum pitch wheel range in semitones (0 to 24)");
     playbackStartDial_.setLabelTooltip(
         "Playback Start - Sample position where playback begins");
     playbackEndDial_.setLabelTooltip(
@@ -3469,6 +3537,8 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Loop Crossfade - Crossfade length in samples at loop wrap point");
     glideDial_.setLabelTooltip(
         "Glide Time - Portamento time between notes in milliseconds");
+    polyphonyDial_.setLabelTooltip(
+        "Polyphony Limit - Maximum simultaneous voices (1 to 64)");
     ampAttackDial_.setLabelTooltip(
         "Attack - Amplitude envelope attack time in milliseconds");
     ampDecayDial_.setLabelTooltip(
@@ -3543,6 +3613,8 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Preload - Number of samples buffered before streaming begins");
     masterVolumeDial_.setLabelTooltip(
         "Master Volume - Final output gain after engine processing");
+    panDial_.setLabelTooltip(
+        "Pan - Stereo balance from -100L to +100R, applied pre-reverb");
     qualityCpuButton_.setTooltip(
         "Quality - Prioritize lower CPU usage");
     qualityFidelityButton_.setTooltip(
@@ -3727,9 +3799,12 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     samplePathLabel_.setText(sampleLabel, juce::dontSendNotification);
     const auto isNewLoadedSample = path.isNotEmpty() && path != lastWaveformSamplePath_;
 
-    rootNoteCombo_.setSelectedId(processor_.getRootMidiNote() + 1, juce::dontSendNotification);
+    const bool isEditingRootNote = rootNoteCombo_.hasKeyboardFocus(true) || rootNoteCombo_.isPopupActive();
+    if (!isEditingRootNote)
+        rootNoteCombo_.setSelectedId(processor_.getRootMidiNote() + 1, juce::dontSendNotification);
     tuneCoarseDial_.setValue(processor_.getCoarseTuneSemitones(), juce::dontSendNotification);
     tuneFineDial_.setValue(processor_.getFineTuneCents(), juce::dontSendNotification);
+    pitchBendRangeDial_.setValue(processor_.getPitchBendRangeSemitones(), juce::dontSendNotification);
 
     playerPadAssignments_ = processor_.getAllPlayerPadAssignments();
     refreshPlayerPadButtons();
@@ -3794,6 +3869,7 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     legatoToggle_.setToggleState(processor_.getLegatoMode(), juce::dontSendNotification);
     legatoToggle_.setEnabled(processor_.getMonoMode());
     glideDial_.setValue(processor_.getGlideSeconds() * 1000.0f);
+    polyphonyDial_.setValue(static_cast<double>(processor_.getPolyphonyLimit()));
 
     // Amp ADSR
     const auto amp = processor_.getAmpEnvelope();
@@ -3850,13 +3926,18 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
         juce::dontSendNotification);
     preloadDial_.setValue(processor_.getPreloadSamples());
     masterVolumeDial_.setValue(processor_.getMasterVolume() * 100.0f);
+    panDial_.setValue(processor_.getPan() * 100.0f);
     reverbMixDial_.setValue(processor_.getReverbMix() * 100.0f);
 
     const auto velCurve = processor_.getVelocityCurve();
-    velocityCurveCombo_.setSelectedId(
-        velCurve == AudiocityAudioProcessor::VelocityCurve::soft ? 2
-            : (velCurve == AudiocityAudioProcessor::VelocityCurve::hard ? 3 : 1),
-        juce::dontSendNotification);
+    const bool isEditingVelocityCurve = velocityCurveCombo_.hasKeyboardFocus(true) || velocityCurveCombo_.isPopupActive();
+    if (!isEditingVelocityCurve)
+    {
+        velocityCurveCombo_.setSelectedId(
+            velCurve == AudiocityAudioProcessor::VelocityCurve::soft ? 2
+                : (velCurve == AudiocityAudioProcessor::VelocityCurve::hard ? 3 : 1),
+            juce::dontSendNotification);
+    }
 
     // Reverse / Fade
     reverseToggle_.setToggleState(processor_.getReversePlayback(), juce::dontSendNotification);
@@ -3868,6 +3949,8 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
         "Preload: " + juce::String(processor_.getLoadedPreloadSamples())
             + " | Stream: " + juce::String(processor_.getLoadedStreamSamples())
             + " | Rebuilds: " + juce::String(processor_.getSegmentRebuildCount())
+            + " | Poly: " + juce::String(processor_.getPolyphonyLimit())
+            + " | Voices: " + juce::String(processor_.getActiveVoiceCount())
             + " | Root: " + juce::String(processor_.getRootMidiNote())
             + " | Length: " + juce::String(sampleLength),
         juce::dontSendNotification);
@@ -4026,11 +4109,13 @@ audiocity::engine::SettingsSnapshot AudiocityAudioProcessorEditor::captureSettin
         processor_.getPreloadSamples(),
         qualityTierIndex,
         playbackModeIndex,
-            processor_.getCoarseTuneSemitones(),
-            processor_.getFineTuneCents(),
+        processor_.getCoarseTuneSemitones(),
+        processor_.getFineTuneCents(),
+        processor_.getPitchBendRangeSemitones(),
         processor_.getMonoMode(),
         processor_.getLegatoMode(),
         processor_.getGlideSeconds(),
+        processor_.getPolyphonyLimit(),
         processor_.getSampleWindowStart(),
         processor_.getSampleWindowEnd(),
         processor_.getLoopStart(),
@@ -4044,8 +4129,9 @@ audiocity::engine::SettingsSnapshot AudiocityAudioProcessorEditor::captureSettin
 void AudiocityAudioProcessorEditor::applySettingsSnapshot(const audiocity::engine::SettingsSnapshot& snapshot)
 {
     processor_.setPreloadSamples(snapshot.preloadSamples);
-        processor_.setCoarseTuneSemitones(snapshot.coarseTuneSemitones);
-        processor_.setFineTuneCents(snapshot.fineTuneCents);
+    processor_.setCoarseTuneSemitones(snapshot.coarseTuneSemitones);
+    processor_.setFineTuneCents(snapshot.fineTuneCents);
+    processor_.setPitchBendRangeSemitones(snapshot.pitchBendRangeSemitones);
     processor_.setQualityTier(snapshot.qualityTierIndex == 0
         ? AudiocityAudioProcessor::QualityTier::cpu
         : (snapshot.qualityTierIndex == 2
@@ -4059,6 +4145,7 @@ void AudiocityAudioProcessorEditor::applySettingsSnapshot(const audiocity::engin
     processor_.setMonoMode(snapshot.monoEnabled);
     processor_.setLegatoMode(snapshot.legatoEnabled);
     processor_.setGlideSeconds(snapshot.glideSeconds);
+    processor_.setPolyphonyLimit(snapshot.polyphonyLimit);
     processor_.setSampleWindow(snapshot.sampleWindowStart, snapshot.sampleWindowEnd);
     processor_.setLoopPoints(snapshot.loopStart, snapshot.loopEnd);
     processor_.setFadeSamples(snapshot.fadeInSamples, snapshot.fadeOutSamples);
