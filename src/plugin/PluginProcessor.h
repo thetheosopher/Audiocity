@@ -111,6 +111,9 @@ public:
     };
     [[nodiscard]] OutputPeakLevels consumeOutputPeakLevels() noexcept;
 
+    using VoicePlaybackPositions = std::array<int, audiocity::engine::VoicePool::maxVoices>;
+    [[nodiscard]] VoicePlaybackPositions getVoicePlaybackPositions() const noexcept;
+
     void setPreloadSamples(int preloadSamples) noexcept { engine_.setPreloadSamples(preloadSamples); }
     [[nodiscard]] int getPreloadSamples() const noexcept { return engine_.getPreloadSamples(); }
     [[nodiscard]] int getLoadedPreloadSamples() const noexcept { return engine_.getLoadedPreloadSamples(); }
@@ -171,6 +174,9 @@ public:
     using AmpLfoSettings = audiocity::engine::EngineCore::AmpLfoSettings;
     void setAmpLfoSettings(const AmpLfoSettings& settings) noexcept;
     [[nodiscard]] AmpLfoSettings getAmpLfoSettings() const noexcept { return engine_.getAmpLfoSettings(); }
+    using PitchLfoSettings = audiocity::engine::EngineCore::PitchLfoSettings;
+    void setPitchLfoSettings(const PitchLfoSettings& settings) noexcept;
+    [[nodiscard]] PitchLfoSettings getPitchLfoSettings() const noexcept { return engine_.getPitchLfoSettings(); }
     void setFilterEnvelope(const AdsrSettings& settings) noexcept;
     [[nodiscard]] AdsrSettings getFilterEnvelope() const noexcept { return engine_.getFilterEnvelope(); }
 
@@ -210,6 +216,8 @@ private:
     void renderGeneratedWavePreview(juce::AudioBuffer<float>& buffer) noexcept;
     void renderSampleFilePreview(juce::AudioBuffer<float>& buffer) noexcept;
     void updateOutputPeakLevels(const juce::AudioBuffer<float>& buffer) noexcept;
+    void updateVoicePlaybackPositionsFromEngine() noexcept;
+    void clearVoicePlaybackPositions() noexcept;
 
     struct UiMidiEvent
     {
@@ -243,6 +251,7 @@ private:
     std::atomic<bool> generatedWaveformLoaded_{ false };
     std::atomic<float> outputPeakLeft_{ 0.0f };
     std::atomic<float> outputPeakRight_{ 0.0f };
+    std::array<std::atomic<int>, audiocity::engine::VoicePool::maxVoices> voicePlaybackPositions_{};
     static constexpr int kPreviewWaveMaxSamples = 2048;
     std::array<float, kPreviewWaveMaxSamples> previewWaveData_{};
     std::atomic<int> previewWaveSamples_{ 0 };

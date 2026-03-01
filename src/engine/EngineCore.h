@@ -94,6 +94,12 @@ public:
         FilterSettings::LfoShape shape = FilterSettings::LfoShape::sine;
     };
 
+    struct PitchLfoSettings
+    {
+        float rateHz = 0.0f;
+        float depthCents = 0.0f;
+    };
+
     void prepare(double sampleRate, int maxSamplesPerBlock, int outputChannels) noexcept;
     void release() noexcept;
 
@@ -102,6 +108,14 @@ public:
         float minValue = 0.0f;
         float maxValue = 0.0f;
     };
+
+    struct VoicePlaybackState
+    {
+        bool active = false;
+        int sampleIndex = -1;
+    };
+
+    using VoicePlaybackStates = std::array<VoicePlaybackState, VoicePool::maxVoices>;
 
     bool loadSampleFromFile(const juce::File& file);
     void setSampleData(const juce::AudioBuffer<float>& sampleData, double sampleRate, int rootNote) noexcept;
@@ -151,11 +165,13 @@ public:
 
     void setAmpEnvelope(const AdsrSettings& settings) noexcept;
     void setAmpLfoSettings(const AmpLfoSettings& settings) noexcept;
+    void setPitchLfoSettings(const PitchLfoSettings& settings) noexcept;
     void setFilterEnvelope(const AdsrSettings& settings) noexcept;
     void setFilterSettings(const FilterSettings& settings) noexcept;
 
     [[nodiscard]] AdsrSettings getAmpEnvelope() const noexcept { return ampEnvelopeSettings_; }
     [[nodiscard]] AmpLfoSettings getAmpLfoSettings() const noexcept { return ampLfoSettings_; }
+    [[nodiscard]] PitchLfoSettings getPitchLfoSettings() const noexcept { return pitchLfoSettings_; }
     [[nodiscard]] AdsrSettings getFilterEnvelope() const noexcept { return filterEnvelopeSettings_; }
     [[nodiscard]] FilterSettings getFilterSettings() const noexcept { return filterSettings_; }
 
@@ -192,6 +208,7 @@ public:
     [[nodiscard]] int stealCount() const noexcept;
     void resetStealCount() noexcept;
     [[nodiscard]] bool isNoteActive(int noteNumber) const noexcept;
+    [[nodiscard]] VoicePlaybackStates getVoicePlaybackStates() const noexcept;
 
 private:
     struct SampleSegments;
@@ -228,6 +245,8 @@ private:
         float velocity = 0.0f;
         int offset = 0;
     };
+
+    bool enqueuePendingEvent(EventType type, int noteNumber, float velocity, int sampleOffsetInBlock) noexcept;
 
     void generateFallbackSample() noexcept;
     void flushPendingEventsAtOffset(int offset) noexcept;
@@ -284,6 +303,7 @@ private:
 
     AdsrSettings ampEnvelopeSettings_{};
     AmpLfoSettings ampLfoSettings_{};
+    PitchLfoSettings pitchLfoSettings_{};
     AdsrSettings filterEnvelopeSettings_{ 0.001f, 0.120f, 0.0f, 0.100f };
     FilterSettings filterSettings_{};
     PlaybackMode playbackMode_ = PlaybackMode::gate;
@@ -292,6 +312,7 @@ private:
     float glideSeconds_ = 0.0f;
     float globalFilterLfoPhase_ = 0.0f;
     float globalAmpLfoPhase_ = 0.0f;
+    float globalPitchLfoPhase_ = 0.0f;
     QualityTier qualityTier_ = QualityTier::fidelity;
     VelocityCurve velocityCurve_ = VelocityCurve::linear;
     float reverbMix_ = 0.0f;

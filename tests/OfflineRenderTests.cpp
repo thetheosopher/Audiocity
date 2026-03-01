@@ -665,6 +665,11 @@ bool runLoadSampleResetsEnvelopeAndFilterDefaultsTest()
     customFilterEnv.releaseSeconds = 0.710f;
     engine.setFilterEnvelope(customFilterEnv);
 
+    auto customPitchLfo = engine.getPitchLfoSettings();
+    customPitchLfo.rateHz = 7.5f;
+    customPitchLfo.depthCents = 42.0f;
+    engine.setPitchLfoSettings(customPitchLfo);
+
     auto customFilter = engine.getFilterSettings();
     customFilter.baseCutoffHz = 420.0f;
     customFilter.envAmountHz = 9500.0f;
@@ -700,13 +705,16 @@ bool runLoadSampleResetsEnvelopeAndFilterDefaultsTest()
     }
 
     const auto filter = engine.getFilterSettings();
+    const auto pitchLfo = engine.getPitchLfoSettings();
     return std::abs(filter.baseCutoffHz - 18000.0f) <= 1.0e-6f
         && std::abs(filter.envAmountHz - 0.0f) <= 1.0e-6f
         && std::abs(filter.resonance - 0.0f) <= 1.0e-6f
         && filter.mode == audiocity::engine::EngineCore::FilterSettings::Mode::lowPass12
         && std::abs(filter.lfoRateHz - 0.0f) <= 1.0e-6f
         && std::abs(filter.lfoAmountHz - 0.0f) <= 1.0e-6f
-        && !filter.lfoTempoSync;
+        && !filter.lfoTempoSync
+        && std::abs(pitchLfo.rateHz - 0.0f) <= 1.0e-6f
+        && std::abs(pitchLfo.depthCents - 0.0f) <= 1.0e-6f;
 }
 
 bool runEditorSampleEditControlsTest()
@@ -898,25 +906,91 @@ bool runPolyphonicSameNoteReleaseTest()
     midi.addEvent(juce::MidiMessage::noteOn(1, 60, 0.9f), 32);
     engine.render(block, midi);
 
-    if (engine.activeVoiceCount() < 2)
-        return false;
-
-    midi.clear();
-    midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
-    engine.render(block, midi);
-
-    midi.clear();
-    for (int i = 0; i < 40; ++i)
-        engine.render(block, midi);
-
     if (engine.activeVoiceCount() != 1)
         return false;
 
+    midi.clear();
     midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
     engine.render(block, midi);
 
     midi.clear();
     for (int i = 0; i < 120; ++i)
+        engine.render(block, midi);
+
+    return engine.activeVoiceCount() == 0;
+}
+
+bool runDenseLoopModeOverflowDoesNotStickNotesTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+    constexpr int denseEventCount = 1600;
+
+    audiocity::engine::EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setSampleData(createTestSample(4096), sampleRate, 60);
+    engine.setMonoMode(false);
+    engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+
+    audiocity::engine::EngineCore::AdsrSettings adsr;
+    adsr.attackSeconds = 0.0001f;
+    adsr.decaySeconds = 0.001f;
+    adsr.sustainLevel = 1.0f;
+    adsr.releaseSeconds = 0.01f;
+    engine.setAmpEnvelope(adsr);
+
+    juce::AudioBuffer<float> block(channels, blockSize);
+    juce::MidiBuffer midi;
+    for (int i = 0; i < denseEventCount; ++i)
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+    for (int i = 0; i < denseEventCount; ++i)
+        midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+
+    engine.render(block, midi);
+
+    midi.clear();
+    for (int i = 0; i < 260; ++i)
+        engine.render(block, midi);
+
+    return engine.activeVoiceCount() == 0;
+}
+
+bool runQueueSaturatedByPitchBendStillReleasesNoteOffTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+    constexpr int saturationEvents = 1600;
+
+    audiocity::engine::EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setSampleData(createTestSample(4096), sampleRate, 60);
+    engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+
+    audiocity::engine::EngineCore::AdsrSettings adsr;
+    adsr.attackSeconds = 0.0001f;
+    adsr.decaySeconds = 0.001f;
+    adsr.sustainLevel = 1.0f;
+    adsr.releaseSeconds = 0.01f;
+    engine.setAmpEnvelope(adsr);
+
+    juce::AudioBuffer<float> block(channels, blockSize);
+    juce::MidiBuffer midi;
+
+    midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+    engine.render(block, midi);
+    if (engine.activeVoiceCount() == 0)
+        return false;
+
+    midi.clear();
+    for (int i = 0; i < saturationEvents; ++i)
+        midi.addEvent(juce::MidiMessage::pitchWheel(1, (i % 2 == 0) ? 16383 : 0), 0);
+    midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+    engine.render(block, midi);
+
+    midi.clear();
+    for (int i = 0; i < 260; ++i)
         engine.render(block, midi);
 
     return engine.activeVoiceCount() == 0;
@@ -1845,6 +1919,50 @@ bool runFilterLfoDifferenceTest()
     const auto noLfo = renderWithLfoAmount(0.0f);
     const auto withLfo = renderWithLfoAmount(3000.0f);
     return !buffersAreEqual(noLfo, withLfo, 1.0e-6f);
+}
+
+bool runPitchLfoVibratoSettingsTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr int blocks = 48;
+    constexpr double sampleRate = 48000.0;
+
+    auto renderWithPitchLfo = [&](const float rateHz, const float depthCents)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(createOneCycleSine(128), sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+
+        audiocity::engine::EngineCore::AdsrSettings heldAdsr;
+        heldAdsr.attackSeconds = 0.0001f;
+        heldAdsr.decaySeconds = 0.0001f;
+        heldAdsr.sustainLevel = 1.0f;
+        heldAdsr.releaseSeconds = 0.5f;
+        engine.setAmpEnvelope(heldAdsr);
+
+        auto pitchLfo = engine.getPitchLfoSettings();
+        pitchLfo.rateHz = rateHz;
+        pitchLfo.depthCents = depthCents;
+        engine.setPitchLfoSettings(pitchLfo);
+
+        return renderHeldNote(engine, 60, blockSize, blocks, channels);
+    };
+
+    const auto dry = renderWithPitchLfo(0.0f, 0.0f);
+    const auto vibrato = renderWithPitchLfo(5.0f, 40.0f);
+    if (buffersAreEqual(dry, vibrato, 1.0e-6f))
+        return false;
+
+    const auto slowRate = renderWithPitchLfo(1.5f, 35.0f);
+    const auto fastRate = renderWithPitchLfo(8.0f, 35.0f);
+    if (buffersAreEqual(slowRate, fastRate, 1.0e-6f))
+        return false;
+
+    const auto shallowDepth = renderWithPitchLfo(5.0f, 10.0f);
+    const auto deepDepth = renderWithPitchLfo(5.0f, 70.0f);
+    return !buffersAreEqual(shallowDepth, deepDepth, 1.0e-6f);
 }
 
 bool runAmpLfoTremoloSettingsTest()
@@ -2815,6 +2933,55 @@ bool runPitchBendRangeAndRealtimeModulationTest()
         && std::abs(ratio12 - expected12) < 0.12f
         && ratio12 > ratio2 * 1.5f;
 }
+
+bool runVoicePlaybackStateSnapshotTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 256;
+    constexpr double sampleRate = 48000.0;
+
+    audiocity::engine::EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setSampleData(createTestSample(4096), sampleRate, 60);
+
+    {
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        midi.addEvent(juce::MidiMessage::noteOn(1, 64, 1.0f), 32);
+        engine.render(block, midi);
+    }
+
+    const auto states = engine.getVoicePlaybackStates();
+    int activeCount = 0;
+    int positivePositions = 0;
+    for (const auto& state : states)
+    {
+        if (!state.active)
+        {
+            if (state.sampleIndex >= 0)
+                return false;
+            continue;
+        }
+
+        ++activeCount;
+        if (state.sampleIndex > 0)
+            ++positivePositions;
+    }
+
+    if (activeCount != 2 || positivePositions == 0)
+        return false;
+
+    engine.panic();
+    const auto afterPanic = engine.getVoicePlaybackStates();
+    for (const auto& state : afterPanic)
+    {
+        if (state.active || state.sampleIndex >= 0)
+            return false;
+    }
+
+    return true;
+}
 }
 
 int main()
@@ -2857,6 +3024,12 @@ int main()
 
     if (!runPolyphonicSameNoteReleaseTest())
         return 24;
+
+    if (!runDenseLoopModeOverflowDoesNotStickNotesTest())
+        return 55;
+
+    if (!runQueueSaturatedByPitchBendStillReleasesNoteOffTest())
+        return 56;
 
     if (!runGlideChangesLegatoTransitionTest())
         return 8;
@@ -2918,6 +3091,9 @@ int main()
     if (!runFilterLfoDifferenceTest())
         return 31;
 
+    if (!runPitchLfoVibratoSettingsTest())
+        return 53;
+
     if (!runFilterLfoShapeDifferenceTest())
         return 32;
 
@@ -2971,6 +3147,9 @@ int main()
 
     if (!runPitchBendRangeAndRealtimeModulationTest())
         return 50;
+
+    if (!runVoicePlaybackStateSnapshotTest())
+        return 54;
 
     if (!runLoopCrossfadeSmoothsBoundaryTest())
         return 29;

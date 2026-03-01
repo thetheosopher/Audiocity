@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <optional>
 
 namespace audiocity::engine
@@ -151,6 +152,11 @@ EngineCore::AmpLfoSettings defaultAmpLfoSettingsForLoadedSample() noexcept
     return {};
 }
 
+EngineCore::PitchLfoSettings defaultPitchLfoSettingsForLoadedSample() noexcept
+{
+    return {};
+}
+
 EngineCore::AdsrSettings defaultFilterEnvelopeForLoadedSample() noexcept
 {
     return { 0.001f, 0.120f, 0.0f, 0.100f };
@@ -199,6 +205,7 @@ void EngineCore::prepare(const double sampleRate, const int maxSamplesPerBlock, 
     pendingEventCount_ = 0;
     globalFilterLfoPhase_ = 0.0f;
     globalAmpLfoPhase_ = 0.0f;
+    globalPitchLfoPhase_ = 0.0f;
     currentPitchBendSemitones_ = 0.0f;
 
     juce::dsp::ProcessSpec spec;
@@ -291,6 +298,7 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
     setSampleData(mono, reader->sampleRate, embeddedRootNote);
     setAmpEnvelope(defaultAmpEnvelopeForLoadedSample());
     setAmpLfoSettings(defaultAmpLfoSettingsForLoadedSample());
+    setPitchLfoSettings(defaultPitchLfoSettingsForLoadedSample());
     setFilterEnvelope(defaultFilterEnvelopeForLoadedSample());
     setFilterSettings(defaultFilterSettingsForLoadedSample());
     displaySampleData_ = loaded;
@@ -409,41 +417,31 @@ void EngineCore::setFadeSamples(const int fadeInSamples, const int fadeOutSample
 
 void EngineCore::noteOn(const int noteNumber, const float velocity, const int sampleOffsetInBlock) noexcept
 {
-    if (pendingEventCount_ >= static_cast<int>(pendingEvents_.size()))
-        return;
-
-    auto& event = pendingEvents_[static_cast<std::size_t>(pendingEventCount_++)];
-    event.type = EventType::noteOn;
-    event.noteNumber = juce::jlimit(0, 127, noteNumber);
-    event.velocity = juce::jlimit(0.0f, 1.0f, velocity);
-    event.offset = juce::jmax(0, sampleOffsetInBlock);
+    enqueuePendingEvent(EventType::noteOn,
+        juce::jlimit(0, 127, noteNumber),
+        juce::jlimit(0.0f, 1.0f, velocity),
+        juce::jmax(0, sampleOffsetInBlock));
 }
 
 void EngineCore::noteOff(const int noteNumber, const int sampleOffsetInBlock) noexcept
 {
-    if (pendingEventCount_ >= static_cast<int>(pendingEvents_.size()))
-        return;
+    const auto accepted = enqueuePendingEvent(EventType::noteOff,
+        juce::jlimit(0, 127, noteNumber),
+        0.0f,
+        juce::jmax(0, sampleOffsetInBlock));
 
-    auto& event = pendingEvents_[static_cast<std::size_t>(pendingEventCount_++)];
-    event.type = EventType::noteOff;
-    event.noteNumber = juce::jlimit(0, 127, noteNumber);
-    event.velocity = 0.0f;
-    event.offset = juce::jmax(0, sampleOffsetInBlock);
+    if (!accepted)
+        releaseVoicesForNote(juce::jlimit(0, 127, noteNumber));
 }
 
 void EngineCore::pitchBend(const int pitchWheelValue, const int sampleOffsetInBlock) noexcept
 {
-    if (pendingEventCount_ >= static_cast<int>(pendingEvents_.size()))
-        return;
-
-    auto& event = pendingEvents_[static_cast<std::size_t>(pendingEventCount_++)];
-    event.type = EventType::pitchBend;
-    event.noteNumber = 0;
-
     const auto clamped = juce::jlimit(0, 16383, pitchWheelValue);
     const auto normalized = (static_cast<float>(clamped) - 8192.0f) / 8192.0f;
-    event.velocity = juce::jlimit(-1.0f, 1.0f, normalized);
-    event.offset = juce::jmax(0, sampleOffsetInBlock);
+    enqueuePendingEvent(EventType::pitchBend,
+        0,
+        juce::jlimit(-1.0f, 1.0f, normalized),
+        juce::jmax(0, sampleOffsetInBlock));
 }
 
 void EngineCore::render(float** outputs, const int numChannels, const int numSamples) noexcept
@@ -468,6 +466,21 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     {
         flushPendingEventsAtOffset(sampleIndex);
         const auto pitchBendRatio = std::pow(2.0f, currentPitchBendSemitones_ / 12.0f);
+
+        float pitchLfoRatio = 1.0f;
+        const bool hasActivePitchLfo = pitchLfoSettings_.rateHz > 0.0f && pitchLfoSettings_.depthCents > 0.0001f;
+        if (hasActivePitchLfo)
+        {
+            const auto pitchLfoWave = computeLfoWave(FilterSettings::LfoShape::sine, globalPitchLfoPhase_);
+            const auto pitchLfoSemitones = (pitchLfoSettings_.depthCents / 100.0f) * pitchLfoWave;
+            pitchLfoRatio = std::pow(2.0f, pitchLfoSemitones / 12.0f);
+
+            globalPitchLfoPhase_ += pitchLfoSettings_.rateHz / static_cast<float>(sampleRate_);
+            if (globalPitchLfoPhase_ >= 1.0f)
+                globalPitchLfoPhase_ -= std::floor(globalPitchLfoPhase_);
+        }
+
+        const auto combinedPitchRatio = pitchBendRatio * pitchLfoRatio;
 
         float globalLfoValue = 0.0f;
         const bool hasActiveLfo = filterSettings_.lfoRateHz > 0.0f && std::abs(filterSettings_.lfoAmountHz) > 0.0001f;
@@ -656,7 +669,7 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
                 --voice.glideSamplesRemaining;
             }
 
-            voice.samplePosition += voice.sampleIncrement * pitchBendRatio;
+            voice.samplePosition += voice.sampleIncrement * combinedPitchRatio;
         }
 
         for (int channel = 0; channel < numChannels; ++channel)
@@ -739,6 +752,12 @@ void EngineCore::setAmpLfoSettings(const AmpLfoSettings& settings) noexcept
     ampLfoSettings_.rateHz = juce::jlimit(0.0f, 40.0f, settings.rateHz);
     ampLfoSettings_.depth = juce::jlimit(0.0f, 1.0f, settings.depth);
     ampLfoSettings_.shape = settings.shape;
+}
+
+void EngineCore::setPitchLfoSettings(const PitchLfoSettings& settings) noexcept
+{
+    pitchLfoSettings_.rateHz = juce::jlimit(0.0f, 40.0f, settings.rateHz);
+    pitchLfoSettings_.depthCents = juce::jlimit(0.0f, 100.0f, settings.depthCents);
 }
 
 void EngineCore::setFilterEnvelope(const AdsrSettings& settings) noexcept
@@ -824,6 +843,53 @@ int EngineCore::activeVoiceCount() const noexcept
     return voicePool_.activeVoiceCount();
 }
 
+bool EngineCore::enqueuePendingEvent(const EventType type,
+                                     const int noteNumber,
+                                     const float velocity,
+                                     const int sampleOffsetInBlock) noexcept
+{
+    const auto capacity = static_cast<int>(pendingEvents_.size());
+    const auto clampedOffset = juce::jmax(0, sampleOffsetInBlock);
+
+    if (pendingEventCount_ < capacity)
+    {
+        auto& event = pendingEvents_[static_cast<std::size_t>(pendingEventCount_++)];
+        event.type = type;
+        event.noteNumber = noteNumber;
+        event.velocity = velocity;
+        event.offset = clampedOffset;
+        return true;
+    }
+
+    if (type == EventType::noteOn)
+        return false;
+
+    int replaceIndex = -1;
+    int latestOffset = std::numeric_limits<int>::min();
+    for (int index = 0; index < pendingEventCount_; ++index)
+    {
+        if (pendingEvents_[static_cast<std::size_t>(index)].type != EventType::noteOn)
+            continue;
+
+        const auto eventOffset = pendingEvents_[static_cast<std::size_t>(index)].offset;
+        if (eventOffset >= latestOffset)
+        {
+            latestOffset = eventOffset;
+            replaceIndex = index;
+        }
+    }
+
+    if (replaceIndex < 0)
+        return false;
+
+    auto& event = pendingEvents_[static_cast<std::size_t>(replaceIndex)];
+    event.type = type;
+    event.noteNumber = noteNumber;
+    event.velocity = velocity;
+    event.offset = clampedOffset;
+    return true;
+}
+
 int EngineCore::stealCount() const noexcept
 {
     return voicePool_.stealCount();
@@ -837,6 +903,28 @@ void EngineCore::resetStealCount() noexcept
 bool EngineCore::isNoteActive(const int noteNumber) const noexcept
 {
     return voicePool_.isNoteActive(noteNumber);
+}
+
+EngineCore::VoicePlaybackStates EngineCore::getVoicePlaybackStates() const noexcept
+{
+    VoicePlaybackStates states{};
+    const auto segments = getSampleSegmentsSnapshot();
+    if (segments == nullptr)
+        return states;
+
+    for (int voiceIndex = 0; voiceIndex < static_cast<int>(VoicePool::maxVoices); ++voiceIndex)
+    {
+        if (!voicePool_.isActive(voiceIndex))
+            continue;
+
+        const auto& voice = voices_[static_cast<std::size_t>(voiceIndex)];
+        const auto playbackIndex = static_cast<int>(std::floor(voice.samplePosition));
+        states[static_cast<std::size_t>(voiceIndex)].active = true;
+        states[static_cast<std::size_t>(voiceIndex)].sampleIndex =
+            mapPlaybackIndexToSampleIndex(*segments, playbackIndex);
+    }
+
+    return states;
 }
 
 void EngineCore::generateFallbackSample() noexcept
@@ -865,6 +953,8 @@ void EngineCore::flushPendingEventsAtOffset(const int offset) noexcept
 
         if (event.type == EventType::noteOn)
         {
+            stopVoicesForNoteImmediate(event.noteNumber);
+
             if (monoMode_)
             {
                 const auto activeIndex = voicePool_.firstActiveVoiceIndex();

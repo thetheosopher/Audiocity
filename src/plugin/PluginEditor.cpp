@@ -814,6 +814,12 @@ void AudiocityAudioProcessorEditor::WaveformView::setState(
     repaint();
 }
 
+void AudiocityAudioProcessorEditor::WaveformView::setVoicePlaybackPositions(const VoicePlaybackPositions& positions)
+{
+    voicePlaybackPositions_ = positions;
+    repaint();
+}
+
 void AudiocityAudioProcessorEditor::WaveformView::resetView()
 {
     viewStartSample_ = 0;
@@ -1095,6 +1101,20 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
         g.setColour(juce::Colours::orange.withAlpha(0.9f));
         g.drawLine(lpHX1, lane.getY(), lpHX1, lane.getBottom(), 1.5f);
         g.drawLine(lpHX2, lane.getY(), lpHX2, lane.getBottom(), 1.5f);
+
+        for (int voiceIndex = 0; voiceIndex < static_cast<int>(voicePlaybackPositions_.size()); ++voiceIndex)
+        {
+            const auto sampleIndex = voicePlaybackPositions_[static_cast<std::size_t>(voiceIndex)];
+            if (sampleIndex < 0)
+                continue;
+
+            const auto markerX = juce::jlimit(bounds.getX(), bounds.getRight(), xFromSample(sampleIndex));
+            const auto hue = std::fmod(0.08f + static_cast<float>(voiceIndex) * 0.61803398875f, 1.0f);
+            const auto markerColour = juce::Colour::fromHSV(hue, 0.68f, 0.98f, 0.92f);
+
+            g.setColour(markerColour);
+            g.drawLine(markerX, lane.getY(), markerX, lane.getBottom(), 1.35f);
+        }
     }
 
     // ── Labels on handles ──
@@ -1624,6 +1644,12 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     {
         processor_.setPitchBendRangeSemitones(static_cast<float>(pitchBendRangeDial_.getValue()));
     };
+    addAndMakeVisible(pitchLfoRateDial_);
+    pitchLfoRateDial_.setDoubleClickResetValue(0.0);
+    pitchLfoRateDial_.onValueChange = [this] { pushPitchLfoSettings(); };
+    addAndMakeVisible(pitchLfoDepthDial_);
+    pitchLfoDepthDial_.setDoubleClickResetValue(0.0);
+    pitchLfoDepthDial_.onValueChange = [this] { pushPitchLfoSettings(); };
 
     // Waveform
     addAndMakeVisible(waveformView_);
@@ -2057,6 +2083,8 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         { &tuneCoarseDial_,     "tuneCoarse" },
         { &tuneFineDial_,       "tuneFine" },
         { &pitchBendRangeDial_, "pitchBendRange" },
+        { &pitchLfoRateDial_,   "pitchLfoRate" },
+        { &pitchLfoDepthDial_,  "pitchLfoDepth" },
         { &preloadDial_,        "preload" },
         { &masterVolumeDial_,   "masterVolume" },
         { &panDial_,            "pan" },
@@ -2091,6 +2119,8 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addToSampleControls(tuneCoarseDial_);
     addToSampleControls(tuneFineDial_);
     addToSampleControls(pitchBendRangeDial_);
+    addToSampleControls(pitchLfoRateDial_);
+    addToSampleControls(pitchLfoDepthDial_);
     addToSampleControls(ampAttackDial_);
     addToSampleControls(ampDecayDial_);
     addToSampleControls(ampSustainDial_);
@@ -2195,6 +2225,8 @@ void AudiocityAudioProcessorEditor::handleNoteOff(juce::MidiKeyboardState* sourc
 void AudiocityAudioProcessorEditor::timerCallback()
 {
     updateGeneratePreviewButtonText();
+
+    waveformView_.setVoicePlaybackPositions(processor_.getVoicePlaybackPositions());
 
     const auto outputPeaks = processor_.consumeOutputPeakLevels();
     outputLevelMeter_.pushLevels(outputPeaks.left, outputPeaks.right);
@@ -2347,6 +2379,9 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
     tuneCoarseDial_.setValue(processor_.getCoarseTuneSemitones(), juce::dontSendNotification);
     tuneFineDial_.setValue(processor_.getFineTuneCents(), juce::dontSendNotification);
     pitchBendRangeDial_.setValue(processor_.getPitchBendRangeSemitones(), juce::dontSendNotification);
+    const auto pitchLfo = processor_.getPitchLfoSettings();
+    pitchLfoRateDial_.setValue(pitchLfo.rateHz, juce::dontSendNotification);
+    pitchLfoDepthDial_.setValue(pitchLfo.depthCents, juce::dontSendNotification);
 
     const auto playbackMode = processor_.getPlaybackMode();
     playbackModeGateButton_.setToggleState(playbackMode == AudiocityAudioProcessor::PlaybackMode::gate,
@@ -2456,6 +2491,8 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     tuneCoarseDial_.setVisible(showSampleTab);
     tuneFineDial_.setVisible(showSampleTab);
     pitchBendRangeDial_.setVisible(showSampleTab);
+    pitchLfoRateDial_.setVisible(showSampleTab);
+    pitchLfoDepthDial_.setVisible(showSampleTab);
     waveformView_.setVisible(showSampleTab);
     playbackModeLabel_.setVisible(showSampleTab);
     playbackModeGateButton_.setVisible(showSampleTab);
@@ -3204,6 +3241,10 @@ void AudiocityAudioProcessorEditor::resized()
         perfInner.removeFromLeft(kDialGap);
         pitchBendRangeDial_.setBounds(perfInner.removeFromLeft(kDial));
         perfInner.removeFromLeft(kDialGap);
+        pitchLfoRateDial_.setBounds(perfInner.removeFromLeft(kDial));
+        perfInner.removeFromLeft(kDialGap);
+        pitchLfoDepthDial_.setBounds(perfInner.removeFromLeft(kDial));
+        perfInner.removeFromLeft(kDialGap);
         auto rightStack = perfInner.removeFromLeft(136);
         rootNoteLabel_.setBounds(rightStack.removeFromTop(16));
         rightStack.removeFromTop(2);
@@ -3644,6 +3685,10 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Tune Fine - Shift playback pitch in cents (-100 to +100)");
     pitchBendRangeDial_.setLabelTooltip(
         "Pitch Bend Range - Maximum pitch wheel range in semitones (0 to 24)");
+    pitchLfoRateDial_.setLabelTooltip(
+        "Pitch LFO Rate - Vibrato speed in Hz");
+    pitchLfoDepthDial_.setLabelTooltip(
+        "Pitch LFO Depth - Vibrato amount in cents");
     playbackStartDial_.setLabelTooltip(
         "Playback Start - Sample position where playback begins");
     playbackEndDial_.setLabelTooltip(
@@ -3932,6 +3977,9 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     tuneCoarseDial_.setValue(processor_.getCoarseTuneSemitones(), juce::dontSendNotification);
     tuneFineDial_.setValue(processor_.getFineTuneCents(), juce::dontSendNotification);
     pitchBendRangeDial_.setValue(processor_.getPitchBendRangeSemitones(), juce::dontSendNotification);
+    const auto pitchLfo = processor_.getPitchLfoSettings();
+    pitchLfoRateDial_.setValue(pitchLfo.rateHz, juce::dontSendNotification);
+    pitchLfoDepthDial_.setValue(pitchLfo.depthCents, juce::dontSendNotification);
 
     playerPadAssignments_ = processor_.getAllPlayerPadAssignments();
     refreshPlayerPadButtons();
@@ -4179,6 +4227,14 @@ void AudiocityAudioProcessorEditor::pushAmpLfoSettings()
     settings.depth = juce::jlimit(0.0f, 1.0f, static_cast<float>(ampLfoDepthDial_.getValue()) / 100.0f);
     settings.shape = comboIdToLfoShape(ampLfoShapeCombo_.getSelectedId());
     processor_.setAmpLfoSettings(settings);
+}
+
+void AudiocityAudioProcessorEditor::pushPitchLfoSettings()
+{
+    AudiocityAudioProcessor::PitchLfoSettings settings;
+    settings.rateHz = juce::jlimit(0.0f, 40.0f, static_cast<float>(pitchLfoRateDial_.getValue()));
+    settings.depthCents = juce::jlimit(0.0f, 100.0f, static_cast<float>(pitchLfoDepthDial_.getValue()));
+    processor_.setPitchLfoSettings(settings);
 }
 
 void AudiocityAudioProcessorEditor::pushFilterSettings()

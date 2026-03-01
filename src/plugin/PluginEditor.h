@@ -16,6 +16,7 @@
 #include "CcLearnDial.h"
 #include "DialLookAndFeel.h"
 #include "PlayerPadState.h"
+#include "../engine/VoicePool.h"
 
 class AudiocityAudioProcessor;
 
@@ -102,6 +103,8 @@ private:
                       int playbackStart, int playbackEnd,
                       int loopStart, int loopEnd,
                       juce::String loopFormatBadge);
+        using VoicePlaybackPositions = std::array<int, audiocity::engine::VoicePool::maxVoices>;
+        void setVoicePlaybackPositions(const VoicePlaybackPositions& positions);
         void resetView();
         void setDisplayMode(DisplayMode mode)
         {
@@ -139,6 +142,7 @@ private:
         int loopStart_ = 0;
         int loopEnd_ = 0;
         juce::String loopFormatBadge_;
+        VoicePlaybackPositions voicePlaybackPositions_{};
 
         int viewStartSample_ = 0;
         int viewSampleCount_ = 0;
@@ -217,6 +221,8 @@ private:
     CcLearnDial tuneCoarseDial_{ "Coarse", -24, 24, 1, "st", 0 };
     CcLearnDial tuneFineDial_{ "Fine", -100, 100, 1, "ct", 0 };
     CcLearnDial pitchBendRangeDial_{ "PB Range", 0, 24, 1, "st", 2 };
+    CcLearnDial pitchLfoRateDial_{ "P LFO Hz", 0, 40, 0.001, "Hz", 0 };
+    CcLearnDial pitchLfoDepthDial_{ "P LFO D", 0, 100, 1, "ct", 0 };
 
     // ── Waveform ──
     WaveformView waveformView_;
@@ -456,6 +462,7 @@ private:
     void enforcePlaybackLoopConstraints();
     void pushAmpEnvelope();
     void pushAmpLfoSettings();
+    void pushPitchLfoSettings();
     void pushFilterEnvelope();
     void pushFilterSettings();
     void pushPerformanceControls();

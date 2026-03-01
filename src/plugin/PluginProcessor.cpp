@@ -16,6 +16,8 @@ constexpr auto kRootMidiNote = "rootMidiNote";
 constexpr auto kCoarseTuneSemitones = "coarseTuneSemitones";
 constexpr auto kFineTuneCents = "fineTuneCents";
 constexpr auto kPitchBendRangeSemitones = "pitchBendRangeSemitones";
+constexpr auto kPitchLfoRate = "pitchLfoRate";
+constexpr auto kPitchLfoDepth = "pitchLfoDepth";
 
 constexpr auto kAmpAttack = "ampAttack";
 constexpr auto kAmpDecay = "ampDecay";
@@ -116,6 +118,8 @@ constexpr auto kParamRootMidiNote = "p_rootMidiNote";
 constexpr auto kParamTuneCoarse = "p_tuneCoarse";
 constexpr auto kParamTuneFine = "p_tuneFine";
 constexpr auto kParamPitchBendRange = "p_pitchBendRange";
+constexpr auto kParamPitchLfoRate = "p_pitchLfoRate";
+constexpr auto kParamPitchLfoDepth = "p_pitchLfoDepth";
 constexpr auto kParamPlaybackStart = "p_playbackStart";
 constexpr auto kParamPlaybackEnd = "p_playbackEnd";
 constexpr auto kParamLoopStart = "p_loopStart";
@@ -133,6 +137,7 @@ AudiocityAudioProcessor::AudiocityAudioProcessor()
     : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true))
     , apvts_(*this, nullptr, "AutomatableParams", createParameterLayout())
 {
+    clearVoicePlaybackPositions();
     playerPadAssignments_ = audiocity::plugin::defaultPlayerPadAssignments();
 
     setFilterSettings(engine_.getFilterSettings());
@@ -150,6 +155,7 @@ AudiocityAudioProcessor::AudiocityAudioProcessor()
     setCoarseTuneSemitones(engine_.getCoarseTuneSemitones());
     setFineTuneCents(engine_.getFineTuneCents());
     setPitchBendRangeSemitones(engine_.getPitchBendRangeSemitones());
+    setPitchLfoSettings(engine_.getPitchLfoSettings());
     setSampleWindow(engine_.getSampleWindowStart(), engine_.getSampleWindowEnd());
     setLoopPoints(engine_.getLoopStart(), engine_.getLoopEnd());
     setLoopCrossfadeSamples(engine_.getLoopCrossfadeSamples());
@@ -250,6 +256,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout AudiocityAudioProcessor::cre
         juce::NormalisableRange<float>(-100.0f, 100.0f, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPitchBendRange, "Pitch Bend Range",
         juce::NormalisableRange<float>(0.0f, 24.0f, 1.0f), 2.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPitchLfoRate, "Pitch LFO Rate",
+        juce::NormalisableRange<float>(0.0f, 40.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPitchLfoDepth, "Pitch LFO Depth",
+        juce::NormalisableRange<float>(0.0f, 100.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPlaybackStart, "Playback Start",
         juce::NormalisableRange<float>(0.0f, kMaxSamplePositionParam, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPlaybackEnd, "Playback End",
@@ -352,6 +362,10 @@ void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
     engine_.setCoarseTuneSemitones(apvts_.getRawParameterValue(kParamTuneCoarse)->load());
     engine_.setFineTuneCents(apvts_.getRawParameterValue(kParamTuneFine)->load());
     engine_.setPitchBendRangeSemitones(apvts_.getRawParameterValue(kParamPitchBendRange)->load());
+    auto pitchLfo = engine_.getPitchLfoSettings();
+    pitchLfo.rateHz = apvts_.getRawParameterValue(kParamPitchLfoRate)->load();
+    pitchLfo.depthCents = apvts_.getRawParameterValue(kParamPitchLfoDepth)->load();
+    engine_.setPitchLfoSettings(pitchLfo);
     engine_.setSampleWindow(
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamPlaybackStart)->load())),
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamPlaybackEnd)->load())));
@@ -415,6 +429,7 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         && previewWaveSamples_.load(std::memory_order_relaxed) > 0)
     {
         renderGeneratedWavePreview(buffer);
+        clearVoicePlaybackPositions();
         updateOutputPeakLevels(buffer);
         return;
     }
@@ -423,6 +438,7 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         && samplePreviewSamples_.load(std::memory_order_relaxed) > 0)
     {
         renderSampleFilePreview(buffer);
+        clearVoicePlaybackPositions();
         updateOutputPeakLevels(buffer);
         return;
     }
@@ -437,6 +453,7 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     }
 
     engine_.render(buffer, midiMessages);
+    updateVoicePlaybackPositionsFromEngine();
     updateOutputPeakLevels(buffer);
 }
 
@@ -476,6 +493,15 @@ AudiocityAudioProcessor::OutputPeakLevels AudiocityAudioProcessor::consumeOutput
     levels.left = outputPeakLeft_.exchange(0.0f, std::memory_order_acq_rel);
     levels.right = outputPeakRight_.exchange(0.0f, std::memory_order_acq_rel);
     return levels;
+}
+
+AudiocityAudioProcessor::VoicePlaybackPositions AudiocityAudioProcessor::getVoicePlaybackPositions() const noexcept
+{
+    VoicePlaybackPositions positions{};
+    for (std::size_t index = 0; index < positions.size(); ++index)
+        positions[index] = voicePlaybackPositions_[index].load(std::memory_order_relaxed);
+
+    return positions;
 }
 
 void AudiocityAudioProcessor::setFilterEnvelope(const AdsrSettings& settings) noexcept
@@ -529,6 +555,9 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kCoarseTuneSemitones, engine_.getCoarseTuneSemitones(), nullptr);
     state.setProperty(kFineTuneCents, engine_.getFineTuneCents(), nullptr);
     state.setProperty(kPitchBendRangeSemitones, engine_.getPitchBendRangeSemitones(), nullptr);
+    const auto pitchLfo = engine_.getPitchLfoSettings();
+    state.setProperty(kPitchLfoRate, pitchLfo.rateHz, nullptr);
+    state.setProperty(kPitchLfoDepth, pitchLfo.depthCents, nullptr);
 
     const auto amp = engine_.getAmpEnvelope();
     state.setProperty(kAmpAttack, amp.attackSeconds, nullptr);
@@ -649,6 +678,10 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     setCoarseTuneSemitones(static_cast<float>(state.getProperty(kCoarseTuneSemitones, engine_.getCoarseTuneSemitones())));
     setFineTuneCents(static_cast<float>(state.getProperty(kFineTuneCents, engine_.getFineTuneCents())));
     setPitchBendRangeSemitones(static_cast<float>(state.getProperty(kPitchBendRangeSemitones, engine_.getPitchBendRangeSemitones())));
+    auto pitchLfo = engine_.getPitchLfoSettings();
+    pitchLfo.rateHz = static_cast<float>(state.getProperty(kPitchLfoRate, pitchLfo.rateHz));
+    pitchLfo.depthCents = static_cast<float>(state.getProperty(kPitchLfoDepth, pitchLfo.depthCents));
+    setPitchLfoSettings(pitchLfo);
 
     auto amp = engine_.getAmpEnvelope();
     amp.attackSeconds = static_cast<float>(state.getProperty(kAmpAttack, amp.attackSeconds));
@@ -780,6 +813,7 @@ bool AudiocityAudioProcessor::loadSampleFromFile(const juce::File& file)
 
     setAmpEnvelope(engine_.getAmpEnvelope());
     setAmpLfoSettings(engine_.getAmpLfoSettings());
+    setPitchLfoSettings(engine_.getPitchLfoSettings());
     setFilterEnvelope(engine_.getFilterEnvelope());
     setFilterSettings(engine_.getFilterSettings());
 
@@ -906,6 +940,14 @@ void AudiocityAudioProcessor::setPitchBendRangeSemitones(const float semitones) 
 {
     engine_.setPitchBendRangeSemitones(semitones);
     updateParameterFromPlainValue(kParamPitchBendRange, engine_.getPitchBendRangeSemitones());
+}
+
+void AudiocityAudioProcessor::setPitchLfoSettings(const PitchLfoSettings& settings) noexcept
+{
+    engine_.setPitchLfoSettings(settings);
+    const auto applied = engine_.getPitchLfoSettings();
+    updateParameterFromPlainValue(kParamPitchLfoRate, applied.rateHz);
+    updateParameterFromPlainValue(kParamPitchLfoDepth, applied.depthCents);
 }
 
 void AudiocityAudioProcessor::setSampleWindow(const int startSample, const int endSample) noexcept
@@ -1294,6 +1336,23 @@ void AudiocityAudioProcessor::updateOutputPeakLevels(const juce::AudioBuffer<flo
 
     accumulatePeak(outputPeakLeft_, leftPeak);
     accumulatePeak(outputPeakRight_, rightPeak);
+}
+
+void AudiocityAudioProcessor::updateVoicePlaybackPositionsFromEngine() noexcept
+{
+    const auto voiceStates = engine_.getVoicePlaybackStates();
+    for (std::size_t voiceIndex = 0; voiceIndex < voiceStates.size(); ++voiceIndex)
+    {
+        const auto& state = voiceStates[voiceIndex];
+        voicePlaybackPositions_[voiceIndex].store(state.active ? state.sampleIndex : -1,
+            std::memory_order_relaxed);
+    }
+}
+
+void AudiocityAudioProcessor::clearVoicePlaybackPositions() noexcept
+{
+    for (auto& position : voicePlaybackPositions_)
+        position.store(-1, std::memory_order_relaxed);
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
