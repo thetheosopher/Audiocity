@@ -166,6 +166,11 @@ void CcLearnDial::setDialLookAndFeel(juce::LookAndFeel* laf)
     slider_.setLookAndFeel(laf);
 }
 
+void CcLearnDial::setDoubleClickResetValue(const double resetValue)
+{
+    slider_.setDoubleClickReturnValue(true, resetValue, juce::ModifierKeys::noModifiers);
+}
+
 void CcLearnDial::setShiftWheelFineFactor(const double factor)
 {
     slider_.setShiftWheelFineFactor(factor);

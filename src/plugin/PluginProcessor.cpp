@@ -10,6 +10,8 @@ constexpr auto kPatchRoot = "AudiocityPatch";
 constexpr auto kSamplePath = "samplePath";
 constexpr auto kSampleBrowserRootFolder = "sampleBrowserRootFolder";
 constexpr auto kRootMidiNote = "rootMidiNote";
+constexpr auto kCoarseTuneSemitones = "coarseTuneSemitones";
+constexpr auto kFineTuneCents = "fineTuneCents";
 
 constexpr auto kAmpAttack = "ampAttack";
 constexpr auto kAmpDecay = "ampDecay";
@@ -98,6 +100,8 @@ constexpr auto kParamFadeIn = "p_fadeIn";
 constexpr auto kParamFadeOut = "p_fadeOut";
 constexpr auto kParamReversePlayback = "p_reverse";
 constexpr auto kParamRootMidiNote = "p_rootMidiNote";
+constexpr auto kParamTuneCoarse = "p_tuneCoarse";
+constexpr auto kParamTuneFine = "p_tuneFine";
 constexpr auto kParamPlaybackStart = "p_playbackStart";
 constexpr auto kParamPlaybackEnd = "p_playbackEnd";
 constexpr auto kParamLoopStart = "p_loopStart";
@@ -126,6 +130,8 @@ AudiocityAudioProcessor::AudiocityAudioProcessor()
     setFadeSamples(engine_.getFadeInSamples(), engine_.getFadeOutSamples());
     setReversePlayback(engine_.getReversePlayback());
     setRootMidiNote(engine_.getRootMidiNote());
+    setCoarseTuneSemitones(engine_.getCoarseTuneSemitones());
+    setFineTuneCents(engine_.getFineTuneCents());
     setSampleWindow(engine_.getSampleWindowStart(), engine_.getSampleWindowEnd());
     setLoopPoints(engine_.getLoopStart(), engine_.getLoopEnd());
     setLoopCrossfadeSamples(engine_.getLoopCrossfadeSamples());
@@ -209,6 +215,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout AudiocityAudioProcessor::cre
     params.push_back(std::make_unique<juce::AudioParameterBool>(kParamReversePlayback, "Reverse", false));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamRootMidiNote, "Root MIDI Note",
         juce::NormalisableRange<float>(0.0f, 127.0f, 1.0f), 60.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamTuneCoarse, "Tune Coarse",
+        juce::NormalisableRange<float>(-24.0f, 24.0f, 1.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamTuneFine, "Tune Fine",
+        juce::NormalisableRange<float>(-100.0f, 100.0f, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPlaybackStart, "Playback Start",
         juce::NormalisableRange<float>(0.0f, kMaxSamplePositionParam, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPlaybackEnd, "Playback End",
@@ -294,6 +304,8 @@ void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamFadeOut)->load())));
     engine_.setReversePlayback(apvts_.getRawParameterValue(kParamReversePlayback)->load() >= 0.5f);
     engine_.setRootMidiNote(static_cast<int>(std::round(apvts_.getRawParameterValue(kParamRootMidiNote)->load())));
+    engine_.setCoarseTuneSemitones(apvts_.getRawParameterValue(kParamTuneCoarse)->load());
+    engine_.setFineTuneCents(apvts_.getRawParameterValue(kParamTuneFine)->load());
     engine_.setSampleWindow(
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamPlaybackStart)->load())),
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamPlaybackEnd)->load())));
@@ -453,6 +465,8 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kSamplePath, engine_.getSamplePath(), nullptr);
     state.setProperty(kSampleBrowserRootFolder, sampleBrowserRootFolderPath_, nullptr);
     state.setProperty(kRootMidiNote, engine_.getRootMidiNote(), nullptr);
+    state.setProperty(kCoarseTuneSemitones, engine_.getCoarseTuneSemitones(), nullptr);
+    state.setProperty(kFineTuneCents, engine_.getFineTuneCents(), nullptr);
 
     const auto amp = engine_.getAmpEnvelope();
     state.setProperty(kAmpAttack, amp.attackSeconds, nullptr);
@@ -564,6 +578,8 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     sampleBrowserRootFolderPath_ = state.getProperty(kSampleBrowserRootFolder, {}).toString();
 
     setRootMidiNote(static_cast<int>(state.getProperty(kRootMidiNote, engine_.getRootMidiNote())));
+    setCoarseTuneSemitones(static_cast<float>(state.getProperty(kCoarseTuneSemitones, engine_.getCoarseTuneSemitones())));
+    setFineTuneCents(static_cast<float>(state.getProperty(kFineTuneCents, engine_.getFineTuneCents())));
 
     auto amp = engine_.getAmpEnvelope();
     amp.attackSeconds = static_cast<float>(state.getProperty(kAmpAttack, amp.attackSeconds));
@@ -776,6 +792,18 @@ void AudiocityAudioProcessor::setRootMidiNote(const int rootNote) noexcept
 {
     engine_.setRootMidiNote(rootNote);
     updateParameterFromPlainValue(kParamRootMidiNote, static_cast<float>(engine_.getRootMidiNote()));
+}
+
+void AudiocityAudioProcessor::setCoarseTuneSemitones(const float semitones) noexcept
+{
+    engine_.setCoarseTuneSemitones(semitones);
+    updateParameterFromPlainValue(kParamTuneCoarse, engine_.getCoarseTuneSemitones());
+}
+
+void AudiocityAudioProcessor::setFineTuneCents(const float cents) noexcept
+{
+    engine_.setFineTuneCents(cents);
+    updateParameterFromPlainValue(kParamTuneFine, engine_.getFineTuneCents());
 }
 
 void AudiocityAudioProcessor::setSampleWindow(const int startSample, const int endSample) noexcept
@@ -1014,6 +1042,8 @@ std::map<int, juce::String> AudiocityAudioProcessor::getAllCcMappings() const
 void AudiocityAudioProcessor::syncSampleDerivedParametersFromEngine() noexcept
 {
     updateParameterFromPlainValue(kParamRootMidiNote, static_cast<float>(engine_.getRootMidiNote()));
+    updateParameterFromPlainValue(kParamTuneCoarse, engine_.getCoarseTuneSemitones());
+    updateParameterFromPlainValue(kParamTuneFine, engine_.getFineTuneCents());
     updateParameterFromPlainValue(kParamPlaybackMode, static_cast<float>(engine_.getPlaybackMode()));
     updateParameterFromPlainValue(kParamPlaybackStart, static_cast<float>(engine_.getSampleWindowStart()));
     updateParameterFromPlainValue(kParamPlaybackEnd, static_cast<float>(engine_.getSampleWindowEnd()));

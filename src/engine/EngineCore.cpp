@@ -1030,7 +1030,9 @@ void EngineCore::applyFilterParamsToVoices() noexcept
 
 float EngineCore::computeSampleIncrementForNote(const int noteNumber) const noexcept
 {
-    const auto semitoneOffset = static_cast<float>(noteNumber - rootMidiNote_);
+    const auto semitoneOffset = static_cast<float>(noteNumber - rootMidiNote_)
+        + coarseTuneSemitones_
+        + (fineTuneCents_ / 100.0f);
     const auto pitchRatio = std::pow(2.0f, semitoneOffset / 12.0f);
     const auto sourceToOutputRatio = sampleDataRate_ > 0.0 ? sampleDataRate_ / sampleRate_ : 1.0;
     return static_cast<float>(pitchRatio * sourceToOutputRatio);

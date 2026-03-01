@@ -1389,9 +1389,25 @@ bool runRuntimeQualitySwitchSmokeTest()
 bool runSettingsUndoHistoryTest()
 {
     audiocity::engine::SettingsUndoHistory history;
-    const audiocity::engine::SettingsSnapshot initial{ 32768, 1, 0, false, false, 0.0f, 0 };
-    const audiocity::engine::SettingsSnapshot changedPreload{ 4096, 1, 0, false, false, 0.0f, 0 };
-    const audiocity::engine::SettingsSnapshot changedTierAndMapping{ 4096, 0, 1, true, true, 0.04f, 2 };
+    audiocity::engine::SettingsSnapshot initial;
+    initial.preloadSamples = 32768;
+    initial.qualityTierIndex = 1;
+    initial.playbackModeIndex = 0;
+    initial.monoEnabled = false;
+    initial.legatoEnabled = false;
+    initial.glideSeconds = 0.0f;
+    initial.sampleWindowStart = 0;
+
+    auto changedPreload = initial;
+    changedPreload.preloadSamples = 4096;
+
+    auto changedTierAndMapping = changedPreload;
+    changedTierAndMapping.qualityTierIndex = 0;
+    changedTierAndMapping.playbackModeIndex = 1;
+    changedTierAndMapping.monoEnabled = true;
+    changedTierAndMapping.legatoEnabled = true;
+    changedTierAndMapping.glideSeconds = 0.04f;
+    changedTierAndMapping.sampleWindowStart = 2;
 
     history.recordChange(initial, changedPreload);
     history.recordChange(changedPreload, changedTierAndMapping);
@@ -1429,10 +1445,29 @@ bool runSettingsUndoHistoryCapacityTest()
 {
     audiocity::engine::SettingsUndoHistory history(2);
 
-    const audiocity::engine::SettingsSnapshot s0{ 32768, 1, 0, false, false, 0.0f, 0 };
-    const audiocity::engine::SettingsSnapshot s1{ 16384, 1, 0, false, false, 0.0f, 0 };
-    const audiocity::engine::SettingsSnapshot s2{ 8192, 1, 1, false, false, 0.0f, 0 };
-    const audiocity::engine::SettingsSnapshot s3{ 4096, 0, 2, true, false, 0.01f, 1 };
+    audiocity::engine::SettingsSnapshot s0;
+    s0.preloadSamples = 32768;
+    s0.qualityTierIndex = 1;
+    s0.playbackModeIndex = 0;
+    s0.monoEnabled = false;
+    s0.legatoEnabled = false;
+    s0.glideSeconds = 0.0f;
+    s0.sampleWindowStart = 0;
+
+    auto s1 = s0;
+    s1.preloadSamples = 16384;
+
+    auto s2 = s1;
+    s2.preloadSamples = 8192;
+    s2.playbackModeIndex = 1;
+
+    auto s3 = s2;
+    s3.preloadSamples = 4096;
+    s3.qualityTierIndex = 0;
+    s3.playbackModeIndex = 2;
+    s3.monoEnabled = true;
+    s3.glideSeconds = 0.01f;
+    s3.sampleWindowStart = 1;
 
     history.recordChange(s0, s1);
     history.recordChange(s1, s2);
@@ -1461,10 +1496,17 @@ bool runSettingsUndoHistoryCoalesceTest()
 {
     audiocity::engine::SettingsUndoHistory history;
 
-    const audiocity::engine::SettingsSnapshot a{ 32768, 1, 0, false, false, 0.00f, 0 };
-    const audiocity::engine::SettingsSnapshot b{ 30000, 1, 0, false, false, 0.00f, 0 };
-    const audiocity::engine::SettingsSnapshot c{ 25000, 1, 0, false, false, 0.00f, 0 };
-    const audiocity::engine::SettingsSnapshot d{ 22000, 1, 0, false, false, 0.00f, 0 };
+    audiocity::engine::SettingsSnapshot a;
+    a.preloadSamples = 32768;
+
+    auto b = a;
+    b.preloadSamples = 30000;
+
+    auto c = b;
+    c.preloadSamples = 25000;
+
+    auto d = c;
+    d.preloadSamples = 22000;
 
     history.recordChange(a, b, 1);
     history.recordChange(b, c, 1);
@@ -1487,8 +1529,11 @@ bool runSettingsUndoHistoryLabelsTest()
 {
     audiocity::engine::SettingsUndoHistory history;
 
-    const audiocity::engine::SettingsSnapshot a{ 32768, 1, 0, false, false, 0.00f, 0 };
-    const audiocity::engine::SettingsSnapshot b{ 4096, 1, 0, false, false, 0.00f, 0 };
+    audiocity::engine::SettingsSnapshot a;
+    a.preloadSamples = 32768;
+
+    auto b = a;
+    b.preloadSamples = 4096;
 
     history.recordChange(a, b, -1, "Change Preload Samples");
 
@@ -2513,6 +2558,57 @@ bool runMasterVolumeGainTest()
     const auto ratio = peakHalf / peakUnity;
     return ratio > 0.45f && ratio < 0.55f && peakMute < 1.0e-7f;
 }
+
+bool runTuneCoarseFinePitchShiftTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 256;
+    constexpr int blocks = 56;
+    constexpr double outputSampleRate = 48000.0;
+    constexpr int rootMidiNote = 60;
+    constexpr int cycleSamples = 512;
+
+    const auto targetHz = juce::MidiMessage::getMidiNoteInHertz(rootMidiNote);
+    const auto sourceSampleRate = targetHz * static_cast<double>(cycleSamples);
+
+    auto renderFrequency = [&](const float coarseSemitones, const float fineCents) -> float
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(outputSampleRate, blockSize, channels);
+
+        audiocity::engine::EngineCore::AdsrSettings sustain;
+        sustain.attackSeconds = 0.0001f;
+        sustain.decaySeconds = 0.0001f;
+        sustain.sustainLevel = 1.0f;
+        sustain.releaseSeconds = 0.25f;
+        engine.setAmpEnvelope(sustain);
+
+        engine.setSampleData(createOneCycleSine(cycleSamples), sourceSampleRate, rootMidiNote);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+        engine.setCoarseTuneSemitones(coarseSemitones);
+        engine.setFineTuneCents(fineCents);
+
+        const auto rendered = renderHeldNote(engine, rootMidiNote, blockSize, blocks, channels);
+        return estimateFrequencyFromPositiveCrossings(rendered, outputSampleRate, blockSize * 3);
+    };
+
+    const auto baseHz = renderFrequency(0.0f, 0.0f);
+    const auto coarseUpHz = renderFrequency(12.0f, 0.0f);
+    const auto coarseDownHz = renderFrequency(-12.0f, 0.0f);
+    const auto fineUpHz = renderFrequency(0.0f, 100.0f);
+
+    if (baseHz <= 0.0f || coarseUpHz <= 0.0f || coarseDownHz <= 0.0f || fineUpHz <= 0.0f)
+        return false;
+
+    const auto coarseUpRatio = coarseUpHz / baseHz;
+    const auto coarseDownRatio = coarseDownHz / baseHz;
+    const auto fineUpRatio = fineUpHz / baseHz;
+    const auto expectedFineRatio = std::pow(2.0f, 1.0f / 12.0f);
+
+    return std::abs(coarseUpRatio - 2.0f) < 0.12f
+        && std::abs(coarseDownRatio - 0.5f) < 0.06f
+        && std::abs(fineUpRatio - expectedFineRatio) < 0.04f;
+}
 }
 
 int main()
@@ -2654,6 +2750,9 @@ int main()
 
     if (!runMasterVolumeGainTest())
         return 47;
+
+    if (!runTuneCoarseFinePitchShiftTest())
+        return 49;
 
     if (!runLoopCrossfadeSmoothsBoundaryTest())
         return 29;

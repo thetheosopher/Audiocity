@@ -12,6 +12,8 @@ struct SettingsSnapshot
     int preloadSamples = 32768;
     int qualityTierIndex = 1;
     int playbackModeIndex = 0;
+    float coarseTuneSemitones = 0.0f;
+    float fineTuneCents = 0.0f;
     bool monoEnabled = false;
     bool legatoEnabled = false;
     float glideSeconds = 0.0f;
@@ -28,6 +30,8 @@ struct SettingsSnapshot
         return preloadSamples == other.preloadSamples
             && qualityTierIndex == other.qualityTierIndex
             && playbackModeIndex == other.playbackModeIndex
+            && coarseTuneSemitones == other.coarseTuneSemitones
+            && fineTuneCents == other.fineTuneCents
             && monoEnabled == other.monoEnabled
             && legatoEnabled == other.legatoEnabled
             && glideSeconds == other.glideSeconds

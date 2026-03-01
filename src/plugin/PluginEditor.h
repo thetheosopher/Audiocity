@@ -209,6 +209,8 @@ private:
     juce::ComboBox waveformDisplayModeCombo_;
     juce::Label rootNoteLabel_{ {}, "Root Note" };
     juce::ComboBox rootNoteCombo_;
+    CcLearnDial tuneCoarseDial_{ "Coarse", -24, 24, 1, "st", 0 };
+    CcLearnDial tuneFineDial_{ "Fine", -100, 100, 1, "ct", 0 };
 
     // ── Waveform ──
     WaveformView waveformView_;

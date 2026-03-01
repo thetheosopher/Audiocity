@@ -53,6 +53,9 @@ public:
     // Set a custom LookAndFeel for the slider
     void setDialLookAndFeel(juce::LookAndFeel* laf);
 
+    // Configure double-click reset behavior for the dial value.
+    void setDoubleClickResetValue(double resetValue);
+
     // When > 1.0, holding Shift scales down mouse-wheel delta for fine adjustments.
     void setShiftWheelFineFactor(double factor);
 

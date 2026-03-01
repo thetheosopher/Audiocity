@@ -148,6 +148,10 @@ public:
     void clearSamplePath() noexcept { samplePath_.clear(); }
     [[nodiscard]] int getRootMidiNote() const noexcept { return rootMidiNote_; }
     void setRootMidiNote(int rootMidiNote) noexcept;
+    void setCoarseTuneSemitones(float semitones) noexcept { coarseTuneSemitones_ = juce::jlimit(-24.0f, 24.0f, semitones); }
+    [[nodiscard]] float getCoarseTuneSemitones() const noexcept { return coarseTuneSemitones_; }
+    void setFineTuneCents(float cents) noexcept { fineTuneCents_ = juce::jlimit(-100.0f, 100.0f, cents); }
+    [[nodiscard]] float getFineTuneCents() const noexcept { return fineTuneCents_; }
 
     void setPlaybackMode(PlaybackMode mode) noexcept { playbackMode_ = mode; }
     [[nodiscard]] PlaybackMode getPlaybackMode() const noexcept { return playbackMode_; }
@@ -253,6 +257,8 @@ private:
     juce::String samplePath_;
     double sampleDataRate_ = 44100.0;
     int rootMidiNote_ = 60;
+    float coarseTuneSemitones_ = 0.0f;
+    float fineTuneCents_ = 0.0f;
     int preloadSamples_ = 32768;
     int segmentRebuildCount_ = 0;
 

@@ -148,6 +148,10 @@ public:
 
     [[nodiscard]] int getRootMidiNote() const noexcept { return engine_.getRootMidiNote(); }
     void setRootMidiNote(int rootNote) noexcept;
+    void setCoarseTuneSemitones(float semitones) noexcept;
+    [[nodiscard]] float getCoarseTuneSemitones() const noexcept { return engine_.getCoarseTuneSemitones(); }
+    void setFineTuneCents(float cents) noexcept;
+    [[nodiscard]] float getFineTuneCents() const noexcept { return engine_.getFineTuneCents(); }
 
     using AdsrSettings = audiocity::engine::EngineCore::AdsrSettings;
     void setAmpEnvelope(const AdsrSettings& settings) noexcept;

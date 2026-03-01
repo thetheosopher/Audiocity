@@ -1575,6 +1575,20 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
             processor_.setRootMidiNote(selected - 1);
     };
 
+    addAndMakeVisible(tuneCoarseDial_);
+    tuneCoarseDial_.setDoubleClickResetValue(0.0);
+    tuneCoarseDial_.onValueChange = [this]
+    {
+        processor_.setCoarseTuneSemitones(static_cast<float>(tuneCoarseDial_.getValue()));
+    };
+
+    addAndMakeVisible(tuneFineDial_);
+    tuneFineDial_.setDoubleClickResetValue(0.0);
+    tuneFineDial_.onValueChange = [this]
+    {
+        processor_.setFineTuneCents(static_cast<float>(tuneFineDial_.getValue()));
+    };
+
     // Waveform
     addAndMakeVisible(waveformView_);
     waveformView_.onLoopPreview = [this](const int ls, const int le)
@@ -1671,6 +1685,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(loopStartDial_);
     addAndMakeVisible(loopEndDial_);
     addAndMakeVisible(loopCrossfadeDial_);
+    loopCrossfadeDial_.setDoubleClickResetValue(0.0);
     loopStartDial_.onValueChange = [this]
     {
         enforcePlaybackLoopConstraints();
@@ -1710,6 +1725,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     legatoToggle_.onClick = [this] { pushPerformanceControls(); };
 
     addAndMakeVisible(glideDial_);
+    glideDial_.setDoubleClickResetValue(0.0);
     glideDial_.onValueChange = [this]
     {
         processor_.setGlideSeconds(static_cast<float>(glideDial_.getValue()) / 1000.0f);
@@ -1717,9 +1733,13 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 
     // Amp ADSR
     addAndMakeVisible(ampAttackDial_);
+    ampAttackDial_.setDoubleClickResetValue(0.1);
     addAndMakeVisible(ampDecayDial_);
+    ampDecayDial_.setDoubleClickResetValue(1.0);
     addAndMakeVisible(ampSustainDial_);
+    ampSustainDial_.setDoubleClickResetValue(1.0);
     addAndMakeVisible(ampReleaseDial_);
+    ampReleaseDial_.setDoubleClickResetValue(5.0);
     addAndMakeVisible(ampEnvelopeGraph_);
     ampAttackDial_.onValueChange = [this] { pushAmpEnvelope(); updateAmpEnvelopeGraphFromDials(); };
     ampDecayDial_.onValueChange = [this] { pushAmpEnvelope(); updateAmpEnvelopeGraphFromDials(); };
@@ -1728,8 +1748,11 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 
     // Filter
     addAndMakeVisible(filterCutoffDial_);
+    filterCutoffDial_.setDoubleClickResetValue(18000.0);
     addAndMakeVisible(filterResDial_);
+    filterResDial_.setDoubleClickResetValue(0.0);
     addAndMakeVisible(filterEnvAmtDial_);
+    filterEnvAmtDial_.setDoubleClickResetValue(0.0);
     addAndMakeVisible(filterTypeLabel_);
     addAndMakeVisible(filterResponseGraph_);
     filterTypeLabel_.setJustificationType(juce::Justification::centredLeft);
@@ -1744,15 +1767,23 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     filterTypeCombo_.onChange = [this] { pushFilterSettings(); };
 
     addAndMakeVisible(filterAttackDial_);
+    filterAttackDial_.setDoubleClickResetValue(0.1);
     addAndMakeVisible(filterDecayDial_);
+    filterDecayDial_.setDoubleClickResetValue(1.0);
     addAndMakeVisible(filterSustainDial_);
+    filterSustainDial_.setDoubleClickResetValue(1.0);
     addAndMakeVisible(filterReleaseDial_);
+    filterReleaseDial_.setDoubleClickResetValue(5.0);
     addAndMakeVisible(filterEnvelopeGraph_);
     addAndMakeVisible(filterKeytrackDial_);
+    filterKeytrackDial_.setDoubleClickResetValue(0.0);
     addAndMakeVisible(filterVelDial_);
+    filterVelDial_.setDoubleClickResetValue(0.0);
     addAndMakeVisible(filterLfoRateDial_);
+    filterLfoRateDial_.setDoubleClickResetValue(0.0);
     addAndMakeVisible(filterLfoRateKeyDial_);
     addAndMakeVisible(filterLfoAmtDial_);
+    filterLfoAmtDial_.setDoubleClickResetValue(0.0);
     addAndMakeVisible(filterLfoAmtKeyDial_);
     addAndMakeVisible(filterLfoStartPhaseDial_);
     addAndMakeVisible(filterLfoStartRandDial_);
@@ -1882,9 +1913,12 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     };
 
     addAndMakeVisible(preloadDial_);
+    preloadDial_.setDoubleClickResetValue(32768.0);
     addAndMakeVisible(masterVolumeDial_);
     addAndMakeVisible(outputLevelMeter_);
     addAndMakeVisible(reverbMixDial_);
+    masterVolumeDial_.setDoubleClickResetValue(100.0);
+    reverbMixDial_.setDoubleClickResetValue(0.0);
     preloadDial_.onValueChange = [this]
     {
         processor_.setPreloadSamples(juce::jmax(256, static_cast<int>(preloadDial_.getValue())));
@@ -1908,6 +1942,8 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 
     addAndMakeVisible(fadeInDial_);
     addAndMakeVisible(fadeOutDial_);
+    fadeInDial_.setDoubleClickResetValue(0.0);
+    fadeOutDial_.setDoubleClickResetValue(0.0);
     auto pushFades = [this]
     {
         processor_.setFadeSamples(
@@ -1950,6 +1986,8 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         { &filterLfoStartPhaseDial_, "filterLfoStartPhase" },
         { &filterLfoStartRandDial_, "filterLfoStartRand" },
         { &filterLfoFadeInDial_, "filterLfoFadeIn" },
+        { &tuneCoarseDial_,     "tuneCoarse" },
+        { &tuneFineDial_,       "tuneFine" },
         { &preloadDial_,        "preload" },
         { &masterVolumeDial_,   "masterVolume" },
         { &reverbMixDial_,      "reverbMix" },
@@ -1979,6 +2017,8 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addToSampleControls(glideDial_);
     addToSampleControls(rootNoteLabel_);
     addToSampleControls(rootNoteCombo_);
+    addToSampleControls(tuneCoarseDial_);
+    addToSampleControls(tuneFineDial_);
     addToSampleControls(ampAttackDial_);
     addToSampleControls(ampDecayDial_);
     addToSampleControls(ampSustainDial_);
@@ -2216,6 +2256,8 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
     const auto rootId = processor_.getRootMidiNote() + 1;
     if (rootNoteCombo_.getSelectedId() != rootId)
         rootNoteCombo_.setSelectedId(rootId, juce::dontSendNotification);
+    tuneCoarseDial_.setValue(processor_.getCoarseTuneSemitones(), juce::dontSendNotification);
+    tuneFineDial_.setValue(processor_.getFineTuneCents(), juce::dontSendNotification);
 
     const auto playbackMode = processor_.getPlaybackMode();
     playbackModeGateButton_.setToggleState(playbackMode == AudiocityAudioProcessor::PlaybackMode::gate,
@@ -2309,6 +2351,8 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     sampleControlsViewport_.setVisible(showSampleTab);
     rootNoteLabel_.setVisible(showSampleTab);
     rootNoteCombo_.setVisible(showSampleTab);
+    tuneCoarseDial_.setVisible(showSampleTab);
+    tuneFineDial_.setVisible(showSampleTab);
     waveformView_.setVisible(showSampleTab);
     playbackModeLabel_.setVisible(showSampleTab);
     playbackModeGateButton_.setVisible(showSampleTab);
@@ -2996,6 +3040,10 @@ void AudiocityAudioProcessorEditor::resized()
         rootArea.removeFromTop(2);
         rootNoteCombo_.setBounds(rootArea.removeFromTop(28));
         perfInner.removeFromLeft(kDialGap);
+        tuneCoarseDial_.setBounds(perfInner.removeFromLeft(kDial));
+        perfInner.removeFromLeft(kDialGap);
+        tuneFineDial_.setBounds(perfInner.removeFromLeft(kDial));
+        perfInner.removeFromLeft(kDialGap);
         auto velArea = perfInner.removeFromLeft(120);
         velocityCurveLabel_.setBounds(velArea.removeFromTop(16));
         velArea.removeFromTop(2);
@@ -3405,6 +3453,10 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Root Note - MIDI note number and pitch name for the sample's original pitch");
     rootNoteCombo_.setTooltip(
         "Root Note - MIDI note number and pitch name for the sample's original pitch");
+    tuneCoarseDial_.setLabelTooltip(
+        "Tune Coarse - Shift playback pitch in semitones (-24 to +24)");
+    tuneFineDial_.setLabelTooltip(
+        "Tune Fine - Shift playback pitch in cents (-100 to +100)");
     playbackStartDial_.setLabelTooltip(
         "Playback Start - Sample position where playback begins");
     playbackEndDial_.setLabelTooltip(
@@ -3676,6 +3728,8 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     const auto isNewLoadedSample = path.isNotEmpty() && path != lastWaveformSamplePath_;
 
     rootNoteCombo_.setSelectedId(processor_.getRootMidiNote() + 1, juce::dontSendNotification);
+    tuneCoarseDial_.setValue(processor_.getCoarseTuneSemitones(), juce::dontSendNotification);
+    tuneFineDial_.setValue(processor_.getFineTuneCents(), juce::dontSendNotification);
 
     playerPadAssignments_ = processor_.getAllPlayerPadAssignments();
     refreshPlayerPadButtons();
@@ -3972,6 +4026,8 @@ audiocity::engine::SettingsSnapshot AudiocityAudioProcessorEditor::captureSettin
         processor_.getPreloadSamples(),
         qualityTierIndex,
         playbackModeIndex,
+            processor_.getCoarseTuneSemitones(),
+            processor_.getFineTuneCents(),
         processor_.getMonoMode(),
         processor_.getLegatoMode(),
         processor_.getGlideSeconds(),
@@ -3988,6 +4044,8 @@ audiocity::engine::SettingsSnapshot AudiocityAudioProcessorEditor::captureSettin
 void AudiocityAudioProcessorEditor::applySettingsSnapshot(const audiocity::engine::SettingsSnapshot& snapshot)
 {
     processor_.setPreloadSamples(snapshot.preloadSamples);
+        processor_.setCoarseTuneSemitones(snapshot.coarseTuneSemitones);
+        processor_.setFineTuneCents(snapshot.fineTuneCents);
     processor_.setQualityTier(snapshot.qualityTierIndex == 0
         ? AudiocityAudioProcessor::QualityTier::cpu
         : (snapshot.qualityTierIndex == 2
