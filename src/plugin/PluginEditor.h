@@ -52,6 +52,9 @@ private:
     int getNumRows() override;
     void paintListBoxItem(int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected) override;
     void listBoxItemClicked(int row, const juce::MouseEvent& event) override;
+    void listBoxItemDoubleClicked(int row, const juce::MouseEvent& event) override;
+    void selectedRowsChanged(int lastRowSelected) override;
+    void returnKeyPressed(int lastRowSelected) override;
 
     void timerCallback() override;
 
@@ -176,6 +179,7 @@ private:
     std::vector<SampleListEntry> allSampleEntries_;
     std::vector<int> visibleSampleEntryIndices_;
     juce::String sampleRootFolderPath_;
+    int lastPreviewedBrowserSourceIndex_ = -1;
     juce::String lastWaveformSamplePath_;
     std::vector<std::vector<WaveformView::MinMax>> cachedWaveformMinMaxByChannel_;
     int cachedWaveformPeakResolution_ = 0;
@@ -187,6 +191,7 @@ private:
     juce::ComboBox sampleBrowserSortCombo_;
     juce::ListBox sampleBrowserListBox_;
     juce::Label sampleBrowserCountLabel_;
+    juce::Label sampleBrowserPreviewLabel_{ {}, "" };
 
     // ── Player ──
     juce::Label playerKeyboardLabel_{ {}, "Piano" };
@@ -455,6 +460,7 @@ private:
     void scanSampleRootFolder(const juce::File& rootFolder);
     void rebuildVisibleSampleList();
     void loadSampleFromBrowserRow(int row);
+    void previewSampleFromBrowserRow(int row, bool forceRestart = true);
     void updatePlayerKeyboardSizing();
     void refreshPlayerPadButtons();
     void showPadAssignmentDialog(int padIndex);

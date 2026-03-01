@@ -2,7 +2,10 @@
 
 #include "PluginEditor.h"
 
+#include <algorithm>
 #include <cmath>
+
+#include <juce_audio_formats/juce_audio_formats.h>
 
 namespace
 {
@@ -391,6 +394,14 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         && previewWaveSamples_.load(std::memory_order_relaxed) > 0)
     {
         renderGeneratedWavePreview(buffer);
+        updateOutputPeakLevels(buffer);
+        return;
+    }
+
+    if (samplePreviewPlaying_.load(std::memory_order_relaxed)
+        && samplePreviewSamples_.load(std::memory_order_relaxed) > 0)
+    {
+        renderSampleFilePreview(buffer);
         updateOutputPeakLevels(buffer);
         return;
     }
@@ -896,6 +907,7 @@ void AudiocityAudioProcessor::startGeneratedWaveformPreview() noexcept
     if (previewWaveSamples_.load(std::memory_order_relaxed) <= 0)
         return;
 
+    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
     previewWavePhase_ = 0.0f;
     previewWavePlaying_.store(true, std::memory_order_relaxed);
 }
@@ -905,9 +917,52 @@ void AudiocityAudioProcessor::stopGeneratedWaveformPreview() noexcept
     previewWavePlaying_.store(false, std::memory_order_relaxed);
 }
 
+bool AudiocityAudioProcessor::previewSampleFromFile(const juce::File& file)
+{
+    if (!file.existsAsFile())
+        return false;
+
+    juce::AudioFormatManager formatManager;
+    formatManager.registerBasicFormats();
+
+    std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
+    if (reader == nullptr || reader->lengthInSamples <= 0)
+        return false;
+
+    const auto availableSamples = static_cast<int>(std::min<long long>(
+        reader->lengthInSamples,
+        static_cast<long long>(kSamplePreviewMaxSamples)));
+    const auto samplesToRead = juce::jlimit(1, kSamplePreviewMaxSamples, availableSamples);
+
+    juce::AudioBuffer<float> tempBuffer(juce::jmax(1, static_cast<int>(reader->numChannels)), samplesToRead);
+    if (!reader->read(&tempBuffer, 0, samplesToRead, 0, true, true))
+        return false;
+
+    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
+    previewWavePlaying_.store(false, std::memory_order_relaxed);
+    engine_.panic();
+
+    const auto channels = tempBuffer.getNumChannels();
+    for (int i = 0; i < samplesToRead; ++i)
+    {
+        float mono = 0.0f;
+        for (int channel = 0; channel < channels; ++channel)
+            mono += tempBuffer.getSample(channel, i);
+
+        samplePreviewData_[static_cast<std::size_t>(i)] = juce::jlimit(-1.0f, 1.0f, mono / static_cast<float>(channels));
+    }
+
+    samplePreviewSourceRate_.store(juce::jmax(1.0, reader->sampleRate), std::memory_order_relaxed);
+    samplePreviewSamples_.store(samplesToRead, std::memory_order_relaxed);
+    samplePreviewReadPos_ = 0.0f;
+    samplePreviewPlaying_.store(true, std::memory_order_relaxed);
+    return true;
+}
+
 void AudiocityAudioProcessor::panicAllAudio() noexcept
 {
     stopGeneratedWaveformPreview();
+    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
     engine_.panic();
 }
 
@@ -1129,6 +1184,50 @@ void AudiocityAudioProcessor::renderGeneratedWavePreview(juce::AudioBuffer<float
         while (previewWavePhase_ >= static_cast<float>(count))
             previewWavePhase_ -= static_cast<float>(count);
     }
+}
+
+void AudiocityAudioProcessor::renderSampleFilePreview(juce::AudioBuffer<float>& buffer) noexcept
+{
+    const auto count = samplePreviewSamples_.load(std::memory_order_relaxed);
+    if (count <= 0)
+    {
+        buffer.clear();
+        samplePreviewPlaying_.store(false, std::memory_order_relaxed);
+        return;
+    }
+
+    const auto channels = buffer.getNumChannels();
+    const auto samples = buffer.getNumSamples();
+    const auto sourceRate = samplePreviewSourceRate_.load(std::memory_order_relaxed);
+    const auto hostRate = juce::jmax(1.0, getSampleRate());
+    const auto increment = static_cast<float>(sourceRate / hostRate);
+    const auto masterVolume = juce::jlimit(0.0f, 1.0f,
+        apvts_.getRawParameterValue(kParamMasterVolume)->load());
+
+    for (int sample = 0; sample < samples; ++sample)
+    {
+        const auto i0 = static_cast<int>(samplePreviewReadPos_);
+        if (i0 >= count)
+        {
+            for (int channel = 0; channel < channels; ++channel)
+                buffer.setSample(channel, sample, 0.0f);
+            continue;
+        }
+
+        const auto i1 = juce::jmin(count - 1, i0 + 1);
+        const auto frac = samplePreviewReadPos_ - static_cast<float>(i0);
+        const auto s0 = samplePreviewData_[static_cast<std::size_t>(i0)];
+        const auto s1 = samplePreviewData_[static_cast<std::size_t>(i1)];
+        const auto value = (s0 + (s1 - s0) * frac) * 0.35f * masterVolume;
+
+        for (int channel = 0; channel < channels; ++channel)
+            buffer.setSample(channel, sample, value);
+
+        samplePreviewReadPos_ += increment;
+    }
+
+    if (samplePreviewReadPos_ >= static_cast<float>(count))
+        samplePreviewPlaying_.store(false, std::memory_order_relaxed);
 }
 
 void AudiocityAudioProcessor::updateOutputPeakLevels(const juce::AudioBuffer<float>& buffer) noexcept

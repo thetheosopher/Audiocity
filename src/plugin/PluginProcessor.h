@@ -74,10 +74,15 @@ public:
     void setGeneratedWaveformPreviewMidiNote(int midiNote) noexcept;
     void startGeneratedWaveformPreview() noexcept;
     void stopGeneratedWaveformPreview() noexcept;
+    bool previewSampleFromFile(const juce::File& file);
     void panicAllAudio() noexcept;
     [[nodiscard]] bool isGeneratedWaveformPreviewPlaying() const noexcept
     {
         return previewWavePlaying_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] bool isSamplePreviewPlaying() const noexcept
+    {
+        return samplePreviewPlaying_.load(std::memory_order_relaxed);
     }
 
     using PlaybackMode = audiocity::engine::EngineCore::PlaybackMode;
@@ -200,6 +205,7 @@ private:
     [[nodiscard]] float lfoRateHzFromTempoSync(int divisionIndex) const noexcept;
     void syncSampleDerivedParametersFromEngine() noexcept;
     void renderGeneratedWavePreview(juce::AudioBuffer<float>& buffer) noexcept;
+    void renderSampleFilePreview(juce::AudioBuffer<float>& buffer) noexcept;
     void updateOutputPeakLevels(const juce::AudioBuffer<float>& buffer) noexcept;
 
     struct UiMidiEvent
@@ -240,6 +246,13 @@ private:
     std::atomic<int> previewWaveMidiNote_{ 60 };
     std::atomic<bool> previewWavePlaying_{ false };
     float previewWavePhase_ = 0.0f;
+
+    static constexpr int kSamplePreviewMaxSamples = 30 * 48000;
+    std::array<float, kSamplePreviewMaxSamples> samplePreviewData_{};
+    std::atomic<int> samplePreviewSamples_{ 0 };
+    std::atomic<double> samplePreviewSourceRate_{ 44100.0 };
+    std::atomic<bool> samplePreviewPlaying_{ false };
+    float samplePreviewReadPos_ = 0.0f;
     void pushUiMidiEvent(int noteNumber, int velocity, bool isNoteOn) noexcept;
     [[nodiscard]] bool popUiMidiEvent(UiMidiEvent& out) noexcept;
 

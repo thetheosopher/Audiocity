@@ -1563,6 +1563,11 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     sampleBrowserCountLabel_.setJustificationType(juce::Justification::centredLeft);
     sampleBrowserCountLabel_.setText("No folder selected", juce::dontSendNotification);
 
+    addAndMakeVisible(sampleBrowserPreviewLabel_);
+    sampleBrowserPreviewLabel_.setJustificationType(juce::Justification::centredRight);
+    sampleBrowserPreviewLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff61d9ff));
+    sampleBrowserPreviewLabel_.setText({}, juce::dontSendNotification);
+
     // Sample info row
     addAndMakeVisible(samplePathLabel_);
     samplePathLabel_.setJustificationType(juce::Justification::centredLeft);
@@ -2239,6 +2244,9 @@ void AudiocityAudioProcessorEditor::timerCallback()
         updateTabVisibility();
         resized();
         repaint();
+
+        if (currentTabIndex_ == 1)
+            sampleBrowserListBox_.grabKeyboardFocus();
     }
 
     AudiocityAudioProcessor::CcEvent event{};
@@ -2268,6 +2276,13 @@ void AudiocityAudioProcessorEditor::timerCallback()
                 }
             }
         }
+    }
+
+    if (currentTabIndex_ == 1)
+    {
+        sampleBrowserPreviewLabel_.setText(
+            processor_.isSamplePreviewPlaying() ? "Previewing..." : juce::String{},
+            juce::dontSendNotification);
     }
 
     syncAutomatedControlsFromProcessor();
@@ -2404,6 +2419,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     sampleBrowserSortCombo_.setVisible(showLibraryTab);
     sampleBrowserListBox_.setVisible(showLibraryTab);
     sampleBrowserCountLabel_.setVisible(showLibraryTab);
+    sampleBrowserPreviewLabel_.setVisible(showLibraryTab);
 
     samplePathLabel_.setVisible(showSampleTab);
     loadButton_.setVisible(showSampleTab);
@@ -2652,9 +2668,36 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
 
 }
 
-void AudiocityAudioProcessorEditor::listBoxItemClicked(const int row, const juce::MouseEvent&)
+void AudiocityAudioProcessorEditor::listBoxItemClicked(const int row, const juce::MouseEvent& event)
+{
+    if (event.mods.isShiftDown())
+    {
+        loadSampleFromBrowserRow(row);
+        return;
+    }
+
+    previewSampleFromBrowserRow(row);
+}
+
+void AudiocityAudioProcessorEditor::listBoxItemDoubleClicked(const int row, const juce::MouseEvent&)
 {
     loadSampleFromBrowserRow(row);
+}
+
+void AudiocityAudioProcessorEditor::selectedRowsChanged(const int lastRowSelected)
+{
+    if (currentTabIndex_ != 1)
+        return;
+
+    previewSampleFromBrowserRow(lastRowSelected, false);
+}
+
+void AudiocityAudioProcessorEditor::returnKeyPressed(const int lastRowSelected)
+{
+    if (currentTabIndex_ != 1)
+        return;
+
+    loadSampleFromBrowserRow(lastRowSelected);
 }
 
 void AudiocityAudioProcessorEditor::mouseDown(const juce::MouseEvent& event)
@@ -2827,7 +2870,11 @@ void AudiocityAudioProcessorEditor::loadSampleFromBrowserRow(const int row)
     if (sourceIndex < 0 || sourceIndex >= static_cast<int>(allSampleEntries_.size()))
         return;
 
+    lastPreviewedBrowserSourceIndex_ = sourceIndex;
+
     const auto& file = allSampleEntries_[static_cast<std::size_t>(sourceIndex)].file;
+    processor_.panicAllAudio();
+    updateGeneratePreviewButtonText();
     if (processor_.loadSampleFromFile(file))
     {
         tabBar_.setCurrentTabIndex(0);
@@ -2837,6 +2884,25 @@ void AudiocityAudioProcessorEditor::loadSampleFromBrowserRow(const int row)
         repaint();
         refreshUI();
     }
+}
+
+void AudiocityAudioProcessorEditor::previewSampleFromBrowserRow(const int row, const bool forceRestart)
+{
+    if (row < 0 || row >= static_cast<int>(visibleSampleEntryIndices_.size()))
+        return;
+
+    const auto sourceIndex = visibleSampleEntryIndices_[static_cast<std::size_t>(row)];
+    if (sourceIndex < 0 || sourceIndex >= static_cast<int>(allSampleEntries_.size()))
+        return;
+
+    if (!forceRestart && sourceIndex == lastPreviewedBrowserSourceIndex_)
+        return;
+
+    lastPreviewedBrowserSourceIndex_ = sourceIndex;
+
+    const auto& file = allSampleEntries_[static_cast<std::size_t>(sourceIndex)].file;
+    processor_.previewSampleFromFile(file);
+    updateGeneratePreviewButtonText();
 }
 
 void AudiocityAudioProcessorEditor::paintSampleBrowserPane(
@@ -2909,7 +2975,9 @@ void AudiocityAudioProcessorEditor::resized()
 
         browserArea.removeFromTop(6);
         auto listArea = browserArea;
-        sampleBrowserCountLabel_.setBounds(listArea.removeFromBottom(20));
+        auto statusRow = listArea.removeFromBottom(20);
+        sampleBrowserCountLabel_.setBounds(statusRow.removeFromLeft(statusRow.getWidth() / 2));
+        sampleBrowserPreviewLabel_.setBounds(statusRow);
         listArea.removeFromBottom(4);
         sampleBrowserListBox_.setBounds(listArea);
         return;
@@ -3286,6 +3354,16 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
 
 bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 {
+    if (key.getKeyCode() == juce::KeyPress::returnKey && currentTabIndex_ == 1)
+    {
+        const auto selectedRow = sampleBrowserListBox_.getSelectedRow();
+        if (selectedRow >= 0)
+        {
+            loadSampleFromBrowserRow(selectedRow);
+            return true;
+        }
+    }
+
     if (key == juce::KeyPress::escapeKey)
     {
         processor_.panicAllAudio();
