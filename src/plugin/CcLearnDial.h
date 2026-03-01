@@ -53,7 +53,36 @@ public:
     // Set a custom LookAndFeel for the slider
     void setDialLookAndFeel(juce::LookAndFeel* laf);
 
+    // When > 1.0, holding Shift scales down mouse-wheel delta for fine adjustments.
+    void setShiftWheelFineFactor(double factor);
+
 private:
+    class FineWheelSlider final : public juce::Slider
+    {
+    public:
+        void setShiftWheelFineFactor(double factor)
+        {
+            shiftWheelFineFactor_ = juce::jmax(1.0, factor);
+        }
+
+        void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override
+        {
+            if (event.mods.isShiftDown() && shiftWheelFineFactor_ > 1.0)
+            {
+                auto scaledWheel = wheel;
+                scaledWheel.deltaX = static_cast<float>(scaledWheel.deltaX / shiftWheelFineFactor_);
+                scaledWheel.deltaY = static_cast<float>(scaledWheel.deltaY / shiftWheelFineFactor_);
+                juce::Slider::mouseWheelMove(event, scaledWheel);
+                return;
+            }
+
+            juce::Slider::mouseWheelMove(event, wheel);
+        }
+
+    private:
+        double shiftWheelFineFactor_ = 1.0;
+    };
+
     class CcLabel final : public juce::Label
     {
     public:
@@ -66,7 +95,7 @@ private:
     };
 
     CcLabel label_;
-    juce::Slider slider_;
+    FineWheelSlider slider_;
 
     int assignedCc_ = -1;
     bool ccLearnArmed_ = false;

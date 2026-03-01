@@ -73,6 +73,7 @@ CcLearnDial::CcLearnDial(const juce::String& name,
     slider_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     slider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 70, 13);
     slider_.setRange(rangeMin, rangeMax, step);
+    slider_.setShiftWheelFineFactor(8.0);
     slider_.setValue(defaultValue, juce::dontSendNotification);
 
     if (suffix.isNotEmpty())
@@ -163,5 +164,10 @@ void CcLearnDial::setLabelTooltip(const juce::String& tooltip)
 void CcLearnDial::setDialLookAndFeel(juce::LookAndFeel* laf)
 {
     slider_.setLookAndFeel(laf);
+}
+
+void CcLearnDial::setShiftWheelFineFactor(const double factor)
+{
+    slider_.setShiftWheelFineFactor(factor);
 }
 

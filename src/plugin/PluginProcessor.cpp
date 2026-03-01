@@ -804,6 +804,12 @@ void AudiocityAudioProcessor::stopGeneratedWaveformPreview() noexcept
     previewWavePlaying_.store(false, std::memory_order_relaxed);
 }
 
+void AudiocityAudioProcessor::panicAllAudio() noexcept
+{
+    stopGeneratedWaveformPreview();
+    engine_.panic();
+}
+
 void AudiocityAudioProcessor::setPlayerPadAssignment(const int padIndex, const int noteNumber, const int velocity) noexcept
 {
     if (padIndex < 0 || padIndex >= kPlayerPadCount)

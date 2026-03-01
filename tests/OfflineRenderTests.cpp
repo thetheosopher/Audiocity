@@ -462,6 +462,33 @@ bool runLoopCrossfadeSmoothsBoundaryTest()
     return crossfadedDelta < (noCrossfadeDelta * 0.85f);
 }
 
+bool runPanicSilencesAudioImmediatelyTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 256;
+    constexpr double sampleRate = 48000.0;
+
+    audiocity::engine::EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setSampleData(createTestSample(4096), sampleRate, 60);
+
+    juce::AudioBuffer<float> block(channels, blockSize);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+    engine.render(block, midi);
+
+    if (blockEnergy(block) <= 0.001f)
+        return false;
+
+    engine.panic();
+
+    midi.clear();
+    engine.render(block, midi);
+    const auto postPanicEnergy = blockEnergy(block);
+
+    return postPanicEnergy <= 1.0e-6f;
+}
+
 bool runLoadSampleResetsPlaybackAndLoopRangesTest()
 {
     constexpr int channels = 2;

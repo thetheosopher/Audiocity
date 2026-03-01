@@ -663,6 +663,12 @@ void EngineCore::render(juce::AudioBuffer<float>& audioBuffer, const juce::MidiB
     render(outputPointers.data(), clampedChannels, numSamples);
 }
 
+void EngineCore::panic() noexcept
+{
+    stopAllVoicesImmediate();
+    pendingEventCount_ = 0;
+}
+
 void EngineCore::setAmpEnvelope(const AdsrSettings& settings) noexcept
 {
     ampEnvelopeSettings_ = settings;

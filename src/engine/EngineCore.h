@@ -125,6 +125,7 @@ public:
 
     void render(float** outputs, int numChannels, int numSamples) noexcept;
     void render(juce::AudioBuffer<float>& audioBuffer, const juce::MidiBuffer& midiBuffer) noexcept;
+    void panic() noexcept;
 
     void setAmpEnvelope(const AdsrSettings& settings) noexcept;
     void setFilterEnvelope(const AdsrSettings& settings) noexcept;

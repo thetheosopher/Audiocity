@@ -40,6 +40,7 @@ public:
     juce::StringArray pendingDropFiles_;
     bool hasPendingDrop_ = false;
     void paint(juce::Graphics& g) override;
+    bool keyPressed(const juce::KeyPress& key) override;
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
@@ -229,10 +230,56 @@ private:
         float lastDrawValue_ = 0.0f;
     };
 
+    class AmpEnvelopeGraph final : public juce::Component
+    {
+    public:
+        void setEnvelope(float attackMs, float decayMs, float sustain, float releaseMs)
+        {
+            attackMs_ = juce::jmax(0.1f, attackMs);
+            decayMs_ = juce::jmax(0.1f, decayMs);
+            sustain_ = juce::jlimit(0.0f, 1.0f, sustain);
+            releaseMs_ = juce::jmax(0.1f, releaseMs);
+            repaint();
+        }
+
+        void paint(juce::Graphics& g) override;
+
+    private:
+        float attackMs_ = 5.0f;
+        float decayMs_ = 150.0f;
+        float sustain_ = 0.85f;
+        float releaseMs_ = 150.0f;
+    };
+
+    class FilterResponseGraph final : public juce::Component
+    {
+    public:
+        void setState(int modeId,
+                      float cutoffHz,
+                      float resonance,
+                      float envAmountHz)
+        {
+            modeId_ = juce::jlimit(1, 6, modeId);
+            cutoffHz_ = juce::jlimit(20.0f, 20000.0f, cutoffHz);
+            resonance_ = juce::jlimit(0.0f, 1.0f, resonance);
+            envAmountHz_ = juce::jmax(0.0f, envAmountHz);
+            repaint();
+        }
+
+        void paint(juce::Graphics& g) override;
+
+    private:
+        int modeId_ = 1;
+        float cutoffHz_ = 1200.0f;
+        float resonance_ = 0.0f;
+        float envAmountHz_ = 0.0f;
+    };
+
     GeneratedWaveformView generateWaveformView_;
     juce::TextButton generateSineButton_{ "Sine" };
     juce::TextButton generateRampButton_{ "Ramp" };
     juce::TextButton generateSquareButton_{ "Square" };
+    juce::TextButton generateSawtoothButton_{ "Sawtooth" };
     juce::TextButton generateTriangleButton_{ "Triangle" };
     juce::TextButton generatePulseButton_{ "Pulse" };
     juce::Label generateSamplesLabel_{ {}, "Samples" };
@@ -253,6 +300,7 @@ private:
         sine,
         ramp,
         square,
+        sawtooth,
         triangle,
         pulse
     };
@@ -292,6 +340,7 @@ private:
     CcLearnDial ampDecayDial_{ "Decay", 0.1, 5000, 0.1, "ms", 1 };
     CcLearnDial ampSustainDial_{ "Sustain", 0, 1.0, 0.01, {}, 1.0 };
     CcLearnDial ampReleaseDial_{ "Release", 0.1, 5000, 0.1, "ms", 5 };
+    AmpEnvelopeGraph ampEnvelopeGraph_;
 
     // ── Filter ──
     CcLearnDial filterCutoffDial_{ "Cutoff", 20, 20000, 1, "Hz", 18000 };
@@ -299,15 +348,17 @@ private:
     CcLearnDial filterEnvAmtDial_{ "Env", 0, 20000, 1, "Hz", 0 };
     juce::Label filterTypeLabel_{ {}, "Type" };
     juce::ComboBox filterTypeCombo_;
+    FilterResponseGraph filterResponseGraph_;
     CcLearnDial filterAttackDial_{ "F Attack", 0.1, 5000, 0.1, "ms", 0.1 };
     CcLearnDial filterDecayDial_{ "F Decay", 0.1, 5000, 0.1, "ms", 1 };
     CcLearnDial filterSustainDial_{ "F Sustain", 0, 1.0, 0.01, {}, 1.0 };
     CcLearnDial filterReleaseDial_{ "F Release", 0.1, 5000, 0.1, "ms", 5 };
+    AmpEnvelopeGraph filterEnvelopeGraph_;
     CcLearnDial filterKeytrackDial_{ "Key %", -100, 200, 1, "%", 0 };
     CcLearnDial filterVelDial_{ "Vel Hz", 0, 12000, 1, "Hz", 0 };
     juce::Label filterKeytrackSnapLabel_{ {}, "Key Snap" };
     juce::ComboBox filterKeytrackSnapCombo_;
-    CcLearnDial filterLfoRateDial_{ "LFO Hz", 0, 40, 0.01, "Hz", 0 };
+    CcLearnDial filterLfoRateDial_{ "LFO Hz", 0, 40, 0.001, "Hz", 0 };
     CcLearnDial filterLfoRateKeyDial_{ "LFO Rate %", -100, 200, 1, "%", 0 };
     CcLearnDial filterLfoAmtDial_{ "LFO Amt", -20000, 20000, 1, "Hz", 0 };
     CcLearnDial filterLfoAmtKeyDial_{ "LFO Key %", -100, 200, 1, "%", 0 };
@@ -369,6 +420,9 @@ private:
     void updateTabVisibility();
     void updateGeneratePreviewButtonText();
     void updateGeneratePulseWidthControlState();
+    void updateAmpEnvelopeGraphFromDials();
+    void updateFilterEnvelopeGraphFromDials();
+    void updateFilterResponseGraphFromControls();
     void regenerateWaveform();
     [[nodiscard]] int getSelectedGenerateSampleCount() const;
     [[nodiscard]] int getSelectedGenerateBitDepth() const;

@@ -74,6 +74,7 @@ public:
     void setGeneratedWaveformPreviewMidiNote(int midiNote) noexcept;
     void startGeneratedWaveformPreview() noexcept;
     void stopGeneratedWaveformPreview() noexcept;
+    void panicAllAudio() noexcept;
     [[nodiscard]] bool isGeneratedWaveformPreviewPlaying() const noexcept
     {
         return previewWavePlaying_.load(std::memory_order_relaxed);

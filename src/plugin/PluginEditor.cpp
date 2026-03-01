@@ -534,6 +534,197 @@ void AudiocityAudioProcessorEditor::GeneratedWaveformView::mouseUp(const juce::M
     lastDrawIndex_ = -1;
 }
 
+void AudiocityAudioProcessorEditor::AmpEnvelopeGraph::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colour(0xff202234));
+    g.setColour(juce::Colour(0xff3a3a52));
+    g.drawRect(getLocalBounds(), 1);
+
+    const auto area = getLocalBounds().toFloat().reduced(10.0f, 8.0f);
+    if (area.getWidth() <= 1.0f || area.getHeight() <= 1.0f)
+        return;
+
+    g.setColour(juce::Colours::white.withAlpha(0.08f));
+    for (int i = 1; i < 4; ++i)
+    {
+        const auto y = area.getY() + area.getHeight() * (static_cast<float>(i) / 4.0f);
+        g.drawLine(area.getX(), y, area.getRight(), y, 1.0f);
+    }
+
+    const auto attack = juce::jmax(0.001f, attackMs_);
+    const auto decay = juce::jmax(0.001f, decayMs_);
+    const auto release = juce::jmax(0.001f, releaseMs_);
+    const auto hold = juce::jmax(5.0f, (attack + decay + release) * 0.3f);
+    const auto total = attack + decay + hold + release;
+
+    auto xFromTime = [&](float t)
+    {
+        return area.getX() + (t / total) * area.getWidth();
+    };
+    auto yFromLevel = [&](float level)
+    {
+        return area.getBottom() - juce::jlimit(0.0f, 1.0f, level) * area.getHeight();
+    };
+
+    const auto x0 = area.getX();
+    const auto y0 = yFromLevel(0.0f);
+    const auto x1 = xFromTime(attack);
+    const auto y1 = yFromLevel(1.0f);
+    const auto x2 = xFromTime(attack + decay);
+    const auto y2 = yFromLevel(sustain_);
+    const auto x3 = xFromTime(attack + decay + hold);
+    const auto y3 = y2;
+    const auto x4 = area.getRight();
+    const auto y4 = yFromLevel(0.0f);
+
+    juce::Path fill;
+    fill.startNewSubPath(x0, y0);
+    fill.lineTo(x1, y1);
+    fill.lineTo(x2, y2);
+    fill.lineTo(x3, y3);
+    fill.lineTo(x4, y4);
+    fill.lineTo(x4, area.getBottom());
+    fill.lineTo(x0, area.getBottom());
+    fill.closeSubPath();
+
+    g.setColour(juce::Colour(0xff4fc3f7).withAlpha(0.18f));
+    g.fillPath(fill);
+
+    juce::Path env;
+    env.startNewSubPath(x0, y0);
+    env.lineTo(x1, y1);
+    env.lineTo(x2, y2);
+    env.lineTo(x3, y3);
+    env.lineTo(x4, y4);
+
+    g.setColour(juce::Colour(0xff61d9ff));
+    g.strokePath(env, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    g.setColour(juce::Colour(0xff9ea5bf));
+    g.setFont(juce::Font(juce::FontOptions(10.0f)));
+    const auto labelY = juce::jmin(static_cast<int>(area.getBottom()) + 1, getHeight() - 12);
+    const auto drawMarker = [&](const juce::String& text, const float centerX)
+    {
+        const int markerWidth = 14;
+        const auto x = juce::jlimit(0, juce::jmax(0, getWidth() - markerWidth),
+            static_cast<int>(std::round(centerX)) - markerWidth / 2);
+        g.drawText(text, x, labelY, markerWidth, 10, juce::Justification::centred);
+    };
+
+    drawMarker("A", (x0 + x1) * 0.5f);
+    drawMarker("D", (x1 + x2) * 0.5f);
+    drawMarker("S", (x2 + x3) * 0.5f);
+    drawMarker("R", (x3 + x4) * 0.5f);
+}
+
+void AudiocityAudioProcessorEditor::FilterResponseGraph::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colour(0xff202234));
+    g.setColour(juce::Colour(0xff3a3a52));
+    g.drawRect(getLocalBounds(), 1);
+
+    const auto area = getLocalBounds().toFloat().reduced(10.0f, 8.0f);
+    if (area.getWidth() <= 2.0f || area.getHeight() <= 2.0f)
+        return;
+
+    g.setColour(juce::Colours::white.withAlpha(0.08f));
+    for (int i = 1; i < 4; ++i)
+    {
+        const auto y = area.getY() + area.getHeight() * (static_cast<float>(i) / 4.0f);
+        g.drawLine(area.getX(), y, area.getRight(), y, 1.0f);
+    }
+
+    constexpr std::array<float, 4> kGuidesHz{ 100.0f, 1000.0f, 5000.0f, 10000.0f };
+    for (const auto hz : kGuidesHz)
+    {
+        const auto norm = std::log10(hz / 20.0f) / std::log10(1000.0f);
+        const auto x = area.getX() + juce::jlimit(0.0f, 1.0f, norm) * area.getWidth();
+        g.drawLine(x, area.getY(), x, area.getBottom(), 1.0f);
+    }
+
+    const auto q = 0.6f + resonance_ * 12.0f;
+    auto magnitudeAtHz = [&](const float hz) -> float
+    {
+        const auto ratio = juce::jmax(0.00001f, hz / juce::jmax(20.0f, cutoffHz_));
+        const auto ratioSquared = ratio * ratio;
+        const auto oneMinusRatioSquared = 1.0f - ratioSquared;
+
+        switch (modeId_)
+        {
+            case 2: // LP24
+            {
+                const auto lp12 = 1.0f / std::sqrt(1.0f + ratioSquared);
+                return lp12 * lp12;
+            }
+            case 1: // LP12
+                return 1.0f / std::sqrt(1.0f + ratioSquared);
+            case 4: // HP24
+            {
+                const auto hp12 = ratio / std::sqrt(1.0f + ratioSquared);
+                return hp12 * hp12;
+            }
+            case 3: // HP12
+                return ratio / std::sqrt(1.0f + ratioSquared);
+            case 5: // BP12
+            {
+                const auto denominator = std::sqrt(oneMinusRatioSquared * oneMinusRatioSquared
+                                                   + (ratio / q) * (ratio / q));
+                return juce::jmax(0.0f, (ratio / q) / juce::jmax(0.00001f, denominator));
+            }
+            case 6: // Notch
+            {
+                const auto numerator = std::abs(oneMinusRatioSquared);
+                const auto denominator = std::sqrt(oneMinusRatioSquared * oneMinusRatioSquared
+                                                   + (ratio / q) * (ratio / q));
+                return juce::jmax(0.0f, numerator / juce::jmax(0.00001f, denominator));
+            }
+            default:
+                return 1.0f;
+        }
+    };
+
+    auto xToHz = [&](const float x) -> float
+    {
+        const auto norm = juce::jlimit(0.0f, 1.0f, (x - area.getX()) / juce::jmax(1.0f, area.getWidth()));
+        return 20.0f * std::pow(1000.0f, norm);
+    };
+
+    auto gainToY = [&](const float magnitude) -> float
+    {
+        constexpr float kMinDb = -30.0f;
+        constexpr float kMaxDb = 12.0f;
+        const auto db = juce::jlimit(kMinDb, kMaxDb, 20.0f * std::log10(juce::jmax(0.00001f, magnitude)));
+        const auto norm = (db - kMinDb) / (kMaxDb - kMinDb);
+        return area.getBottom() - norm * area.getHeight();
+    };
+
+    juce::Path curve;
+    for (int px = 0; px < static_cast<int>(std::round(area.getWidth())); ++px)
+    {
+        const auto x = area.getX() + static_cast<float>(px);
+        const auto hz = xToHz(x);
+        const auto y = gainToY(magnitudeAtHz(hz));
+        if (px == 0)
+            curve.startNewSubPath(x, y);
+        else
+            curve.lineTo(x, y);
+    }
+
+    g.setColour(juce::Colour(0xff61d9ff));
+    g.strokePath(curve, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    const auto cutoffNorm = std::log10(cutoffHz_ / 20.0f) / std::log10(1000.0f);
+    const auto cutoffX = area.getX() + juce::jlimit(0.0f, 1.0f, cutoffNorm) * area.getWidth();
+    g.setColour(juce::Colour(0xfff5b76b).withAlpha(0.9f));
+    g.drawLine(cutoffX, area.getY(), cutoffX, area.getBottom(), 1.0f);
+
+    const auto envCutoffHz = juce::jlimit(20.0f, 20000.0f, cutoffHz_ + envAmountHz_);
+    const auto envNorm = std::log10(envCutoffHz / 20.0f) / std::log10(1000.0f);
+    const auto envX = area.getX() + juce::jlimit(0.0f, 1.0f, envNorm) * area.getWidth();
+    g.setColour(juce::Colour(0xff93d984).withAlpha(0.75f));
+    g.drawLine(envX, area.getY(), envX, area.getBottom(), 1.0f);
+}
+
 // ─── WaveformView ──────────────────────────────────────────────────────────────
 
 void AudiocityAudioProcessorEditor::WaveformView::setState(
@@ -1062,8 +1253,11 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 {
     setName("Audiocity");
     setSize(980, 860);
+    setWantsKeyboardFocus(true);
+    setMouseClickGrabsKeyboardFocus(true);
     setLookAndFeel(&dialLaf_);
     tooltipWindow_ = std::make_unique<juce::TooltipWindow>(this, 700);
+    tooltipWindow_->setLookAndFeel(&dialLaf_);
 
     addAndMakeVisible(tabBar_);
     tabBar_.setLookAndFeel(&tabTextLookAndFeel);
@@ -1143,6 +1337,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(generateSineButton_);
     addAndMakeVisible(generateRampButton_);
     addAndMakeVisible(generateSquareButton_);
+    addAndMakeVisible(generateSawtoothButton_);
     addAndMakeVisible(generateTriangleButton_);
     addAndMakeVisible(generatePulseButton_);
     addAndMakeVisible(generateSamplesLabel_);
@@ -1188,7 +1383,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
             : SketchedWaveSmoothing::line;
     };
 
-    generatePulseWidthSlider_.setRange(10.0, 90.0, 1.0);
+    generatePulseWidthSlider_.setRange(1.0, 99.0, 1.0);
     generatePulseWidthSlider_.setValue(20.0, juce::dontSendNotification);
     generatePulseWidthSlider_.setTextValueSuffix(" %");
     generatePulseWidthSlider_.onValueChange = [this]
@@ -1217,6 +1412,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     bindWaveButton(generateSineButton_, GeneratedWaveType::sine);
     bindWaveButton(generateRampButton_, GeneratedWaveType::ramp);
     bindWaveButton(generateSquareButton_, GeneratedWaveType::square);
+    bindWaveButton(generateSawtoothButton_, GeneratedWaveType::sawtooth);
     bindWaveButton(generateTriangleButton_, GeneratedWaveType::triangle);
     bindWaveButton(generatePulseButton_, GeneratedWaveType::pulse);
 
@@ -1453,16 +1649,18 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(ampDecayDial_);
     addAndMakeVisible(ampSustainDial_);
     addAndMakeVisible(ampReleaseDial_);
-    ampAttackDial_.onValueChange = [this] { pushAmpEnvelope(); };
-    ampDecayDial_.onValueChange = [this] { pushAmpEnvelope(); };
-    ampSustainDial_.onValueChange = [this] { pushAmpEnvelope(); };
-    ampReleaseDial_.onValueChange = [this] { pushAmpEnvelope(); };
+    addAndMakeVisible(ampEnvelopeGraph_);
+    ampAttackDial_.onValueChange = [this] { pushAmpEnvelope(); updateAmpEnvelopeGraphFromDials(); };
+    ampDecayDial_.onValueChange = [this] { pushAmpEnvelope(); updateAmpEnvelopeGraphFromDials(); };
+    ampSustainDial_.onValueChange = [this] { pushAmpEnvelope(); updateAmpEnvelopeGraphFromDials(); };
+    ampReleaseDial_.onValueChange = [this] { pushAmpEnvelope(); updateAmpEnvelopeGraphFromDials(); };
 
     // Filter
     addAndMakeVisible(filterCutoffDial_);
     addAndMakeVisible(filterResDial_);
     addAndMakeVisible(filterEnvAmtDial_);
     addAndMakeVisible(filterTypeLabel_);
+    addAndMakeVisible(filterResponseGraph_);
     filterTypeLabel_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(filterTypeCombo_);
     filterTypeCombo_.addItem("LP 12", 1);
@@ -1478,6 +1676,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(filterDecayDial_);
     addAndMakeVisible(filterSustainDial_);
     addAndMakeVisible(filterReleaseDial_);
+    addAndMakeVisible(filterEnvelopeGraph_);
     addAndMakeVisible(filterKeytrackDial_);
     addAndMakeVisible(filterVelDial_);
     addAndMakeVisible(filterLfoRateDial_);
@@ -1559,6 +1758,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     filterEnvAmtDial_.onValueChange = [this] { pushFilterSettings(); };
     filterKeytrackDial_.onValueChange = [this] { pushFilterSettings(); };
     filterVelDial_.onValueChange = [this] { pushFilterSettings(); };
+    filterLfoRateDial_.setShiftWheelFineFactor(8.0);
     filterLfoRateDial_.onValueChange = [this] { pushFilterSettings(); };
     filterLfoRateKeyDial_.onValueChange = [this] { pushFilterSettings(); };
     filterLfoAmtDial_.onValueChange = [this] { pushFilterSettings(); };
@@ -1566,10 +1766,21 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     filterLfoStartPhaseDial_.onValueChange = [this] { pushFilterSettings(); };
     filterLfoStartRandDial_.onValueChange = [this] { pushFilterSettings(); };
     filterLfoFadeInDial_.onValueChange = [this] { pushFilterSettings(); };
-    filterAttackDial_.onValueChange = [this] { pushFilterEnvelope(); };
-    filterDecayDial_.onValueChange = [this] { pushFilterEnvelope(); };
-    filterSustainDial_.onValueChange = [this] { pushFilterEnvelope(); };
-    filterReleaseDial_.onValueChange = [this] { pushFilterEnvelope(); };
+    filterAttackDial_.onValueChange = [this] { pushFilterEnvelope(); updateFilterEnvelopeGraphFromDials(); };
+    filterDecayDial_.onValueChange = [this] { pushFilterEnvelope(); updateFilterEnvelopeGraphFromDials(); };
+    filterSustainDial_.onValueChange = [this] { pushFilterEnvelope(); updateFilterEnvelopeGraphFromDials(); };
+    filterReleaseDial_.onValueChange = [this] { pushFilterEnvelope(); updateFilterEnvelopeGraphFromDials(); };
+
+    filterLfoRateKeyDial_.setVisible(false);
+    filterLfoAmtKeyDial_.setVisible(false);
+    filterLfoStartPhaseDial_.setVisible(false);
+    filterLfoStartRandDial_.setVisible(false);
+    filterLfoFadeInDial_.setVisible(false);
+    filterKeytrackSnapLabel_.setVisible(false);
+    filterKeytrackSnapCombo_.setVisible(false);
+    filterLfoRateKeySyncToggle_.setVisible(false);
+    filterLfoKeytrackLinearToggle_.setVisible(false);
+    filterLfoUnipolarToggle_.setVisible(false);
 
     // Quality / Preload
     addAndMakeVisible(qualityLabel_);
@@ -1694,15 +1905,18 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addToSampleControls(ampDecayDial_);
     addToSampleControls(ampSustainDial_);
     addToSampleControls(ampReleaseDial_);
+    addToSampleControls(ampEnvelopeGraph_);
     addToSampleControls(filterCutoffDial_);
     addToSampleControls(filterResDial_);
     addToSampleControls(filterEnvAmtDial_);
     addToSampleControls(filterTypeLabel_);
     addToSampleControls(filterTypeCombo_);
+    addToSampleControls(filterResponseGraph_);
     addToSampleControls(filterAttackDial_);
     addToSampleControls(filterDecayDial_);
     addToSampleControls(filterSustainDial_);
     addToSampleControls(filterReleaseDial_);
+    addToSampleControls(filterEnvelopeGraph_);
     addToSampleControls(filterKeytrackDial_);
     addToSampleControls(filterVelDial_);
     addToSampleControls(filterLfoRateDial_);
@@ -2084,6 +2298,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     generateSineButton_.setVisible(showGenerateTab);
     generateRampButton_.setVisible(showGenerateTab);
     generateSquareButton_.setVisible(showGenerateTab);
+    generateSawtoothButton_.setVisible(showGenerateTab);
     generateTriangleButton_.setVisible(showGenerateTab);
     generatePulseButton_.setVisible(showGenerateTab);
     generateSamplesLabel_.setVisible(showGenerateTab);
@@ -2579,6 +2794,8 @@ void AudiocityAudioProcessorEditor::resized()
         waveButtons.removeFromLeft(kBtnGap);
         generateSquareButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
         waveButtons.removeFromLeft(kBtnGap);
+        generateSawtoothButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
+        waveButtons.removeFromLeft(kBtnGap);
         generateTriangleButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
         waveButtons.removeFromLeft(kBtnGap);
         generatePulseButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
@@ -2721,6 +2938,8 @@ void AudiocityAudioProcessorEditor::resized()
         ampSustainDial_.setBounds(ampInner.removeFromLeft(kDial));
         ampInner.removeFromLeft(kDialGap);
         ampReleaseDial_.setBounds(ampInner.removeFromLeft(kDial));
+        ampInner.removeFromLeft(10);
+        ampEnvelopeGraph_.setBounds(ampInner.reduced(0, 8));
     }
 
     // ── Panel 5: Filter ──
@@ -2736,11 +2955,13 @@ void AudiocityAudioProcessorEditor::resized()
         filterTypeLabel_.setBounds(filterTypeArea.removeFromTop(16));
         filterTypeArea.removeFromTop(2);
         filterTypeCombo_.setBounds(filterTypeArea.removeFromTop(24));
+        filterInner.removeFromLeft(10);
+        filterResponseGraph_.setBounds(filterInner.reduced(0, 8));
     }
 
     // ── Panel 6: Filter Envelope + Mod ──
     {
-        constexpr int kFilterModPanelH = 310;
+        constexpr int kFilterModPanelH = 238;
         auto filterEnvInner = makeGroup("Filter Envelope + Mod", kFilterModPanelH);
 
         auto row1 = filterEnvInner.removeFromTop(kDialH);
@@ -2751,59 +2972,35 @@ void AudiocityAudioProcessorEditor::resized()
         filterSustainDial_.setBounds(row1.removeFromLeft(kDial));
         row1.removeFromLeft(kDialGap);
         filterReleaseDial_.setBounds(row1.removeFromLeft(kDial));
-        row1.removeFromLeft(kDialGap);
-        filterKeytrackDial_.setBounds(row1.removeFromLeft(kDial));
-        row1.removeFromLeft(kDialGap);
-        filterVelDial_.setBounds(row1.removeFromLeft(kDial));
-        row1.removeFromLeft(kDialGap);
-        filterLfoRateDial_.setBounds(row1.removeFromLeft(kDial));
-        row1.removeFromLeft(kDialGap);
-        filterLfoRateKeyDial_.setBounds(row1.removeFromLeft(kDial));
+        row1.removeFromLeft(10);
+        filterEnvelopeGraph_.setBounds(row1.reduced(0, 8));
 
         filterEnvInner.removeFromTop(8);
 
         auto row2 = filterEnvInner.removeFromTop(kDialH);
+        filterKeytrackDial_.setBounds(row2.removeFromLeft(kDial));
+        row2.removeFromLeft(kDialGap);
+        filterVelDial_.setBounds(row2.removeFromLeft(kDial));
+        row2.removeFromLeft(kDialGap);
+        filterLfoRateDial_.setBounds(row2.removeFromLeft(kDial));
+        row2.removeFromLeft(kDialGap);
         filterLfoAmtDial_.setBounds(row2.removeFromLeft(kDial));
-        row2.removeFromLeft(kDialGap);
-        filterLfoAmtKeyDial_.setBounds(row2.removeFromLeft(kDial));
-        row2.removeFromLeft(kDialGap);
-        filterLfoStartPhaseDial_.setBounds(row2.removeFromLeft(kDial));
-        row2.removeFromLeft(kDialGap);
-        filterLfoStartRandDial_.setBounds(row2.removeFromLeft(kDial));
-        row2.removeFromLeft(kDialGap);
-        filterLfoFadeInDial_.setBounds(row2.removeFromLeft(kDial));
-
-        filterEnvInner.removeFromTop(8);
-
-        auto keyShapeRow = filterEnvInner.removeFromTop(42);
-        auto keySnapArea = keyShapeRow.removeFromLeft(120);
-        filterKeytrackSnapLabel_.setBounds(keySnapArea.removeFromTop(16));
-        keySnapArea.removeFromTop(2);
-        filterKeytrackSnapCombo_.setBounds(keySnapArea.removeFromTop(24));
-        keyShapeRow.removeFromLeft(10);
-        auto lfoShapeArea = keyShapeRow.removeFromLeft(120);
+        row2.removeFromLeft(10);
+        auto lfoShapeArea = row2.removeFromLeft(120);
         filterLfoShapeLabel_.setBounds(lfoShapeArea.removeFromTop(16));
         lfoShapeArea.removeFromTop(2);
         filterLfoShapeCombo_.setBounds(lfoShapeArea.removeFromTop(24));
-
-        filterEnvInner.removeFromTop(6);
-
-        auto toggleRow = filterEnvInner.removeFromTop(22);
-        filterLfoRetriggerToggle_.setBounds(toggleRow.removeFromLeft(90));
-        toggleRow.removeFromLeft(8);
-        filterLfoTempoSyncToggle_.setBounds(toggleRow.removeFromLeft(90));
-        toggleRow.removeFromLeft(8);
-        filterLfoRateKeySyncToggle_.setBounds(toggleRow.removeFromLeft(96));
-        toggleRow.removeFromLeft(8);
-        filterLfoKeytrackLinearToggle_.setBounds(toggleRow.removeFromLeft(86));
-        toggleRow.removeFromLeft(8);
-        filterLfoUnipolarToggle_.setBounds(toggleRow.removeFromLeft(80));
-
-        filterEnvInner.removeFromTop(6);
-        auto divArea = filterEnvInner.removeFromTop(42).removeFromLeft(120);
+        row2.removeFromLeft(10);
+        auto divArea = row2.removeFromLeft(120);
         filterLfoDivisionLabel_.setBounds(divArea.removeFromTop(16));
         divArea.removeFromTop(2);
         filterLfoDivisionCombo_.setBounds(divArea.removeFromTop(24));
+
+        row2.removeFromLeft(12);
+        auto syncArea = row2.removeFromLeft(90);
+        filterLfoRetriggerToggle_.setBounds(syncArea.removeFromTop(22));
+        syncArea.removeFromTop(6);
+        filterLfoTempoSyncToggle_.setBounds(syncArea.removeFromTop(22));
     }
 
     // ── Panel 7: Output ──
@@ -2873,6 +3070,18 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colours::white.withAlpha(0.95f));
     g.setFont(14.0f);
     g.drawText("Drop .wav or .aiff to load", overlay, juce::Justification::centred);
+}
+
+bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
+{
+    if (key == juce::KeyPress::escapeKey)
+    {
+        processor_.panicAllAudio();
+        updateGeneratePreviewButtonText();
+        return true;
+    }
+
+    return juce::AudioProcessorEditor::keyPressed(key);
 }
 
 void AudiocityAudioProcessorEditor::updateGeneratePreviewButtonText()
@@ -2956,6 +3165,31 @@ void AudiocityAudioProcessorEditor::updateGeneratePulseWidthControlState()
     generatePulseWidthSlider_.setEnabled(enabled);
 }
 
+void AudiocityAudioProcessorEditor::updateAmpEnvelopeGraphFromDials()
+{
+    ampEnvelopeGraph_.setEnvelope(static_cast<float>(ampAttackDial_.getValue()),
+                                  static_cast<float>(ampDecayDial_.getValue()),
+                                  static_cast<float>(ampSustainDial_.getValue()),
+                                  static_cast<float>(ampReleaseDial_.getValue()));
+}
+
+void AudiocityAudioProcessorEditor::updateFilterEnvelopeGraphFromDials()
+{
+    filterEnvelopeGraph_.setEnvelope(static_cast<float>(filterAttackDial_.getValue()),
+                                     static_cast<float>(filterDecayDial_.getValue()),
+                                     static_cast<float>(filterSustainDial_.getValue()),
+                                     static_cast<float>(filterReleaseDial_.getValue()));
+}
+
+void AudiocityAudioProcessorEditor::updateFilterResponseGraphFromControls()
+{
+    const auto modeId = filterTypeCombo_.getSelectedId();
+    const auto cutoffHz = static_cast<float>(filterCutoffDial_.getValue());
+    const auto resonance = static_cast<float>(filterResDial_.getValue()) / 100.0f;
+    const auto envAmountHz = static_cast<float>(filterEnvAmtDial_.getValue());
+    filterResponseGraph_.setState(modeId, cutoffHz, resonance, envAmountHz);
+}
+
 void AudiocityAudioProcessorEditor::regenerateWaveform()
 {
     const auto sampleCount = getSelectedGenerateSampleCount();
@@ -2978,6 +3212,9 @@ void AudiocityAudioProcessorEditor::regenerateWaveform()
                 break;
             case GeneratedWaveType::square:
                 value = phase < 0.5f ? 1.0f : -1.0f;
+                break;
+            case GeneratedWaveType::sawtooth:
+                value = 1.0f - (phase * 2.0f);
                 break;
             case GeneratedWaveType::triangle:
                 value = 1.0f - 4.0f * std::abs(phase - 0.5f);
@@ -3390,6 +3627,7 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     ampDecayDial_.setValue(amp.decaySeconds * 1000.0f);
     ampSustainDial_.setValue(amp.sustainLevel);
     ampReleaseDial_.setValue(amp.releaseSeconds * 1000.0f);
+    updateAmpEnvelopeGraphFromDials();
 
     // Filter
     const auto filter = processor_.getFilterSettings();
@@ -3397,6 +3635,7 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     filterResDial_.setValue(static_cast<double>(filter.resonance) * 100.0);
     filterEnvAmtDial_.setValue(filter.envAmountHz);
     filterTypeCombo_.setSelectedId(filterModeToComboId(filter.mode), juce::dontSendNotification);
+    updateFilterResponseGraphFromControls();
     filterKeytrackDial_.setValue(filter.keyTracking * 100.0f);
     filterVelDial_.setValue(filter.velocityAmountHz);
     filterLfoRateDial_.setValue(filter.lfoRateHz);
@@ -3423,6 +3662,7 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     filterDecayDial_.setValue(filterEnv.decaySeconds * 1000.0f);
     filterSustainDial_.setValue(filterEnv.sustainLevel);
     filterReleaseDial_.setValue(filterEnv.releaseSeconds * 1000.0f);
+    updateFilterEnvelopeGraphFromDials();
 
     // Quality / Preload
     qualityCpuButton_.setToggleState(
@@ -3549,20 +3789,21 @@ void AudiocityAudioProcessorEditor::pushFilterSettings()
     settings.keyTracking = juce::jlimit(-1.0f, 2.0f, static_cast<float>(filterKeytrackDial_.getValue()) / 100.0f);
     settings.velocityAmountHz = juce::jmax(0.0f, static_cast<float>(filterVelDial_.getValue()));
     settings.lfoRateHz = juce::jlimit(0.0f, 40.0f, static_cast<float>(filterLfoRateDial_.getValue()));
-    settings.lfoRateKeyTracking = juce::jlimit(-1.0f, 2.0f, static_cast<float>(filterLfoRateKeyDial_.getValue()) / 100.0f);
+    settings.lfoRateKeyTracking = 0.0f;
     settings.lfoAmountHz = juce::jlimit(-20000.0f, 20000.0f, static_cast<float>(filterLfoAmtDial_.getValue()));
-    settings.lfoAmountKeyTracking = juce::jlimit(-1.0f, 2.0f, static_cast<float>(filterLfoAmtKeyDial_.getValue()) / 100.0f);
-    settings.lfoStartPhaseDegrees = juce::jlimit(0.0f, 360.0f, static_cast<float>(filterLfoStartPhaseDial_.getValue()));
-    settings.lfoStartPhaseRandomDegrees = juce::jlimit(0.0f, 180.0f, static_cast<float>(filterLfoStartRandDial_.getValue()));
-    settings.lfoFadeInMs = juce::jlimit(0.0f, 5000.0f, static_cast<float>(filterLfoFadeInDial_.getValue()));
+    settings.lfoAmountKeyTracking = 0.0f;
+    settings.lfoStartPhaseDegrees = 0.0f;
+    settings.lfoStartPhaseRandomDegrees = 0.0f;
+    settings.lfoFadeInMs = 0.0f;
     settings.lfoShape = comboIdToLfoShape(filterLfoShapeCombo_.getSelectedId());
     settings.lfoRetrigger = filterLfoRetriggerToggle_.getToggleState();
     settings.lfoTempoSync = filterLfoTempoSyncToggle_.getToggleState();
-    settings.lfoRateKeytrackInTempoSync = filterLfoRateKeySyncToggle_.getToggleState();
-    settings.lfoKeytrackLinear = filterLfoKeytrackLinearToggle_.getToggleState();
-    settings.lfoUnipolar = filterLfoUnipolarToggle_.getToggleState();
+    settings.lfoRateKeytrackInTempoSync = true;
+    settings.lfoKeytrackLinear = false;
+    settings.lfoUnipolar = false;
     settings.lfoSyncDivision = juce::jlimit(0, 11, filterLfoDivisionCombo_.getSelectedId() - 1);
     processor_.setFilterSettings(settings);
+    updateFilterResponseGraphFromControls();
 }
 
 void AudiocityAudioProcessorEditor::pushFilterEnvelope()

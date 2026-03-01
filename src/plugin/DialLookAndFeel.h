@@ -38,6 +38,11 @@ public:
         setColour(juce::PopupMenu::textColourId, juce::Colour(0xffc0c0d0));
         setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(0xff4fc3f7));
         setColour(juce::PopupMenu::highlightedTextColourId, juce::Colours::white);
+
+        // Tooltip
+        setColour(juce::TooltipWindow::backgroundColourId, juce::Colour(0xfff3e6c8));
+        setColour(juce::TooltipWindow::textColourId, juce::Colour(0xff2d2b28));
+        setColour(juce::TooltipWindow::outlineColourId, juce::Colour(0xffbfae8e));
     }
 
     ~DialLookAndFeel() override = default;
@@ -114,6 +119,26 @@ public:
         }
 
         juce::ignoreUnused(rx, ry);
+    }
+
+    void drawTooltip(juce::Graphics& g, const juce::String& text, int width, int height) override
+    {
+        constexpr int padX = 12;
+        constexpr int padY = 9;
+
+        const auto bounds = juce::Rectangle<float>(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
+
+        g.setColour(findColour(juce::TooltipWindow::backgroundColourId));
+        g.fillRoundedRectangle(bounds.reduced(0.5f), 6.0f);
+
+        g.setColour(findColour(juce::TooltipWindow::outlineColourId));
+        g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.0f);
+
+        g.setColour(findColour(juce::TooltipWindow::textColourId));
+        g.setFont(juce::Font(juce::FontOptions(13.5f)));
+
+        const auto textBounds = juce::Rectangle<int>(0, 0, width, height).reduced(padX, padY);
+        g.drawFittedText(text, textBounds, juce::Justification::centredLeft, 8);
     }
 
 private:
