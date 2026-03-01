@@ -27,8 +27,19 @@ constexpr auto kFilterMode = "filterMode";
 constexpr auto kFilterKeyTracking = "filterKeyTracking";
 constexpr auto kFilterVelocityAmount = "filterVelocityAmount";
 constexpr auto kFilterLfoRate = "filterLfoRate";
+constexpr auto kFilterLfoRateKeytrack = "filterLfoRateKeytrack";
 constexpr auto kFilterLfoAmount = "filterLfoAmount";
+constexpr auto kFilterLfoAmountKeytrack = "filterLfoAmountKeytrack";
+constexpr auto kFilterLfoStartPhase = "filterLfoStartPhase";
+constexpr auto kFilterLfoStartPhaseRandom = "filterLfoStartPhaseRandom";
+constexpr auto kFilterLfoFadeIn = "filterLfoFadeIn";
 constexpr auto kFilterLfoShape = "filterLfoShape";
+constexpr auto kFilterLfoRetrigger = "filterLfoRetrigger";
+constexpr auto kFilterLfoTempoSync = "filterLfoTempoSync";
+constexpr auto kFilterLfoRateKeytrackInTempoSync = "filterLfoRateKeytrackInTempoSync";
+constexpr auto kFilterLfoKeytrackLinear = "filterLfoKeytrackLinear";
+constexpr auto kFilterLfoUnipolar = "filterLfoUnipolar";
+constexpr auto kFilterLfoSyncDivision = "filterLfoSyncDivision";
 constexpr auto kPlaybackMode = "playbackMode";
 constexpr auto kQualityTier = "qualityTier";
 constexpr auto kVelocityCurve = "velocityCurve";
@@ -62,8 +73,19 @@ constexpr auto kParamFilterRelease = "p_filterRelease";
 constexpr auto kParamFilterKeytrack = "p_filterKeytrack";
 constexpr auto kParamFilterVel = "p_filterVel";
 constexpr auto kParamFilterLfoRate = "p_filterLfoRate";
+constexpr auto kParamFilterLfoRateKeytrack = "p_filterLfoRateKeytrack";
 constexpr auto kParamFilterLfoAmount = "p_filterLfoAmount";
+constexpr auto kParamFilterLfoAmountKeytrack = "p_filterLfoAmountKeytrack";
+constexpr auto kParamFilterLfoStartPhase = "p_filterLfoStartPhase";
+constexpr auto kParamFilterLfoStartPhaseRandom = "p_filterLfoStartPhaseRandom";
+constexpr auto kParamFilterLfoFadeIn = "p_filterLfoFadeIn";
 constexpr auto kParamFilterLfoShape = "p_filterLfoShape";
+constexpr auto kParamFilterLfoRetrigger = "p_filterLfoRetrigger";
+constexpr auto kParamFilterLfoTempoSync = "p_filterLfoTempoSync";
+constexpr auto kParamFilterLfoRateKeytrackInTempoSync = "p_filterLfoRateKeytrackInTempoSync";
+constexpr auto kParamFilterLfoKeytrackLinear = "p_filterLfoKeytrackLinear";
+constexpr auto kParamFilterLfoUnipolar = "p_filterLfoUnipolar";
+constexpr auto kParamFilterLfoSyncDivision = "p_filterLfoSyncDivision";
 constexpr auto kParamAmpAttack = "p_ampAttack";
 constexpr auto kParamAmpDecay = "p_ampDecay";
 constexpr auto kParamAmpSustain = "p_ampSustain";
@@ -139,11 +161,32 @@ juce::AudioProcessorValueTreeState::ParameterLayout AudiocityAudioProcessor::cre
         juce::NormalisableRange<float>(0.0f, 12000.0f, 0.01f, 0.5f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamFilterLfoRate, "Filter LFO Rate",
         juce::NormalisableRange<float>(0.0f, 40.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamFilterLfoRateKeytrack, "Filter LFO Rate Keytracking",
+        juce::NormalisableRange<float>(-1.0f, 2.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamFilterLfoAmount, "Filter LFO Amount",
         juce::NormalisableRange<float>(-20000.0f, 20000.0f, 0.01f, 0.35f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamFilterLfoAmountKeytrack, "Filter LFO Amount Keytracking",
+        juce::NormalisableRange<float>(-1.0f, 2.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamFilterLfoStartPhase, "Filter LFO Start Phase",
+        juce::NormalisableRange<float>(0.0f, 360.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamFilterLfoStartPhaseRandom, "Filter LFO Start Rand",
+        juce::NormalisableRange<float>(0.0f, 180.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamFilterLfoFadeIn, "Filter LFO Fade In",
+        juce::NormalisableRange<float>(0.0f, 5000.0f, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterChoice>(kParamFilterLfoShape, "Filter LFO Shape",
         juce::StringArray{ "Sine", "Triangle", "Square", "Saw Up", "Saw Down" },
         static_cast<int>(FilterSettings::LfoShape::sine)));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(kParamFilterLfoRetrigger, "Filter LFO Retrigger", true));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(kParamFilterLfoTempoSync, "Filter LFO Tempo Sync", false));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(kParamFilterLfoRateKeytrackInTempoSync,
+        "Filter LFO Rate Keytrack In Sync", true));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(kParamFilterLfoKeytrackLinear,
+        "Filter LFO Keytrack Linear", false));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(kParamFilterLfoUnipolar,
+        "Filter LFO Unipolar", false));
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(kParamFilterLfoSyncDivision, "Filter LFO Sync Division",
+        juce::StringArray{ "1/16", "1/16T", "1/16.", "1/8", "1/8T", "1/8.",
+            "1/4", "1/4T", "1/4.", "1/2", "1/1", "2/1" }, 6));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamAmpAttack, "Amp Attack",
         juce::NormalisableRange<float>(0.0001f, 5.0f, 0.0001f, 0.4f), 0.005f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamAmpDecay, "Amp Decay",
@@ -214,9 +257,23 @@ void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
     filter.keyTracking = apvts_.getRawParameterValue(kParamFilterKeytrack)->load();
     filter.velocityAmountHz = apvts_.getRawParameterValue(kParamFilterVel)->load();
     filter.lfoRateHz = apvts_.getRawParameterValue(kParamFilterLfoRate)->load();
+    filter.lfoRateKeyTracking = apvts_.getRawParameterValue(kParamFilterLfoRateKeytrack)->load();
     filter.lfoAmountHz = apvts_.getRawParameterValue(kParamFilterLfoAmount)->load();
+    filter.lfoAmountKeyTracking = apvts_.getRawParameterValue(kParamFilterLfoAmountKeytrack)->load();
+    filter.lfoStartPhaseDegrees = apvts_.getRawParameterValue(kParamFilterLfoStartPhase)->load();
+    filter.lfoStartPhaseRandomDegrees = apvts_.getRawParameterValue(kParamFilterLfoStartPhaseRandom)->load();
+    filter.lfoFadeInMs = apvts_.getRawParameterValue(kParamFilterLfoFadeIn)->load();
     filter.lfoShape = static_cast<FilterSettings::LfoShape>(juce::jlimit(0, 4,
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamFilterLfoShape)->load()))));
+    filter.lfoRetrigger = apvts_.getRawParameterValue(kParamFilterLfoRetrigger)->load() >= 0.5f;
+    filter.lfoTempoSync = apvts_.getRawParameterValue(kParamFilterLfoTempoSync)->load() >= 0.5f;
+    filter.lfoRateKeytrackInTempoSync = apvts_.getRawParameterValue(kParamFilterLfoRateKeytrackInTempoSync)->load() >= 0.5f;
+    filter.lfoKeytrackLinear = apvts_.getRawParameterValue(kParamFilterLfoKeytrackLinear)->load() >= 0.5f;
+    filter.lfoUnipolar = apvts_.getRawParameterValue(kParamFilterLfoUnipolar)->load() >= 0.5f;
+    filter.lfoSyncDivision = juce::jlimit(0, 11,
+        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamFilterLfoSyncDivision)->load())));
+    if (filter.lfoTempoSync)
+        filter.lfoRateHz = lfoRateHzFromTempoSync(filter.lfoSyncDivision);
     engine_.setFilterSettings(filter);
 
     auto filterEnv = engine_.getFilterEnvelope();
@@ -279,6 +336,7 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     for (auto channel = numInputChannels; channel < numOutputChannels; ++channel)
         buffer.clear(channel, 0, buffer.getNumSamples());
 
+    updateHostTempoFromPlayHead();
     syncEngineFromAutomatableParameters();
 
     // Extract CC messages and push to FIFO for the editor to consume
@@ -340,8 +398,19 @@ void AudiocityAudioProcessor::setFilterSettings(const FilterSettings& settings) 
     updateParameterFromPlainValue(kParamFilterKeytrack, applied.keyTracking);
     updateParameterFromPlainValue(kParamFilterVel, applied.velocityAmountHz);
     updateParameterFromPlainValue(kParamFilterLfoRate, applied.lfoRateHz);
+    updateParameterFromPlainValue(kParamFilterLfoRateKeytrack, applied.lfoRateKeyTracking);
     updateParameterFromPlainValue(kParamFilterLfoAmount, applied.lfoAmountHz);
+    updateParameterFromPlainValue(kParamFilterLfoAmountKeytrack, applied.lfoAmountKeyTracking);
+    updateParameterFromPlainValue(kParamFilterLfoStartPhase, applied.lfoStartPhaseDegrees);
+    updateParameterFromPlainValue(kParamFilterLfoStartPhaseRandom, applied.lfoStartPhaseRandomDegrees);
+    updateParameterFromPlainValue(kParamFilterLfoFadeIn, applied.lfoFadeInMs);
     updateParameterFromPlainValue(kParamFilterLfoShape, static_cast<float>(applied.lfoShape));
+    updateParameterFromPlainValue(kParamFilterLfoRetrigger, applied.lfoRetrigger ? 1.0f : 0.0f);
+    updateParameterFromPlainValue(kParamFilterLfoTempoSync, applied.lfoTempoSync ? 1.0f : 0.0f);
+    updateParameterFromPlainValue(kParamFilterLfoRateKeytrackInTempoSync, applied.lfoRateKeytrackInTempoSync ? 1.0f : 0.0f);
+    updateParameterFromPlainValue(kParamFilterLfoKeytrackLinear, applied.lfoKeytrackLinear ? 1.0f : 0.0f);
+    updateParameterFromPlainValue(kParamFilterLfoUnipolar, applied.lfoUnipolar ? 1.0f : 0.0f);
+    updateParameterFromPlainValue(kParamFilterLfoSyncDivision, static_cast<float>(applied.lfoSyncDivision));
 }
 
 juce::AudioProcessorEditor* AudiocityAudioProcessor::createEditor()
@@ -377,8 +446,19 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kFilterKeyTracking, filter.keyTracking, nullptr);
     state.setProperty(kFilterVelocityAmount, filter.velocityAmountHz, nullptr);
     state.setProperty(kFilterLfoRate, filter.lfoRateHz, nullptr);
+    state.setProperty(kFilterLfoRateKeytrack, filter.lfoRateKeyTracking, nullptr);
     state.setProperty(kFilterLfoAmount, filter.lfoAmountHz, nullptr);
+    state.setProperty(kFilterLfoAmountKeytrack, filter.lfoAmountKeyTracking, nullptr);
+    state.setProperty(kFilterLfoStartPhase, filter.lfoStartPhaseDegrees, nullptr);
+    state.setProperty(kFilterLfoStartPhaseRandom, filter.lfoStartPhaseRandomDegrees, nullptr);
+    state.setProperty(kFilterLfoFadeIn, filter.lfoFadeInMs, nullptr);
     state.setProperty(kFilterLfoShape, static_cast<int>(filter.lfoShape), nullptr);
+    state.setProperty(kFilterLfoRetrigger, filter.lfoRetrigger ? 1 : 0, nullptr);
+    state.setProperty(kFilterLfoTempoSync, filter.lfoTempoSync ? 1 : 0, nullptr);
+    state.setProperty(kFilterLfoRateKeytrackInTempoSync, filter.lfoRateKeytrackInTempoSync ? 1 : 0, nullptr);
+    state.setProperty(kFilterLfoKeytrackLinear, filter.lfoKeytrackLinear ? 1 : 0, nullptr);
+    state.setProperty(kFilterLfoUnipolar, filter.lfoUnipolar ? 1 : 0, nullptr);
+    state.setProperty(kFilterLfoSyncDivision, filter.lfoSyncDivision, nullptr);
     state.setProperty(kPlaybackMode,
         getPlaybackMode() == PlaybackMode::oneShot ? 1 : (getPlaybackMode() == PlaybackMode::loop ? 2 : 0),
         nullptr);
@@ -480,9 +560,24 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     filter.keyTracking = static_cast<float>(state.getProperty(kFilterKeyTracking, filter.keyTracking));
     filter.velocityAmountHz = static_cast<float>(state.getProperty(kFilterVelocityAmount, filter.velocityAmountHz));
     filter.lfoRateHz = static_cast<float>(state.getProperty(kFilterLfoRate, filter.lfoRateHz));
+    filter.lfoRateKeyTracking = static_cast<float>(state.getProperty(kFilterLfoRateKeytrack, filter.lfoRateKeyTracking));
     filter.lfoAmountHz = static_cast<float>(state.getProperty(kFilterLfoAmount, filter.lfoAmountHz));
+    filter.lfoAmountKeyTracking = static_cast<float>(state.getProperty(kFilterLfoAmountKeytrack, filter.lfoAmountKeyTracking));
+    filter.lfoStartPhaseDegrees = static_cast<float>(state.getProperty(kFilterLfoStartPhase, filter.lfoStartPhaseDegrees));
+    filter.lfoStartPhaseRandomDegrees = static_cast<float>(state.getProperty(kFilterLfoStartPhaseRandom, filter.lfoStartPhaseRandomDegrees));
+    filter.lfoFadeInMs = static_cast<float>(state.getProperty(kFilterLfoFadeIn, filter.lfoFadeInMs));
     filter.lfoShape = static_cast<FilterSettings::LfoShape>(juce::jlimit(0, 4,
         static_cast<int>(state.getProperty(kFilterLfoShape, static_cast<int>(filter.lfoShape)))));
+    filter.lfoRetrigger = static_cast<int>(state.getProperty(kFilterLfoRetrigger, filter.lfoRetrigger ? 1 : 0)) == 1;
+    filter.lfoTempoSync = static_cast<int>(state.getProperty(kFilterLfoTempoSync, filter.lfoTempoSync ? 1 : 0)) == 1;
+    filter.lfoRateKeytrackInTempoSync = static_cast<int>(state.getProperty(kFilterLfoRateKeytrackInTempoSync,
+        filter.lfoRateKeytrackInTempoSync ? 1 : 0)) == 1;
+    filter.lfoKeytrackLinear = static_cast<int>(state.getProperty(kFilterLfoKeytrackLinear,
+        filter.lfoKeytrackLinear ? 1 : 0)) == 1;
+    filter.lfoUnipolar = static_cast<int>(state.getProperty(kFilterLfoUnipolar,
+        filter.lfoUnipolar ? 1 : 0)) == 1;
+    filter.lfoSyncDivision = juce::jlimit(0, 11,
+        static_cast<int>(state.getProperty(kFilterLfoSyncDivision, filter.lfoSyncDivision)));
     setFilterSettings(filter);
 
     const auto playbackMode = static_cast<int>(state.getProperty(kPlaybackMode, 0));
@@ -725,6 +820,43 @@ bool AudiocityAudioProcessor::popUiMidiEvent(UiMidiEvent& out) noexcept
     out = uiMidiFifo_[static_cast<std::size_t>(readPos)];
     uiMidiReadPos_.store((readPos + 1) % kUiMidiFifoSize, std::memory_order_release);
     return true;
+}
+
+void AudiocityAudioProcessor::updateHostTempoFromPlayHead() noexcept
+{
+    if (auto* currentPlayHead = getPlayHead())
+    {
+        if (const auto pos = currentPlayHead->getPosition())
+        {
+            if (const auto bpm = pos->getBpm())
+            {
+                const auto bpmValue = static_cast<float>(*bpm);
+                if (bpmValue > 1.0f)
+                    hostBpm_.store(bpmValue, std::memory_order_relaxed);
+            }
+        }
+    }
+}
+
+float AudiocityAudioProcessor::lfoRateHzFromTempoSync(const int divisionIndex) const noexcept
+{
+    constexpr std::array<float, 12> beatsPerCycle{
+        0.25f,
+        1.0f / 6.0f,
+        0.375f,
+        0.5f,
+        1.0f / 3.0f,
+        0.75f,
+        1.0f,
+        2.0f / 3.0f,
+        1.5f,
+        2.0f,
+        4.0f,
+        8.0f
+    };
+    const auto idx = juce::jlimit(0, static_cast<int>(beatsPerCycle.size()) - 1, divisionIndex);
+    const auto bpm = juce::jmax(1.0f, hostBpm_.load(std::memory_order_relaxed));
+    return juce::jlimit(0.0f, 40.0f, (bpm / 60.0f) / beatsPerCycle[static_cast<std::size_t>(idx)]);
 }
 
 // ─── CC Mapping ────────────────────────────────────────────────────────────────

@@ -72,8 +72,19 @@ public:
         float keyTracking = 0.0f;      // -1..2 (-100%..200%)
         float velocityAmountHz = 0.0f; // Hz at velocity=1.0
         float lfoRateHz = 0.0f;        // 0 disables LFO
+        float lfoRateKeyTracking = 0.0f; // -1..2 (-100%..200%)
         float lfoAmountHz = 0.0f;      // bipolar modulation depth
+        float lfoAmountKeyTracking = 0.0f; // -1..2 (-100%..200%)
+        float lfoStartPhaseDegrees = 0.0f;
+        float lfoStartPhaseRandomDegrees = 0.0f;
+        float lfoFadeInMs = 0.0f;
+        bool lfoKeytrackLinear = false;
+        bool lfoUnipolar = false;
         LfoShape lfoShape = LfoShape::sine;
+        bool lfoRetrigger = true;
+        bool lfoTempoSync = false;
+        bool lfoRateKeytrackInTempoSync = true;
+        int lfoSyncDivision = 6;
     };
 
     void prepare(double sampleRate, int maxSamplesPerBlock, int outputChannels) noexcept;
@@ -166,6 +177,8 @@ private:
         juce::dsp::StateVariableTPTFilter<float> filterA;
         juce::dsp::StateVariableTPTFilter<float> filterB;
         float filterLfoPhase = 0.0f;
+        int filterLfoFadeSamplesTotal = 0;
+        int filterLfoFadeSamplesRemaining = 0;
         float glideTargetIncrement = 1.0f;
         int glideSamplesRemaining = 0;
         juce::ADSR ampEnvelope;
@@ -242,6 +255,7 @@ private:
     bool legatoMode_ = false;
     float glideSeconds_ = 0.0f;
     int chokeGroup_ = 0;
+    float globalFilterLfoPhase_ = 0.0f;
     QualityTier qualityTier_ = QualityTier::fidelity;
     VelocityCurve velocityCurve_ = VelocityCurve::linear;
     float reverbMix_ = 0.0f;

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <optional>
 
 namespace audiocity::engine
@@ -29,6 +30,24 @@ float computeLfoWave(const audiocity::engine::EngineCore::FilterSettings::LfoSha
         default:
             return std::sin(2.0f * kPi * p);
     }
+}
+
+float unitHashToFloat(std::uint32_t x) noexcept
+{
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return static_cast<float>(x) * (1.0f / 4294967295.0f);
+}
+
+float deterministicBipolarFromNoteAndOrder(const int noteNumber, const std::uint64_t startOrder) noexcept
+{
+    const auto seedA = static_cast<std::uint32_t>(noteNumber * 2654435761u);
+    const auto seedB = static_cast<std::uint32_t>((startOrder & 0xffffffffull) ^ (startOrder >> 32));
+    const auto unit = unitHashToFloat(seedA ^ seedB ^ 0x9e3779b9U);
+    return (2.0f * unit) - 1.0f;
 }
 
 std::optional<juce::String> getMetadataValueCaseInsensitive(const juce::StringPairArray& metadata,
@@ -137,6 +156,7 @@ void EngineCore::prepare(const double sampleRate, const int maxSamplesPerBlock, 
 
     voicePool_.prepare(maxSamplesPerBlock_);
     pendingEventCount_ = 0;
+    globalFilterLfoPhase_ = 0.0f;
 
     juce::dsp::ProcessSpec spec;
     spec.sampleRate = sampleRate_;
@@ -383,6 +403,16 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     {
         flushPendingEventsAtOffset(sampleIndex);
 
+        float globalLfoValue = 0.0f;
+        const bool hasActiveLfo = filterSettings_.lfoRateHz > 0.0f && std::abs(filterSettings_.lfoAmountHz) > 0.0001f;
+        if (hasActiveLfo)
+        {
+            globalLfoValue = computeLfoWave(filterSettings_.lfoShape, globalFilterLfoPhase_);
+            globalFilterLfoPhase_ += filterSettings_.lfoRateHz / static_cast<float>(sampleRate_);
+            if (globalFilterLfoPhase_ >= 1.0f)
+                globalFilterLfoPhase_ -= std::floor(globalFilterLfoPhase_);
+        }
+
         float mixed = 0.0f;
 
         for (int voiceIndex = 0; voiceIndex < static_cast<int>(VoicePool::maxVoices); ++voiceIndex)
@@ -462,12 +492,48 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
             }
 
             float lfoValue = 0.0f;
-            if (filterSettings_.lfoRateHz > 0.0f && std::abs(filterSettings_.lfoAmountHz) > 0.0001f)
+            if (hasActiveLfo)
             {
-                lfoValue = computeLfoWave(filterSettings_.lfoShape, voice.filterLfoPhase);
-                voice.filterLfoPhase += filterSettings_.lfoRateHz / static_cast<float>(sampleRate_);
-                if (voice.filterLfoPhase >= 1.0f)
-                    voice.filterLfoPhase -= std::floor(voice.filterLfoPhase);
+                if (filterSettings_.lfoRetrigger)
+                {
+                    lfoValue = computeLfoWave(filterSettings_.lfoShape, voice.filterLfoPhase);
+                    auto lfoRateKeyTrackRatio = 1.0f;
+                    if (!filterSettings_.lfoTempoSync || filterSettings_.lfoRateKeytrackInTempoSync)
+                    {
+                        const auto noteSemitoneOffset = static_cast<float>(voicePool_.noteAt(voiceIndex) - rootMidiNote_);
+                        if (filterSettings_.lfoKeytrackLinear)
+                        {
+                            lfoRateKeyTrackRatio = juce::jmax(0.0f,
+                                1.0f + (noteSemitoneOffset / 12.0f) * filterSettings_.lfoRateKeyTracking);
+                        }
+                        else
+                        {
+                            lfoRateKeyTrackRatio = std::pow(2.0f,
+                                (noteSemitoneOffset / 12.0f) * filterSettings_.lfoRateKeyTracking);
+                        }
+                    }
+                    const auto trackedLfoRateHz = juce::jlimit(0.0f, 40.0f,
+                        filterSettings_.lfoRateHz * lfoRateKeyTrackRatio);
+                    voice.filterLfoPhase += trackedLfoRateHz / static_cast<float>(sampleRate_);
+                    if (voice.filterLfoPhase >= 1.0f)
+                        voice.filterLfoPhase -= std::floor(voice.filterLfoPhase);
+                }
+                else
+                {
+                    lfoValue = globalLfoValue;
+                }
+
+                if (filterSettings_.lfoUnipolar)
+                    lfoValue = 0.5f * (lfoValue + 1.0f);
+
+                if (voice.filterLfoFadeSamplesTotal > 0 && voice.filterLfoFadeSamplesRemaining > 0)
+                {
+                    const auto remaining = static_cast<float>(voice.filterLfoFadeSamplesRemaining);
+                    const auto total = static_cast<float>(voice.filterLfoFadeSamplesTotal);
+                    const auto depthScale = juce::jlimit(0.0f, 1.0f, 1.0f - (remaining / total));
+                    lfoValue *= depthScale;
+                    --voice.filterLfoFadeSamplesRemaining;
+                }
             }
 
             float rawSample = readSampleLinear(*segments, voice.samplePosition);
@@ -577,8 +643,19 @@ void EngineCore::setFilterSettings(const FilterSettings& settings) noexcept
     filterSettings_.keyTracking = juce::jlimit(-1.0f, 2.0f, settings.keyTracking);
     filterSettings_.velocityAmountHz = juce::jmax(0.0f, settings.velocityAmountHz);
     filterSettings_.lfoRateHz = juce::jlimit(0.0f, 40.0f, settings.lfoRateHz);
+    filterSettings_.lfoRateKeyTracking = juce::jlimit(-1.0f, 2.0f, settings.lfoRateKeyTracking);
     filterSettings_.lfoAmountHz = juce::jlimit(-20000.0f, 20000.0f, settings.lfoAmountHz);
+    filterSettings_.lfoAmountKeyTracking = juce::jlimit(-1.0f, 2.0f, settings.lfoAmountKeyTracking);
+    filterSettings_.lfoStartPhaseDegrees = juce::jlimit(0.0f, 360.0f, settings.lfoStartPhaseDegrees);
+    filterSettings_.lfoStartPhaseRandomDegrees = juce::jlimit(0.0f, 180.0f, settings.lfoStartPhaseRandomDegrees);
+    filterSettings_.lfoFadeInMs = juce::jlimit(0.0f, 5000.0f, settings.lfoFadeInMs);
+    filterSettings_.lfoKeytrackLinear = settings.lfoKeytrackLinear;
+    filterSettings_.lfoUnipolar = settings.lfoUnipolar;
     filterSettings_.lfoShape = settings.lfoShape;
+    filterSettings_.lfoRetrigger = settings.lfoRetrigger;
+    filterSettings_.lfoTempoSync = settings.lfoTempoSync;
+    filterSettings_.lfoRateKeytrackInTempoSync = settings.lfoRateKeytrackInTempoSync;
+    filterSettings_.lfoSyncDivision = juce::jlimit(0, 11, settings.lfoSyncDivision);
     applyFilterParamsToVoices();
 }
 
@@ -697,7 +774,27 @@ void EngineCore::startVoice(const int voiceIndex, const int noteNumber, const fl
     voice.lastAmpLevel = 0.0f;
     voice.filterA.reset();
     voice.filterB.reset();
-    voice.filterLfoPhase = 0.0f;
+    if (filterSettings_.lfoRetrigger)
+    {
+        auto startPhase = filterSettings_.lfoStartPhaseDegrees;
+        if (filterSettings_.lfoStartPhaseRandomDegrees > 0.0f)
+        {
+            const auto startOrder = voicePool_.startOrderAt(voiceIndex);
+            const auto bipolar = deterministicBipolarFromNoteAndOrder(noteNumber, startOrder);
+            startPhase += bipolar * filterSettings_.lfoStartPhaseRandomDegrees;
+        }
+
+        auto phaseNorm = startPhase / 360.0f;
+        phaseNorm -= std::floor(phaseNorm);
+        voice.filterLfoPhase = phaseNorm;
+    }
+    else
+    {
+        voice.filterLfoPhase = globalFilterLfoPhase_;
+    }
+    voice.filterLfoFadeSamplesTotal = static_cast<int>(std::round(
+        (filterSettings_.lfoFadeInMs / 1000.0f) * static_cast<float>(sampleRate_)));
+    voice.filterLfoFadeSamplesRemaining = voice.filterLfoFadeSamplesTotal;
 
     voice.ampEnvelope.reset();
     voice.ampEnvelope.noteOn();
@@ -743,6 +840,8 @@ void EngineCore::stopAllVoicesImmediate() noexcept
         voice.filterA.reset();
         voice.filterB.reset();
         voice.filterLfoPhase = 0.0f;
+        voice.filterLfoFadeSamplesTotal = 0;
+        voice.filterLfoFadeSamplesRemaining = 0;
         voice.glideSamplesRemaining = 0;
         voice.ampEnvelope.reset();
         voice.filterEnvelope.reset();
@@ -1100,12 +1199,16 @@ float EngineCore::computeFilterSample(const float inputSample,
                                       const float velocity,
                                       VoiceState& voice) const noexcept
 {
+    const auto semitoneOffset = static_cast<float>(noteNumber - rootMidiNote_);
+    const auto lfoAmountKeyTrackRatio = filterSettings_.lfoKeytrackLinear
+        ? juce::jmax(0.0f, 1.0f + (semitoneOffset / 12.0f) * filterSettings_.lfoAmountKeyTracking)
+        : std::pow(2.0f, (semitoneOffset / 12.0f) * filterSettings_.lfoAmountKeyTracking);
+
     auto cutoff = filterSettings_.baseCutoffHz
         + envValue * filterSettings_.envAmountHz
         + velocity * filterSettings_.velocityAmountHz
-        + lfoValue * filterSettings_.lfoAmountHz;
+        + lfoValue * (filterSettings_.lfoAmountHz * lfoAmountKeyTrackRatio);
 
-    const auto semitoneOffset = static_cast<float>(noteNumber - rootMidiNote_);
     const auto keyTrackRatio = std::pow(2.0f, (semitoneOffset / 12.0f) * filterSettings_.keyTracking);
     cutoff *= keyTrackRatio;
     cutoff = juce::jlimit(20.0f, static_cast<float>(sampleRate_ * 0.45), cutoff);

@@ -1495,6 +1495,609 @@ bool runFilterLfoShapeDifferenceTest()
     return !buffersAreEqual(sine, square, 1.0e-6f);
 }
 
+bool runFilterLfoTempoSyncSettingsTest()
+{
+    audiocity::engine::EngineCore engine;
+    engine.prepare(48000.0, 128, 2);
+
+    auto filter = engine.getFilterSettings();
+    filter.lfoTempoSync = true;
+    filter.lfoSyncDivision = 11;
+    filter.lfoRateHz = 7.5f;
+    filter.lfoAmountHz = 1200.0f;
+    engine.setFilterSettings(filter);
+
+    const auto applied = engine.getFilterSettings();
+    if (!applied.lfoTempoSync)
+        return false;
+
+    if (applied.lfoSyncDivision != 11)
+        return false;
+
+    return std::abs(applied.lfoRateHz - 7.5f) < 1.0e-6f;
+}
+
+bool runFilterLfoRetriggerDifferenceTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> brightSample(1, 4096);
+    for (int i = 0; i < brightSample.getNumSamples(); ++i)
+    {
+        const auto low = std::sin(2.0 * juce::MathConstants<double>::pi * i * 170.0 / sampleRate);
+        const auto high = 0.75 * std::sin(2.0 * juce::MathConstants<double>::pi * i * 5000.0 / sampleRate);
+        brightSample.setSample(0, i, static_cast<float>(0.25 * low + high));
+    }
+
+    auto renderSecondAttack = [&](const bool retrigger)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(brightSample, sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::gate);
+
+        audiocity::engine::EngineCore::AdsrSettings adsr;
+        adsr.attackSeconds = 0.0001f;
+        adsr.decaySeconds = 0.001f;
+        adsr.sustainLevel = 1.0f;
+        adsr.releaseSeconds = 0.01f;
+        engine.setAmpEnvelope(adsr);
+
+        audiocity::engine::EngineCore::FilterSettings filter;
+        filter.mode = audiocity::engine::EngineCore::FilterSettings::Mode::lowPass12;
+        filter.baseCutoffHz = 950.0f;
+        filter.envAmountHz = 0.0f;
+        filter.resonance = 0.1f;
+        filter.lfoRateHz = 4.0f;
+        filter.lfoAmountHz = 2800.0f;
+        filter.lfoShape = audiocity::engine::EngineCore::FilterSettings::LfoShape::sine;
+        filter.lfoRetrigger = retrigger;
+        engine.setFilterSettings(filter);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        for (int i = 0; i < 8; ++i)
+            engine.render(block, midi);
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+        return block;
+    };
+
+    const auto retrigSecondAttack = renderSecondAttack(true);
+    const auto freeRunSecondAttack = renderSecondAttack(false);
+    return !buffersAreEqual(retrigSecondAttack, freeRunSecondAttack, 1.0e-6f);
+}
+
+bool runFilterLfoStartPhaseDifferenceTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> brightSample(1, 4096);
+    for (int i = 0; i < brightSample.getNumSamples(); ++i)
+    {
+        const auto low = std::sin(2.0 * juce::MathConstants<double>::pi * i * 150.0 / sampleRate);
+        const auto high = 0.8 * std::sin(2.0 * juce::MathConstants<double>::pi * i * 5400.0 / sampleRate);
+        brightSample.setSample(0, i, static_cast<float>(0.2 * low + high));
+    }
+
+    auto renderSecondAttack = [&](const float startPhaseDegrees)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(brightSample, sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::gate);
+
+        audiocity::engine::EngineCore::AdsrSettings adsr;
+        adsr.attackSeconds = 0.0001f;
+        adsr.decaySeconds = 0.001f;
+        adsr.sustainLevel = 1.0f;
+        adsr.releaseSeconds = 0.01f;
+        engine.setAmpEnvelope(adsr);
+
+        audiocity::engine::EngineCore::FilterSettings filter;
+        filter.mode = audiocity::engine::EngineCore::FilterSettings::Mode::lowPass12;
+        filter.baseCutoffHz = 900.0f;
+        filter.envAmountHz = 0.0f;
+        filter.resonance = 0.1f;
+        filter.lfoRateHz = 4.0f;
+        filter.lfoAmountHz = 3000.0f;
+        filter.lfoShape = audiocity::engine::EngineCore::FilterSettings::LfoShape::sine;
+        filter.lfoRetrigger = true;
+        filter.lfoStartPhaseDegrees = startPhaseDegrees;
+        engine.setFilterSettings(filter);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        for (int i = 0; i < 8; ++i)
+            engine.render(block, midi);
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+        return block;
+    };
+
+    const auto phaseZero = renderSecondAttack(0.0f);
+    const auto phaseQuarter = renderSecondAttack(90.0f);
+    return !buffersAreEqual(phaseZero, phaseQuarter, 1.0e-6f);
+}
+
+bool runFilterLfoFadeInDifferenceTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> brightSample(1, 4096);
+    for (int i = 0; i < brightSample.getNumSamples(); ++i)
+    {
+        const auto low = std::sin(2.0 * juce::MathConstants<double>::pi * i * 140.0 / sampleRate);
+        const auto high = 0.8 * std::sin(2.0 * juce::MathConstants<double>::pi * i * 5600.0 / sampleRate);
+        brightSample.setSample(0, i, static_cast<float>(0.2 * low + high));
+    }
+
+    auto renderSecondAttack = [&](const float fadeInMs)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(brightSample, sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::gate);
+
+        audiocity::engine::EngineCore::AdsrSettings adsr;
+        adsr.attackSeconds = 0.0001f;
+        adsr.decaySeconds = 0.001f;
+        adsr.sustainLevel = 1.0f;
+        adsr.releaseSeconds = 0.01f;
+        engine.setAmpEnvelope(adsr);
+
+        audiocity::engine::EngineCore::FilterSettings filter;
+        filter.mode = audiocity::engine::EngineCore::FilterSettings::Mode::lowPass12;
+        filter.baseCutoffHz = 900.0f;
+        filter.envAmountHz = 0.0f;
+        filter.resonance = 0.1f;
+        filter.lfoRateHz = 6.0f;
+        filter.lfoAmountHz = 3200.0f;
+        filter.lfoShape = audiocity::engine::EngineCore::FilterSettings::LfoShape::sine;
+        filter.lfoRetrigger = true;
+        filter.lfoStartPhaseDegrees = 90.0f;
+        filter.lfoFadeInMs = fadeInMs;
+        engine.setFilterSettings(filter);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        for (int i = 0; i < 8; ++i)
+            engine.render(block, midi);
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+        return block;
+    };
+
+    const auto instant = renderSecondAttack(0.0f);
+    const auto faded = renderSecondAttack(250.0f);
+    return !buffersAreEqual(instant, faded, 1.0e-6f);
+}
+
+bool runFilterLfoStartRandomDifferenceTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> brightSample(1, 4096);
+    for (int i = 0; i < brightSample.getNumSamples(); ++i)
+    {
+        const auto low = std::sin(2.0 * juce::MathConstants<double>::pi * i * 145.0 / sampleRate);
+        const auto high = 0.8 * std::sin(2.0 * juce::MathConstants<double>::pi * i * 5450.0 / sampleRate);
+        brightSample.setSample(0, i, static_cast<float>(0.2 * low + high));
+    }
+
+    auto renderSecondAttack = [&](const float randomDegrees)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(brightSample, sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::gate);
+
+        audiocity::engine::EngineCore::AdsrSettings adsr;
+        adsr.attackSeconds = 0.0001f;
+        adsr.decaySeconds = 0.001f;
+        adsr.sustainLevel = 1.0f;
+        adsr.releaseSeconds = 0.01f;
+        engine.setAmpEnvelope(adsr);
+
+        audiocity::engine::EngineCore::FilterSettings filter;
+        filter.mode = audiocity::engine::EngineCore::FilterSettings::Mode::lowPass12;
+        filter.baseCutoffHz = 900.0f;
+        filter.envAmountHz = 0.0f;
+        filter.resonance = 0.1f;
+        filter.lfoRateHz = 5.0f;
+        filter.lfoAmountHz = 3200.0f;
+        filter.lfoShape = audiocity::engine::EngineCore::FilterSettings::LfoShape::sine;
+        filter.lfoRetrigger = true;
+        filter.lfoStartPhaseDegrees = 45.0f;
+        filter.lfoStartPhaseRandomDegrees = randomDegrees;
+        engine.setFilterSettings(filter);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        for (int i = 0; i < 8; ++i)
+            engine.render(block, midi);
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+        return block;
+    };
+
+    const auto fixed = renderSecondAttack(0.0f);
+    const auto randomised = renderSecondAttack(120.0f);
+    return !buffersAreEqual(fixed, randomised, 1.0e-6f);
+}
+
+bool runFilterLfoAmountKeytrackingDifferenceTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> brightSample(1, 4096);
+    for (int i = 0; i < brightSample.getNumSamples(); ++i)
+    {
+        const auto low = std::sin(2.0 * juce::MathConstants<double>::pi * i * 155.0 / sampleRate);
+        const auto high = 0.8 * std::sin(2.0 * juce::MathConstants<double>::pi * i * 5300.0 / sampleRate);
+        brightSample.setSample(0, i, static_cast<float>(0.2 * low + high));
+    }
+
+    auto renderHighNoteSecondAttack = [&](const float lfoAmountKeytrack)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(brightSample, sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::gate);
+
+        audiocity::engine::EngineCore::AdsrSettings adsr;
+        adsr.attackSeconds = 0.0001f;
+        adsr.decaySeconds = 0.001f;
+        adsr.sustainLevel = 1.0f;
+        adsr.releaseSeconds = 0.01f;
+        engine.setAmpEnvelope(adsr);
+
+        audiocity::engine::EngineCore::FilterSettings filter;
+        filter.mode = audiocity::engine::EngineCore::FilterSettings::Mode::lowPass12;
+        filter.baseCutoffHz = 1000.0f;
+        filter.envAmountHz = 0.0f;
+        filter.resonance = 0.1f;
+        filter.lfoRateHz = 5.0f;
+        filter.lfoAmountHz = 2400.0f;
+        filter.lfoAmountKeyTracking = lfoAmountKeytrack;
+        filter.lfoShape = audiocity::engine::EngineCore::FilterSettings::LfoShape::sine;
+        filter.lfoRetrigger = true;
+        engine.setFilterSettings(filter);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 84, 1.0f), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::noteOff(1, 84), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        for (int i = 0; i < 8; ++i)
+            engine.render(block, midi);
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 84, 1.0f), 0);
+        engine.render(block, midi);
+        return block;
+    };
+
+    const auto neutral = renderHighNoteSecondAttack(0.0f);
+    const auto positiveTracked = renderHighNoteSecondAttack(1.0f);
+    return !buffersAreEqual(neutral, positiveTracked, 1.0e-6f);
+}
+
+bool runFilterLfoRateKeytrackingDifferenceTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> brightSample(1, 4096);
+    for (int i = 0; i < brightSample.getNumSamples(); ++i)
+    {
+        const auto low = std::sin(2.0 * juce::MathConstants<double>::pi * i * 150.0 / sampleRate);
+        const auto high = 0.8 * std::sin(2.0 * juce::MathConstants<double>::pi * i * 5200.0 / sampleRate);
+        brightSample.setSample(0, i, static_cast<float>(0.2 * low + high));
+    }
+
+    auto renderHighNoteSecondAttack = [&](const float lfoRateKeytrack)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(brightSample, sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::gate);
+
+        audiocity::engine::EngineCore::AdsrSettings adsr;
+        adsr.attackSeconds = 0.0001f;
+        adsr.decaySeconds = 0.001f;
+        adsr.sustainLevel = 1.0f;
+        adsr.releaseSeconds = 0.01f;
+        engine.setAmpEnvelope(adsr);
+
+        audiocity::engine::EngineCore::FilterSettings filter;
+        filter.mode = audiocity::engine::EngineCore::FilterSettings::Mode::lowPass12;
+        filter.baseCutoffHz = 1050.0f;
+        filter.envAmountHz = 0.0f;
+        filter.resonance = 0.1f;
+        filter.lfoRateHz = 2.0f;
+        filter.lfoRateKeyTracking = lfoRateKeytrack;
+        filter.lfoAmountHz = 2600.0f;
+        filter.lfoShape = audiocity::engine::EngineCore::FilterSettings::LfoShape::sine;
+        filter.lfoRetrigger = true;
+        engine.setFilterSettings(filter);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 84, 1.0f), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::noteOff(1, 84), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        for (int i = 0; i < 8; ++i)
+            engine.render(block, midi);
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 84, 1.0f), 0);
+        engine.render(block, midi);
+        return block;
+    };
+
+    const auto neutral = renderHighNoteSecondAttack(0.0f);
+    const auto positiveTracked = renderHighNoteSecondAttack(1.0f);
+    return !buffersAreEqual(neutral, positiveTracked, 1.0e-6f);
+}
+
+bool runFilterLfoRateKeytrackInTempoSyncToggleDifferenceTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> brightSample(1, 4096);
+    for (int i = 0; i < brightSample.getNumSamples(); ++i)
+    {
+        const auto low = std::sin(2.0 * juce::MathConstants<double>::pi * i * 150.0 / sampleRate);
+        const auto high = 0.8 * std::sin(2.0 * juce::MathConstants<double>::pi * i * 5100.0 / sampleRate);
+        brightSample.setSample(0, i, static_cast<float>(0.2 * low + high));
+    }
+
+    auto renderHighNoteSecondAttack = [&](const bool keytrackInSync)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(brightSample, sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::gate);
+
+        audiocity::engine::EngineCore::AdsrSettings adsr;
+        adsr.attackSeconds = 0.0001f;
+        adsr.decaySeconds = 0.001f;
+        adsr.sustainLevel = 1.0f;
+        adsr.releaseSeconds = 0.01f;
+        engine.setAmpEnvelope(adsr);
+
+        audiocity::engine::EngineCore::FilterSettings filter;
+        filter.mode = audiocity::engine::EngineCore::FilterSettings::Mode::lowPass12;
+        filter.baseCutoffHz = 1000.0f;
+        filter.envAmountHz = 0.0f;
+        filter.resonance = 0.1f;
+        filter.lfoRateHz = 3.0f;
+        filter.lfoRateKeyTracking = 1.0f;
+        filter.lfoAmountHz = 2600.0f;
+        filter.lfoShape = audiocity::engine::EngineCore::FilterSettings::LfoShape::sine;
+        filter.lfoRetrigger = true;
+        filter.lfoTempoSync = true;
+        filter.lfoRateKeytrackInTempoSync = keytrackInSync;
+        engine.setFilterSettings(filter);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 84, 1.0f), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::noteOff(1, 84), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        for (int i = 0; i < 8; ++i)
+            engine.render(block, midi);
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 84, 1.0f), 0);
+        engine.render(block, midi);
+        return block;
+    };
+
+    const auto disabled = renderHighNoteSecondAttack(false);
+    const auto enabled = renderHighNoteSecondAttack(true);
+    return !buffersAreEqual(disabled, enabled, 1.0e-6f);
+}
+
+bool runFilterLfoKeytrackCurveDifferenceTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> brightSample(1, 4096);
+    for (int i = 0; i < brightSample.getNumSamples(); ++i)
+    {
+        const auto low = std::sin(2.0 * juce::MathConstants<double>::pi * i * 170.0 / sampleRate);
+        const auto high = 0.8 * std::sin(2.0 * juce::MathConstants<double>::pi * i * 5000.0 / sampleRate);
+        brightSample.setSample(0, i, static_cast<float>(0.2 * low + high));
+    }
+
+    auto renderHighNoteSecondAttack = [&](const bool linearCurve)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(brightSample, sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::gate);
+
+        audiocity::engine::EngineCore::AdsrSettings adsr;
+        adsr.attackSeconds = 0.0001f;
+        adsr.decaySeconds = 0.001f;
+        adsr.sustainLevel = 1.0f;
+        adsr.releaseSeconds = 0.01f;
+        engine.setAmpEnvelope(adsr);
+
+        audiocity::engine::EngineCore::FilterSettings filter;
+        filter.mode = audiocity::engine::EngineCore::FilterSettings::Mode::lowPass12;
+        filter.baseCutoffHz = 980.0f;
+        filter.envAmountHz = 0.0f;
+        filter.resonance = 0.1f;
+        filter.lfoRateHz = 2.0f;
+        filter.lfoRateKeyTracking = 1.0f;
+        filter.lfoAmountHz = 2600.0f;
+        filter.lfoAmountKeyTracking = 1.0f;
+        filter.lfoShape = audiocity::engine::EngineCore::FilterSettings::LfoShape::sine;
+        filter.lfoRetrigger = true;
+        filter.lfoKeytrackLinear = linearCurve;
+        engine.setFilterSettings(filter);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 84, 1.0f), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::noteOff(1, 84), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        for (int i = 0; i < 8; ++i)
+            engine.render(block, midi);
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 84, 1.0f), 0);
+        engine.render(block, midi);
+        return block;
+    };
+
+    const auto exponential = renderHighNoteSecondAttack(false);
+    const auto linear = renderHighNoteSecondAttack(true);
+    return !buffersAreEqual(exponential, linear, 1.0e-6f);
+}
+
+bool runFilterLfoUnipolarDifferenceTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> brightSample(1, 4096);
+    for (int i = 0; i < brightSample.getNumSamples(); ++i)
+    {
+        const auto low = std::sin(2.0 * juce::MathConstants<double>::pi * i * 165.0 / sampleRate);
+        const auto high = 0.8 * std::sin(2.0 * juce::MathConstants<double>::pi * i * 5150.0 / sampleRate);
+        brightSample.setSample(0, i, static_cast<float>(0.2 * low + high));
+    }
+
+    auto renderSecondAttack = [&](const bool unipolar)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(brightSample, sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::gate);
+
+        audiocity::engine::EngineCore::AdsrSettings adsr;
+        adsr.attackSeconds = 0.0001f;
+        adsr.decaySeconds = 0.001f;
+        adsr.sustainLevel = 1.0f;
+        adsr.releaseSeconds = 0.01f;
+        engine.setAmpEnvelope(adsr);
+
+        audiocity::engine::EngineCore::FilterSettings filter;
+        filter.mode = audiocity::engine::EngineCore::FilterSettings::Mode::lowPass12;
+        filter.baseCutoffHz = 1020.0f;
+        filter.envAmountHz = 0.0f;
+        filter.resonance = 0.1f;
+        filter.lfoRateHz = 3.0f;
+        filter.lfoAmountHz = 2800.0f;
+        filter.lfoShape = audiocity::engine::EngineCore::FilterSettings::LfoShape::sine;
+        filter.lfoRetrigger = true;
+        filter.lfoUnipolar = unipolar;
+        engine.setFilterSettings(filter);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 72, 1.0f), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::noteOff(1, 72), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        for (int i = 0; i < 8; ++i)
+            engine.render(block, midi);
+
+        midi.addEvent(juce::MidiMessage::noteOn(1, 72, 1.0f), 0);
+        engine.render(block, midi);
+        return block;
+    };
+
+    const auto bipolar = renderSecondAttack(false);
+    const auto uni = renderSecondAttack(true);
+    return !buffersAreEqual(bipolar, uni, 1.0e-6f);
+}
+
 bool runUltraQualityDifferenceTest()
 {
     constexpr int channels = 2;
@@ -1657,6 +2260,36 @@ int main()
 
     if (!runFilterLfoShapeDifferenceTest())
         return 32;
+
+    if (!runFilterLfoTempoSyncSettingsTest())
+        return 33;
+
+    if (!runFilterLfoRetriggerDifferenceTest())
+        return 34;
+
+    if (!runFilterLfoStartPhaseDifferenceTest())
+        return 35;
+
+    if (!runFilterLfoFadeInDifferenceTest())
+        return 36;
+
+    if (!runFilterLfoStartRandomDifferenceTest())
+        return 37;
+
+    if (!runFilterLfoAmountKeytrackingDifferenceTest())
+        return 38;
+
+    if (!runFilterLfoRateKeytrackingDifferenceTest())
+        return 39;
+
+    if (!runFilterLfoRateKeytrackInTempoSyncToggleDifferenceTest())
+        return 40;
+
+    if (!runFilterLfoKeytrackCurveDifferenceTest())
+        return 41;
+
+    if (!runFilterLfoUnipolarDifferenceTest())
+        return 42;
 
     if (!runUltraQualityDifferenceTest())
         return 27;

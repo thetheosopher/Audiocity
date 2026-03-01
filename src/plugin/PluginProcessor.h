@@ -160,6 +160,8 @@ private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void syncEngineFromAutomatableParameters() noexcept;
     void updateParameterFromPlainValue(const juce::String& parameterId, float plainValue) noexcept;
+    void updateHostTempoFromPlayHead() noexcept;
+    [[nodiscard]] float lfoRateHzFromTempoSync(int divisionIndex) const noexcept;
 
     struct UiMidiEvent
     {
@@ -188,6 +190,7 @@ private:
     std::array<UiMidiEvent, kUiMidiFifoSize> uiMidiFifo_{};
     std::atomic<int> uiMidiWritePos_{ 0 };
     std::atomic<int> uiMidiReadPos_{ 0 };
+    std::atomic<float> hostBpm_{ 120.0f };
     void pushUiMidiEvent(int noteNumber, int velocity, bool isNoteOn) noexcept;
     [[nodiscard]] bool popUiMidiEvent(UiMidiEvent& out) noexcept;
 

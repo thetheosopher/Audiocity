@@ -221,9 +221,21 @@ private:
     juce::Label filterKeytrackSnapLabel_{ {}, "Key Snap" };
     juce::ComboBox filterKeytrackSnapCombo_;
     CcLearnDial filterLfoRateDial_{ "LFO Hz", 0, 40, 0.01, "Hz", 0 };
+    CcLearnDial filterLfoRateKeyDial_{ "LFO Rate %", -100, 200, 1, "%", 0 };
     CcLearnDial filterLfoAmtDial_{ "LFO Amt", -20000, 20000, 1, "Hz", 0 };
+    CcLearnDial filterLfoAmtKeyDial_{ "LFO Key %", -100, 200, 1, "%", 0 };
+    CcLearnDial filterLfoStartPhaseDial_{ "LFO Phase", 0, 360, 1, "\u00b0", 0 };
+    CcLearnDial filterLfoStartRandDial_{ "LFO Rand", 0, 180, 1, "\u00b0", 0 };
+    CcLearnDial filterLfoFadeInDial_{ "LFO Fade", 0, 5000, 1, "ms", 0 };
     juce::Label filterLfoShapeLabel_{ {}, "LFO Shape" };
     juce::ComboBox filterLfoShapeCombo_;
+    juce::ToggleButton filterLfoRetriggerToggle_{ "Retrig" };
+    juce::ToggleButton filterLfoTempoSyncToggle_{ "Sync" };
+    juce::ToggleButton filterLfoRateKeySyncToggle_{ "Key Sync" };
+    juce::ToggleButton filterLfoKeytrackLinearToggle_{ "Key Lin" };
+    juce::ToggleButton filterLfoUnipolarToggle_{ "Uni" };
+    juce::Label filterLfoDivisionLabel_{ {}, "LFO Div" };
+    juce::ComboBox filterLfoDivisionCombo_;
 
     // ── Output ──
     CcLearnDial fadeInDial_{ "Fade In", 0, 10000, 1 };

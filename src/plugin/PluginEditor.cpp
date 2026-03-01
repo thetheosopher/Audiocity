@@ -1099,7 +1099,12 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(filterKeytrackDial_);
     addAndMakeVisible(filterVelDial_);
     addAndMakeVisible(filterLfoRateDial_);
+    addAndMakeVisible(filterLfoRateKeyDial_);
     addAndMakeVisible(filterLfoAmtDial_);
+    addAndMakeVisible(filterLfoAmtKeyDial_);
+    addAndMakeVisible(filterLfoStartPhaseDial_);
+    addAndMakeVisible(filterLfoStartRandDial_);
+    addAndMakeVisible(filterLfoFadeInDial_);
     addAndMakeVisible(filterLfoShapeLabel_);
     filterLfoShapeLabel_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(filterLfoShapeCombo_);
@@ -1110,6 +1115,33 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     filterLfoShapeCombo_.addItem("Saw Down", 5);
     filterLfoShapeCombo_.setSelectedId(1, juce::dontSendNotification);
     filterLfoShapeCombo_.onChange = [this] { pushFilterSettings(); };
+    addAndMakeVisible(filterLfoRetriggerToggle_);
+    filterLfoRetriggerToggle_.onClick = [this] { pushFilterSettings(); };
+    addAndMakeVisible(filterLfoTempoSyncToggle_);
+    filterLfoTempoSyncToggle_.onClick = [this] { pushFilterSettings(); };
+    addAndMakeVisible(filterLfoRateKeySyncToggle_);
+    filterLfoRateKeySyncToggle_.onClick = [this] { pushFilterSettings(); };
+    addAndMakeVisible(filterLfoKeytrackLinearToggle_);
+    filterLfoKeytrackLinearToggle_.onClick = [this] { pushFilterSettings(); };
+    addAndMakeVisible(filterLfoUnipolarToggle_);
+    filterLfoUnipolarToggle_.onClick = [this] { pushFilterSettings(); };
+    addAndMakeVisible(filterLfoDivisionLabel_);
+    filterLfoDivisionLabel_.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(filterLfoDivisionCombo_);
+    filterLfoDivisionCombo_.addItem("1/16", 1);
+    filterLfoDivisionCombo_.addItem("1/16T", 2);
+    filterLfoDivisionCombo_.addItem("1/16.", 3);
+    filterLfoDivisionCombo_.addItem("1/8", 4);
+    filterLfoDivisionCombo_.addItem("1/8T", 5);
+    filterLfoDivisionCombo_.addItem("1/8.", 6);
+    filterLfoDivisionCombo_.addItem("1/4", 7);
+    filterLfoDivisionCombo_.addItem("1/4T", 8);
+    filterLfoDivisionCombo_.addItem("1/4.", 9);
+    filterLfoDivisionCombo_.addItem("1/2", 10);
+    filterLfoDivisionCombo_.addItem("1/1", 11);
+    filterLfoDivisionCombo_.addItem("2/1", 12);
+    filterLfoDivisionCombo_.setSelectedId(7, juce::dontSendNotification);
+    filterLfoDivisionCombo_.onChange = [this] { pushFilterSettings(); };
     addAndMakeVisible(filterKeytrackSnapLabel_);
     filterKeytrackSnapLabel_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(filterKeytrackSnapCombo_);
@@ -1146,7 +1178,12 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     filterKeytrackDial_.onValueChange = [this] { pushFilterSettings(); };
     filterVelDial_.onValueChange = [this] { pushFilterSettings(); };
     filterLfoRateDial_.onValueChange = [this] { pushFilterSettings(); };
+    filterLfoRateKeyDial_.onValueChange = [this] { pushFilterSettings(); };
     filterLfoAmtDial_.onValueChange = [this] { pushFilterSettings(); };
+    filterLfoAmtKeyDial_.onValueChange = [this] { pushFilterSettings(); };
+    filterLfoStartPhaseDial_.onValueChange = [this] { pushFilterSettings(); };
+    filterLfoStartRandDial_.onValueChange = [this] { pushFilterSettings(); };
+    filterLfoFadeInDial_.onValueChange = [this] { pushFilterSettings(); };
     filterAttackDial_.onValueChange = [this] { pushFilterEnvelope(); };
     filterDecayDial_.onValueChange = [this] { pushFilterEnvelope(); };
     filterSustainDial_.onValueChange = [this] { pushFilterEnvelope(); };
@@ -1238,7 +1275,12 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         { &filterKeytrackDial_, "filterKeytrack" },
         { &filterVelDial_,      "filterVel" },
         { &filterLfoRateDial_,  "filterLfoRate" },
+        { &filterLfoRateKeyDial_, "filterLfoRateKeytrack" },
         { &filterLfoAmtDial_,   "filterLfoAmount" },
+        { &filterLfoAmtKeyDial_, "filterLfoAmountKeytrack" },
+        { &filterLfoStartPhaseDial_, "filterLfoStartPhase" },
+        { &filterLfoStartRandDial_, "filterLfoStartRand" },
+        { &filterLfoFadeInDial_, "filterLfoFadeIn" },
         { &preloadDial_,        "preload" },
         { &reverbMixDial_,      "reverbMix" },
         { &fadeInDial_,         "fadeIn" },
@@ -1453,8 +1495,21 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
     filterKeytrackDial_.setValue(filter.keyTracking * 100.0f, juce::dontSendNotification);
     filterVelDial_.setValue(filter.velocityAmountHz, juce::dontSendNotification);
     filterLfoRateDial_.setValue(filter.lfoRateHz, juce::dontSendNotification);
+    filterLfoRateKeyDial_.setValue(filter.lfoRateKeyTracking * 100.0f, juce::dontSendNotification);
     filterLfoAmtDial_.setValue(filter.lfoAmountHz, juce::dontSendNotification);
+    filterLfoAmtKeyDial_.setValue(filter.lfoAmountKeyTracking * 100.0f, juce::dontSendNotification);
+    filterLfoStartPhaseDial_.setValue(filter.lfoStartPhaseDegrees, juce::dontSendNotification);
+    filterLfoStartRandDial_.setValue(filter.lfoStartPhaseRandomDegrees, juce::dontSendNotification);
+    filterLfoFadeInDial_.setValue(filter.lfoFadeInMs, juce::dontSendNotification);
     filterLfoShapeCombo_.setSelectedId(lfoShapeToComboId(filter.lfoShape), juce::dontSendNotification);
+    filterLfoRetriggerToggle_.setToggleState(filter.lfoRetrigger, juce::dontSendNotification);
+    filterLfoTempoSyncToggle_.setToggleState(filter.lfoTempoSync, juce::dontSendNotification);
+    filterLfoRateKeySyncToggle_.setToggleState(filter.lfoRateKeytrackInTempoSync, juce::dontSendNotification);
+    filterLfoDivisionCombo_.setSelectedId(filter.lfoSyncDivision + 1, juce::dontSendNotification);
+    filterLfoRateDial_.setEnabled(!filter.lfoTempoSync);
+    filterLfoRateKeySyncToggle_.setEnabled(filter.lfoTempoSync);
+    filterLfoDivisionLabel_.setEnabled(filter.lfoTempoSync);
+    filterLfoDivisionCombo_.setEnabled(filter.lfoTempoSync);
     filterTypeCombo_.setSelectedId(filterModeToComboId(filter.mode), juce::dontSendNotification);
 
     const auto filterEnv = processor_.getFilterEnvelope();
@@ -1531,9 +1586,21 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     filterKeytrackDial_.setVisible(showSampleTab);
     filterVelDial_.setVisible(showSampleTab);
     filterLfoRateDial_.setVisible(showSampleTab);
+    filterLfoRateKeyDial_.setVisible(showSampleTab);
     filterLfoAmtDial_.setVisible(showSampleTab);
+    filterLfoAmtKeyDial_.setVisible(showSampleTab);
+    filterLfoStartPhaseDial_.setVisible(showSampleTab);
+    filterLfoStartRandDial_.setVisible(showSampleTab);
+    filterLfoFadeInDial_.setVisible(showSampleTab);
     filterLfoShapeLabel_.setVisible(showSampleTab);
     filterLfoShapeCombo_.setVisible(showSampleTab);
+    filterLfoRetriggerToggle_.setVisible(showSampleTab);
+    filterLfoTempoSyncToggle_.setVisible(showSampleTab);
+    filterLfoRateKeySyncToggle_.setVisible(showSampleTab);
+    filterLfoKeytrackLinearToggle_.setVisible(showSampleTab);
+    filterLfoUnipolarToggle_.setVisible(showSampleTab);
+    filterLfoDivisionLabel_.setVisible(showSampleTab);
+    filterLfoDivisionCombo_.setVisible(showSampleTab);
     filterKeytrackSnapLabel_.setVisible(showSampleTab);
     filterKeytrackSnapCombo_.setVisible(showSampleTab);
     fadeInDial_.setVisible(showSampleTab);
@@ -2186,7 +2253,17 @@ void AudiocityAudioProcessorEditor::resized()
         filterEnvInner.removeFromLeft(kDialGap);
         filterLfoRateDial_.setBounds(filterEnvInner.removeFromLeft(kDial));
         filterEnvInner.removeFromLeft(kDialGap);
+        filterLfoRateKeyDial_.setBounds(filterEnvInner.removeFromLeft(kDial));
+        filterEnvInner.removeFromLeft(kDialGap);
         filterLfoAmtDial_.setBounds(filterEnvInner.removeFromLeft(kDial));
+        filterEnvInner.removeFromLeft(kDialGap);
+        filterLfoAmtKeyDial_.setBounds(filterEnvInner.removeFromLeft(kDial));
+        filterEnvInner.removeFromLeft(kDialGap);
+        filterLfoStartPhaseDial_.setBounds(filterEnvInner.removeFromLeft(kDial));
+        filterEnvInner.removeFromLeft(kDialGap);
+        filterLfoStartRandDial_.setBounds(filterEnvInner.removeFromLeft(kDial));
+        filterEnvInner.removeFromLeft(kDialGap);
+        filterLfoFadeInDial_.setBounds(filterEnvInner.removeFromLeft(kDial));
         filterEnvInner.removeFromLeft(kDialGap);
         auto keySnapArea = filterEnvInner.removeFromLeft(100);
         filterKeytrackSnapLabel_.setBounds(keySnapArea.removeFromTop(16));
@@ -2197,6 +2274,21 @@ void AudiocityAudioProcessorEditor::resized()
         filterLfoShapeLabel_.setBounds(lfoShapeArea.removeFromTop(16));
         lfoShapeArea.removeFromTop(2);
         filterLfoShapeCombo_.setBounds(lfoShapeArea.removeFromTop(24));
+        filterEnvInner.removeFromLeft(kDialGap);
+        auto lfoSyncArea = filterEnvInner.removeFromLeft(142);
+        filterLfoRetriggerToggle_.setBounds(lfoSyncArea.removeFromTop(20));
+        lfoSyncArea.removeFromTop(2);
+        filterLfoTempoSyncToggle_.setBounds(lfoSyncArea.removeFromTop(20));
+        lfoSyncArea.removeFromTop(2);
+        filterLfoRateKeySyncToggle_.setBounds(lfoSyncArea.removeFromTop(20));
+        lfoSyncArea.removeFromTop(2);
+        filterLfoKeytrackLinearToggle_.setBounds(lfoSyncArea.removeFromTop(20));
+        lfoSyncArea.removeFromTop(2);
+        filterLfoUnipolarToggle_.setBounds(lfoSyncArea.removeFromTop(20));
+        lfoSyncArea.removeFromTop(2);
+        filterLfoDivisionLabel_.setBounds(lfoSyncArea.removeFromTop(16));
+        lfoSyncArea.removeFromTop(2);
+        filterLfoDivisionCombo_.setBounds(lfoSyncArea.removeFromTop(24));
     }
 
     area.removeFromTop(kGrpGap);
@@ -2359,12 +2451,36 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Filter Velocity Amount - Extra cutoff added at high velocity");
     filterLfoRateDial_.setLabelTooltip(
         "Filter LFO Rate - Modulation speed in Hz");
+    filterLfoRateKeyDial_.setLabelTooltip(
+        "Filter LFO Rate Keytracking - Scales LFO speed across keyboard (-100% to 200%)");
     filterLfoAmtDial_.setLabelTooltip(
         "Filter LFO Amount - Bipolar cutoff modulation depth in Hz");
+    filterLfoAmtKeyDial_.setLabelTooltip(
+        "Filter LFO Amount Keytracking - Scales LFO depth across keyboard (-100% to 200%)");
+    filterLfoStartPhaseDial_.setLabelTooltip(
+        "Filter LFO Start Phase - Retrigger start offset in degrees (0 to 360)");
+    filterLfoStartRandDial_.setLabelTooltip(
+        "Filter LFO Start Random - Adds deterministic bipolar random offset per note");
+    filterLfoFadeInDial_.setLabelTooltip(
+        "Filter LFO Fade In - Time to ramp LFO depth from 0 to full per note");
     filterLfoShapeLabel_.setTooltip(
         "Filter LFO Shape - Waveform used for filter modulation");
     filterLfoShapeCombo_.setTooltip(
         "Filter LFO Shape - Choose Sine, Triangle, Square, Saw Up, or Saw Down");
+    filterLfoRetriggerToggle_.setTooltip(
+        "Filter LFO Retrigger - Restart LFO phase at note-on when enabled");
+    filterLfoTempoSyncToggle_.setTooltip(
+        "Filter LFO Tempo Sync - Locks LFO rate to host tempo using musical divisions");
+    filterLfoRateKeySyncToggle_.setTooltip(
+        "Filter LFO Key Sync - Apply LFO rate keytracking while tempo sync is enabled");
+    filterLfoKeytrackLinearToggle_.setTooltip(
+        "Filter LFO Key Linear - Use linear keytracking curve for LFO rate and amount when enabled");
+    filterLfoUnipolarToggle_.setTooltip(
+        "Filter LFO Unipolar - Convert LFO from bipolar (-1..1) to unipolar (0..1)");
+    filterLfoDivisionLabel_.setTooltip(
+        "Filter LFO Division - Note length used when tempo sync is enabled");
+    filterLfoDivisionCombo_.setTooltip(
+        "Filter LFO Division - Select 1/16 through 2/1 sync rates");
     filterKeytrackSnapLabel_.setTooltip(
         "Key Snap - Quick preset values for key tracking");
     filterKeytrackSnapCombo_.setTooltip(
@@ -2643,8 +2759,23 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     filterKeytrackDial_.setValue(filter.keyTracking * 100.0f);
     filterVelDial_.setValue(filter.velocityAmountHz);
     filterLfoRateDial_.setValue(filter.lfoRateHz);
+    filterLfoRateKeyDial_.setValue(filter.lfoRateKeyTracking * 100.0f);
     filterLfoAmtDial_.setValue(filter.lfoAmountHz);
+    filterLfoAmtKeyDial_.setValue(filter.lfoAmountKeyTracking * 100.0f);
+    filterLfoStartPhaseDial_.setValue(filter.lfoStartPhaseDegrees);
+    filterLfoStartRandDial_.setValue(filter.lfoStartPhaseRandomDegrees);
+    filterLfoFadeInDial_.setValue(filter.lfoFadeInMs);
     filterLfoShapeCombo_.setSelectedId(lfoShapeToComboId(filter.lfoShape), juce::dontSendNotification);
+    filterLfoRetriggerToggle_.setToggleState(filter.lfoRetrigger, juce::dontSendNotification);
+    filterLfoTempoSyncToggle_.setToggleState(filter.lfoTempoSync, juce::dontSendNotification);
+    filterLfoRateKeySyncToggle_.setToggleState(filter.lfoRateKeytrackInTempoSync, juce::dontSendNotification);
+    filterLfoKeytrackLinearToggle_.setToggleState(filter.lfoKeytrackLinear, juce::dontSendNotification);
+    filterLfoUnipolarToggle_.setToggleState(filter.lfoUnipolar, juce::dontSendNotification);
+    filterLfoDivisionCombo_.setSelectedId(filter.lfoSyncDivision + 1, juce::dontSendNotification);
+    filterLfoRateDial_.setEnabled(!filter.lfoTempoSync);
+    filterLfoRateKeySyncToggle_.setEnabled(filter.lfoTempoSync);
+    filterLfoDivisionLabel_.setEnabled(filter.lfoTempoSync);
+    filterLfoDivisionCombo_.setEnabled(filter.lfoTempoSync);
 
     const auto filterEnv = processor_.getFilterEnvelope();
     filterAttackDial_.setValue(filterEnv.attackSeconds * 1000.0f);
@@ -2768,8 +2899,19 @@ void AudiocityAudioProcessorEditor::pushFilterSettings()
     settings.keyTracking = juce::jlimit(-1.0f, 2.0f, static_cast<float>(filterKeytrackDial_.getValue()) / 100.0f);
     settings.velocityAmountHz = juce::jmax(0.0f, static_cast<float>(filterVelDial_.getValue()));
     settings.lfoRateHz = juce::jlimit(0.0f, 40.0f, static_cast<float>(filterLfoRateDial_.getValue()));
+    settings.lfoRateKeyTracking = juce::jlimit(-1.0f, 2.0f, static_cast<float>(filterLfoRateKeyDial_.getValue()) / 100.0f);
     settings.lfoAmountHz = juce::jlimit(-20000.0f, 20000.0f, static_cast<float>(filterLfoAmtDial_.getValue()));
+    settings.lfoAmountKeyTracking = juce::jlimit(-1.0f, 2.0f, static_cast<float>(filterLfoAmtKeyDial_.getValue()) / 100.0f);
+    settings.lfoStartPhaseDegrees = juce::jlimit(0.0f, 360.0f, static_cast<float>(filterLfoStartPhaseDial_.getValue()));
+    settings.lfoStartPhaseRandomDegrees = juce::jlimit(0.0f, 180.0f, static_cast<float>(filterLfoStartRandDial_.getValue()));
+    settings.lfoFadeInMs = juce::jlimit(0.0f, 5000.0f, static_cast<float>(filterLfoFadeInDial_.getValue()));
     settings.lfoShape = comboIdToLfoShape(filterLfoShapeCombo_.getSelectedId());
+    settings.lfoRetrigger = filterLfoRetriggerToggle_.getToggleState();
+    settings.lfoTempoSync = filterLfoTempoSyncToggle_.getToggleState();
+    settings.lfoRateKeytrackInTempoSync = filterLfoRateKeySyncToggle_.getToggleState();
+    settings.lfoKeytrackLinear = filterLfoKeytrackLinearToggle_.getToggleState();
+    settings.lfoUnipolar = filterLfoUnipolarToggle_.getToggleState();
+    settings.lfoSyncDivision = juce::jlimit(0, 11, filterLfoDivisionCombo_.getSelectedId() - 1);
     processor_.setFilterSettings(settings);
 }
 
