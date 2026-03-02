@@ -828,6 +828,18 @@ void AudiocityAudioProcessorEditor::WaveformView::resetView()
     repaint();
 }
 
+void AudiocityAudioProcessorEditor::WaveformView::setViewRange(const int viewStartSample, const int viewSampleCount)
+{
+    viewStartSample_ = juce::jmax(0, viewStartSample);
+    viewSampleCount_ = juce::jmax(0, viewSampleCount);
+
+    if (viewSampleCount_ <= 0)
+        viewSampleCount_ = juce::jmax(1, totalSamples_);
+
+    clampView();
+    repaint();
+}
+
 int AudiocityAudioProcessorEditor::WaveformView::sampleFromX(const float x) const noexcept
 {
     const auto width = juce::jmax(1.0f, static_cast<float>(getWidth()));
@@ -1368,8 +1380,8 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     tabBar_.addTab("Library", juce::Colour(0xff252538), &tabLibraryPage_, false);
     tabBar_.addTab("Player", juce::Colour(0xff252538), &tabPlayerPage_, false);
     tabBar_.addTab("Generate", juce::Colour(0xff252538), &tabGeneratePage_, false);
-    tabBar_.setCurrentTabIndex(0);
-    currentTabIndex_ = 0;
+    currentTabIndex_ = processor_.getEditorTabIndex();
+    tabBar_.setCurrentTabIndex(currentTabIndex_);
 
     addAndMakeVisible(sampleControlsViewport_);
     sampleControlsViewport_.setScrollBarsShown(true, false);
@@ -1443,6 +1455,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(generateTriangleButton_);
     addAndMakeVisible(generatePulseButton_);
     addAndMakeVisible(generateRandomButton_);
+    addAndMakeVisible(generateNoiseButton_);
     addAndMakeVisible(generateSamplesLabel_);
     addAndMakeVisible(generateSamplesCombo_);
     addAndMakeVisible(generateBitDepthLabel_);
@@ -1467,46 +1480,73 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         const auto sampleCount = 1 << power;
         generateSamplesCombo_.addItem(juce::String(sampleCount), sampleCount);
     }
-    generateSamplesCombo_.setSelectedId(512, juce::dontSendNotification);
-    generateSamplesCombo_.onChange = [this] { regenerateWaveform(); };
+    generateSamplesCombo_.setSelectedId(processor_.getGenerateSampleCount(), juce::dontSendNotification);
+    if (generateSamplesCombo_.getSelectedId() <= 0)
+        generateSamplesCombo_.setSelectedId(512, juce::dontSendNotification);
+    generateSamplesCombo_.onChange = [this]
+    {
+        processor_.setGenerateSampleCount(getSelectedGenerateSampleCount());
+        regenerateWaveform();
+    };
 
     generateBitDepthCombo_.addItem("8 bit", 8);
     generateBitDepthCombo_.addItem("16 bit", 16);
     generateBitDepthCombo_.addItem("24 bit", 24);
-    generateBitDepthCombo_.setSelectedId(16, juce::dontSendNotification);
-    generateBitDepthCombo_.onChange = [this] { regenerateWaveform(); };
+    generateBitDepthCombo_.setSelectedId(processor_.getGenerateBitDepth(), juce::dontSendNotification);
+    if (generateBitDepthCombo_.getSelectedId() <= 0)
+        generateBitDepthCombo_.setSelectedId(16, juce::dontSendNotification);
+    generateBitDepthCombo_.onChange = [this]
+    {
+        processor_.setGenerateBitDepth(getSelectedGenerateBitDepth());
+        regenerateWaveform();
+    };
 
     generateSketchSmoothingCombo_.addItem("Line", 1);
     generateSketchSmoothingCombo_.addItem("Curve", 2);
-    generateSketchSmoothingCombo_.setSelectedId(1, juce::dontSendNotification);
+    generateSketchSmoothingCombo_.setSelectedId(processor_.getGenerateSketchSmoothing(), juce::dontSendNotification);
+    if (generateSketchSmoothingCombo_.getSelectedId() <= 0)
+        generateSketchSmoothingCombo_.setSelectedId(1, juce::dontSendNotification);
+    selectedSketchSmoothing_ = generateSketchSmoothingCombo_.getSelectedId() == 2
+        ? SketchedWaveSmoothing::curve
+        : SketchedWaveSmoothing::line;
     generateSketchSmoothingCombo_.onChange = [this]
     {
+        processor_.setGenerateSketchSmoothing(generateSketchSmoothingCombo_.getSelectedId());
         selectedSketchSmoothing_ = generateSketchSmoothingCombo_.getSelectedId() == 2
             ? SketchedWaveSmoothing::curve
             : SketchedWaveSmoothing::line;
     };
 
     generatePulseWidthSlider_.setRange(1.0, 99.0, 1.0);
-    generatePulseWidthSlider_.setValue(20.0, juce::dontSendNotification);
+    generatePulseWidthSlider_.setValue(processor_.getGeneratePulseWidth(), juce::dontSendNotification);
     generatePulseWidthSlider_.setTextValueSuffix(" %");
     generatePulseWidthSlider_.onValueChange = [this]
     {
+        processor_.setGeneratePulseWidth(static_cast<float>(generatePulseWidthSlider_.getValue()));
         regenerateWaveform();
     };
 
     for (int midi = 0; midi <= 127; ++midi)
         generateFrequencyCombo_.addItem(formatMidiNoteName(midi), midi + 1);
-    generateFrequencyCombo_.setSelectedId(61, juce::dontSendNotification);
+    generateFrequencyCombo_.setSelectedId(processor_.getGenerateFrequencyMidiNote() + 1, juce::dontSendNotification);
+    if (generateFrequencyCombo_.getSelectedId() <= 0)
+        generateFrequencyCombo_.setSelectedId(61, juce::dontSendNotification);
     generateFrequencyCombo_.onChange = [this]
     {
+        const auto selected = generateFrequencyCombo_.getSelectedId();
+        if (selected > 0)
+            processor_.setGenerateFrequencyMidiNote(selected - 1);
         processor_.setGeneratedWaveformPreviewMidiNote(getSelectedGenerateMidiNote());
     };
+
+    selectedGeneratedWaveType_ = static_cast<GeneratedWaveType>(juce::jlimit(0, 7, processor_.getGenerateWaveType()));
 
     auto bindWaveButton = [this](juce::TextButton& button, const GeneratedWaveType type)
     {
         button.onClick = [this, type]
         {
             selectedGeneratedWaveType_ = type;
+            processor_.setGenerateWaveType(static_cast<int>(type));
             updateGeneratePulseWidthControlState();
             regenerateWaveform();
         };
@@ -1519,6 +1559,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     bindWaveButton(generateTriangleButton_, GeneratedWaveType::triangle);
     bindWaveButton(generatePulseButton_, GeneratedWaveType::pulse);
     bindWaveButton(generateRandomButton_, GeneratedWaveType::random);
+    bindWaveButton(generateNoiseButton_, GeneratedWaveType::noise);
 
     generatePreviewButton_.onClick = [this]
     {
@@ -1543,6 +1584,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         processor_.setRootMidiNote(selectedMidiNote);
         tabBar_.setCurrentTabIndex(0);
         currentTabIndex_ = 0;
+        processor_.setEditorTabIndex(currentTabIndex_);
         updateTabVisibility();
         resized();
         refreshUI(true);
@@ -1602,11 +1644,15 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(waveformDisplayModeCombo_);
     waveformDisplayModeCombo_.addItem("Signed", 1);
     waveformDisplayModeCombo_.addItem("Symmetric", 2);
-    waveformDisplayModeCombo_.setSelectedId(1, juce::dontSendNotification);
+    waveformDisplayModeCombo_.setSelectedId(processor_.getWaveformDisplayMode(), juce::dontSendNotification);
+    waveformView_.setDisplayMode(waveformDisplayModeCombo_.getSelectedId() == 2
+        ? WaveformView::DisplayMode::symmetricEnvelope
+        : WaveformView::DisplayMode::signedWaveform);
     waveformDisplayModeCombo_.setTooltip("Waveform Display Mode");
     waveformDisplayModeCombo_.onChange = [this]
     {
         const auto selected = waveformDisplayModeCombo_.getSelectedId();
+        processor_.setWaveformDisplayMode(selected);
         waveformView_.setDisplayMode(selected == 2
             ? WaveformView::DisplayMode::symmetricEnvelope
             : WaveformView::DisplayMode::signedWaveform);
@@ -2011,6 +2057,10 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(delayTempoSyncToggle_);
     addAndMakeVisible(dcFilterEnabledToggle_);
     addAndMakeVisible(dcFilterCutoffDial_);
+    addAndMakeVisible(autopanRateDial_);
+    addAndMakeVisible(autopanDepthDial_);
+    addAndMakeVisible(saturationDriveDial_);
+    addAndMakeVisible(saturationModeCombo_);
     masterVolumeDial_.setDoubleClickResetValue(100.0);
     panDial_.setDoubleClickResetValue(0.0);
     reverbMixDial_.setDoubleClickResetValue(0.0);
@@ -2018,6 +2068,14 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     delayFeedbackDial_.setDoubleClickResetValue(35.0);
     delayMixDial_.setDoubleClickResetValue(0.0);
     dcFilterCutoffDial_.setDoubleClickResetValue(10.0);
+    autopanRateDial_.setDoubleClickResetValue(0.5);
+    autopanDepthDial_.setDoubleClickResetValue(0.0);
+    saturationDriveDial_.setDoubleClickResetValue(0.0);
+    saturationModeCombo_.addItem("Soft Clip", 1);
+    saturationModeCombo_.addItem("Hard Clip", 2);
+    saturationModeCombo_.addItem("Tape", 3);
+    saturationModeCombo_.addItem("Tube", 4);
+    saturationModeCombo_.setSelectedId(1, juce::dontSendNotification);
     preloadDial_.onValueChange = [this]
     {
         processor_.setPreloadSamples(juce::jmax(256, static_cast<int>(preloadDial_.getValue())));
@@ -2041,6 +2099,10 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     delayTempoSyncToggle_.onClick = [this] { pushDelaySettings(); };
     dcFilterEnabledToggle_.onClick = [this] { pushDcFilterSettings(); };
     dcFilterCutoffDial_.onValueChange = [this] { pushDcFilterSettings(); };
+    autopanRateDial_.onValueChange = [this] { pushAutopanSettings(); };
+    autopanDepthDial_.onValueChange = [this] { pushAutopanSettings(); };
+    saturationDriveDial_.onValueChange = [this] { pushSaturationSettings(); };
+    saturationModeCombo_.onChange = [this] { pushSaturationSettings(); };
 
     // Reverse / Fade
     addAndMakeVisible(reverseToggle_);
@@ -2111,6 +2173,9 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         { &delayFeedbackDial_,  "delayFeedback" },
         { &delayMixDial_,       "delayMix" },
         { &dcFilterCutoffDial_, "dcFilterCutoff" },
+        { &autopanRateDial_,    "autopanRate" },
+        { &autopanDepthDial_,   "autopanDepth" },
+        { &saturationDriveDial_,"saturationDrive" },
         { &fadeInDial_,         "fadeIn" },
         { &fadeOutDial_,        "fadeOut" },
     };
@@ -2200,6 +2265,10 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addToSampleControls(delayTempoSyncToggle_);
     addToSampleControls(dcFilterEnabledToggle_);
     addToSampleControls(dcFilterCutoffDial_);
+    addToSampleControls(autopanRateDial_);
+    addToSampleControls(autopanDepthDial_);
+    addToSampleControls(saturationDriveDial_);
+    addToSampleControls(saturationModeCombo_);
     addToSampleControls(diagnosticsLabel_);
 
     setupTooltips();
@@ -2253,6 +2322,8 @@ void AudiocityAudioProcessorEditor::handleNoteOff(juce::MidiKeyboardState* sourc
 void AudiocityAudioProcessorEditor::timerCallback()
 {
     updateGeneratePreviewButtonText();
+
+    processor_.setWaveformViewRange(waveformView_.getViewStartSample(), waveformView_.getViewSampleCount());
 
     waveformView_.setVoicePlaybackPositions(processor_.getVoicePlaybackPositions());
 
@@ -2323,6 +2394,7 @@ void AudiocityAudioProcessorEditor::timerCallback()
     if (selectedTab != currentTabIndex_)
     {
         currentTabIndex_ = selectedTab;
+        processor_.setEditorTabIndex(currentTabIndex_);
         updateTabVisibility();
         resized();
         repaint();
@@ -2499,6 +2571,12 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
     const auto dcFilter = processor_.getDcFilterSettings();
     dcFilterEnabledToggle_.setToggleState(dcFilter.enabled, juce::dontSendNotification);
     dcFilterCutoffDial_.setValue(dcFilter.cutoffHz, juce::dontSendNotification);
+    const auto autopan = processor_.getAutopanSettings();
+    autopanRateDial_.setValue(autopan.rateHz, juce::dontSendNotification);
+    autopanDepthDial_.setValue(autopan.depth * 100.0f, juce::dontSendNotification);
+    const auto saturation = processor_.getSaturationSettings();
+    saturationDriveDial_.setValue(saturation.drive * 100.0f, juce::dontSendNotification);
+    saturationModeCombo_.setSelectedId(static_cast<int>(saturation.mode) + 1, juce::dontSendNotification);
 
     updateDiagnosticsStatusText();
 }
@@ -2600,6 +2678,10 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     delayTempoSyncToggle_.setVisible(showSampleTab);
     dcFilterEnabledToggle_.setVisible(showSampleTab);
     dcFilterCutoffDial_.setVisible(showSampleTab);
+    autopanRateDial_.setVisible(showSampleTab);
+    autopanDepthDial_.setVisible(showSampleTab);
+    saturationDriveDial_.setVisible(showSampleTab);
+    saturationModeCombo_.setVisible(showSampleTab);
     diagnosticsLabel_.setVisible(showSampleTab);
 
     playerKeyboardLabel_.setVisible(showPlayerTab);
@@ -2621,6 +2703,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     generateTriangleButton_.setVisible(showGenerateTab);
     generatePulseButton_.setVisible(showGenerateTab);
     generateRandomButton_.setVisible(showGenerateTab);
+    generateNoiseButton_.setVisible(showGenerateTab);
     generateSamplesLabel_.setVisible(showGenerateTab);
     generateSamplesCombo_.setVisible(showGenerateTab);
     generateBitDepthLabel_.setVisible(showGenerateTab);
@@ -2989,6 +3072,7 @@ void AudiocityAudioProcessorEditor::loadSampleFromBrowserRow(const int row)
     {
         tabBar_.setCurrentTabIndex(0);
         currentTabIndex_ = 0;
+        processor_.setEditorTabIndex(currentTabIndex_);
         updateTabVisibility();
         resized();
         repaint();
@@ -3173,6 +3257,8 @@ void AudiocityAudioProcessorEditor::resized()
         generatePulseButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
         waveButtons.removeFromLeft(kBtnGap);
         generateRandomButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
+        waveButtons.removeFromLeft(kBtnGap);
+        generateNoiseButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
 
         genArea.removeFromTop(10);
         auto settingsRow = genArea.removeFromTop(32);
@@ -3401,7 +3487,7 @@ void AudiocityAudioProcessorEditor::resized()
 
     // ── Panel 7: Effects ──
     {
-        constexpr int kEffectsPanelH = kRowH + 40;
+        constexpr int kEffectsPanelH = kRowH + 88;
         auto fxInner = makeGroup("Effects", kEffectsPanelH);
 
         auto fxDialRow = fxInner.removeFromTop(kDialH);
@@ -3423,19 +3509,32 @@ void AudiocityAudioProcessorEditor::resized()
 
         const auto dcFilterDialBounds = fxDialRow.removeFromLeft(kDial);
         dcFilterCutoffDial_.setBounds(dcFilterDialBounds);
+        fxDialRow.removeFromLeft(kDialGap);
 
-        fxInner.removeFromTop(12);
-        auto fxToggleRow = fxInner.removeFromTop(24);
+        autopanRateDial_.setBounds(fxDialRow.removeFromLeft(kDial));
+        fxDialRow.removeFromLeft(kDialGap);
+        const auto autopanDepthBounds = fxDialRow.removeFromLeft(kDial);
+        autopanDepthDial_.setBounds(autopanDepthBounds);
+        fxDialRow.removeFromLeft(kDialGap);
+        const auto saturationDriveBounds = fxDialRow.removeFromLeft(kDial);
+        saturationDriveDial_.setBounds(saturationDriveBounds);
+
+        fxInner.removeFromTop(10);
+        auto fxControlRow = fxInner.removeFromTop(24);
 
         constexpr int kDelaySyncW = 120;
         const auto delayClusterLeft = delayTimeBounds.getX();
         const auto delayClusterRight = delayMixBounds.getRight();
         const auto delaySyncX = delayClusterLeft + (delayClusterRight - delayClusterLeft - kDelaySyncW) / 2;
-        delayTempoSyncToggle_.setBounds(delaySyncX, fxToggleRow.getY(), kDelaySyncW, 24);
+        delayTempoSyncToggle_.setBounds(delaySyncX, fxControlRow.getY(), kDelaySyncW, 24);
 
         constexpr int kDcFilterW = 108;
         const auto dcFilterX = dcFilterDialBounds.getX() + (dcFilterDialBounds.getWidth() - kDcFilterW) / 2;
-        dcFilterEnabledToggle_.setBounds(dcFilterX, fxToggleRow.getY(), kDcFilterW, 24);
+        dcFilterEnabledToggle_.setBounds(dcFilterX, fxControlRow.getY(), kDcFilterW, 24);
+
+        constexpr int kSatModeW = 116;
+        const auto satModeX = saturationDriveBounds.getX() + (saturationDriveBounds.getWidth() - kSatModeW) / 2;
+        saturationModeCombo_.setBounds(satModeX, fxControlRow.getY(), kSatModeW, 24);
     }
 
     // ── Panel 8: Output ──
@@ -3766,6 +3865,22 @@ void AudiocityAudioProcessorEditor::regenerateWaveform()
         return;
     }
 
+    if (selectedGeneratedWaveType_ == GeneratedWaveType::noise)
+    {
+        juce::Random random(juce::Random::getSystemRandom().nextInt());
+        for (int i = 0; i < sampleCount; ++i)
+        {
+            const auto value = (random.nextFloat() * 2.0f) - 1.0f;
+            generatedWaveform_[static_cast<std::size_t>(i)] = quantizeWaveSample(value, bitDepth);
+        }
+
+        enforceWaveBoundaryZeroCrossings(generatedWaveform_);
+        generateWaveformView_.setWaveform(generatedWaveform_);
+        processor_.setGeneratedWaveformPreview(generatedWaveform_);
+        processor_.setGeneratedWaveformPreviewMidiNote(getSelectedGenerateMidiNote());
+        return;
+    }
+
     for (int i = 0; i < sampleCount; ++i)
     {
         const auto phase = static_cast<float>(i) / static_cast<float>(sampleCount);
@@ -3795,6 +3910,7 @@ void AudiocityAudioProcessorEditor::regenerateWaveform()
                 break;
             }
             case GeneratedWaveType::random:
+            case GeneratedWaveType::noise:
                 value = 0.0f;
                 break;
         }
@@ -3985,10 +4101,20 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Delay Sync - Quantize delay time to host tempo divisions");
     generateRandomButton_.setTooltip(
         "Random - Generate a random waveform from Bezier-curve anchor segments");
+    generateNoiseButton_.setTooltip(
+        "Noise - Generate random sample values across the waveform");
     dcFilterEnabledToggle_.setTooltip(
         "DC Filter - Enable a subsonic high-pass filter to remove DC offset");
     dcFilterCutoffDial_.setLabelTooltip(
         "DC HPF - Subsonic high-pass cutoff in Hz (5 to 20)");
+    autopanRateDial_.setLabelTooltip(
+        "Autopan Rate - Stereo modulation speed in Hz");
+    autopanDepthDial_.setLabelTooltip(
+        "Autopan Depth - Stereo modulation amount from 0% to 100%");
+    saturationDriveDial_.setLabelTooltip(
+        "Drive - Amount of post-filter waveshaper saturation (adds harmonic character with minimal CPU)");
+    saturationModeCombo_.setTooltip(
+        "Type - Select saturation character: Soft Clip (smooth), Hard Clip (aggressive), Tape (rounded), Tube (warm odd/even harmonics)");
     velocityCurveCombo_.setTooltip(
         "Velocity Curve - Response curve for velocity to amplitude");
     velocityCurveLabel_.setTooltip(
@@ -4158,12 +4284,21 @@ void AudiocityAudioProcessorEditor::showPadAssignmentDialog(const int padIndex)
 
 void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
 {
+    const auto persistedDisplayMode = processor_.getWaveformDisplayMode();
+    waveformDisplayModeCombo_.setSelectedId(persistedDisplayMode, juce::dontSendNotification);
+    waveformView_.setDisplayMode(persistedDisplayMode == 2
+        ? WaveformView::DisplayMode::symmetricEnvelope
+        : WaveformView::DisplayMode::signedWaveform);
+
     const auto path = processor_.getLoadedSamplePath();
+    const auto sampleIdentity = path.isNotEmpty()
+        ? (juce::String("file:") + path)
+        : (processor_.isGeneratedWaveformLoaded() ? juce::String("generated") : juce::String("none"));
     const auto sampleLabel = path.isNotEmpty()
         ? path
         : (processor_.isGeneratedWaveformLoaded() ? juce::String("Generated Waveform") : juce::String("No sample loaded"));
     samplePathLabel_.setText(sampleLabel, juce::dontSendNotification);
-    const auto isNewLoadedSample = path.isNotEmpty() && path != lastWaveformSamplePath_;
+    const auto isNewLoadedSample = sampleIdentity != lastWaveformSamplePath_;
 
     const bool isEditingRootNote = rootNoteCombo_.hasKeyboardFocus(true) || rootNoteCombo_.isPopupActive();
     if (!isEditingRootNote)
@@ -4211,9 +4346,16 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
         processor_.getLoadedSampleLoopFormatBadge());
 
     if (forceWaveformReset || isNewLoadedSample)
+    {
         waveformView_.resetView();
+    }
+    else
+    {
+        const auto [viewStart, viewCount] = processor_.getWaveformViewRange();
+        waveformView_.setViewRange(viewStart, viewCount);
+    }
 
-    lastWaveformSamplePath_ = path;
+    lastWaveformSamplePath_ = sampleIdentity;
 
     // Playback mode
     const auto playbackMode = processor_.getPlaybackMode();
@@ -4309,6 +4451,12 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     const auto dcFilter = processor_.getDcFilterSettings();
     dcFilterEnabledToggle_.setToggleState(dcFilter.enabled, juce::dontSendNotification);
     dcFilterCutoffDial_.setValue(dcFilter.cutoffHz, juce::dontSendNotification);
+    const auto autopan = processor_.getAutopanSettings();
+    autopanRateDial_.setValue(autopan.rateHz, juce::dontSendNotification);
+    autopanDepthDial_.setValue(autopan.depth * 100.0f, juce::dontSendNotification);
+    const auto saturation = processor_.getSaturationSettings();
+    saturationDriveDial_.setValue(saturation.drive * 100.0f, juce::dontSendNotification);
+    saturationModeCombo_.setSelectedId(static_cast<int>(saturation.mode) + 1, juce::dontSendNotification);
 
     const auto velCurve = processor_.getVelocityCurve();
     const bool isEditingVelocityCurve = velocityCurveCombo_.hasKeyboardFocus(true) || velocityCurveCombo_.isPopupActive();
@@ -4447,6 +4595,23 @@ void AudiocityAudioProcessorEditor::pushDcFilterSettings()
     settings.enabled = dcFilterEnabledToggle_.getToggleState();
     settings.cutoffHz = juce::jlimit(5.0f, 20.0f, static_cast<float>(dcFilterCutoffDial_.getValue()));
     processor_.setDcFilterSettings(settings);
+}
+
+void AudiocityAudioProcessorEditor::pushAutopanSettings()
+{
+    AudiocityAudioProcessor::AutopanSettings settings;
+    settings.rateHz = juce::jlimit(0.01f, 20.0f, static_cast<float>(autopanRateDial_.getValue()));
+    settings.depth = juce::jlimit(0.0f, 1.0f, static_cast<float>(autopanDepthDial_.getValue()) / 100.0f);
+    processor_.setAutopanSettings(settings);
+}
+
+void AudiocityAudioProcessorEditor::pushSaturationSettings()
+{
+    AudiocityAudioProcessor::SaturationSettings settings;
+    settings.drive = juce::jlimit(0.0f, 1.0f, static_cast<float>(saturationDriveDial_.getValue()) / 100.0f);
+    settings.mode = static_cast<AudiocityAudioProcessor::SaturationSettings::Mode>(juce::jlimit(0, 3,
+        saturationModeCombo_.getSelectedId() - 1));
+    processor_.setSaturationSettings(settings);
 }
 
 void AudiocityAudioProcessorEditor::pushPitchLfoSettings()

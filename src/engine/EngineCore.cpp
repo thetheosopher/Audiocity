@@ -206,6 +206,7 @@ void EngineCore::prepare(const double sampleRate, const int maxSamplesPerBlock, 
     globalFilterLfoPhase_ = 0.0f;
     globalAmpLfoPhase_ = 0.0f;
     globalPitchLfoPhase_ = 0.0f;
+    autopanPhase_ = 0.0f;
     currentPitchBendSemitones_ = 0.0f;
 
     juce::dsp::ProcessSpec spec;
@@ -252,6 +253,7 @@ void EngineCore::release() noexcept
     currentPitchBendSemitones_ = 0.0f;
     delayBuffer_.clear();
     delayWritePos_ = 0;
+    autopanPhase_ = 0.0f;
     for (auto& filter : dcBlockFilters_)
         filter.reset();
 }
@@ -278,6 +280,18 @@ void EngineCore::setDcFilterSettings(const DcFilterSettings& settings) noexcept
     const auto cutoff = dcFilterSettings_.cutoffHz;
     for (auto& filter : dcBlockFilters_)
         filter.setCutoffFrequency(cutoff);
+}
+
+void EngineCore::setAutopanSettings(const AutopanSettings& settings) noexcept
+{
+    autopanSettings_.rateHz = juce::jlimit(0.01f, 20.0f, settings.rateHz);
+    autopanSettings_.depth = juce::jlimit(0.0f, 1.0f, settings.depth);
+}
+
+void EngineCore::setSaturationSettings(const SaturationSettings& settings) noexcept
+{
+    saturationSettings_.drive = juce::jlimit(0.0f, 1.0f, settings.drive);
+    saturationSettings_.mode = settings.mode;
 }
 
 int EngineCore::getLoadedPreloadSamples() const noexcept
@@ -708,6 +722,8 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
             voice.samplePosition += voice.sampleIncrement * combinedPitchRatio;
         }
 
+        mixed = processSaturationSample(mixed);
+
         for (int channel = 0; channel < numChannels; ++channel)
             outputs[channel][sampleIndex] += mixed;
     }
@@ -715,13 +731,24 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     if (numChannels >= 2)
     {
         const auto clampedPan = juce::jlimit(-1.0f, 1.0f, pan_);
-        const auto leftGain = clampedPan > 0.0f ? (1.0f - clampedPan) : 1.0f;
-        const auto rightGain = clampedPan < 0.0f ? (1.0f + clampedPan) : 1.0f;
+        const auto autopanRateHz = juce::jlimit(0.01f, 20.0f, autopanSettings_.rateHz);
+        const auto autopanDepth = juce::jlimit(0.0f, 1.0f, autopanSettings_.depth);
+        const auto phaseInc = autopanRateHz / static_cast<float>(sampleRate_);
 
-        if (leftGain < 0.9999f)
-            juce::FloatVectorOperations::multiply(outputs[0], leftGain, numSamples);
-        if (rightGain < 0.9999f)
-            juce::FloatVectorOperations::multiply(outputs[1], rightGain, numSamples);
+        for (int sampleIndex = 0; sampleIndex < numSamples; ++sampleIndex)
+        {
+            const auto autopanOffset = std::sin(2.0f * juce::MathConstants<float>::pi * autopanPhase_) * autopanDepth;
+            const auto effectivePan = juce::jlimit(-1.0f, 1.0f, clampedPan + autopanOffset);
+            const auto leftGain = effectivePan > 0.0f ? (1.0f - effectivePan) : 1.0f;
+            const auto rightGain = effectivePan < 0.0f ? (1.0f + effectivePan) : 1.0f;
+
+            outputs[0][sampleIndex] *= leftGain;
+            outputs[1][sampleIndex] *= rightGain;
+
+            autopanPhase_ += phaseInc;
+            if (autopanPhase_ >= 1.0f)
+                autopanPhase_ -= std::floor(autopanPhase_);
+        }
     }
 
     if (reverbMix_ > 0.0001f)
@@ -780,6 +807,7 @@ void EngineCore::panic() noexcept
     currentPitchBendSemitones_ = 0.0f;
     delayBuffer_.clear();
     delayWritePos_ = 0;
+    autopanPhase_ = 0.0f;
     for (auto& filter : dcBlockFilters_)
         filter.reset();
 }
@@ -1616,6 +1644,40 @@ void EngineCore::processDcFilter(float** outputs, const int numChannels, const i
         for (int sample = 0; sample < numSamples; ++sample)
             channelData[sample] = filter.processSample(0, channelData[sample]);
     }
+}
+
+float EngineCore::processSaturationSample(const float sample) const noexcept
+{
+    const auto drive = juce::jlimit(0.0f, 1.0f, saturationSettings_.drive);
+    if (drive <= 1.0e-5f)
+        return sample;
+
+    const auto driveGain = 1.0f + drive * 9.0f;
+    const auto input = sample * driveGain;
+    float shaped = input;
+
+    switch (saturationSettings_.mode)
+    {
+        case SaturationSettings::Mode::hardClip:
+            shaped = juce::jlimit(-1.0f, 1.0f, input);
+            break;
+        case SaturationSettings::Mode::tape:
+            shaped = std::atan(input * 0.85f) * (2.0f / juce::MathConstants<float>::pi);
+            break;
+        case SaturationSettings::Mode::tube:
+        {
+            const auto cubic = input - (0.2f * input * input * input);
+            shaped = std::tanh(cubic);
+            break;
+        }
+        case SaturationSettings::Mode::softClip:
+        default:
+            shaped = std::tanh(input);
+            break;
+    }
+
+    const auto outputGain = 1.0f / (1.0f + drive * 0.55f);
+    return shaped * outputGain;
 }
 
 float EngineCore::computeSyncedDelayTimeMs(const float rawTimeMs) const noexcept

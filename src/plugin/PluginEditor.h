@@ -106,6 +106,9 @@ private:
         using VoicePlaybackPositions = std::array<int, audiocity::engine::VoicePool::maxVoices>;
         void setVoicePlaybackPositions(const VoicePlaybackPositions& positions);
         void resetView();
+        void setViewRange(int viewStartSample, int viewSampleCount);
+        [[nodiscard]] int getViewStartSample() const noexcept { return viewStartSample_; }
+        [[nodiscard]] int getViewSampleCount() const noexcept { return viewSampleCount_; }
         void setDisplayMode(DisplayMode mode)
         {
             displayMode_ = mode;
@@ -334,6 +337,7 @@ private:
     juce::TextButton generateTriangleButton_{ "Triangle" };
     juce::TextButton generatePulseButton_{ "Pulse" };
     juce::TextButton generateRandomButton_{ "Random" };
+    juce::TextButton generateNoiseButton_{ "Noise" };
     juce::Label generateSamplesLabel_{ {}, "Samples" };
     juce::ComboBox generateSamplesCombo_;
     juce::Label generateBitDepthLabel_{ {}, "Bit Depth" };
@@ -355,7 +359,8 @@ private:
         sawtooth,
         triangle,
         pulse,
-        random
+        random,
+        noise
     };
     enum class SketchedWaveSmoothing
     {
@@ -445,12 +450,17 @@ private:
     CcLearnDial panDial_{ "Pan", -100, 100, 1, {}, 0 };
     StereoPeakMeter outputLevelMeter_;
     CcLearnDial reverbMixDial_{ "Reverb", 0, 100, 1, "%", 0 };
-    CcLearnDial delayTimeDial_{ "Delay T", 1, 2000, 1, "ms", 320 };
-    CcLearnDial delayFeedbackDial_{ "Delay FB", 0, 95, 1, "%", 35 };
+    CcLearnDial delayTimeDial_{ "Delay Time", 1, 2000, 1, "ms", 320 };
+    CcLearnDial delayFeedbackDial_{ "Feedback", 0, 95, 1, "%", 35 };
     CcLearnDial delayMixDial_{ "Delay Mix", 0, 100, 1, "%", 0 };
     juce::ToggleButton delayTempoSyncToggle_{ "Delay Sync" };
     juce::ToggleButton dcFilterEnabledToggle_{ "DC Filter" };
     CcLearnDial dcFilterCutoffDial_{ "DC HPF", 5, 20, 0.1, "Hz", 10 };
+    CcLearnDial autopanRateDial_{ "Autopan Rate", 0.01, 20, 0.01, "Hz", 0.5 };
+    CcLearnDial autopanDepthDial_{ "Depth", 0, 100, 1, "%", 0 };
+    CcLearnDial saturationDriveDial_{ "Drive", 0, 100, 1, "%", 0 };
+    juce::Label saturationModeLabel_{ {}, "Sat Mode" };
+    juce::ComboBox saturationModeCombo_;
 
     // ── Diagnostics ──
     juce::Label diagnosticsLabel_;
@@ -475,6 +485,8 @@ private:
     void pushFilterSettings();
     void pushDelaySettings();
     void pushDcFilterSettings();
+    void pushAutopanSettings();
+    void pushSaturationSettings();
     void pushPerformanceControls();
     void syncCcMappingsFromProcessor();
     void setupTooltips();

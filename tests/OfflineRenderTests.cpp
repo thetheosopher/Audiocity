@@ -2998,6 +2998,175 @@ bool runPanBalanceTest()
         && fullRightLeft < centerLeft * 0.05f;
 }
 
+bool runAutopanStereoMotionTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double outputSampleRate = 48000.0;
+    constexpr int rootMidiNote = 60;
+    constexpr int cycleSamples = 512;
+    const auto targetHz = juce::MidiMessage::getMidiNoteInHertz(rootMidiNote);
+    const auto sourceSampleRate = targetHz * static_cast<double>(cycleSamples);
+
+    auto renderDiffStats = [&](const float depth)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(outputSampleRate, blockSize, channels);
+        engine.setSampleData(createOneCycleSine(cycleSamples), sourceSampleRate, rootMidiNote);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+        engine.setReverbMix(0.0f);
+        engine.setPan(0.0f);
+        engine.setMasterVolume(1.0f);
+
+        audiocity::engine::EngineCore::DelaySettings delay;
+        delay.mix = 0.0f;
+        engine.setDelaySettings(delay);
+
+        audiocity::engine::EngineCore::AutopanSettings autopan;
+        autopan.rateHz = 2.0f;
+        autopan.depth = juce::jlimit(0.0f, 1.0f, depth);
+        engine.setAutopanSettings(autopan);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        double absDiffSum = 0.0;
+        int counted = 0;
+        float maxDiff = -std::numeric_limits<float>::infinity();
+        float minDiff = std::numeric_limits<float>::infinity();
+
+        for (int blockIndex = 0; blockIndex < 90; ++blockIndex)
+        {
+            juce::MidiBuffer midi;
+            if (blockIndex == 0)
+                midi.addEvent(juce::MidiMessage::noteOn(1, rootMidiNote, 1.0f), 0);
+
+            engine.render(block, midi);
+
+            if (blockIndex < 8)
+                continue;
+
+            for (int sample = 0; sample < blockSize; ++sample)
+            {
+                const auto diff = block.getSample(0, sample) - block.getSample(1, sample);
+                absDiffSum += std::abs(diff);
+                ++counted;
+                maxDiff = juce::jmax(maxDiff, diff);
+                minDiff = juce::jmin(minDiff, diff);
+            }
+        }
+
+        struct Stats
+        {
+            float meanAbsDiff = 0.0f;
+            float minDiff = 0.0f;
+            float maxDiff = 0.0f;
+        };
+
+        Stats stats;
+        if (counted > 0)
+            stats.meanAbsDiff = static_cast<float>(absDiffSum / static_cast<double>(counted));
+        stats.minDiff = minDiff;
+        stats.maxDiff = maxDiff;
+        return stats;
+    };
+
+    const auto dry = renderDiffStats(0.0f);
+    const auto mod = renderDiffStats(0.85f);
+
+    return dry.meanAbsDiff < 0.003f
+        && mod.meanAbsDiff > 0.05f
+        && mod.maxDiff > 0.05f
+        && mod.minDiff < -0.05f;
+}
+
+bool runSaturationDriveAndModeTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double outputSampleRate = 48000.0;
+    constexpr int rootMidiNote = 60;
+    constexpr int cycleSamples = 512;
+    const auto targetHz = juce::MidiMessage::getMidiNoteInHertz(rootMidiNote);
+    const auto sourceSampleRate = targetHz * static_cast<double>(cycleSamples);
+
+    auto renderSignal = [&](const float drive,
+                            const audiocity::engine::EngineCore::SaturationSettings::Mode mode)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(outputSampleRate, blockSize, channels);
+        engine.setSampleData(createOneCycleSine(cycleSamples), sourceSampleRate, rootMidiNote);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+        engine.setReverbMix(0.0f);
+
+        audiocity::engine::EngineCore::DelaySettings delay;
+        delay.mix = 0.0f;
+        engine.setDelaySettings(delay);
+
+        audiocity::engine::EngineCore::AutopanSettings autopan;
+        autopan.depth = 0.0f;
+        engine.setAutopanSettings(autopan);
+
+        engine.setPan(0.0f);
+        engine.setMasterVolume(1.0f);
+
+        audiocity::engine::EngineCore::SaturationSettings sat;
+        sat.drive = drive;
+        sat.mode = mode;
+        engine.setSaturationSettings(sat);
+
+        std::vector<float> captured;
+        captured.reserve(static_cast<std::size_t>(blockSize * 80));
+        for (int blockIndex = 0; blockIndex < 80; ++blockIndex)
+        {
+            juce::AudioBuffer<float> block(channels, blockSize);
+            juce::MidiBuffer midi;
+            if (blockIndex == 0)
+                midi.addEvent(juce::MidiMessage::noteOn(1, rootMidiNote, 1.0f), 0);
+
+            engine.render(block, midi);
+
+            if (blockIndex < 8)
+                continue;
+
+            for (int sample = 0; sample < blockSize; ++sample)
+                captured.push_back(block.getSample(0, sample));
+        }
+
+        return captured;
+    };
+
+    const auto base = renderSignal(0.0f, audiocity::engine::EngineCore::SaturationSettings::Mode::softClip);
+    const auto drivenSoft = renderSignal(0.8f, audiocity::engine::EngineCore::SaturationSettings::Mode::softClip);
+    const auto drivenHard = renderSignal(0.8f, audiocity::engine::EngineCore::SaturationSettings::Mode::hardClip);
+    const auto drivenTape = renderSignal(0.8f, audiocity::engine::EngineCore::SaturationSettings::Mode::tape);
+    const auto drivenTube = renderSignal(0.8f, audiocity::engine::EngineCore::SaturationSettings::Mode::tube);
+
+    if (base.empty() || drivenSoft.empty() || drivenHard.empty() || drivenTape.empty() || drivenTube.empty())
+        return false;
+
+    auto meanAbsDifference = [](const std::vector<float>& a, const std::vector<float>& b)
+    {
+        const auto count = juce::jmin(static_cast<int>(a.size()), static_cast<int>(b.size()));
+        if (count <= 0)
+            return 0.0f;
+
+        double sum = 0.0;
+        for (int i = 0; i < count; ++i)
+            sum += std::abs(a[static_cast<std::size_t>(i)] - b[static_cast<std::size_t>(i)]);
+
+        return static_cast<float>(sum / static_cast<double>(count));
+    };
+
+    const auto diffDrive = meanAbsDifference(base, drivenSoft);
+    const auto diffHard = meanAbsDifference(drivenSoft, drivenHard);
+    const auto diffTape = meanAbsDifference(drivenSoft, drivenTape);
+    const auto diffTube = meanAbsDifference(drivenSoft, drivenTube);
+
+    return diffDrive > 0.01f
+        && diffHard > 0.002f
+        && diffTape > 0.002f
+        && diffTube > 0.002f;
+}
+
 bool runTuneCoarseFinePitchShiftTest()
 {
     constexpr int channels = 2;
@@ -3331,6 +3500,12 @@ int main()
 
     if (!runPanBalanceTest())
         return 51;
+
+    if (!runAutopanStereoMotionTest())
+        return 60;
+
+    if (!runSaturationDriveAndModeTest())
+        return 61;
 
     if (!runTuneCoarseFinePitchShiftTest())
         return 49;

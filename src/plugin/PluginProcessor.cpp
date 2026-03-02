@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -11,6 +12,7 @@ namespace
 {
 constexpr auto kPatchRoot = "AudiocityPatch";
 constexpr auto kSamplePath = "samplePath";
+constexpr auto kGeneratedWaveformData = "generatedWaveformData";
 constexpr auto kSampleBrowserRootFolder = "sampleBrowserRootFolder";
 constexpr auto kRootMidiNote = "rootMidiNote";
 constexpr auto kCoarseTuneSemitones = "coarseTuneSemitones";
@@ -61,6 +63,10 @@ constexpr auto kDelayMix = "delayMix";
 constexpr auto kDelayTempoSync = "delayTempoSync";
 constexpr auto kDcFilterEnabled = "dcFilterEnabled";
 constexpr auto kDcFilterCutoffHz = "dcFilterCutoffHz";
+constexpr auto kAutopanRateHz = "autopanRateHz";
+constexpr auto kAutopanDepth = "autopanDepth";
+constexpr auto kSaturationDrive = "saturationDrive";
+constexpr auto kSaturationMode = "saturationMode";
 constexpr auto kPan = "pan";
 constexpr auto kMasterVolume = "masterVolume";
 constexpr auto kPreloadSamples = "preloadSamples";
@@ -70,6 +76,16 @@ constexpr auto kGlideSeconds = "glideSeconds";
 constexpr auto kPolyphonyLimit = "polyphonyLimit";
 constexpr auto kSampleWindowStart = "sampleWindowStart";
 constexpr auto kSampleWindowEnd = "sampleWindowEnd";
+constexpr auto kWaveformViewStartSample = "waveformViewStartSample";
+constexpr auto kWaveformViewSampleCount = "waveformViewSampleCount";
+constexpr auto kEditorTabIndex = "editorTabIndex";
+constexpr auto kWaveformDisplayMode = "waveformDisplayMode";
+constexpr auto kGenerateWaveType = "generateWaveType";
+constexpr auto kGenerateSampleCount = "generateSampleCount";
+constexpr auto kGenerateBitDepth = "generateBitDepth";
+constexpr auto kGeneratePulseWidth = "generatePulseWidth";
+constexpr auto kGenerateFrequencyMidiNote = "generateFrequencyMidiNote";
+constexpr auto kGenerateSketchSmoothing = "generateSketchSmoothing";
 constexpr auto kLoopStart = "loopStart";
 constexpr auto kLoopEnd = "loopEnd";
 constexpr auto kLoopCrossfadeSamples = "loopCrossfadeSamples";
@@ -140,6 +156,10 @@ constexpr auto kParamDelayMix = "p_delayMix";
 constexpr auto kParamDelayTempoSync = "p_delayTempoSync";
 constexpr auto kParamDcFilterEnabled = "p_dcFilterEnabled";
 constexpr auto kParamDcFilterCutoff = "p_dcFilterCutoff";
+constexpr auto kParamAutopanRate = "p_autopanRate";
+constexpr auto kParamAutopanDepth = "p_autopanDepth";
+constexpr auto kParamSaturationDrive = "p_saturationDrive";
+constexpr auto kParamSaturationMode = "p_saturationMode";
 constexpr auto kParamPan = "p_pan";
 constexpr auto kParamMasterVolume = "p_masterVolume";
 constexpr float kMaxSamplePositionParam = 16000000.0f;
@@ -176,6 +196,8 @@ AudiocityAudioProcessor::AudiocityAudioProcessor()
     setReverbMix(engine_.getReverbMix());
     setDelaySettings(engine_.getDelaySettings());
     setDcFilterSettings(engine_.getDcFilterSettings());
+    setAutopanSettings(engine_.getAutopanSettings());
+    setSaturationSettings(engine_.getSaturationSettings());
     setPan(engine_.getPan());
     setMasterVolume(engine_.getMasterVolume());
 }
@@ -300,6 +322,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout AudiocityAudioProcessor::cre
     params.push_back(std::make_unique<juce::AudioParameterBool>(kParamDcFilterEnabled, "DC Filter Enabled", true));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamDcFilterCutoff, "DC Filter Cutoff",
         juce::NormalisableRange<float>(5.0f, 20.0f), 10.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamAutopanRate, "Autopan Rate",
+        juce::NormalisableRange<float>(0.01f, 20.0f), 0.5f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamAutopanDepth, "Autopan Depth",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamSaturationDrive, "Saturation Drive",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(kParamSaturationMode, "Saturation Mode",
+        juce::StringArray{ "Soft Clip", "Hard Clip", "Tape", "Tube" }, 0));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPan, "Pan",
         juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamMasterVolume, "Master Volume",
@@ -419,6 +449,17 @@ void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
     dcFilter.cutoffHz = apvts_.getRawParameterValue(kParamDcFilterCutoff)->load();
     engine_.setDcFilterSettings(dcFilter);
 
+    AutopanSettings autopan;
+    autopan.rateHz = apvts_.getRawParameterValue(kParamAutopanRate)->load();
+    autopan.depth = apvts_.getRawParameterValue(kParamAutopanDepth)->load();
+    engine_.setAutopanSettings(autopan);
+
+    SaturationSettings saturation;
+    saturation.drive = apvts_.getRawParameterValue(kParamSaturationDrive)->load();
+    saturation.mode = static_cast<SaturationSettings::Mode>(juce::jlimit(0, 3,
+        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamSaturationMode)->load()))));
+    engine_.setSaturationSettings(saturation);
+
     engine_.setPan(apvts_.getRawParameterValue(kParamPan)->load());
     engine_.setMasterVolume(apvts_.getRawParameterValue(kParamMasterVolume)->load());
 }
@@ -532,6 +573,22 @@ void AudiocityAudioProcessor::setDcFilterSettings(const DcFilterSettings& settin
     updateParameterFromPlainValue(kParamDcFilterCutoff, applied.cutoffHz);
 }
 
+void AudiocityAudioProcessor::setAutopanSettings(const AutopanSettings& settings) noexcept
+{
+    engine_.setAutopanSettings(settings);
+    const auto applied = engine_.getAutopanSettings();
+    updateParameterFromPlainValue(kParamAutopanRate, applied.rateHz);
+    updateParameterFromPlainValue(kParamAutopanDepth, applied.depth);
+}
+
+void AudiocityAudioProcessor::setSaturationSettings(const SaturationSettings& settings) noexcept
+{
+    engine_.setSaturationSettings(settings);
+    const auto applied = engine_.getSaturationSettings();
+    updateParameterFromPlainValue(kParamSaturationDrive, applied.drive);
+    updateParameterFromPlainValue(kParamSaturationMode, static_cast<float>(applied.mode));
+}
+
 void AudiocityAudioProcessor::setPan(const float pan) noexcept
 {
     engine_.setPan(pan);
@@ -607,6 +664,15 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     auto state = juce::ValueTree(kPatchRoot);
 
     state.setProperty(kSamplePath, engine_.getSamplePath(), nullptr);
+    {
+        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+        if (generatedWaveformLoaded_.load(std::memory_order_relaxed) && !generatedWaveformState_.empty())
+        {
+            juce::MemoryBlock generatedBytes(generatedWaveformState_.size() * sizeof(float));
+            std::memcpy(generatedBytes.getData(), generatedWaveformState_.data(), generatedBytes.getSize());
+            state.setProperty(kGeneratedWaveformData, juce::var(generatedBytes), nullptr);
+        }
+    }
     state.setProperty(kSampleBrowserRootFolder, sampleBrowserRootFolderPath_, nullptr);
     state.setProperty(kRootMidiNote, engine_.getRootMidiNote(), nullptr);
     state.setProperty(kCoarseTuneSemitones, engine_.getCoarseTuneSemitones(), nullptr);
@@ -673,6 +739,12 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     const auto dcFilter = getDcFilterSettings();
     state.setProperty(kDcFilterEnabled, dcFilter.enabled ? 1 : 0, nullptr);
     state.setProperty(kDcFilterCutoffHz, dcFilter.cutoffHz, nullptr);
+    const auto autopan = getAutopanSettings();
+    state.setProperty(kAutopanRateHz, autopan.rateHz, nullptr);
+    state.setProperty(kAutopanDepth, autopan.depth, nullptr);
+    const auto saturation = getSaturationSettings();
+    state.setProperty(kSaturationDrive, saturation.drive, nullptr);
+    state.setProperty(kSaturationMode, static_cast<int>(saturation.mode), nullptr);
     state.setProperty(kPan, getPan(), nullptr);
     state.setProperty(kMasterVolume, getMasterVolume(), nullptr);
     state.setProperty(kPreloadSamples, getPreloadSamples(), nullptr);
@@ -682,6 +754,16 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kPolyphonyLimit, getPolyphonyLimit(), nullptr);
     state.setProperty(kSampleWindowStart, getSampleWindowStart(), nullptr);
     state.setProperty(kSampleWindowEnd, getSampleWindowEnd(), nullptr);
+    state.setProperty(kWaveformViewStartSample, waveformViewStartSample_.load(std::memory_order_relaxed), nullptr);
+    state.setProperty(kWaveformViewSampleCount, waveformViewSampleCount_.load(std::memory_order_relaxed), nullptr);
+    state.setProperty(kEditorTabIndex, editorTabIndex_.load(std::memory_order_relaxed), nullptr);
+    state.setProperty(kWaveformDisplayMode, waveformDisplayMode_.load(std::memory_order_relaxed), nullptr);
+    state.setProperty(kGenerateWaveType, generateWaveType_.load(std::memory_order_relaxed), nullptr);
+    state.setProperty(kGenerateSampleCount, generateSampleCount_.load(std::memory_order_relaxed), nullptr);
+    state.setProperty(kGenerateBitDepth, generateBitDepth_.load(std::memory_order_relaxed), nullptr);
+    state.setProperty(kGeneratePulseWidth, generatePulseWidth_.load(std::memory_order_relaxed), nullptr);
+    state.setProperty(kGenerateFrequencyMidiNote, generateFrequencyMidiNote_.load(std::memory_order_relaxed), nullptr);
+    state.setProperty(kGenerateSketchSmoothing, generateSketchSmoothing_.load(std::memory_order_relaxed), nullptr);
     state.setProperty(kLoopStart, getLoopStart(), nullptr);
     state.setProperty(kLoopEnd, getLoopEnd(), nullptr);
     state.setProperty(kLoopCrossfadeSamples, getLoopCrossfadeSamples(), nullptr);
@@ -734,8 +816,34 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
         return;
 
     const auto samplePath = state.getProperty(kSamplePath).toString();
+    const auto storedRootMidiNote = static_cast<int>(state.getProperty(kRootMidiNote, engine_.getRootMidiNote()));
+
+    bool restoredSample = false;
     if (samplePath.isNotEmpty())
-        loadSampleFromFile(juce::File(samplePath));
+        restoredSample = loadSampleFromFile(juce::File(samplePath));
+
+    if (!restoredSample)
+    {
+        if (const auto* generatedData = state.getProperty(kGeneratedWaveformData).getBinaryData(); generatedData != nullptr)
+        {
+            const auto totalBytes = generatedData->getSize();
+            if (totalBytes >= sizeof(float) && (totalBytes % sizeof(float)) == 0)
+            {
+                const auto sampleCount = static_cast<std::size_t>(totalBytes / sizeof(float));
+                std::vector<float> waveform(sampleCount, 0.0f);
+                std::memcpy(waveform.data(), generatedData->getData(), totalBytes);
+                loadGeneratedWaveformAsSample(waveform, storedRootMidiNote);
+                restoredSample = true;
+            }
+        }
+    }
+
+    if (!restoredSample)
+    {
+        generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+        generatedWaveformState_.clear();
+    }
 
     sampleBrowserRootFolderPath_ = state.getProperty(kSampleBrowserRootFolder, {}).toString();
 
@@ -815,6 +923,15 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     dcFilter.enabled = static_cast<int>(state.getProperty(kDcFilterEnabled, dcFilter.enabled ? 1 : 0)) == 1;
     dcFilter.cutoffHz = static_cast<float>(state.getProperty(kDcFilterCutoffHz, dcFilter.cutoffHz));
     setDcFilterSettings(dcFilter);
+    AutopanSettings autopan = getAutopanSettings();
+    autopan.rateHz = static_cast<float>(state.getProperty(kAutopanRateHz, autopan.rateHz));
+    autopan.depth = static_cast<float>(state.getProperty(kAutopanDepth, autopan.depth));
+    setAutopanSettings(autopan);
+    SaturationSettings saturation = getSaturationSettings();
+    saturation.drive = static_cast<float>(state.getProperty(kSaturationDrive, saturation.drive));
+    saturation.mode = static_cast<SaturationSettings::Mode>(juce::jlimit(0, 3,
+        static_cast<int>(state.getProperty(kSaturationMode, static_cast<int>(saturation.mode)))));
+    setSaturationSettings(saturation);
     setPan(static_cast<float>(state.getProperty(kPan, getPan())));
     setMasterVolume(static_cast<float>(state.getProperty(kMasterVolume, getMasterVolume())));
     setPreloadSamples(static_cast<int>(state.getProperty(kPreloadSamples, getPreloadSamples())));
@@ -825,6 +942,17 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     setSampleWindow(
         static_cast<int>(state.getProperty(kSampleWindowStart, getSampleWindowStart())),
         static_cast<int>(state.getProperty(kSampleWindowEnd, getSampleWindowEnd())));
+    setWaveformViewRange(
+        static_cast<int>(state.getProperty(kWaveformViewStartSample, waveformViewStartSample_.load(std::memory_order_relaxed))),
+        static_cast<int>(state.getProperty(kWaveformViewSampleCount, waveformViewSampleCount_.load(std::memory_order_relaxed))));
+    setEditorTabIndex(static_cast<int>(state.getProperty(kEditorTabIndex, editorTabIndex_.load(std::memory_order_relaxed))));
+    setWaveformDisplayMode(static_cast<int>(state.getProperty(kWaveformDisplayMode, waveformDisplayMode_.load(std::memory_order_relaxed))));
+    setGenerateWaveType(static_cast<int>(state.getProperty(kGenerateWaveType, generateWaveType_.load(std::memory_order_relaxed))));
+    setGenerateSampleCount(static_cast<int>(state.getProperty(kGenerateSampleCount, generateSampleCount_.load(std::memory_order_relaxed))));
+    setGenerateBitDepth(static_cast<int>(state.getProperty(kGenerateBitDepth, generateBitDepth_.load(std::memory_order_relaxed))));
+    setGeneratePulseWidth(static_cast<float>(state.getProperty(kGeneratePulseWidth, generatePulseWidth_.load(std::memory_order_relaxed))));
+    setGenerateFrequencyMidiNote(static_cast<int>(state.getProperty(kGenerateFrequencyMidiNote, generateFrequencyMidiNote_.load(std::memory_order_relaxed))));
+    setGenerateSketchSmoothing(static_cast<int>(state.getProperty(kGenerateSketchSmoothing, generateSketchSmoothing_.load(std::memory_order_relaxed))));
     setLoopPoints(
         static_cast<int>(state.getProperty(kLoopStart, getLoopStart())),
         static_cast<int>(state.getProperty(kLoopEnd, getLoopEnd())));
@@ -883,6 +1011,10 @@ bool AudiocityAudioProcessor::loadSampleFromFile(const juce::File& file)
         return false;
 
     generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+        generatedWaveformState_.clear();
+    }
 
     suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
 
@@ -917,6 +1049,10 @@ void AudiocityAudioProcessor::loadGeneratedWaveformAsSample(const std::vector<fl
     if (getPlaybackMode() != PlaybackMode::loop)
         setPlaybackMode(PlaybackMode::loop);
     generatedWaveformLoaded_.store(true, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+        generatedWaveformState_ = waveform;
+    }
     stopGeneratedWaveformPreview();
     suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
     syncSampleDerivedParametersFromEngine();
@@ -1030,6 +1166,119 @@ void AudiocityAudioProcessor::setSampleWindow(const int startSample, const int e
     engine_.setSampleWindow(startSample, endSample);
     updateParameterFromPlainValue(kParamPlaybackStart, static_cast<float>(engine_.getSampleWindowStart()));
     updateParameterFromPlainValue(kParamPlaybackEnd, static_cast<float>(engine_.getSampleWindowEnd()));
+}
+
+void AudiocityAudioProcessor::setWaveformViewRange(const int startSample, const int sampleCount) noexcept
+{
+    waveformViewStartSample_.store(juce::jmax(0, startSample), std::memory_order_relaxed);
+    waveformViewSampleCount_.store(juce::jmax(0, sampleCount), std::memory_order_relaxed);
+}
+
+std::pair<int, int> AudiocityAudioProcessor::getWaveformViewRange() const noexcept
+{
+    return {
+        waveformViewStartSample_.load(std::memory_order_relaxed),
+        waveformViewSampleCount_.load(std::memory_order_relaxed)
+    };
+}
+
+void AudiocityAudioProcessor::setEditorTabIndex(const int tabIndex) noexcept
+{
+    editorTabIndex_.store(juce::jlimit(0, 3, tabIndex), std::memory_order_relaxed);
+}
+
+int AudiocityAudioProcessor::getEditorTabIndex() const noexcept
+{
+    return juce::jlimit(0, 3, editorTabIndex_.load(std::memory_order_relaxed));
+}
+
+void AudiocityAudioProcessor::setWaveformDisplayMode(const int modeId) noexcept
+{
+    waveformDisplayMode_.store(juce::jlimit(1, 2, modeId), std::memory_order_relaxed);
+}
+
+int AudiocityAudioProcessor::getWaveformDisplayMode() const noexcept
+{
+    return juce::jlimit(1, 2, waveformDisplayMode_.load(std::memory_order_relaxed));
+}
+
+void AudiocityAudioProcessor::setGenerateWaveType(const int waveType) noexcept
+{
+    generateWaveType_.store(juce::jlimit(0, 7, waveType), std::memory_order_relaxed);
+}
+
+int AudiocityAudioProcessor::getGenerateWaveType() const noexcept
+{
+    return juce::jlimit(0, 7, generateWaveType_.load(std::memory_order_relaxed));
+}
+
+void AudiocityAudioProcessor::setGenerateSampleCount(const int sampleCount) noexcept
+{
+    const auto clamped = juce::jlimit(16, 2048, sampleCount);
+    int quantized = 16;
+    while (quantized < clamped)
+        quantized <<= 1;
+
+    if (quantized > 2048)
+        quantized = 2048;
+
+    generateSampleCount_.store(quantized, std::memory_order_relaxed);
+}
+
+int AudiocityAudioProcessor::getGenerateSampleCount() const noexcept
+{
+    return juce::jlimit(16, 2048, generateSampleCount_.load(std::memory_order_relaxed));
+}
+
+void AudiocityAudioProcessor::setGenerateBitDepth(const int bitDepth) noexcept
+{
+    int normalized = 16;
+    if (bitDepth <= 8)
+        normalized = 8;
+    else if (bitDepth >= 24)
+        normalized = 24;
+
+    generateBitDepth_.store(normalized, std::memory_order_relaxed);
+}
+
+int AudiocityAudioProcessor::getGenerateBitDepth() const noexcept
+{
+    const auto value = generateBitDepth_.load(std::memory_order_relaxed);
+    if (value <= 8)
+        return 8;
+    if (value >= 24)
+        return 24;
+    return 16;
+}
+
+void AudiocityAudioProcessor::setGeneratePulseWidth(const float pulseWidthPercent) noexcept
+{
+    generatePulseWidth_.store(juce::jlimit(1.0f, 99.0f, pulseWidthPercent), std::memory_order_relaxed);
+}
+
+float AudiocityAudioProcessor::getGeneratePulseWidth() const noexcept
+{
+    return juce::jlimit(1.0f, 99.0f, generatePulseWidth_.load(std::memory_order_relaxed));
+}
+
+void AudiocityAudioProcessor::setGenerateFrequencyMidiNote(const int midiNote) noexcept
+{
+    generateFrequencyMidiNote_.store(juce::jlimit(0, 127, midiNote), std::memory_order_relaxed);
+}
+
+int AudiocityAudioProcessor::getGenerateFrequencyMidiNote() const noexcept
+{
+    return juce::jlimit(0, 127, generateFrequencyMidiNote_.load(std::memory_order_relaxed));
+}
+
+void AudiocityAudioProcessor::setGenerateSketchSmoothing(const int modeId) noexcept
+{
+    generateSketchSmoothing_.store(juce::jlimit(1, 2, modeId), std::memory_order_relaxed);
+}
+
+int AudiocityAudioProcessor::getGenerateSketchSmoothing() const noexcept
+{
+    return juce::jlimit(1, 2, generateSketchSmoothing_.load(std::memory_order_relaxed));
 }
 
 void AudiocityAudioProcessor::setLoopPoints(const int loopStart, const int loopEnd) noexcept

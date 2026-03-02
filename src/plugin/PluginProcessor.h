@@ -10,6 +10,8 @@
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <utility>
+#include <vector>
 
 class AudiocityAudioProcessor final : public juce::AudioProcessor
 {
@@ -105,6 +107,12 @@ public:
     using DcFilterSettings = audiocity::engine::EngineCore::DcFilterSettings;
     void setDcFilterSettings(const DcFilterSettings& settings) noexcept;
     [[nodiscard]] DcFilterSettings getDcFilterSettings() const noexcept { return engine_.getDcFilterSettings(); }
+    using AutopanSettings = audiocity::engine::EngineCore::AutopanSettings;
+    void setAutopanSettings(const AutopanSettings& settings) noexcept;
+    [[nodiscard]] AutopanSettings getAutopanSettings() const noexcept { return engine_.getAutopanSettings(); }
+    using SaturationSettings = audiocity::engine::EngineCore::SaturationSettings;
+    void setSaturationSettings(const SaturationSettings& settings) noexcept;
+    [[nodiscard]] SaturationSettings getSaturationSettings() const noexcept { return engine_.getSaturationSettings(); }
     void setPan(float pan) noexcept;
     [[nodiscard]] float getPan() const noexcept { return engine_.getPan(); }
     void setMasterVolume(float volume) noexcept;
@@ -141,6 +149,24 @@ public:
     void setSampleWindow(int startSample, int endSample) noexcept;
     [[nodiscard]] int getSampleWindowStart() const noexcept { return engine_.getSampleWindowStart(); }
     [[nodiscard]] int getSampleWindowEnd() const noexcept { return engine_.getSampleWindowEnd(); }
+    void setWaveformViewRange(int startSample, int sampleCount) noexcept;
+    [[nodiscard]] std::pair<int, int> getWaveformViewRange() const noexcept;
+    void setEditorTabIndex(int tabIndex) noexcept;
+    [[nodiscard]] int getEditorTabIndex() const noexcept;
+    void setWaveformDisplayMode(int modeId) noexcept;
+    [[nodiscard]] int getWaveformDisplayMode() const noexcept;
+    void setGenerateWaveType(int waveType) noexcept;
+    [[nodiscard]] int getGenerateWaveType() const noexcept;
+    void setGenerateSampleCount(int sampleCount) noexcept;
+    [[nodiscard]] int getGenerateSampleCount() const noexcept;
+    void setGenerateBitDepth(int bitDepth) noexcept;
+    [[nodiscard]] int getGenerateBitDepth() const noexcept;
+    void setGeneratePulseWidth(float pulseWidthPercent) noexcept;
+    [[nodiscard]] float getGeneratePulseWidth() const noexcept;
+    void setGenerateFrequencyMidiNote(int midiNote) noexcept;
+    [[nodiscard]] int getGenerateFrequencyMidiNote() const noexcept;
+    void setGenerateSketchSmoothing(int modeId) noexcept;
+    [[nodiscard]] int getGenerateSketchSmoothing() const noexcept;
 
     void setLoopPoints(int loopStart, int loopEnd) noexcept;
     [[nodiscard]] int getLoopStart() const noexcept { return engine_.getLoopStart(); }
@@ -255,6 +281,18 @@ private:
     std::atomic<int> suspendParamSyncBlocks_{ 0 };
     std::atomic<float> hostBpm_{ 120.0f };
     std::atomic<bool> generatedWaveformLoaded_{ false };
+    mutable std::mutex generatedWaveformStateMutex_;
+    std::vector<float> generatedWaveformState_;
+    std::atomic<int> waveformViewStartSample_{ 0 };
+    std::atomic<int> waveformViewSampleCount_{ 0 };
+    std::atomic<int> editorTabIndex_{ 0 };
+    std::atomic<int> waveformDisplayMode_{ 1 };
+    std::atomic<int> generateWaveType_{ 0 };
+    std::atomic<int> generateSampleCount_{ 512 };
+    std::atomic<int> generateBitDepth_{ 16 };
+    std::atomic<float> generatePulseWidth_{ 20.0f };
+    std::atomic<int> generateFrequencyMidiNote_{ 60 };
+    std::atomic<int> generateSketchSmoothing_{ 1 };
     std::atomic<float> outputPeakLeft_{ 0.0f };
     std::atomic<float> outputPeakRight_{ 0.0f };
     std::array<std::atomic<int>, audiocity::engine::VoicePool::maxVoices> voicePlaybackPositions_{};

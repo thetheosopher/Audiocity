@@ -114,6 +114,26 @@ public:
         float cutoffHz = 10.0f;
     };
 
+    struct AutopanSettings
+    {
+        float rateHz = 0.5f;
+        float depth = 0.0f;
+    };
+
+    struct SaturationSettings
+    {
+        enum class Mode
+        {
+            softClip,
+            hardClip,
+            tape,
+            tube
+        };
+
+        float drive = 0.0f;
+        Mode mode = Mode::softClip;
+    };
+
     void prepare(double sampleRate, int maxSamplesPerBlock, int outputChannels) noexcept;
     void release() noexcept;
 
@@ -154,6 +174,10 @@ public:
     [[nodiscard]] DelaySettings getDelaySettings() const noexcept { return delaySettings_; }
     void setDcFilterSettings(const DcFilterSettings& settings) noexcept;
     [[nodiscard]] DcFilterSettings getDcFilterSettings() const noexcept { return dcFilterSettings_; }
+    void setAutopanSettings(const AutopanSettings& settings) noexcept;
+    [[nodiscard]] AutopanSettings getAutopanSettings() const noexcept { return autopanSettings_; }
+    void setSaturationSettings(const SaturationSettings& settings) noexcept;
+    [[nodiscard]] SaturationSettings getSaturationSettings() const noexcept { return saturationSettings_; }
     void setHostTempoBpm(float bpm) noexcept { hostTempoBpm_ = juce::jmax(1.0f, bpm); }
     void setPan(float pan) noexcept { pan_ = juce::jlimit(-1.0f, 1.0f, pan); }
     [[nodiscard]] float getPan() const noexcept { return pan_; }
@@ -301,6 +325,7 @@ private:
                                             VoiceState& voice) const noexcept;
     void processDelay(float** outputs, int numChannels, int numSamples) noexcept;
     void processDcFilter(float** outputs, int numChannels, int numSamples) noexcept;
+    [[nodiscard]] float processSaturationSample(float sample) const noexcept;
     [[nodiscard]] float computeSyncedDelayTimeMs(float rawTimeMs) const noexcept;
     [[nodiscard]] float mapVelocity(float velocity) const noexcept;
     void updateReverbParameters() noexcept;
@@ -340,6 +365,9 @@ private:
     float reverbMix_ = 0.0f;
     DelaySettings delaySettings_{};
     DcFilterSettings dcFilterSettings_{};
+    AutopanSettings autopanSettings_{};
+    SaturationSettings saturationSettings_{};
+    float autopanPhase_ = 0.0f;
     float hostTempoBpm_ = 120.0f;
     float pan_ = 0.0f;
     float masterVolume_ = 1.0f;
