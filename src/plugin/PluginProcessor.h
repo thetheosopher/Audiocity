@@ -349,9 +349,9 @@ private:
     std::atomic<int> editorTabIndex_{ 0 };
     std::atomic<int> waveformDisplayMode_{ 1 };
     std::atomic<int> generateWaveType_{ 0 };
-    std::atomic<int> generateSampleCount_{ 512 };
+    std::atomic<int> generateSampleCount_{ 1024 };
     std::atomic<int> generateBitDepth_{ 16 };
-    std::atomic<float> generatePulseWidth_{ 20.0f };
+    std::atomic<float> generatePulseWidth_{ 5.0f };
     std::atomic<int> generateFrequencyMidiNote_{ 60 };
     std::atomic<int> generateSketchSmoothing_{ 1 };
     std::atomic<float> outputPeakLeft_{ 0.0f };

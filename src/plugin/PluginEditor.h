@@ -121,6 +121,7 @@ private:
         std::function<void(int, int)> onPlaybackPreview;
         std::function<void(int, int)> onPlaybackCommitted;
         std::function<void()> onResetRangesRequested;
+        std::function<void(DisplayMode)> onDisplayModeSelected;
 
         void paint(juce::Graphics& g) override;
         void mouseDown(const juce::MouseEvent& event) override;
@@ -205,8 +206,6 @@ private:
 
     // ── Player ──
     juce::Label playerKeyboardLabel_{ {}, "Piano" };
-    juce::TextButton playerKeyboardScrollLeft_{ "<" };
-    juce::TextButton playerKeyboardScrollRight_{ ">" };
     juce::Viewport playerKeyboardViewport_;
     juce::MidiKeyboardState playerKeyboardState_;
     juce::MidiKeyboardComponent playerKeyboard_{ playerKeyboardState_, juce::MidiKeyboardComponent::horizontalKeyboard };
@@ -224,9 +223,7 @@ private:
     juce::TextButton presetSaveButton_{ "Save" };
     juce::TextButton presetRenameButton_{ "Rename" };
     juce::TextButton presetDeleteButton_{ "Delete" };
-    juce::Label restoreSourceLabel_{ {}, "Restore: none" };
     juce::TextButton loadButton_{ "..." };
-    juce::ComboBox waveformDisplayModeCombo_;
     juce::Label rootNoteLabel_{ {}, "Root Note" };
     juce::ComboBox rootNoteCombo_;
     CcLearnDial tuneCoarseDial_{ "Coarse", -24, 24, 1, "st", 0 };

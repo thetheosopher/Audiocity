@@ -1083,9 +1083,9 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     setEditorTabIndex(0);
     setWaveformDisplayMode(static_cast<int>(state.getProperty(kWaveformDisplayMode, waveformDisplayMode_.load(std::memory_order_relaxed))));
     setGenerateWaveType(static_cast<int>(state.getProperty(kGenerateWaveType, generateWaveType_.load(std::memory_order_relaxed))));
-    setGenerateSampleCount(static_cast<int>(state.getProperty(kGenerateSampleCount, generateSampleCount_.load(std::memory_order_relaxed))));
+    setGenerateSampleCount(static_cast<int>(state.getProperty(kGenerateSampleCount, 1024)));
     setGenerateBitDepth(static_cast<int>(state.getProperty(kGenerateBitDepth, generateBitDepth_.load(std::memory_order_relaxed))));
-    setGeneratePulseWidth(static_cast<float>(state.getProperty(kGeneratePulseWidth, generatePulseWidth_.load(std::memory_order_relaxed))));
+    setGeneratePulseWidth(static_cast<float>(state.getProperty(kGeneratePulseWidth, 5.0f)));
     setGenerateFrequencyMidiNote(static_cast<int>(state.getProperty(kGenerateFrequencyMidiNote, generateFrequencyMidiNote_.load(std::memory_order_relaxed))));
     setGenerateSketchSmoothing(static_cast<int>(state.getProperty(kGenerateSketchSmoothing, generateSketchSmoothing_.load(std::memory_order_relaxed))));
     setCaptureTargetSampleRate(static_cast<int>(state.getProperty(kCaptureTargetSampleRate,
@@ -1466,20 +1466,20 @@ int AudiocityAudioProcessor::getGenerateWaveType() const noexcept
 
 void AudiocityAudioProcessor::setGenerateSampleCount(const int sampleCount) noexcept
 {
-    const auto clamped = juce::jlimit(16, 2048, sampleCount);
+    const auto clamped = juce::jlimit(16, 8192, sampleCount);
     int quantized = 16;
     while (quantized < clamped)
         quantized <<= 1;
 
-    if (quantized > 2048)
-        quantized = 2048;
+    if (quantized > 8192)
+        quantized = 8192;
 
     generateSampleCount_.store(quantized, std::memory_order_relaxed);
 }
 
 int AudiocityAudioProcessor::getGenerateSampleCount() const noexcept
 {
-    return juce::jlimit(16, 2048, generateSampleCount_.load(std::memory_order_relaxed));
+    return juce::jlimit(16, 8192, generateSampleCount_.load(std::memory_order_relaxed));
 }
 
 void AudiocityAudioProcessor::setGenerateBitDepth(const int bitDepth) noexcept

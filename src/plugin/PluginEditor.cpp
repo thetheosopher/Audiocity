@@ -79,6 +79,29 @@ int computeWaveformPeakResolution(const int waveformWidthPixels)
     return juce::jlimit(2048, 32768, juce::jmax(4096, width * 8));
 }
 
+int computePlayerKeyboardPanelHeight(const int availableWidth)
+{
+    return juce::jlimit(110, 190, availableWidth / 6);
+}
+
+constexpr int kPlayerKeyboardMinMidiNote = 24;  // C0
+constexpr int kPlayerKeyboardMaxMidiNote = 120; // C8
+
+int countWhiteKeysInRange(const int minMidiNote, const int maxMidiNote)
+{
+    int whiteKeys = 0;
+    for (int midiNote = juce::jmax(0, minMidiNote); midiNote <= juce::jmin(127, maxMidiNote); ++midiNote)
+    {
+        const auto noteClass = midiNote % 12;
+        const bool isWhite = noteClass == 0 || noteClass == 2 || noteClass == 4
+            || noteClass == 5 || noteClass == 7 || noteClass == 9 || noteClass == 11;
+        if (isWhite)
+            ++whiteKeys;
+    }
+
+    return juce::jmax(1, whiteKeys);
+}
+
 juce::String formatMidiNoteName(const int midiNote)
 {
     static constexpr const char* kNoteNames[] = {
@@ -1342,7 +1365,40 @@ void AudiocityAudioProcessorEditor::WaveformView::mouseDown(const juce::MouseEve
 {
     linkedPlaybackDuringLoopDrag_ = false;
 
-    if (event.mods.isRightButtonDown() || event.mods.isMiddleButtonDown())
+    if (event.mods.isPopupMenu())
+    {
+        juce::PopupMenu menu;
+        menu.addItem(1, "Signed", true, displayMode_ == DisplayMode::signedWaveform);
+        menu.addItem(2, "Symmetric", true, displayMode_ == DisplayMode::symmetricEnvelope);
+        const auto clickScreenPosition = event.getScreenPosition();
+        const juce::Rectangle<int> targetArea(clickScreenPosition.x, clickScreenPosition.y, 1, 1);
+
+        juce::Component::SafePointer<WaveformView> safeThis(this);
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(targetArea),
+            [safeThis](int selectedId)
+            {
+                if (safeThis == nullptr)
+                    return;
+
+                if (selectedId == 1)
+                {
+                    safeThis->setDisplayMode(DisplayMode::signedWaveform);
+                    if (safeThis->onDisplayModeSelected)
+                        safeThis->onDisplayModeSelected(DisplayMode::signedWaveform);
+                }
+                else if (selectedId == 2)
+                {
+                    safeThis->setDisplayMode(DisplayMode::symmetricEnvelope);
+                    if (safeThis->onDisplayModeSelected)
+                        safeThis->onDisplayModeSelected(DisplayMode::symmetricEnvelope);
+                }
+            });
+
+        dragMode_ = DragMode::none;
+        return;
+    }
+
+    if (event.mods.isMiddleButtonDown())
     {
         dragMode_ = DragMode::pan;
         dragAnchorViewStart_ = viewStartSample_;
@@ -1557,25 +1613,12 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(playerKeyboardLabel_);
     playerKeyboardLabel_.setJustificationType(juce::Justification::centredLeft);
 
-    addAndMakeVisible(playerKeyboardScrollLeft_);
-    addAndMakeVisible(playerKeyboardScrollRight_);
-    playerKeyboardScrollLeft_.onClick = [this]
-    {
-        auto& bar = playerKeyboardViewport_.getHorizontalScrollBar();
-        bar.setCurrentRangeStart(juce::jmax(0.0, bar.getCurrentRangeStart() - 140.0));
-    };
-    playerKeyboardScrollRight_.onClick = [this]
-    {
-        auto& bar = playerKeyboardViewport_.getHorizontalScrollBar();
-        bar.setCurrentRangeStart(bar.getCurrentRangeStart() + 140.0);
-    };
-
     addAndMakeVisible(playerKeyboardViewport_);
     playerKeyboardViewport_.setViewedComponent(&playerKeyboard_, false);
-    playerKeyboardViewport_.setScrollBarsShown(true, false);
+    playerKeyboardViewport_.setScrollBarsShown(false, false);
 
     playerKeyboardState_.addListener(this);
-    playerKeyboard_.setAvailableRange(21, 108);
+    playerKeyboard_.setAvailableRange(kPlayerKeyboardMinMidiNote, kPlayerKeyboardMaxMidiNote);
     playerKeyboard_.setColour(juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour(0xffd7dde8));
     playerKeyboard_.setColour(juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour(0xff20253a));
     playerKeyboard_.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, juce::Colour(0xff61d9ff).withAlpha(0.60f));
@@ -1640,14 +1683,14 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     generatePulseWidthLabel_.setJustificationType(juce::Justification::centredLeft);
     generateFrequencyLabel_.setJustificationType(juce::Justification::centredLeft);
 
-    for (int power = 4; power <= 11; ++power)
+    for (int power = 4; power <= 13; ++power)
     {
         const auto sampleCount = 1 << power;
         generateSamplesCombo_.addItem(juce::String(sampleCount), sampleCount);
     }
     generateSamplesCombo_.setSelectedId(processor_.getGenerateSampleCount(), juce::dontSendNotification);
     if (generateSamplesCombo_.getSelectedId() <= 0)
-        generateSamplesCombo_.setSelectedId(512, juce::dontSendNotification);
+        generateSamplesCombo_.setSelectedId(1024, juce::dontSendNotification);
     generateSamplesCombo_.onChange = [this]
     {
         processor_.setGenerateSampleCount(getSelectedGenerateSampleCount());
@@ -1685,6 +1728,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     generatePulseWidthSlider_.setRange(1.0, 99.0, 1.0);
     generatePulseWidthSlider_.setValue(processor_.getGeneratePulseWidth(), juce::dontSendNotification);
     generatePulseWidthSlider_.setTextValueSuffix(" %");
+    generatePulseWidthSlider_.setDoubleClickReturnValue(true, 5.0);
     generatePulseWidthSlider_.onValueChange = [this]
     {
         processor_.setGeneratePulseWidth(static_cast<float>(generatePulseWidthSlider_.getValue()));
@@ -1995,30 +2039,16 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         deleteSelectedPreset();
     };
 
-    addAndMakeVisible(restoreSourceLabel_);
-    restoreSourceLabel_.setJustificationType(juce::Justification::centredRight);
-    restoreSourceLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8a8aa0));
-    restoreSourceLabel_.setText("Restore: none", juce::dontSendNotification);
-
     addAndMakeVisible(loadButton_);
     loadButton_.setTooltip("Load Sample");
     loadButton_.onClick = [this] { openSampleChooser(); };
 
-    addAndMakeVisible(waveformDisplayModeCombo_);
-    waveformDisplayModeCombo_.addItem("Signed", 1);
-    waveformDisplayModeCombo_.addItem("Symmetric", 2);
-    waveformDisplayModeCombo_.setSelectedId(processor_.getWaveformDisplayMode(), juce::dontSendNotification);
-    waveformView_.setDisplayMode(waveformDisplayModeCombo_.getSelectedId() == 2
+    waveformView_.setDisplayMode(processor_.getWaveformDisplayMode() == 2
         ? WaveformView::DisplayMode::symmetricEnvelope
         : WaveformView::DisplayMode::signedWaveform);
-    waveformDisplayModeCombo_.setTooltip("Waveform Display Mode");
-    waveformDisplayModeCombo_.onChange = [this]
+    waveformView_.onDisplayModeSelected = [this](const WaveformView::DisplayMode mode)
     {
-        const auto selected = waveformDisplayModeCombo_.getSelectedId();
-        processor_.setWaveformDisplayMode(selected);
-        waveformView_.setDisplayMode(selected == 2
-            ? WaveformView::DisplayMode::symmetricEnvelope
-            : WaveformView::DisplayMode::signedWaveform);
+        processor_.setWaveformDisplayMode(mode == WaveformView::DisplayMode::symmetricEnvelope ? 2 : 1);
     };
 
             refreshPresetList();
@@ -3007,9 +3037,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     presetSaveButton_.setVisible(showSampleTab);
     presetRenameButton_.setVisible(showSampleTab);
     presetDeleteButton_.setVisible(showSampleTab);
-    restoreSourceLabel_.setVisible(showSampleTab);
     loadButton_.setVisible(showSampleTab);
-    waveformDisplayModeCombo_.setVisible(showSampleTab);
     sampleControlsViewport_.setVisible(showSampleTab);
     rootNoteLabel_.setVisible(showSampleTab);
     rootNoteCombo_.setVisible(showSampleTab);
@@ -3096,8 +3124,6 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     diagnosticsLabel_.setVisible(showSampleTab);
 
     playerKeyboardLabel_.setVisible(showPlayerTab);
-    playerKeyboardScrollLeft_.setVisible(showPlayerTab);
-    playerKeyboardScrollRight_.setVisible(showPlayerTab);
     playerKeyboardViewport_.setVisible(showPlayerTab);
     playerPadsLabel_.setVisible(showPlayerTab);
     for (int i = 0; i < kPlayerPadCount; ++i)
@@ -3564,7 +3590,7 @@ void AudiocityAudioProcessorEditor::paintPlayerPane(juce::Graphics& g, juce::Rec
 {
     area = area.reduced(8, 6);
 
-    auto keyboardPanel = area.removeFromTop(juce::jlimit(120, 240, area.getWidth() / 5));
+    auto keyboardPanel = area.removeFromTop(computePlayerKeyboardPanelHeight(area.getWidth()));
     auto padsPanel = area.withTrimmedTop(10);
 
     g.setColour(juce::Colour(0xff252538));
@@ -3633,14 +3659,10 @@ void AudiocityAudioProcessorEditor::resized()
     {
         auto playerArea = area.reduced(8, 6);
 
-        auto keyboardPanel = playerArea.removeFromTop(juce::jlimit(120, 240, playerArea.getWidth() / 5));
+        auto keyboardPanel = playerArea.removeFromTop(computePlayerKeyboardPanelHeight(playerArea.getWidth()));
         keyboardPanel.reduce(10, 10);
 
         auto keyboardHeader = keyboardPanel.removeFromTop(26);
-        playerKeyboardScrollRight_.setBounds(keyboardHeader.removeFromRight(28));
-        keyboardHeader.removeFromRight(4);
-        playerKeyboardScrollLeft_.setBounds(keyboardHeader.removeFromRight(28));
-        keyboardHeader.removeFromRight(8);
         playerKeyboardLabel_.setBounds(keyboardHeader);
 
         keyboardPanel.removeFromTop(6);
@@ -3792,10 +3814,6 @@ void AudiocityAudioProcessorEditor::resized()
     {
         auto topRow = area.removeFromTop(kTopBarH);
         loadButton_.setBounds(topRow.removeFromRight(32));
-        topRow.removeFromRight(8);
-        waveformDisplayModeCombo_.setBounds(topRow.removeFromRight(132));
-        topRow.removeFromRight(8);
-        restoreSourceLabel_.setBounds(topRow.removeFromRight(150));
         topRow.removeFromRight(10);
 
         presetDeleteButton_.setBounds(topRow.removeFromLeft(64));
@@ -4001,7 +4019,7 @@ void AudiocityAudioProcessorEditor::resized()
 
     // ── Panel 7: Effects ──
     {
-        constexpr int kEffectsPanelH = kRowH + 88;
+        constexpr int kEffectsPanelH = kRowH + 44;
         auto fxInner = makeGroup("Effects", kEffectsPanelH);
 
         auto fxDialRow = fxInner.removeFromTop(kDialH);
@@ -4046,7 +4064,7 @@ void AudiocityAudioProcessorEditor::resized()
         const auto dcFilterX = dcFilterDialBounds.getX() + (dcFilterDialBounds.getWidth() - kDcFilterW) / 2;
         dcFilterEnabledToggle_.setBounds(dcFilterX, fxControlRow.getY(), kDcFilterW, 24);
 
-        constexpr int kSatModeW = 116;
+        constexpr int kSatModeW = 92;
         const auto satModeX = saturationDriveBounds.getX() + (saturationDriveBounds.getWidth() - kSatModeW) / 2;
         saturationModeCombo_.setBounds(satModeX, fxControlRow.getY(), kSatModeW, 24);
     }
@@ -4333,6 +4351,23 @@ void AudiocityAudioProcessorEditor::refreshPresetList(const juce::String& prefer
         }
     }
 
+    if (selectedId == 0)
+    {
+        const auto currentPresetXml = processor_.createPlaybackPresetXml().trim();
+        if (currentPresetXml.isNotEmpty())
+        {
+            for (int index = 0; index < availablePresetFiles_.size(); ++index)
+            {
+                const auto candidateXml = availablePresetFiles_.getReference(index).loadFileAsString().trim();
+                if (candidateXml.isNotEmpty() && candidateXml == currentPresetXml)
+                {
+                    selectedId = index + 1;
+                    break;
+                }
+            }
+        }
+    }
+
     if (selectedId > 0)
     {
         presetCombo_.setSelectedId(selectedId, juce::dontSendNotification);
@@ -4348,6 +4383,8 @@ void AudiocityAudioProcessorEditor::refreshPresetList(const juce::String& prefer
     suppressPresetComboChange_ = false;
 
     const auto hasSelection = presetCombo_.getSelectedId() > 0;
+    const auto hasLoadedSample = processor_.getLoadedSampleLength() > 0;
+    presetSaveButton_.setEnabled(hasLoadedSample);
     presetRenameButton_.setEnabled(hasSelection);
     presetDeleteButton_.setEnabled(hasSelection);
 }
@@ -4447,7 +4484,7 @@ void AudiocityAudioProcessorEditor::showPresetLoadErrorAndOfferDelete(const juce
         if (safeThis == nullptr)
             return;
 
-        if (result == 1)
+        if (result == 0)
         {
             const auto deletedName = presetFile.getFileName().upToLastOccurrenceOf(kPresetFileExtension, false, false);
             if (!presetFile.deleteFile())
@@ -4564,18 +4601,39 @@ void AudiocityAudioProcessorEditor::deleteSelectedPreset()
     const auto file = availablePresetFiles_.getReference(index);
     const auto presetName = file.getFileName().upToLastOccurrenceOf(kPresetFileExtension, false, false);
 
-    if (!file.deleteFile())
+    juce::String message;
+    message << "Are you sure you want to delete preset '" << presetName << "'?";
+
+    auto options = juce::MessageBoxOptions::makeOptionsYesNo(
+        juce::MessageBoxIconType::WarningIcon,
+        "Delete Preset",
+        message,
+        "Delete",
+        "Cancel",
+        this);
+
+    juce::Component::SafePointer<AudiocityAudioProcessorEditor> safeThis(this);
+    juce::NativeMessageBox::showAsync(options, [safeThis, file, presetName](int result)
     {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-            "Delete Preset",
-            "Failed to delete preset file.");
-        return;
-    }
+        if (safeThis == nullptr)
+            return;
 
-    if (currentPresetName_ == presetName)
-        currentPresetName_.clear();
+        if (result != 0)
+            return;
 
-    refreshPresetList();
+        if (!file.deleteFile())
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                "Delete Preset",
+                "Failed to delete preset file.");
+            return;
+        }
+
+        if (safeThis->currentPresetName_ == presetName)
+            safeThis->currentPresetName_.clear();
+
+        safeThis->refreshPresetList();
+    });
 }
 
 void AudiocityAudioProcessorEditor::updateGeneratePreviewButtonText()
@@ -4696,7 +4754,7 @@ AudiocityAudioProcessorEditor::getLoadedSampleWaveformMinMaxByChannel(const int 
 int AudiocityAudioProcessorEditor::getSelectedGenerateSampleCount() const
 {
     const auto selected = generateSamplesCombo_.getSelectedId();
-    return juce::jlimit(16, 2048, selected > 0 ? selected : 512);
+    return juce::jlimit(16, 8192, selected > 0 ? selected : 1024);
 }
 
 int AudiocityAudioProcessorEditor::getSelectedGenerateBitDepth() const
@@ -5013,10 +5071,6 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Search Samples - Filter by sample name or relative path");
     sampleBrowserSortCombo_.setTooltip(
         "Sort Samples - Sort by sample name or by relative source path");
-    playerKeyboardScrollLeft_.setTooltip(
-        "Scroll Keyboard Left");
-    playerKeyboardScrollRight_.setTooltip(
-        "Scroll Keyboard Right");
     captureRecordButton_.setTooltip(
         "Start/Stop Capture from Plugin Input");
     captureClearButton_.setTooltip(
@@ -5297,17 +5351,22 @@ void AudiocityAudioProcessorEditor::openSampleChooser()
 
 void AudiocityAudioProcessorEditor::updatePlayerKeyboardSizing()
 {
-    constexpr int kWhiteKeys = 52;
+    const auto whiteKeyCount = countWhiteKeysInRange(kPlayerKeyboardMinMidiNote, kPlayerKeyboardMaxMidiNote);
+    constexpr float kWhiteKeyLengthRatio = 6.4f;
     const auto viewportBounds = playerKeyboardViewport_.getLocalBounds();
     if (viewportBounds.isEmpty())
         return;
 
-    const auto whiteKeyWidth = juce::jmax(10.0f,
-        juce::jmin(18.0f, static_cast<float>(viewportBounds.getWidth()) / static_cast<float>(kWhiteKeys)));
+    const auto whiteKeyWidth = juce::jmax(6.0f,
+        juce::jmin(18.0f, static_cast<float>(viewportBounds.getWidth()) / static_cast<float>(whiteKeyCount)));
+
+    const auto preferredKeyLength = static_cast<int>(std::round(whiteKeyWidth * kWhiteKeyLengthRatio));
+    const auto keyboardHeight = juce::jlimit(64, viewportBounds.getHeight(), preferredKeyLength);
 
     playerKeyboard_.setKeyWidth(whiteKeyWidth);
-    playerKeyboard_.setSize(static_cast<int>(std::ceil(whiteKeyWidth * static_cast<float>(kWhiteKeys))),
-                            viewportBounds.getHeight());
+    playerKeyboard_.setSize(static_cast<int>(std::ceil(whiteKeyWidth * static_cast<float>(whiteKeyCount))),
+                            keyboardHeight);
+    playerKeyboardViewport_.setViewPosition(0, 0);
 }
 
 void AudiocityAudioProcessorEditor::refreshPlayerPadButtons()
@@ -5357,7 +5416,6 @@ void AudiocityAudioProcessorEditor::showPadAssignmentDialog(const int padIndex)
 void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
 {
     const auto persistedDisplayMode = processor_.getWaveformDisplayMode();
-    waveformDisplayModeCombo_.setSelectedId(persistedDisplayMode, juce::dontSendNotification);
     waveformView_.setDisplayMode(persistedDisplayMode == 2
         ? WaveformView::DisplayMode::symmetricEnvelope
         : WaveformView::DisplayMode::signedWaveform);
@@ -5374,7 +5432,7 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
             ? juce::String("Generated Waveform")
             : (processor_.isCapturedAudioLoaded() ? juce::String("Captured Audio") : juce::String("No sample loaded")));
     samplePathLabel_.setText(sampleLabel, juce::dontSendNotification);
-    restoreSourceLabel_.setText("Restore: " + processor_.getLastStateRestoreSourceLabel(), juce::dontSendNotification);
+    presetSaveButton_.setEnabled(processor_.getLoadedSampleLength() > 0);
     const auto isNewLoadedSample = sampleIdentity != lastWaveformSamplePath_;
 
     const bool isEditingRootNote = rootNoteCombo_.hasKeyboardFocus(true) || rootNoteCombo_.isPopupActive();

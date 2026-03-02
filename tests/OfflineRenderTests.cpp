@@ -285,15 +285,22 @@ bool runGeneratedCyclePitchInvariantAcrossSampleCountsTest()
 
     const auto freq64 = renderFrequency(64);
     const auto freq1024 = renderFrequency(1024);
+    const auto freq8192 = renderFrequency(8192);
 
-    if (freq64 <= 0.0f || freq1024 <= 0.0f)
+    if (freq64 <= 0.0f || freq1024 <= 0.0f || freq8192 <= 0.0f)
         return false;
 
     const auto targetError64 = std::abs(freq64 - static_cast<float>(targetHz));
     const auto targetError1024 = std::abs(freq1024 - static_cast<float>(targetHz));
+    const auto targetError8192 = std::abs(freq8192 - static_cast<float>(targetHz));
     const auto crossCountDelta = std::abs(freq64 - freq1024);
+    const auto crossCountDeltaHigh = std::abs(freq1024 - freq8192);
 
-    return targetError64 < 1.5f && targetError1024 < 1.5f && crossCountDelta < 0.8f;
+    return targetError64 < 1.5f
+        && targetError1024 < 1.5f
+        && targetError8192 < 1.5f
+        && crossCountDelta < 0.8f
+        && crossCountDeltaHigh < 0.8f;
 }
 
 bool runDisplayMinMaxPreservesPolarityTest()
