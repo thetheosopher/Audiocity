@@ -44,6 +44,35 @@ Fast path:
 - Standalone output is generated under `build/Audiocity_artefacts/Debug/Standalone/`.
 - VS Code CMake Tools test runs are configured to pass `-C Debug` via workspace settings.
 
+## Windows installer (WiX)
+- Installer project: `installer/AudiocityInstaller.wixproj`
+- WiX source: `installer/AudiocityInstaller.wxs`
+- License shown in installer: `installer/MIT-LICENSE.rtf` (MIT)
+
+The installer exposes optional features so users can install:
+- Standalone application (`Audiocity.exe` + `REX Shared Library.dll`)
+- VST3 plugin (`Audiocity.vst3` + `REX Shared Library.dll` and bundle metadata)
+
+VST3 installs to the standard system location:
+- `C:\Program Files\Common Files\VST3\Audiocity.vst3`
+
+Build MSI directly with MSBuild (WiX Toolset v3 required):
+- `msbuild installer/AudiocityInstaller.wixproj /p:Configuration=Debug /p:Platform=x64 /p:ProductVersion=0.1.0`
+
+Installer outputs are written under:
+- `output/installer/Debug/`
+- `output/installer/Release/`
+
+Optional CMake target:
+- Configure with `-DAUDIOCITY_ENABLE_WIX_INSTALLER=ON`
+- Build target `audiocity_wix_installer`
+
+Preset-based packaging flow:
+- `cmake --preset package-debug`
+- `cmake --build --preset package-debug`
+- `cmake --preset package-release`
+- `cmake --build --preset package-release`
+
 ## Working agreement
 - Specs in `docs/` are the source of truth.
 - Every milestone expands tests.

@@ -15,6 +15,24 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
       }
+    },
+    {
+      "name": "package-debug",
+      "displayName": "Package Debug (WiX)",
+      "inherits": "default",
+      "cacheVariables": {
+        "AUDIOCITY_ENABLE_WIX_INSTALLER": "ON",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "package-release",
+      "displayName": "Package Release (WiX)",
+      "inherits": "default",
+      "cacheVariables": {
+        "AUDIOCITY_ENABLE_WIX_INSTALLER": "ON",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     }
   ],
   "buildPresets": [
@@ -22,6 +40,26 @@
       "name": "default",
       "displayName": "Default build",
       "configurePreset": "default"
+    },
+    {
+      "name": "package-debug",
+      "displayName": "Build MSI (Debug)",
+      "configurePreset": "package-debug",
+      "configuration": "Debug",
+      "targets": [
+        "Audiocity_All",
+        "audiocity_wix_installer"
+      ]
+    },
+    {
+      "name": "package-release",
+      "displayName": "Build MSI (Release)",
+      "configurePreset": "package-release",
+      "configuration": "Release",
+      "targets": [
+        "Audiocity_All",
+        "audiocity_wix_installer"
+      ]
     }
   ],
   "testPresets": [

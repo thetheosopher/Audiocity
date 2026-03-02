@@ -7,6 +7,8 @@
 #include "../src/plugin/PlayerPadState.h"
 
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <limits>
 #include <utility>
 
@@ -718,6 +720,94 @@ bool runLoadSampleResetsEnvelopeAndFilterDefaultsTest()
         && std::abs(pitchLfo.depthCents - 0.0f) <= 1.0e-6f;
 }
 
+bool runEmbeddedLoopMetadataLoadsWithoutRootNoteTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 512;
+    constexpr int loopStart = 96;
+    constexpr int loopEnd = 320;
+
+    const auto tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_embedded_loop_test", ".wav");
+
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(tempFile.createOutputStream());
+        if (output == nullptr)
+            return false;
+
+        juce::StringPairArray metadata;
+        metadata.set("loop0start", juce::String(loopStart));
+        metadata.set("loop0end", juce::String(loopEnd));
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(
+            wav.createWriterFor(output.get(), sampleRate, 1, 16, metadata, 0));
+        if (writer == nullptr)
+            return false;
+
+        output.release();
+
+        juce::AudioBuffer<float> buffer(1, sampleLength);
+        for (int i = 0; i < sampleLength; ++i)
+        {
+            const float phase = static_cast<float>(2.0 * juce::MathConstants<double>::pi * i * 220.0 / sampleRate);
+            buffer.setSample(0, i, 0.3f * std::sin(phase));
+        }
+
+        if (!writer->writeFromAudioSampleBuffer(buffer, 0, sampleLength))
+            return false;
+    }
+
+    auto getMetadataIntCaseInsensitive = [](const juce::StringPairArray& metadata, const juce::String& key) -> int
+    {
+        const auto keys = metadata.getAllKeys();
+        for (int i = 0; i < keys.size(); ++i)
+        {
+            if (keys[i].equalsIgnoreCase(key))
+            {
+                const auto value = metadata.getValue(keys[i], {}).trim();
+                if (value.containsOnly("-0123456789"))
+                    return value.getIntValue();
+            }
+        }
+
+        return -1;
+    };
+
+    juce::AudioFormatManager formatManager;
+    formatManager.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(tempFile));
+    if (reader == nullptr)
+    {
+        tempFile.deleteFile();
+        return false;
+    }
+
+    const auto readBackStart = getMetadataIntCaseInsensitive(reader->metadataValues, "Loop0Start");
+    const auto readBackEnd = getMetadataIntCaseInsensitive(reader->metadataValues, "Loop0End");
+    if (readBackStart < 0 || readBackEnd <= readBackStart)
+    {
+        tempFile.deleteFile();
+        return true;
+    }
+
+    audiocity::engine::EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    const auto loaded = engine.loadSampleFromFile(tempFile);
+    tempFile.deleteFile();
+
+    if (!loaded)
+        return false;
+
+    return engine.getSampleWindowStart() == 0
+        && engine.getSampleWindowEnd() == sampleLength - 1
+        && engine.getLoopStart() == readBackStart
+        && engine.getLoopEnd() == readBackEnd
+        && engine.getPlaybackMode() == audiocity::engine::EngineCore::PlaybackMode::loop;
+}
+
 bool runRexRuntimeFallbackSmokeTest()
 {
     constexpr int channels = 2;
@@ -737,7 +827,15 @@ bool runRexRuntimeFallbackSmokeTest()
     if (!rexRuntimeAvailable)
         return !loaded;
 
-    return loaded && engine.getLoadedSampleLength() > 0;
+    if (!loaded || engine.getLoadedSampleLength() <= 0)
+        return false;
+
+    const auto fullEnd = juce::jmax(0, engine.getLoadedSampleLength() - 1);
+    return engine.getSampleWindowStart() == 0
+        && engine.getSampleWindowEnd() == fullEnd
+        && engine.getLoopStart() == 0
+        && engine.getLoopEnd() == fullEnd
+        && engine.getPlaybackMode() == audiocity::engine::EngineCore::PlaybackMode::loop;
 }
 
 bool runEditorSampleEditControlsTest()
@@ -3394,6 +3492,9 @@ int main()
 
     if (!runLoadSampleResetsEnvelopeAndFilterDefaultsTest())
         return 45;
+
+    if (!runEmbeddedLoopMetadataLoadsWithoutRootNoteTest())
+        return 64;
 
     if (!runRexRuntimeFallbackSmokeTest())
         return 62;

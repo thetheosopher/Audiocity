@@ -113,3 +113,32 @@ include(CTest)
 if (BUILD_TESTING)
     add_subdirectory(tests)
 endif ()
+
+if (WIN32)
+    option(AUDIOCITY_ENABLE_WIX_INSTALLER "Enable WiX MSI installer build target (requires WiX Toolset v3)." OFF)
+
+    if (AUDIOCITY_ENABLE_WIX_INSTALLER)
+        set(AUDIOCITY_MSBUILD_EXECUTABLE "")
+
+        if (DEFINED CMAKE_VS_MSBUILD_COMMAND AND NOT CMAKE_VS_MSBUILD_COMMAND STREQUAL "")
+            set(AUDIOCITY_MSBUILD_EXECUTABLE "${CMAKE_VS_MSBUILD_COMMAND}")
+        else ()
+            find_program(AUDIOCITY_MSBUILD_EXECUTABLE NAMES MSBuild.exe msbuild)
+        endif ()
+
+        if (AUDIOCITY_MSBUILD_EXECUTABLE)
+            add_custom_target(audiocity_wix_installer
+                COMMAND "${AUDIOCITY_MSBUILD_EXECUTABLE}"
+                    "${CMAKE_SOURCE_DIR}/installer/AudiocityInstaller.wixproj"
+                    /t:Build
+                    /p:Configuration=$<CONFIG>
+                    /p:Platform=x64
+                    /p:ProductVersion=${PROJECT_VERSION}
+                DEPENDS Audiocity_Standalone Audiocity_VST3
+                WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/installer"
+                COMMENT "Building Audiocity MSI via WiX Toolset")
+        else ()
+            message(WARNING "AUDIOCITY_ENABLE_WIX_INSTALLER is ON, but MSBuild was not found. Installer target will not be created.")
+        endif ()
+    endif ()
+endif ()

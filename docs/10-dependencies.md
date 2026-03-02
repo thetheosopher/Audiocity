@@ -27,3 +27,6 @@
 - Pin versions (tags/commits) and record in `DEPENDENCIES.md`.
 - Keep the audio-thread dependency surface minimal.
 - For optional runtime codecs (like REX), fail soft and keep feature disabled when runtime binaries are unavailable.
+
+## Build / Packaging
+- **WiX Toolset v3** (Windows): builds MSI installer (`installer/AudiocityInstaller.wixproj`) with optional Standalone and VST3 features.

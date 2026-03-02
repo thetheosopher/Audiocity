@@ -378,12 +378,12 @@ private:
     juce::ToggleButton reverseToggle_{ "Reverse" };
 
     // ── Trim ──
-    CcLearnDial playbackStartDial_{ "Start", 0, 16000000, 1 };
-    CcLearnDial playbackEndDial_{ "End", 0, 16000000, 1 };
+    CcLearnDial playbackStartDial_{ "Trim Start", 0, 16000000, 1 };
+    CcLearnDial playbackEndDial_{ "Trim End", 0, 16000000, 1 };
 
     // ── Loop ──
-    CcLearnDial loopStartDial_{ "Start", 0, 16000000, 1 };
-    CcLearnDial loopEndDial_{ "End", 0, 16000000, 1 };
+    CcLearnDial loopStartDial_{ "Loop Start", 0, 16000000, 1 };
+    CcLearnDial loopEndDial_{ "Loop End", 0, 16000000, 1 };
     CcLearnDial loopCrossfadeDial_{ "XFade", 0, 5000, 1 };
 
     // ── Performance ──

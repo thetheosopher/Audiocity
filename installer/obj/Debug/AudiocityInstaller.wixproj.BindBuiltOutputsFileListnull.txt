@@ -1,0 +1,2 @@
+C:\Projects\other\Audiocity\output\installer\Debug\AudiocityInstaller.msi
+C:\Projects\other\Audiocity\output\installer\Debug\AudiocityInstaller.wixpdb

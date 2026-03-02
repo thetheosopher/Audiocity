@@ -945,7 +945,7 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     setWaveformViewRange(
         static_cast<int>(state.getProperty(kWaveformViewStartSample, waveformViewStartSample_.load(std::memory_order_relaxed))),
         static_cast<int>(state.getProperty(kWaveformViewSampleCount, waveformViewSampleCount_.load(std::memory_order_relaxed))));
-    setEditorTabIndex(static_cast<int>(state.getProperty(kEditorTabIndex, editorTabIndex_.load(std::memory_order_relaxed))));
+    setEditorTabIndex(0);
     setWaveformDisplayMode(static_cast<int>(state.getProperty(kWaveformDisplayMode, waveformDisplayMode_.load(std::memory_order_relaxed))));
     setGenerateWaveType(static_cast<int>(state.getProperty(kGenerateWaveType, generateWaveType_.load(std::memory_order_relaxed))));
     setGenerateSampleCount(static_cast<int>(state.getProperty(kGenerateSampleCount, generateSampleCount_.load(std::memory_order_relaxed))));

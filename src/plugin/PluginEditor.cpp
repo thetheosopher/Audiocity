@@ -1380,7 +1380,8 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     tabBar_.addTab("Library", juce::Colour(0xff252538), &tabLibraryPage_, false);
     tabBar_.addTab("Player", juce::Colour(0xff252538), &tabPlayerPage_, false);
     tabBar_.addTab("Generate", juce::Colour(0xff252538), &tabGeneratePage_, false);
-    currentTabIndex_ = processor_.getEditorTabIndex();
+    currentTabIndex_ = 0;
+    processor_.setEditorTabIndex(currentTabIndex_);
     tabBar_.setCurrentTabIndex(currentTabIndex_);
 
     addAndMakeVisible(sampleControlsViewport_);

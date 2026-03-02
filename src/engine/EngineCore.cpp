@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <optional>
 
@@ -124,17 +125,134 @@ std::optional<int> findEmbeddedRootMidiNote(const juce::StringPairArray& metadat
     return std::nullopt;
 }
 
+std::optional<int> findEmbeddedLoopPoint(const juce::StringPairArray& metadata,
+                                         const juce::StringArray& candidateKeys)
+{
+    for (const auto& key : candidateKeys)
+    {
+        const auto maybeValue = getMetadataValueCaseInsensitive(metadata, key);
+        if (!maybeValue.has_value())
+            continue;
+
+        const auto trimmed = maybeValue->trim();
+        if (trimmed.isEmpty() || !trimmed.containsOnly("-0123456789"))
+            continue;
+
+        return trimmed.getIntValue();
+    }
+
+    return std::nullopt;
+}
+
+std::optional<std::pair<int, int>> findEmbeddedLoopRange(const juce::StringPairArray& metadata)
+{
+    static const juce::StringArray loopStartKeys
+    {
+        "Loop0Start",
+        "loop0start"
+    };
+
+    static const juce::StringArray loopEndKeys
+    {
+        "Loop0End",
+        "loop0end"
+    };
+
+    static const juce::StringArray loopLengthKeys
+    {
+        "Loop0Length",
+        "loop0length"
+    };
+
+    const auto maybeStart = findEmbeddedLoopPoint(metadata, loopStartKeys);
+    if (!maybeStart.has_value())
+        return std::nullopt;
+
+    auto maybeEnd = findEmbeddedLoopPoint(metadata, loopEndKeys);
+    const auto maybeLength = findEmbeddedLoopPoint(metadata, loopLengthKeys);
+    if (!maybeEnd.has_value() && maybeLength.has_value() && *maybeLength > 0)
+        maybeEnd = *maybeStart + *maybeLength - 1;
+
+    if (!maybeEnd.has_value())
+        return std::nullopt;
+
+    if (*maybeStart < 0 || *maybeEnd <= *maybeStart)
+        return std::nullopt;
+
+    return std::pair<int, int>{ *maybeStart, *maybeEnd };
+}
+
+std::uint32_t readLeU32(const std::uint8_t* data) noexcept
+{
+    return static_cast<std::uint32_t>(data[0])
+        | (static_cast<std::uint32_t>(data[1]) << 8)
+        | (static_cast<std::uint32_t>(data[2]) << 16)
+        | (static_cast<std::uint32_t>(data[3]) << 24);
+}
+
+std::optional<std::pair<int, int>> findEmbeddedLoopRangeFromWavSmplChunk(const juce::File& file)
+{
+    juce::MemoryBlock bytes;
+    if (!file.loadFileAsData(bytes))
+        return std::nullopt;
+
+    const auto* data = static_cast<const std::uint8_t*>(bytes.getData());
+    const auto size = bytes.getSize();
+    if (size < 12)
+        return std::nullopt;
+
+    if (std::memcmp(data + 0, "RIFF", 4) != 0 || std::memcmp(data + 8, "WAVE", 4) != 0)
+        return std::nullopt;
+
+    std::size_t cursor = 12;
+    while (cursor + 8 <= size)
+    {
+        const auto* chunkHeader = data + cursor;
+        const auto chunkSize = static_cast<std::size_t>(readLeU32(chunkHeader + 4));
+        const auto chunkDataOffset = cursor + 8;
+
+        if (chunkDataOffset + chunkSize > size)
+            break;
+
+        if (std::memcmp(chunkHeader, "smpl", 4) == 0)
+        {
+            if (chunkSize < 60)
+                return std::nullopt;
+
+            const auto* smpl = data + chunkDataOffset;
+            const auto loopCount = readLeU32(smpl + 28);
+            if (loopCount == 0)
+                return std::nullopt;
+
+            const auto* loop = smpl + 36;
+            const auto loopStart = static_cast<int>(readLeU32(loop + 8));
+            const auto loopEnd = static_cast<int>(readLeU32(loop + 12));
+            if (loopStart < 0 || loopEnd <= loopStart)
+                return std::nullopt;
+
+            return std::pair<int, int>{ loopStart, loopEnd };
+        }
+
+        cursor = chunkDataOffset + chunkSize + (chunkSize & 1u);
+    }
+
+    return std::nullopt;
+}
+
 juce::String detectLoopFormatBadge(const juce::File& file, const juce::StringPairArray& metadata)
 {
-    const auto hasRootNote = findEmbeddedRootMidiNote(metadata).has_value();
-    const auto loopStart = metadata.getValue("Loop0Start", "-1").getIntValue();
-    const auto loopEnd = metadata.getValue("Loop0End", "-1").getIntValue();
-    const auto hasLoop = loopStart >= 0 && loopEnd > loopStart;
+    const auto ext = file.getFileExtension().toLowerCase();
+    const auto isWav = (ext == ".wav");
 
-    if (!(hasRootNote && hasLoop))
+    const auto embeddedLoopRange = findEmbeddedLoopRange(metadata);
+    const auto fallbackSmplLoopRange = embeddedLoopRange.has_value()
+        ? std::optional<std::pair<int, int>>{}
+        : (isWav ? findEmbeddedLoopRangeFromWavSmplChunk(file)
+                 : std::optional<std::pair<int, int>>{});
+
+    if (!embeddedLoopRange.has_value() && !fallbackSmplLoopRange.has_value())
         return {};
 
-    const auto ext = file.getFileExtension().toLowerCase();
     if (ext == ".wav")
         return "Acidized";
 
@@ -332,11 +450,12 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
         setFilterSettings(defaultFilterSettingsForLoadedSample());
         displaySampleData_ = decoded.audio;
         samplePath_ = file.getFullPathName();
-        loadedSampleLoopFormatBadge_ = {};
+        loadedSampleLoopFormatBadge_ = "REX";
 
         const auto fullEnd = juce::jmax(0, getTotalSampleLength() - 1);
         setSampleWindow(0, fullEnd);
         setLoopPoints(0, fullEnd);
+        setPlaybackMode(PlaybackMode::loop);
         return true;
     }
 
@@ -384,13 +503,15 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
     samplePath_ = file.getFullPathName();
     loadedSampleLoopFormatBadge_ = {};
 
-    // Read embedded loop points from WAV smpl chunk or AIFF MARK/INST chunks
-    const auto embeddedLoopStart = metadata.getValue("Loop0Start", "-1").getIntValue();
-    const auto embeddedLoopEnd = metadata.getValue("Loop0End", "-1").getIntValue();
+    auto embeddedLoopRange = findEmbeddedLoopRange(metadata);
+    if (!embeddedLoopRange.has_value() && ext == ".wav")
+        embeddedLoopRange = findEmbeddedLoopRangeFromWavSmplChunk(file);
 
-    if (loadedLoopFormatBadge.isNotEmpty() && embeddedLoopStart >= 0 && embeddedLoopEnd > embeddedLoopStart)
+    if (embeddedLoopRange.has_value())
     {
-        setSampleWindow(embeddedLoopStart, embeddedLoopEnd);
+        const auto [embeddedLoopStart, embeddedLoopEnd] = *embeddedLoopRange;
+        const auto fullEnd = juce::jmax(0, getTotalSampleLength() - 1);
+        setSampleWindow(0, fullEnd);
         setLoopPoints(embeddedLoopStart, embeddedLoopEnd);
         setPlaybackMode(PlaybackMode::loop);
         loadedSampleLoopFormatBadge_ = loadedLoopFormatBadge;
