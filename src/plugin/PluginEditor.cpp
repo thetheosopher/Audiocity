@@ -1442,6 +1442,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(generateSawtoothButton_);
     addAndMakeVisible(generateTriangleButton_);
     addAndMakeVisible(generatePulseButton_);
+    addAndMakeVisible(generateRandomButton_);
     addAndMakeVisible(generateSamplesLabel_);
     addAndMakeVisible(generateSamplesCombo_);
     addAndMakeVisible(generateBitDepthLabel_);
@@ -1517,6 +1518,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     bindWaveButton(generateSawtoothButton_, GeneratedWaveType::sawtooth);
     bindWaveButton(generateTriangleButton_, GeneratedWaveType::triangle);
     bindWaveButton(generatePulseButton_, GeneratedWaveType::pulse);
+    bindWaveButton(generateRandomButton_, GeneratedWaveType::random);
 
     generatePreviewButton_.onClick = [this]
     {
@@ -2618,6 +2620,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     generateSawtoothButton_.setVisible(showGenerateTab);
     generateTriangleButton_.setVisible(showGenerateTab);
     generatePulseButton_.setVisible(showGenerateTab);
+    generateRandomButton_.setVisible(showGenerateTab);
     generateSamplesLabel_.setVisible(showGenerateTab);
     generateSamplesCombo_.setVisible(showGenerateTab);
     generateBitDepthLabel_.setVisible(showGenerateTab);
@@ -3168,6 +3171,8 @@ void AudiocityAudioProcessorEditor::resized()
         generateTriangleButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
         waveButtons.removeFromLeft(kBtnGap);
         generatePulseButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
+        waveButtons.removeFromLeft(kBtnGap);
+        generateRandomButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
 
         genArea.removeFromTop(10);
         auto settingsRow = genArea.removeFromTop(32);
@@ -3665,6 +3670,102 @@ void AudiocityAudioProcessorEditor::regenerateWaveform()
 
     generatedWaveform_.assign(static_cast<std::size_t>(sampleCount), 0.0f);
 
+    if (selectedGeneratedWaveType_ == GeneratedWaveType::random && sampleCount >= 2)
+    {
+        struct Anchor
+        {
+            float x = 0.0f;
+            float y = 0.0f;
+        };
+
+        struct CurveSegment
+        {
+            Anchor p0;
+            Anchor p1;
+            Anchor p2;
+            Anchor p3;
+        };
+
+        juce::Random random(juce::Random::getSystemRandom().nextInt());
+        const auto anchorCount = random.nextInt(juce::Range<int>(3, 10));
+
+        std::vector<Anchor> anchors;
+        anchors.resize(static_cast<std::size_t>(anchorCount));
+        anchors.front() = { 0.0f, 0.0f };
+        anchors.back() = { 1.0f, 0.0f };
+
+        std::vector<float> segmentWeights;
+        segmentWeights.resize(static_cast<std::size_t>(anchorCount - 1), 0.0f);
+        float totalWeight = 0.0f;
+        for (int i = 0; i < anchorCount - 1; ++i)
+        {
+            const auto w = 0.25f + random.nextFloat();
+            segmentWeights[static_cast<std::size_t>(i)] = w;
+            totalWeight += w;
+        }
+
+        float cumulative = 0.0f;
+        for (int i = 1; i < anchorCount - 1; ++i)
+        {
+            cumulative += segmentWeights[static_cast<std::size_t>(i - 1)] / totalWeight;
+            anchors[static_cast<std::size_t>(i)].x = juce::jlimit(0.0f, 1.0f, cumulative);
+            anchors[static_cast<std::size_t>(i)].y = (random.nextFloat() * 2.0f) - 1.0f;
+        }
+
+        std::vector<CurveSegment> curves;
+        curves.reserve(static_cast<std::size_t>(anchorCount - 1));
+        for (int i = 0; i < anchorCount - 1; ++i)
+        {
+            const auto p0 = anchors[static_cast<std::size_t>(i)];
+            const auto p3 = anchors[static_cast<std::size_t>(i + 1)];
+            const auto dx = p3.x - p0.x;
+
+            CurveSegment segment;
+            segment.p0 = p0;
+            segment.p3 = p3;
+            segment.p1.x = p0.x + dx * (1.0f / 3.0f);
+            segment.p2.x = p0.x + dx * (2.0f / 3.0f);
+            segment.p1.y = juce::jlimit(-1.0f, 1.0f, p0.y + ((random.nextFloat() * 2.0f) - 1.0f));
+            segment.p2.y = juce::jlimit(-1.0f, 1.0f, p3.y + ((random.nextFloat() * 2.0f) - 1.0f));
+            curves.push_back(segment);
+        }
+
+        int segmentIndex = 0;
+        const auto lastSample = juce::jmax(1, sampleCount - 1);
+        for (int i = 0; i < sampleCount; ++i)
+        {
+            const auto x = static_cast<float>(i) / static_cast<float>(lastSample);
+            while (segmentIndex < anchorCount - 2
+                && x > anchors[static_cast<std::size_t>(segmentIndex + 1)].x)
+            {
+                ++segmentIndex;
+            }
+
+            const auto& left = anchors[static_cast<std::size_t>(segmentIndex)];
+            const auto& right = anchors[static_cast<std::size_t>(segmentIndex + 1)];
+            const auto span = juce::jmax(1.0e-6f, right.x - left.x);
+            const auto t = juce::jlimit(0.0f, 1.0f, (x - left.x) / span);
+
+            float value = 0.0f;
+            const auto& curve = curves[static_cast<std::size_t>(segmentIndex)];
+            const auto omt = 1.0f - t;
+            const auto omt2 = omt * omt;
+            const auto t2 = t * t;
+            value = (omt2 * omt) * curve.p0.y
+                + (3.0f * omt2 * t) * curve.p1.y
+                + (3.0f * omt * t2) * curve.p2.y
+                + (t2 * t) * curve.p3.y;
+
+            generatedWaveform_[static_cast<std::size_t>(i)] = quantizeWaveSample(value, bitDepth);
+        }
+
+        enforceWaveBoundaryZeroCrossings(generatedWaveform_);
+        generateWaveformView_.setWaveform(generatedWaveform_);
+        processor_.setGeneratedWaveformPreview(generatedWaveform_);
+        processor_.setGeneratedWaveformPreviewMidiNote(getSelectedGenerateMidiNote());
+        return;
+    }
+
     for (int i = 0; i < sampleCount; ++i)
     {
         const auto phase = static_cast<float>(i) / static_cast<float>(sampleCount);
@@ -3693,6 +3794,9 @@ void AudiocityAudioProcessorEditor::regenerateWaveform()
                 value = phase < pulseWidth ? 1.0f : -1.0f;
                 break;
             }
+            case GeneratedWaveType::random:
+                value = 0.0f;
+                break;
         }
 
         generatedWaveform_[static_cast<std::size_t>(i)] = quantizeWaveSample(value, bitDepth);
@@ -3879,6 +3983,8 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Delay Mix - Blend between dry signal and delayed signal");
     delayTempoSyncToggle_.setTooltip(
         "Delay Sync - Quantize delay time to host tempo divisions");
+    generateRandomButton_.setTooltip(
+        "Random - Generate a random waveform from Bezier-curve anchor segments");
     dcFilterEnabledToggle_.setTooltip(
         "DC Filter - Enable a subsonic high-pass filter to remove DC offset");
     dcFilterCutoffDial_.setLabelTooltip(

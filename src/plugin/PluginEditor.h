@@ -333,6 +333,7 @@ private:
     juce::TextButton generateSawtoothButton_{ "Sawtooth" };
     juce::TextButton generateTriangleButton_{ "Triangle" };
     juce::TextButton generatePulseButton_{ "Pulse" };
+    juce::TextButton generateRandomButton_{ "Random" };
     juce::Label generateSamplesLabel_{ {}, "Samples" };
     juce::ComboBox generateSamplesCombo_;
     juce::Label generateBitDepthLabel_{ {}, "Bit Depth" };
@@ -353,7 +354,8 @@ private:
         square,
         sawtooth,
         triangle,
-        pulse
+        pulse,
+        random
     };
     enum class SketchedWaveSmoothing
     {
