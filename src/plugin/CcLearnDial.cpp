@@ -38,7 +38,7 @@ void CcLearnDial::CcLabel::mouseDown(const juce::MouseEvent& event)
             else if (result == 2)
                 owner_.armCcLearn();
             else if (result == 3)
-                owner_.clearCc();
+                owner_.clearCcByUser();
         });
 }
 
@@ -140,6 +140,13 @@ void CcLearnDial::clearCc()
     const auto base = label_.getText().upToFirstOccurrenceOf(" [", false, true);
     label_.setText(base, juce::dontSendNotification);
     label_.repaint();
+}
+
+void CcLearnDial::clearCcByUser()
+{
+    clearCc();
+    if (onCcClearedByUser)
+        onCcClearedByUser();
 }
 
 void CcLearnDial::handleCcValue(const int ccValue)

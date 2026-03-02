@@ -1,5 +1,7 @@
 #include "EngineCore.h"
 
+#include "RexLoader.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -311,6 +313,33 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
     if (!file.existsAsFile())
         return false;
 
+    const auto ext = file.getFileExtension().toLowerCase();
+    if (ext == ".rex" || ext == ".rx2")
+    {
+        rex::DecodedLoop decoded;
+        if (!rex::decodeFile(file, decoded))
+            return false;
+
+        if (decoded.audio.getNumSamples() <= 0 || decoded.audio.getNumChannels() <= 0)
+            return false;
+
+        const auto rootNote = rootMidiNote_;
+        setSampleData(decoded.audio, decoded.sampleRateHz, rootNote);
+        setAmpEnvelope(defaultAmpEnvelopeForLoadedSample());
+        setAmpLfoSettings(defaultAmpLfoSettingsForLoadedSample());
+        setPitchLfoSettings(defaultPitchLfoSettingsForLoadedSample());
+        setFilterEnvelope(defaultFilterEnvelopeForLoadedSample());
+        setFilterSettings(defaultFilterSettingsForLoadedSample());
+        displaySampleData_ = decoded.audio;
+        samplePath_ = file.getFullPathName();
+        loadedSampleLoopFormatBadge_ = {};
+
+        const auto fullEnd = juce::jmax(0, getTotalSampleLength() - 1);
+        setSampleWindow(0, fullEnd);
+        setLoopPoints(0, fullEnd);
+        return true;
+    }
+
     juce::AudioFormatManager formatManager;
     formatManager.registerBasicFormats();
 
@@ -375,6 +404,11 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
     }
 
     return true;
+}
+
+bool EngineCore::isRexRuntimeAvailable() const noexcept
+{
+    return rex::isRuntimeAvailable();
 }
 
 void EngineCore::setSampleData(const juce::AudioBuffer<float>& sampleData, const double sampleRate, const int rootNote) noexcept

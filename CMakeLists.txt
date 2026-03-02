@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(Audiocity VERSION 0.1.0 LANGUAGES CXX)
+project(Audiocity VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -40,6 +40,25 @@ juce_add_plugin(Audiocity
 
 juce_generate_juce_header(Audiocity)
 
+add_library(audiocity_rex_sdk STATIC
+    third_party/REXSDK_Win_1.9.2/REX.c)
+
+target_include_directories(audiocity_rex_sdk
+    PUBLIC
+        third_party/REXSDK_Win_1.9.2)
+
+target_compile_definitions(audiocity_rex_sdk
+    PRIVATE
+        REX_WINDOWS=1
+        REX_MAC=0)
+
+if (MSVC)
+    target_compile_options(audiocity_rex_sdk PRIVATE /W0 /WX-)
+    target_link_libraries(audiocity_rex_sdk PRIVATE Version)
+else ()
+    target_compile_options(audiocity_rex_sdk PRIVATE -w)
+endif ()
+
 target_sources(Audiocity
     PRIVATE
         src/plugin/PluginProcessor.cpp
@@ -47,6 +66,7 @@ target_sources(Audiocity
         src/plugin/PlayerPadState.cpp
         src/plugin/CcLearnDial.cpp
         src/engine/EngineCore.cpp
+        src/engine/RexLoader.cpp
         src/engine/VoicePool.cpp)
 
 target_include_directories(Audiocity
@@ -55,11 +75,14 @@ target_include_directories(Audiocity
 
 target_compile_definitions(Audiocity
     PRIVATE
+        REX_WINDOWS=1
+        REX_MAC=0
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0)
 
 target_link_libraries(Audiocity
     PRIVATE
+        audiocity_rex_sdk
         juce::juce_audio_utils
         juce::juce_data_structures
         juce::juce_dsp
@@ -70,6 +93,20 @@ target_link_libraries(Audiocity
 
 if (MSVC)
     target_compile_options(Audiocity PRIVATE /W4 /WX /permissive-)
+endif ()
+
+set(AUDIOCITY_REX_DEPLOY_DLL
+    "${CMAKE_SOURCE_DIR}/third_party/REXSDK_Win_1.9.2/Win/x64/Deployment/REX Shared Library.dll")
+
+if (EXISTS "${AUDIOCITY_REX_DEPLOY_DLL}")
+    foreach (rex_target Audiocity_Standalone Audiocity_VST3)
+        if (TARGET ${rex_target})
+            add_custom_command(TARGET ${rex_target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${AUDIOCITY_REX_DEPLOY_DLL}"
+                    "$<TARGET_FILE_DIR:${rex_target}>/REX Shared Library.dll")
+        endif ()
+    endforeach ()
 endif ()
 
 include(CTest)

@@ -10,6 +10,7 @@
 - **SQLite**: browser index, tags, favorites, peaks cache.
 - **dr_wav**: lightweight WAV preview/import.
 - **TagLib** (optional): metadata browsing.
+- **Reason Studios REX SDK 1.9.2**: `.rex` / `.rx2` import (requires `REX Shared Library.dll` deployed beside plugin/standalone binaries).
 
 ## v1.1 (Quality + Streaming)
 - **libsamplerate**: HQ resampling tier.
@@ -25,3 +26,4 @@
 ## Policy
 - Pin versions (tags/commits) and record in `DEPENDENCIES.md`.
 - Keep the audio-thread dependency surface minimal.
+- For optional runtime codecs (like REX), fail soft and keep feature disabled when runtime binaries are unavailable.

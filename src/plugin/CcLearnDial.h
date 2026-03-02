@@ -28,6 +28,7 @@ public:
 
     // Callbacks
     std::function<void()> onValueChange;
+    std::function<void()> onCcClearedByUser;
 
     // CC learn
     void armCcLearn();
@@ -35,6 +36,7 @@ public:
     [[nodiscard]] bool isCcLearnArmed() const noexcept { return ccLearnArmed_; }
     void assignCc(int ccNumber);
     void clearCc();
+    void clearCcByUser();
     [[nodiscard]] int getAssignedCc() const noexcept { return assignedCc_; }
 
     // Called by editor when a CC message arrives while this dial is armed,

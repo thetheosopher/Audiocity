@@ -3,6 +3,7 @@
 
 #include "../src/engine/EngineCore.h"
 #include "../src/engine/SettingsUndoHistory.h"
+#include "../src/plugin/CcLearnDial.h"
 #include "../src/plugin/PlayerPadState.h"
 
 #include <cmath>
@@ -715,6 +716,28 @@ bool runLoadSampleResetsEnvelopeAndFilterDefaultsTest()
         && !filter.lfoTempoSync
         && std::abs(pitchLfo.rateHz - 0.0f) <= 1.0e-6f
         && std::abs(pitchLfo.depthCents - 0.0f) <= 1.0e-6f;
+}
+
+bool runRexRuntimeFallbackSmokeTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    const auto rexFixture = fixtureFile("third_party/REXSDK_Win_1.9.2/REX Test Protocol Files/120Mono.rx2");
+    if (!rexFixture.existsAsFile())
+        return true;
+
+    audiocity::engine::EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+
+    const auto rexRuntimeAvailable = engine.isRexRuntimeAvailable();
+    const auto loaded = engine.loadSampleFromFile(rexFixture);
+
+    if (!rexRuntimeAvailable)
+        return !loaded;
+
+    return loaded && engine.getLoadedSampleLength() > 0;
 }
 
 bool runEditorSampleEditControlsTest()
@@ -3332,6 +3355,21 @@ bool runVoicePlaybackStateSnapshotTest()
 
     return true;
 }
+
+bool runCcLearnDialUserClearCallbackTest()
+{
+    CcLearnDial dial("Test", 0.0, 1.0, 0.01, {}, 0.5);
+    bool callbackInvoked = false;
+    dial.onCcClearedByUser = [&callbackInvoked]
+    {
+        callbackInvoked = true;
+    };
+
+    dial.assignCc(74);
+    dial.clearCcByUser();
+
+    return callbackInvoked && dial.getAssignedCc() == -1 && !dial.isCcLearnArmed();
+}
 }
 
 int main()
@@ -3356,6 +3394,12 @@ int main()
 
     if (!runLoadSampleResetsEnvelopeAndFilterDefaultsTest())
         return 45;
+
+    if (!runRexRuntimeFallbackSmokeTest())
+        return 62;
+
+    if (!runCcLearnDialUserClearCallbackTest())
+        return 63;
 
     if (!runGeneratedCyclePitchInvariantAcrossSampleCountsTest())
         return 46;

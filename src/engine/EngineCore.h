@@ -152,6 +152,7 @@ public:
     using VoicePlaybackStates = std::array<VoicePlaybackState, VoicePool::maxVoices>;
 
     bool loadSampleFromFile(const juce::File& file);
+    [[nodiscard]] bool isRexRuntimeAvailable() const noexcept;
     void setSampleData(const juce::AudioBuffer<float>& sampleData, double sampleRate, int rootNote) noexcept;
     void setPreloadSamples(int preloadSamples) noexcept;
     [[nodiscard]] int getPreloadSamples() const noexcept { return preloadSamples_; }

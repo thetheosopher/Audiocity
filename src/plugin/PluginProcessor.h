@@ -52,6 +52,7 @@ public:
     void setStateInformation(const void* data, int sizeInBytes) override;
 
     bool loadSampleFromFile(const juce::File& file);
+    [[nodiscard]] bool isRexRuntimeAvailable() const noexcept { return engine_.isRexRuntimeAvailable(); }
     void loadGeneratedWaveformAsSample(const std::vector<float>& waveform, int rootMidiNote = 60);
     [[nodiscard]] juce::String getLoadedSamplePath() const;
     [[nodiscard]] bool isGeneratedWaveformLoaded() const noexcept

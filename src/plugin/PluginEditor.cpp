@@ -2180,6 +2180,14 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         { &fadeOutDial_,        "fadeOut" },
     };
 
+    for (auto& [dial, paramId] : allDials_)
+    {
+        dial->onCcClearedByUser = [this, paramId]
+        {
+            processor_.clearCcMappingByParam(paramId);
+        };
+    }
+
     auto addToSampleControls = [this](juce::Component& c)
     {
         sampleControlsContent_.addAndMakeVisible(c);
@@ -2372,7 +2380,9 @@ void AudiocityAudioProcessorEditor::timerCallback()
 
             const auto ext = dropped.getFileExtension().toLowerCase();
             DBG("[DnD]   ext: \"" + ext + "\"");
-            if (ext == ".wav" || ext == ".aiff" || ext == ".aif")
+            const auto rexSupported = processor_.isRexRuntimeAvailable();
+            if (ext == ".wav" || ext == ".aiff" || ext == ".aif"
+                || (rexSupported && (ext == ".rex" || ext == ".rx2")))
             {
                 DBG("[DnD]   loading sample...");
                 if (processor_.loadSampleFromFile(dropped))
@@ -2912,7 +2922,13 @@ void AudiocityAudioProcessorEditor::mouseUp(const juce::MouseEvent&)
 bool AudiocityAudioProcessorEditor::isSupportedSampleFile(const juce::File& file) const
 {
     const auto ext = file.getFileExtension().toLowerCase();
-    return ext == ".wav" || ext == ".aif" || ext == ".aiff";
+    if (ext == ".wav" || ext == ".aif" || ext == ".aiff")
+        return true;
+
+    if (processor_.isRexRuntimeAvailable() && (ext == ".rex" || ext == ".rx2"))
+        return true;
+
+    return false;
 }
 
 void AudiocityAudioProcessorEditor::chooseSampleRootFolder()
@@ -3609,7 +3625,10 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawRect(overlay, 2);
     g.setColour(juce::Colours::white.withAlpha(0.95f));
     g.setFont(14.0f);
-    g.drawText("Drop .wav or .aiff to load", overlay, juce::Justification::centred);
+    const auto dropText = processor_.isRexRuntimeAvailable()
+        ? juce::String("Drop .wav, .aiff, .rex, or .rx2 to load")
+        : juce::String("Drop .wav or .aiff to load");
+    g.drawText(dropText, overlay, juce::Justification::centred);
 }
 
 bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
@@ -4161,7 +4180,9 @@ bool AudiocityAudioProcessorEditor::isInterestedInFileDrag(const juce::StringArr
 
         const auto ext = juce::File(path).getFileExtension().toLowerCase();
         DBG("[DnD]   normalized=\"" + path + "\"  ext=\"" + ext + "\"");
-        if (ext == ".wav" || ext == ".aiff" || ext == ".aif")
+        const auto rexSupported = processor_.isRexRuntimeAvailable();
+        if (ext == ".wav" || ext == ".aiff" || ext == ".aif"
+            || (rexSupported && (ext == ".rex" || ext == ".rx2")))
         {
             DBG("[DnD]   -> INTERESTED");
             return true;
@@ -4209,7 +4230,10 @@ void AudiocityAudioProcessorEditor::filesDropped(const juce::StringArray& files,
 
 void AudiocityAudioProcessorEditor::openSampleChooser()
 {
-    fileChooser_ = std::make_unique<juce::FileChooser>("Load sample", juce::File{}, "*.wav;*.aiff;*.aif");
+    const auto wildcard = processor_.isRexRuntimeAvailable()
+        ? juce::String("*.wav;*.aiff;*.aif;*.rex;*.rx2")
+        : juce::String("*.wav;*.aiff;*.aif");
+    fileChooser_ = std::make_unique<juce::FileChooser>("Load sample", juce::File{}, wildcard);
 
     const auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
     fileChooser_->launchAsync(chooserFlags, [this](const juce::FileChooser& chooser)
