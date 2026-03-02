@@ -2003,9 +2003,19 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(panDial_);
     addAndMakeVisible(outputLevelMeter_);
     addAndMakeVisible(reverbMixDial_);
+    addAndMakeVisible(delayTimeDial_);
+    addAndMakeVisible(delayFeedbackDial_);
+    addAndMakeVisible(delayMixDial_);
+    addAndMakeVisible(delayTempoSyncToggle_);
+    addAndMakeVisible(dcFilterEnabledToggle_);
+    addAndMakeVisible(dcFilterCutoffDial_);
     masterVolumeDial_.setDoubleClickResetValue(100.0);
     panDial_.setDoubleClickResetValue(0.0);
     reverbMixDial_.setDoubleClickResetValue(0.0);
+    delayTimeDial_.setDoubleClickResetValue(320.0);
+    delayFeedbackDial_.setDoubleClickResetValue(35.0);
+    delayMixDial_.setDoubleClickResetValue(0.0);
+    dcFilterCutoffDial_.setDoubleClickResetValue(10.0);
     preloadDial_.onValueChange = [this]
     {
         processor_.setPreloadSamples(juce::jmax(256, static_cast<int>(preloadDial_.getValue())));
@@ -2023,6 +2033,12 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     {
         processor_.setReverbMix(static_cast<float>(reverbMixDial_.getValue()) / 100.0f);
     };
+    delayTimeDial_.onValueChange = [this] { pushDelaySettings(); };
+    delayFeedbackDial_.onValueChange = [this] { pushDelaySettings(); };
+    delayMixDial_.onValueChange = [this] { pushDelaySettings(); };
+    delayTempoSyncToggle_.onClick = [this] { pushDelaySettings(); };
+    dcFilterEnabledToggle_.onClick = [this] { pushDcFilterSettings(); };
+    dcFilterCutoffDial_.onValueChange = [this] { pushDcFilterSettings(); };
 
     // Reverse / Fade
     addAndMakeVisible(reverseToggle_);
@@ -2089,6 +2105,10 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         { &masterVolumeDial_,   "masterVolume" },
         { &panDial_,            "pan" },
         { &reverbMixDial_,      "reverbMix" },
+        { &delayTimeDial_,      "delayTime" },
+        { &delayFeedbackDial_,  "delayFeedback" },
+        { &delayMixDial_,       "delayMix" },
+        { &dcFilterCutoffDial_, "dcFilterCutoff" },
         { &fadeInDial_,         "fadeIn" },
         { &fadeOutDial_,        "fadeOut" },
     };
@@ -2172,6 +2192,12 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addToSampleControls(panDial_);
     addToSampleControls(outputLevelMeter_);
     addToSampleControls(reverbMixDial_);
+    addToSampleControls(delayTimeDial_);
+    addToSampleControls(delayFeedbackDial_);
+    addToSampleControls(delayMixDial_);
+    addToSampleControls(delayTempoSyncToggle_);
+    addToSampleControls(dcFilterEnabledToggle_);
+    addToSampleControls(dcFilterCutoffDial_);
     addToSampleControls(diagnosticsLabel_);
 
     setupTooltips();
@@ -2463,6 +2489,14 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
     masterVolumeDial_.setValue(processor_.getMasterVolume() * 100.0f, juce::dontSendNotification);
     panDial_.setValue(processor_.getPan() * 100.0f, juce::dontSendNotification);
     reverbMixDial_.setValue(processor_.getReverbMix() * 100.0f, juce::dontSendNotification);
+    const auto delay = processor_.getDelaySettings();
+    delayTimeDial_.setValue(delay.timeMs, juce::dontSendNotification);
+    delayFeedbackDial_.setValue(delay.feedback * 100.0f, juce::dontSendNotification);
+    delayMixDial_.setValue(delay.mix * 100.0f, juce::dontSendNotification);
+    delayTempoSyncToggle_.setToggleState(delay.tempoSync, juce::dontSendNotification);
+    const auto dcFilter = processor_.getDcFilterSettings();
+    dcFilterEnabledToggle_.setToggleState(dcFilter.enabled, juce::dontSendNotification);
+    dcFilterCutoffDial_.setValue(dcFilter.cutoffHz, juce::dontSendNotification);
 
     updateDiagnosticsStatusText();
 }
@@ -2558,6 +2592,12 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     panDial_.setVisible(showSampleTab);
     outputLevelMeter_.setVisible(showSampleTab);
     reverbMixDial_.setVisible(showSampleTab);
+    delayTimeDial_.setVisible(showSampleTab);
+    delayFeedbackDial_.setVisible(showSampleTab);
+    delayMixDial_.setVisible(showSampleTab);
+    delayTempoSyncToggle_.setVisible(showSampleTab);
+    dcFilterEnabledToggle_.setVisible(showSampleTab);
+    dcFilterCutoffDial_.setVisible(showSampleTab);
     diagnosticsLabel_.setVisible(showSampleTab);
 
     playerKeyboardLabel_.setVisible(showPlayerTab);
@@ -3354,16 +3394,40 @@ void AudiocityAudioProcessorEditor::resized()
         filterLfoTempoSyncToggle_.setBounds(syncArea.removeFromTop(22));
     }
 
-    // ── Panel 7: Output ──
+    // ── Panel 7: Effects ──
+    {
+        auto fxInner = makeGroup("Effects", kRowH);
+
+        reverbMixDial_.setBounds(fxInner.removeFromLeft(kDial));
+        fxInner.removeFromLeft(kDialGap);
+
+        delayTimeDial_.setBounds(fxInner.removeFromLeft(kDial));
+        fxInner.removeFromLeft(kDialGap);
+
+        delayFeedbackDial_.setBounds(fxInner.removeFromLeft(kDial));
+        fxInner.removeFromLeft(kDialGap);
+
+        delayMixDial_.setBounds(fxInner.removeFromLeft(kDial));
+        fxInner.removeFromLeft(kDialGap);
+
+        auto delaySyncArea = fxInner.removeFromLeft(120);
+        delayTempoSyncToggle_.setBounds(delaySyncArea.removeFromTop(24));
+        fxInner.removeFromLeft(kDialGap);
+
+        auto dcFilterArea = fxInner.removeFromLeft(108);
+        dcFilterEnabledToggle_.setBounds(dcFilterArea.removeFromTop(24));
+        fxInner.removeFromLeft(kDialGap);
+
+        dcFilterCutoffDial_.setBounds(fxInner.removeFromLeft(kDial));
+    }
+
+    // ── Panel 8: Output ──
     {
         auto outInner = makeGroup("Output", kRowH);
         fadeInDial_.setBounds(outInner.removeFromLeft(kDial));
         outInner.removeFromLeft(kDialGap);
         fadeOutDial_.setBounds(outInner.removeFromLeft(kDial));
         outInner.removeFromLeft(kStackColGap);
-
-        reverbMixDial_.setBounds(outInner.removeFromLeft(kDial));
-        outInner.removeFromLeft(kDialGap);
 
         masterVolumeDial_.setBounds(outInner.removeFromLeft(kDial));
         outInner.removeFromLeft(kDialGap);
@@ -3385,7 +3449,7 @@ void AudiocityAudioProcessorEditor::resized()
         outputLevelMeter_.setBounds(outInner.reduced(0, 6));
     }
 
-    // ── Panel 8: Diagnostics ──
+    // ── Panel 9: Diagnostics ──
     {
         auto diagInner = makeGroup("Diagnostics", 56);
         diagnosticsLabel_.setBounds(diagInner.removeFromTop(22));
@@ -3795,6 +3859,18 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Quality - High quality cubic interpolation");
     reverbMixDial_.setLabelTooltip(
         "Reverb Mix - Global wet amount");
+    delayTimeDial_.setLabelTooltip(
+        "Delay Time - Delay length in milliseconds (or snapped note value when Delay Sync is enabled)");
+    delayFeedbackDial_.setLabelTooltip(
+        "Delay Feedback - Amount of delayed signal fed back into the delay line");
+    delayMixDial_.setLabelTooltip(
+        "Delay Mix - Blend between dry signal and delayed signal");
+    delayTempoSyncToggle_.setTooltip(
+        "Delay Sync - Quantize delay time to host tempo divisions");
+    dcFilterEnabledToggle_.setTooltip(
+        "DC Filter - Enable a subsonic high-pass filter to remove DC offset");
+    dcFilterCutoffDial_.setLabelTooltip(
+        "DC HPF - Subsonic high-pass cutoff in Hz (5 to 20)");
     velocityCurveCombo_.setTooltip(
         "Velocity Curve - Response curve for velocity to amplitude");
     velocityCurveLabel_.setTooltip(
@@ -4107,6 +4183,14 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     masterVolumeDial_.setValue(processor_.getMasterVolume() * 100.0f);
     panDial_.setValue(processor_.getPan() * 100.0f);
     reverbMixDial_.setValue(processor_.getReverbMix() * 100.0f);
+    const auto delay = processor_.getDelaySettings();
+    delayTimeDial_.setValue(delay.timeMs);
+    delayFeedbackDial_.setValue(delay.feedback * 100.0f);
+    delayMixDial_.setValue(delay.mix * 100.0f);
+    delayTempoSyncToggle_.setToggleState(delay.tempoSync, juce::dontSendNotification);
+    const auto dcFilter = processor_.getDcFilterSettings();
+    dcFilterEnabledToggle_.setToggleState(dcFilter.enabled, juce::dontSendNotification);
+    dcFilterCutoffDial_.setValue(dcFilter.cutoffHz, juce::dontSendNotification);
 
     const auto velCurve = processor_.getVelocityCurve();
     const bool isEditingVelocityCurve = velocityCurveCombo_.hasKeyboardFocus(true) || velocityCurveCombo_.isPopupActive();
@@ -4227,6 +4311,24 @@ void AudiocityAudioProcessorEditor::pushAmpLfoSettings()
     settings.depth = juce::jlimit(0.0f, 1.0f, static_cast<float>(ampLfoDepthDial_.getValue()) / 100.0f);
     settings.shape = comboIdToLfoShape(ampLfoShapeCombo_.getSelectedId());
     processor_.setAmpLfoSettings(settings);
+}
+
+void AudiocityAudioProcessorEditor::pushDelaySettings()
+{
+    AudiocityAudioProcessor::DelaySettings settings;
+    settings.timeMs = juce::jlimit(1.0f, 2000.0f, static_cast<float>(delayTimeDial_.getValue()));
+    settings.feedback = juce::jlimit(0.0f, 0.95f, static_cast<float>(delayFeedbackDial_.getValue()) / 100.0f);
+    settings.mix = juce::jlimit(0.0f, 1.0f, static_cast<float>(delayMixDial_.getValue()) / 100.0f);
+    settings.tempoSync = delayTempoSyncToggle_.getToggleState();
+    processor_.setDelaySettings(settings);
+}
+
+void AudiocityAudioProcessorEditor::pushDcFilterSettings()
+{
+    AudiocityAudioProcessor::DcFilterSettings settings;
+    settings.enabled = dcFilterEnabledToggle_.getToggleState();
+    settings.cutoffHz = juce::jlimit(5.0f, 20.0f, static_cast<float>(dcFilterCutoffDial_.getValue()));
+    processor_.setDcFilterSettings(settings);
 }
 
 void AudiocityAudioProcessorEditor::pushPitchLfoSettings()

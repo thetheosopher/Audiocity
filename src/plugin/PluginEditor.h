@@ -443,6 +443,12 @@ private:
     CcLearnDial panDial_{ "Pan", -100, 100, 1, {}, 0 };
     StereoPeakMeter outputLevelMeter_;
     CcLearnDial reverbMixDial_{ "Reverb", 0, 100, 1, "%", 0 };
+    CcLearnDial delayTimeDial_{ "Delay T", 1, 2000, 1, "ms", 320 };
+    CcLearnDial delayFeedbackDial_{ "Delay FB", 0, 95, 1, "%", 35 };
+    CcLearnDial delayMixDial_{ "Delay Mix", 0, 100, 1, "%", 0 };
+    juce::ToggleButton delayTempoSyncToggle_{ "Delay Sync" };
+    juce::ToggleButton dcFilterEnabledToggle_{ "DC Filter" };
+    CcLearnDial dcFilterCutoffDial_{ "DC HPF", 5, 20, 0.1, "Hz", 10 };
 
     // ── Diagnostics ──
     juce::Label diagnosticsLabel_;
@@ -465,6 +471,8 @@ private:
     void pushPitchLfoSettings();
     void pushFilterEnvelope();
     void pushFilterSettings();
+    void pushDelaySettings();
+    void pushDcFilterSettings();
     void pushPerformanceControls();
     void syncCcMappingsFromProcessor();
     void setupTooltips();

@@ -55,6 +55,12 @@ constexpr auto kPlaybackMode = "playbackMode";
 constexpr auto kQualityTier = "qualityTier";
 constexpr auto kVelocityCurve = "velocityCurve";
 constexpr auto kReverbMix = "reverbMix";
+constexpr auto kDelayTimeMs = "delayTimeMs";
+constexpr auto kDelayFeedback = "delayFeedback";
+constexpr auto kDelayMix = "delayMix";
+constexpr auto kDelayTempoSync = "delayTempoSync";
+constexpr auto kDcFilterEnabled = "dcFilterEnabled";
+constexpr auto kDcFilterCutoffHz = "dcFilterCutoffHz";
 constexpr auto kPan = "pan";
 constexpr auto kMasterVolume = "masterVolume";
 constexpr auto kPreloadSamples = "preloadSamples";
@@ -128,6 +134,12 @@ constexpr auto kParamLoopCrossfade = "p_loopCrossfade";
 constexpr auto kParamVelocityCurve = "p_velocityCurve";
 constexpr auto kParamQualityTier = "p_qualityTier";
 constexpr auto kParamReverbMix = "p_reverbMix";
+constexpr auto kParamDelayTime = "p_delayTime";
+constexpr auto kParamDelayFeedback = "p_delayFeedback";
+constexpr auto kParamDelayMix = "p_delayMix";
+constexpr auto kParamDelayTempoSync = "p_delayTempoSync";
+constexpr auto kParamDcFilterEnabled = "p_dcFilterEnabled";
+constexpr auto kParamDcFilterCutoff = "p_dcFilterCutoff";
 constexpr auto kParamPan = "p_pan";
 constexpr auto kParamMasterVolume = "p_masterVolume";
 constexpr float kMaxSamplePositionParam = 16000000.0f;
@@ -162,6 +174,8 @@ AudiocityAudioProcessor::AudiocityAudioProcessor()
     setQualityTier(engine_.getQualityTier());
     setVelocityCurve(engine_.getVelocityCurve());
     setReverbMix(engine_.getReverbMix());
+    setDelaySettings(engine_.getDelaySettings());
+    setDcFilterSettings(engine_.getDcFilterSettings());
     setPan(engine_.getPan());
     setMasterVolume(engine_.getMasterVolume());
 }
@@ -276,6 +290,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout AudiocityAudioProcessor::cre
         juce::StringArray{ "CPU", "Fidelity", "Ultra" }, 1));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamReverbMix, "Reverb Mix",
         juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamDelayTime, "Delay Time",
+        juce::NormalisableRange<float>(1.0f, 2000.0f, 1.0f), 320.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamDelayFeedback, "Delay Feedback",
+        juce::NormalisableRange<float>(0.0f, 0.95f), 0.35f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamDelayMix, "Delay Mix",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(kParamDelayTempoSync, "Delay Tempo Sync", false));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(kParamDcFilterEnabled, "DC Filter Enabled", true));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamDcFilterCutoff, "DC Filter Cutoff",
+        juce::NormalisableRange<float>(5.0f, 20.0f), 10.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPan, "Pan",
         juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamMasterVolume, "Master Volume",
@@ -299,6 +323,8 @@ void AudiocityAudioProcessor::updateParameterFromPlainValue(const juce::String& 
 
 void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
 {
+    engine_.setHostTempoBpm(hostBpm_.load(std::memory_order_relaxed));
+
     auto amp = engine_.getAmpEnvelope();
     amp.attackSeconds = apvts_.getRawParameterValue(kParamAmpAttack)->load();
     amp.decaySeconds = apvts_.getRawParameterValue(kParamAmpDecay)->load();
@@ -380,6 +406,19 @@ void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
     engine_.setQualityTier(static_cast<QualityTier>(juce::jlimit(0, 2,
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamQualityTier)->load())))));
     engine_.setReverbMix(apvts_.getRawParameterValue(kParamReverbMix)->load());
+
+    DelaySettings delay;
+    delay.timeMs = apvts_.getRawParameterValue(kParamDelayTime)->load();
+    delay.feedback = apvts_.getRawParameterValue(kParamDelayFeedback)->load();
+    delay.mix = apvts_.getRawParameterValue(kParamDelayMix)->load();
+    delay.tempoSync = apvts_.getRawParameterValue(kParamDelayTempoSync)->load() >= 0.5f;
+    engine_.setDelaySettings(delay);
+
+    DcFilterSettings dcFilter;
+    dcFilter.enabled = apvts_.getRawParameterValue(kParamDcFilterEnabled)->load() >= 0.5f;
+    dcFilter.cutoffHz = apvts_.getRawParameterValue(kParamDcFilterCutoff)->load();
+    engine_.setDcFilterSettings(dcFilter);
+
     engine_.setPan(apvts_.getRawParameterValue(kParamPan)->load());
     engine_.setMasterVolume(apvts_.getRawParameterValue(kParamMasterVolume)->load());
 }
@@ -473,6 +512,24 @@ void AudiocityAudioProcessor::setReverbMix(const float mix) noexcept
 {
     engine_.setReverbMix(mix);
     updateParameterFromPlainValue(kParamReverbMix, mix);
+}
+
+void AudiocityAudioProcessor::setDelaySettings(const DelaySettings& settings) noexcept
+{
+    engine_.setDelaySettings(settings);
+    const auto applied = engine_.getDelaySettings();
+    updateParameterFromPlainValue(kParamDelayTime, applied.timeMs);
+    updateParameterFromPlainValue(kParamDelayFeedback, applied.feedback);
+    updateParameterFromPlainValue(kParamDelayMix, applied.mix);
+    updateParameterFromPlainValue(kParamDelayTempoSync, applied.tempoSync ? 1.0f : 0.0f);
+}
+
+void AudiocityAudioProcessor::setDcFilterSettings(const DcFilterSettings& settings) noexcept
+{
+    engine_.setDcFilterSettings(settings);
+    const auto applied = engine_.getDcFilterSettings();
+    updateParameterFromPlainValue(kParamDcFilterEnabled, applied.enabled ? 1.0f : 0.0f);
+    updateParameterFromPlainValue(kParamDcFilterCutoff, applied.cutoffHz);
 }
 
 void AudiocityAudioProcessor::setPan(const float pan) noexcept
@@ -608,6 +665,14 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kQualityTier, qualityTierIndex, nullptr);
     state.setProperty(kVelocityCurve, static_cast<int>(getVelocityCurve()), nullptr);
     state.setProperty(kReverbMix, getReverbMix(), nullptr);
+    const auto delay = getDelaySettings();
+    state.setProperty(kDelayTimeMs, delay.timeMs, nullptr);
+    state.setProperty(kDelayFeedback, delay.feedback, nullptr);
+    state.setProperty(kDelayMix, delay.mix, nullptr);
+    state.setProperty(kDelayTempoSync, delay.tempoSync ? 1 : 0, nullptr);
+    const auto dcFilter = getDcFilterSettings();
+    state.setProperty(kDcFilterEnabled, dcFilter.enabled ? 1 : 0, nullptr);
+    state.setProperty(kDcFilterCutoffHz, dcFilter.cutoffHz, nullptr);
     state.setProperty(kPan, getPan(), nullptr);
     state.setProperty(kMasterVolume, getMasterVolume(), nullptr);
     state.setProperty(kPreloadSamples, getPreloadSamples(), nullptr);
@@ -740,6 +805,16 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     setVelocityCurve(static_cast<VelocityCurve>(static_cast<int>(state.getProperty(kVelocityCurve,
         static_cast<int>(getVelocityCurve())))));
     setReverbMix(static_cast<float>(state.getProperty(kReverbMix, getReverbMix())));
+    DelaySettings delay = getDelaySettings();
+    delay.timeMs = static_cast<float>(state.getProperty(kDelayTimeMs, delay.timeMs));
+    delay.feedback = static_cast<float>(state.getProperty(kDelayFeedback, delay.feedback));
+    delay.mix = static_cast<float>(state.getProperty(kDelayMix, delay.mix));
+    delay.tempoSync = static_cast<int>(state.getProperty(kDelayTempoSync, delay.tempoSync ? 1 : 0)) == 1;
+    setDelaySettings(delay);
+    DcFilterSettings dcFilter = getDcFilterSettings();
+    dcFilter.enabled = static_cast<int>(state.getProperty(kDcFilterEnabled, dcFilter.enabled ? 1 : 0)) == 1;
+    dcFilter.cutoffHz = static_cast<float>(state.getProperty(kDcFilterCutoffHz, dcFilter.cutoffHz));
+    setDcFilterSettings(dcFilter);
     setPan(static_cast<float>(state.getProperty(kPan, getPan())));
     setMasterVolume(static_cast<float>(state.getProperty(kMasterVolume, getMasterVolume())));
     setPreloadSamples(static_cast<int>(state.getProperty(kPreloadSamples, getPreloadSamples())));

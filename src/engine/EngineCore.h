@@ -100,6 +100,20 @@ public:
         float depthCents = 0.0f;
     };
 
+    struct DelaySettings
+    {
+        float timeMs = 320.0f;
+        float feedback = 0.35f;
+        float mix = 0.0f;
+        bool tempoSync = false;
+    };
+
+    struct DcFilterSettings
+    {
+        bool enabled = true;
+        float cutoffHz = 10.0f;
+    };
+
     void prepare(double sampleRate, int maxSamplesPerBlock, int outputChannels) noexcept;
     void release() noexcept;
 
@@ -136,6 +150,11 @@ public:
     [[nodiscard]] VelocityCurve getVelocityCurve() const noexcept { return velocityCurve_; }
     void setReverbMix(float mix) noexcept;
     [[nodiscard]] float getReverbMix() const noexcept { return reverbMix_; }
+    void setDelaySettings(const DelaySettings& settings) noexcept;
+    [[nodiscard]] DelaySettings getDelaySettings() const noexcept { return delaySettings_; }
+    void setDcFilterSettings(const DcFilterSettings& settings) noexcept;
+    [[nodiscard]] DcFilterSettings getDcFilterSettings() const noexcept { return dcFilterSettings_; }
+    void setHostTempoBpm(float bpm) noexcept { hostTempoBpm_ = juce::jmax(1.0f, bpm); }
     void setPan(float pan) noexcept { pan_ = juce::jlimit(-1.0f, 1.0f, pan); }
     [[nodiscard]] float getPan() const noexcept { return pan_; }
     void setMasterVolume(float volume) noexcept { masterVolume_ = juce::jlimit(0.0f, 1.0f, volume); }
@@ -280,6 +299,9 @@ private:
                                             int noteNumber,
                                             float velocity,
                                             VoiceState& voice) const noexcept;
+    void processDelay(float** outputs, int numChannels, int numSamples) noexcept;
+    void processDcFilter(float** outputs, int numChannels, int numSamples) noexcept;
+    [[nodiscard]] float computeSyncedDelayTimeMs(float rawTimeMs) const noexcept;
     [[nodiscard]] float mapVelocity(float velocity) const noexcept;
     void updateReverbParameters() noexcept;
 
@@ -316,9 +338,15 @@ private:
     QualityTier qualityTier_ = QualityTier::fidelity;
     VelocityCurve velocityCurve_ = VelocityCurve::linear;
     float reverbMix_ = 0.0f;
+    DelaySettings delaySettings_{};
+    DcFilterSettings dcFilterSettings_{};
+    float hostTempoBpm_ = 120.0f;
     float pan_ = 0.0f;
     float masterVolume_ = 1.0f;
     juce::Reverb reverb_;
+    juce::AudioBuffer<float> delayBuffer_;
+    int delayWritePos_ = 0;
+    std::array<juce::dsp::StateVariableTPTFilter<float>, 2> dcBlockFilters_{};
 
     int loopStartSample_ = 0;
     int loopEndSample_ = 0;

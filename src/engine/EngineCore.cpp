@@ -226,6 +226,20 @@ void EngineCore::prepare(const double sampleRate, const int maxSamplesPerBlock, 
     reverb_.setSampleRate(sampleRate_);
     updateReverbParameters();
 
+    for (auto& filter : dcBlockFilters_)
+    {
+        filter.prepare(spec);
+        filter.setType(juce::dsp::StateVariableTPTFilterType::highpass);
+        filter.setResonance(0.7071f);
+        filter.setCutoffFrequency(juce::jlimit(5.0f, 20.0f, dcFilterSettings_.cutoffHz));
+        filter.reset();
+    }
+
+    const auto maxDelaySamples = juce::jmax(1, static_cast<int>(std::ceil(sampleRate_ * 4.0)));
+    delayBuffer_.setSize(2, maxDelaySamples, false, true, true);
+    delayBuffer_.clear();
+    delayWritePos_ = 0;
+
     if (getTotalSampleLength() == 0)
         generateFallbackSample();
 }
@@ -236,12 +250,34 @@ void EngineCore::release() noexcept
     voicePool_.reset();
     pendingEventCount_ = 0;
     currentPitchBendSemitones_ = 0.0f;
+    delayBuffer_.clear();
+    delayWritePos_ = 0;
+    for (auto& filter : dcBlockFilters_)
+        filter.reset();
 }
 
 void EngineCore::setReverbMix(const float mix) noexcept
 {
     reverbMix_ = juce::jlimit(0.0f, 1.0f, mix);
     updateReverbParameters();
+}
+
+void EngineCore::setDelaySettings(const DelaySettings& settings) noexcept
+{
+    delaySettings_.timeMs = juce::jlimit(1.0f, 2000.0f, settings.timeMs);
+    delaySettings_.feedback = juce::jlimit(0.0f, 0.95f, settings.feedback);
+    delaySettings_.mix = juce::jlimit(0.0f, 1.0f, settings.mix);
+    delaySettings_.tempoSync = settings.tempoSync;
+}
+
+void EngineCore::setDcFilterSettings(const DcFilterSettings& settings) noexcept
+{
+    dcFilterSettings_.enabled = settings.enabled;
+    dcFilterSettings_.cutoffHz = juce::jlimit(5.0f, 20.0f, settings.cutoffHz);
+
+    const auto cutoff = dcFilterSettings_.cutoffHz;
+    for (auto& filter : dcBlockFilters_)
+        filter.setCutoffFrequency(cutoff);
 }
 
 int EngineCore::getLoadedPreloadSamples() const noexcept
@@ -696,6 +732,9 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
             reverb_.processMono(outputs[0], numSamples);
     }
 
+    processDelay(outputs, numChannels, numSamples);
+    processDcFilter(outputs, numChannels, numSamples);
+
     if (masterVolume_ < 0.9999f)
     {
         for (int channel = 0; channel < numChannels; ++channel)
@@ -739,6 +778,10 @@ void EngineCore::panic() noexcept
     stopAllVoicesImmediate();
     pendingEventCount_ = 0;
     currentPitchBendSemitones_ = 0.0f;
+    delayBuffer_.clear();
+    delayWritePos_ = 0;
+    for (auto& filter : dcBlockFilters_)
+        filter.reset();
 }
 
 void EngineCore::setAmpEnvelope(const AdsrSettings& settings) noexcept
@@ -1511,6 +1554,101 @@ float EngineCore::computeFilterSample(const float inputSample,
     }
 
     return out;
+}
+
+void EngineCore::processDelay(float** outputs, const int numChannels, const int numSamples) noexcept
+{
+    if (outputs == nullptr || numChannels <= 0 || numSamples <= 0)
+        return;
+
+    if (delaySettings_.mix <= 0.0001f || delayBuffer_.getNumSamples() <= 1)
+        return;
+
+    const auto effectiveTimeMs = delaySettings_.tempoSync
+        ? computeSyncedDelayTimeMs(delaySettings_.timeMs)
+        : delaySettings_.timeMs;
+
+    const auto delaySamples = juce::jlimit(1, delayBuffer_.getNumSamples() - 1,
+        static_cast<int>(std::round((effectiveTimeMs / 1000.0f) * static_cast<float>(sampleRate_))));
+
+    int readPos = delayWritePos_ - delaySamples;
+    while (readPos < 0)
+        readPos += delayBuffer_.getNumSamples();
+
+    const auto channelsToProcess = juce::jmin(numChannels, delayBuffer_.getNumChannels());
+    const auto dry = 1.0f - delaySettings_.mix;
+    const auto wet = delaySettings_.mix;
+    const auto feedback = delaySettings_.feedback;
+
+    for (int sample = 0; sample < numSamples; ++sample)
+    {
+        for (int channel = 0; channel < channelsToProcess; ++channel)
+        {
+            const auto input = outputs[channel][sample];
+            const auto delayed = delayBuffer_.getSample(channel, readPos);
+            outputs[channel][sample] = input * dry + delayed * wet;
+            delayBuffer_.setSample(channel, delayWritePos_, input + delayed * feedback);
+        }
+
+        ++delayWritePos_;
+        if (delayWritePos_ >= delayBuffer_.getNumSamples())
+            delayWritePos_ = 0;
+
+        ++readPos;
+        if (readPos >= delayBuffer_.getNumSamples())
+            readPos = 0;
+    }
+}
+
+void EngineCore::processDcFilter(float** outputs, const int numChannels, const int numSamples) noexcept
+{
+    if (outputs == nullptr || numChannels <= 0 || numSamples <= 0)
+        return;
+
+    if (!dcFilterSettings_.enabled)
+        return;
+
+    const auto channelsToProcess = juce::jmin(numChannels, static_cast<int>(dcBlockFilters_.size()));
+    for (int channel = 0; channel < channelsToProcess; ++channel)
+    {
+        auto& filter = dcBlockFilters_[static_cast<std::size_t>(channel)];
+        auto* channelData = outputs[channel];
+        for (int sample = 0; sample < numSamples; ++sample)
+            channelData[sample] = filter.processSample(0, channelData[sample]);
+    }
+}
+
+float EngineCore::computeSyncedDelayTimeMs(const float rawTimeMs) const noexcept
+{
+    const auto bpm = juce::jmax(1.0f, hostTempoBpm_);
+    const auto beatMs = 60000.0f / bpm;
+    constexpr std::array<float, 10> beatDivisions{
+        0.25f,
+        1.0f / 3.0f,
+        0.5f,
+        2.0f / 3.0f,
+        0.75f,
+        1.0f,
+        1.5f,
+        2.0f,
+        3.0f,
+        4.0f
+    };
+
+    auto bestMs = beatMs * beatDivisions[0];
+    auto bestDistance = std::abs(bestMs - rawTimeMs);
+    for (std::size_t index = 1; index < beatDivisions.size(); ++index)
+    {
+        const auto candidateMs = beatMs * beatDivisions[index];
+        const auto candidateDistance = std::abs(candidateMs - rawTimeMs);
+        if (candidateDistance < bestDistance)
+        {
+            bestDistance = candidateDistance;
+            bestMs = candidateMs;
+        }
+    }
+
+    return juce::jlimit(1.0f, 2000.0f, bestMs);
 }
 
 float EngineCore::mapVelocity(const float velocity) const noexcept

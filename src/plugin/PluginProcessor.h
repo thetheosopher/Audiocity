@@ -99,6 +99,12 @@ public:
 
     void setReverbMix(float mix) noexcept;
     [[nodiscard]] float getReverbMix() const noexcept { return engine_.getReverbMix(); }
+    using DelaySettings = audiocity::engine::EngineCore::DelaySettings;
+    void setDelaySettings(const DelaySettings& settings) noexcept;
+    [[nodiscard]] DelaySettings getDelaySettings() const noexcept { return engine_.getDelaySettings(); }
+    using DcFilterSettings = audiocity::engine::EngineCore::DcFilterSettings;
+    void setDcFilterSettings(const DcFilterSettings& settings) noexcept;
+    [[nodiscard]] DcFilterSettings getDcFilterSettings() const noexcept { return engine_.getDcFilterSettings(); }
     void setPan(float pan) noexcept;
     [[nodiscard]] float getPan() const noexcept { return engine_.getPan(); }
     void setMasterVolume(float volume) noexcept;

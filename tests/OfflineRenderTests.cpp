@@ -2736,6 +2736,187 @@ bool runReverbMixTailTest()
     return wetTail > dryTail * 1.05f;
 }
 
+bool runDelayMixTailTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> impulse(1, 2048);
+    impulse.clear();
+    impulse.setSample(0, 0, 1.0f);
+
+    auto renderTailEnergy = [&](const float mix)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(impulse, sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::oneShot);
+        engine.setReverbMix(0.0f);
+
+        audiocity::engine::EngineCore::DelaySettings delay;
+        delay.timeMs = 30.0f;
+        delay.feedback = 0.45f;
+        delay.mix = mix;
+        delay.tempoSync = false;
+        engine.setDelaySettings(delay);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        float tailEnergy = 0.0f;
+        for (int i = 0; i < 28; ++i)
+        {
+            engine.render(block, midi);
+            if (i >= 5)
+                tailEnergy += blockEnergy(block);
+        }
+
+        return tailEnergy;
+    };
+
+    const auto dryTail = renderTailEnergy(0.0f);
+    const auto wetTail = renderTailEnergy(0.35f);
+    return wetTail > dryTail * 1.15f;
+}
+
+bool runDelayTempoSyncRespondsToTempoTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> impulse(1, 4096);
+    impulse.clear();
+    impulse.setSample(0, 0, 1.0f);
+
+    auto renderLeftChannel = [&](const float bpm)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(impulse, sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::oneShot);
+        engine.setReverbMix(0.0f);
+        engine.setHostTempoBpm(bpm);
+
+        audiocity::engine::EngineCore::DelaySettings delay;
+        delay.timeMs = 600.0f;
+        delay.feedback = 0.0f;
+        delay.mix = 1.0f;
+        delay.tempoSync = true;
+        engine.setDelaySettings(delay);
+
+        constexpr int totalBlocks = 420;
+        std::vector<float> rendered;
+        rendered.resize(static_cast<std::size_t>(totalBlocks * blockSize), 0.0f);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        for (int blockIndex = 0; blockIndex < totalBlocks; ++blockIndex)
+        {
+            juce::MidiBuffer midi;
+            if (blockIndex == 0)
+                midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+
+            engine.render(block, midi);
+            for (int sampleIndex = 0; sampleIndex < blockSize; ++sampleIndex)
+            {
+                rendered[static_cast<std::size_t>(blockIndex * blockSize + sampleIndex)] = block.getSample(0, sampleIndex);
+            }
+        }
+
+        return rendered;
+    };
+
+    auto windowEnergy = [](const std::vector<float>& signal, const int center, const int radius)
+    {
+        const auto start = juce::jlimit(0, static_cast<int>(signal.size()) - 1, center - radius);
+        const auto end = juce::jlimit(start, static_cast<int>(signal.size()) - 1, center + radius);
+        float energy = 0.0f;
+        for (int i = start; i <= end; ++i)
+            energy += std::abs(signal[static_cast<std::size_t>(i)]);
+        return energy;
+    };
+
+    const auto rendered120 = renderLeftChannel(120.0f);
+    const auto rendered90 = renderLeftChannel(90.0f);
+
+    const auto sampleAt500ms = static_cast<int>(std::round(sampleRate * 0.500));
+    const auto sampleAt667ms = static_cast<int>(std::round(sampleRate * (2.0 / 3.0)));
+    constexpr int kWindowRadius = 256;
+
+    const auto e120at500 = windowEnergy(rendered120, sampleAt500ms, kWindowRadius);
+    const auto e120at667 = windowEnergy(rendered120, sampleAt667ms, kWindowRadius);
+    const auto e90at500 = windowEnergy(rendered90, sampleAt500ms, kWindowRadius);
+    const auto e90at667 = windowEnergy(rendered90, sampleAt667ms, kWindowRadius);
+
+    if (e120at500 <= 1.0e-5f || e90at667 <= 1.0e-5f)
+        return false;
+
+    return e120at500 > e120at667 * 2.0f
+        && e90at667 > e90at500 * 2.0f;
+}
+
+bool runDcOffsetFilterRemovesBiasTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    juce::AudioBuffer<float> dcSample(1, 4096);
+    dcSample.clear();
+    for (int i = 0; i < dcSample.getNumSamples(); ++i)
+        dcSample.setSample(0, i, 0.5f);
+
+    auto renderMeanWithSettings = [&](const bool enabled, const float cutoffHz)
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(dcSample, sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::oneShot);
+        engine.setReverbMix(0.0f);
+        engine.setMasterVolume(1.0f);
+
+        audiocity::engine::EngineCore::DcFilterSettings dc;
+        dc.enabled = enabled;
+        dc.cutoffHz = cutoffHz;
+        engine.setDcFilterSettings(dc);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+
+        std::vector<float> captured;
+        captured.reserve(static_cast<std::size_t>(blockSize * 16));
+        for (int blockIndex = 0; blockIndex < 16; ++blockIndex)
+        {
+            engine.render(block, midi);
+            midi.clear();
+            for (int sample = 0; sample < block.getNumSamples(); ++sample)
+                captured.push_back(block.getSample(0, sample));
+        }
+
+        constexpr int kSkip = 384;
+        double sum = 0.0;
+        int count = 0;
+        for (int i = kSkip; i < static_cast<int>(captured.size()); ++i)
+        {
+            sum += static_cast<double>(captured[static_cast<std::size_t>(i)]);
+            ++count;
+        }
+
+        return count > 0 ? static_cast<float>(sum / static_cast<double>(count)) : 0.0f;
+    };
+
+    const auto meanBypassed = renderMeanWithSettings(false, 10.0f);
+    const auto meanFiltered = renderMeanWithSettings(true, 10.0f);
+
+    return std::abs(meanBypassed) > 0.10f
+        && std::abs(meanFiltered) < 0.02f;
+}
+
 bool runMasterVolumeGainTest()
 {
     constexpr int channels = 2;
@@ -3135,6 +3316,15 @@ int main()
 
     if (!runReverbMixTailTest())
         return 28;
+
+    if (!runDelayMixTailTest())
+        return 57;
+
+    if (!runDelayTempoSyncRespondsToTempoTest())
+        return 58;
+
+    if (!runDcOffsetFilterRemovesBiasTest())
+        return 59;
 
     if (!runMasterVolumeGainTest())
         return 47;
