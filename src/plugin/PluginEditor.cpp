@@ -3396,29 +3396,41 @@ void AudiocityAudioProcessorEditor::resized()
 
     // ── Panel 7: Effects ──
     {
-        auto fxInner = makeGroup("Effects", kRowH);
+        constexpr int kEffectsPanelH = kRowH + 40;
+        auto fxInner = makeGroup("Effects", kEffectsPanelH);
 
-        reverbMixDial_.setBounds(fxInner.removeFromLeft(kDial));
-        fxInner.removeFromLeft(kDialGap);
+        auto fxDialRow = fxInner.removeFromTop(kDialH);
 
-        delayTimeDial_.setBounds(fxInner.removeFromLeft(kDial));
-        fxInner.removeFromLeft(kDialGap);
+        reverbMixDial_.setBounds(fxDialRow.removeFromLeft(kDial));
+        fxDialRow.removeFromLeft(kDialGap);
 
-        delayFeedbackDial_.setBounds(fxInner.removeFromLeft(kDial));
-        fxInner.removeFromLeft(kDialGap);
+        const auto delayTimeBounds = fxDialRow.removeFromLeft(kDial);
+        delayTimeDial_.setBounds(delayTimeBounds);
+        fxDialRow.removeFromLeft(kDialGap);
 
-        delayMixDial_.setBounds(fxInner.removeFromLeft(kDial));
-        fxInner.removeFromLeft(kDialGap);
+        const auto delayFeedbackBounds = fxDialRow.removeFromLeft(kDial);
+        delayFeedbackDial_.setBounds(delayFeedbackBounds);
+        fxDialRow.removeFromLeft(kDialGap);
 
-        auto delaySyncArea = fxInner.removeFromLeft(120);
-        delayTempoSyncToggle_.setBounds(delaySyncArea.removeFromTop(24));
-        fxInner.removeFromLeft(kDialGap);
+        const auto delayMixBounds = fxDialRow.removeFromLeft(kDial);
+        delayMixDial_.setBounds(delayMixBounds);
+        fxDialRow.removeFromLeft(kDialGap * 2);
 
-        auto dcFilterArea = fxInner.removeFromLeft(108);
-        dcFilterEnabledToggle_.setBounds(dcFilterArea.removeFromTop(24));
-        fxInner.removeFromLeft(kDialGap);
+        const auto dcFilterDialBounds = fxDialRow.removeFromLeft(kDial);
+        dcFilterCutoffDial_.setBounds(dcFilterDialBounds);
 
-        dcFilterCutoffDial_.setBounds(fxInner.removeFromLeft(kDial));
+        fxInner.removeFromTop(12);
+        auto fxToggleRow = fxInner.removeFromTop(24);
+
+        constexpr int kDelaySyncW = 120;
+        const auto delayClusterLeft = delayTimeBounds.getX();
+        const auto delayClusterRight = delayMixBounds.getRight();
+        const auto delaySyncX = delayClusterLeft + (delayClusterRight - delayClusterLeft - kDelaySyncW) / 2;
+        delayTempoSyncToggle_.setBounds(delaySyncX, fxToggleRow.getY(), kDelaySyncW, 24);
+
+        constexpr int kDcFilterW = 108;
+        const auto dcFilterX = dcFilterDialBounds.getX() + (dcFilterDialBounds.getWidth() - kDcFilterW) / 2;
+        dcFilterEnabledToggle_.setBounds(dcFilterX, fxToggleRow.getY(), kDcFilterW, 24);
     }
 
     // ── Panel 8: Output ──
