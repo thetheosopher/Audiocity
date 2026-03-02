@@ -26,6 +26,10 @@ struct SettingsSnapshot
     int fadeInSamples = 0;
     int fadeOutSamples = 0;
     bool reversePlayback = false;
+    int captureTargetSampleRate = 0;
+    int captureChannelMode = 0;
+    int captureBitDepth = 16;
+    float captureInputGain = 1.0f;
 
     [[nodiscard]] bool operator==(const SettingsSnapshot& other) const noexcept
     {
@@ -45,7 +49,11 @@ struct SettingsSnapshot
             && loopEnd == other.loopEnd
             && fadeInSamples == other.fadeInSamples
             && fadeOutSamples == other.fadeOutSamples
-            && reversePlayback == other.reversePlayback;
+                && reversePlayback == other.reversePlayback
+                && captureTargetSampleRate == other.captureTargetSampleRate
+                && captureChannelMode == other.captureChannelMode
+                    && captureBitDepth == other.captureBitDepth
+                    && captureInputGain == other.captureInputGain;
     }
 
     [[nodiscard]] bool operator!=(const SettingsSnapshot& other) const noexcept

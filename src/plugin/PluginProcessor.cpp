@@ -13,6 +13,8 @@ namespace
 constexpr auto kPatchRoot = "AudiocityPatch";
 constexpr auto kSamplePath = "samplePath";
 constexpr auto kGeneratedWaveformData = "generatedWaveformData";
+constexpr auto kCapturedSampleData = "capturedSampleData";
+constexpr auto kCapturedSampleRate = "capturedSampleRate";
 constexpr auto kSampleBrowserRootFolder = "sampleBrowserRootFolder";
 constexpr auto kRootMidiNote = "rootMidiNote";
 constexpr auto kCoarseTuneSemitones = "coarseTuneSemitones";
@@ -86,6 +88,10 @@ constexpr auto kGenerateBitDepth = "generateBitDepth";
 constexpr auto kGeneratePulseWidth = "generatePulseWidth";
 constexpr auto kGenerateFrequencyMidiNote = "generateFrequencyMidiNote";
 constexpr auto kGenerateSketchSmoothing = "generateSketchSmoothing";
+constexpr auto kCaptureTargetSampleRate = "captureTargetSampleRate";
+constexpr auto kCaptureChannelMode = "captureChannelMode";
+constexpr auto kCaptureBitDepth = "captureBitDepth";
+constexpr auto kCaptureInputGain = "captureInputGain";
 constexpr auto kLoopStart = "loopStart";
 constexpr auto kLoopEnd = "loopEnd";
 constexpr auto kLoopCrossfadeSamples = "loopCrossfadeSamples";
@@ -166,7 +172,9 @@ constexpr float kMaxSamplePositionParam = 16000000.0f;
 }
 
 AudiocityAudioProcessor::AudiocityAudioProcessor()
-    : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true))
+    : AudioProcessor(BusesProperties()
+          .withInput("Input", juce::AudioChannelSet::stereo(), true)
+          .withOutput("Output", juce::AudioChannelSet::stereo(), true))
     , apvts_(*this, nullptr, "AutomatableParams", createParameterLayout())
 {
     clearVoicePlaybackPositions();
@@ -467,6 +475,7 @@ void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
 void AudiocityAudioProcessor::prepareToPlay(const double sampleRate, const int samplesPerBlock)
 {
     engine_.prepare(sampleRate, samplesPerBlock, getTotalNumOutputChannels());
+    captureInputSampleRate_.store(juce::jmax(1.0, sampleRate), std::memory_order_relaxed);
 }
 
 void AudiocityAudioProcessor::releaseResources()
@@ -476,8 +485,18 @@ void AudiocityAudioProcessor::releaseResources()
 
 bool AudiocityAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 {
+    const auto& mainIn = layouts.getMainInputChannelSet();
     const auto& mainOut = layouts.getMainOutputChannelSet();
-    return mainOut == juce::AudioChannelSet::mono() || mainOut == juce::AudioChannelSet::stereo();
+
+    const auto outputSupported = mainOut == juce::AudioChannelSet::mono() || mainOut == juce::AudioChannelSet::stereo();
+    if (!outputSupported)
+        return false;
+
+    if (mainIn.isDisabled())
+        return true;
+
+    const auto inputSupported = mainIn == juce::AudioChannelSet::mono() || mainIn == juce::AudioChannelSet::stereo();
+    return inputSupported && (mainIn == mainOut);
 }
 
 void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
@@ -486,9 +505,19 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
 
     const auto numInputChannels = getTotalNumInputChannels();
     const auto numOutputChannels = getTotalNumOutputChannels();
+    const auto captureRecording = captureRecording_.load(std::memory_order_acquire);
+    const auto monitorCaptureInput = captureRecording
+        || getEditorTabIndex() == 4;
 
     for (auto channel = numInputChannels; channel < numOutputChannels; ++channel)
         buffer.clear(channel, 0, buffer.getNumSamples());
+
+    if (monitorCaptureInput && numInputChannels > 0)
+        updateCaptureInputMonitorLevels(buffer, numInputChannels);
+
+    bool capturedThisBlock = false;
+    if (captureRecording && numInputChannels > 0)
+        capturedThisBlock = captureInputAudio(buffer, numInputChannels);
 
     updateHostTempoFromPlayHead();
     const auto suspendedBlocks = suspendParamSyncBlocks_.load(std::memory_order_relaxed);
@@ -509,6 +538,10 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         && previewWaveSamples_.load(std::memory_order_relaxed) > 0)
     {
         renderGeneratedWavePreview(buffer);
+        if (monitorCaptureInput && numInputChannels <= 0 && numOutputChannels > 0)
+            updateCaptureInputMonitorLevels(buffer, numOutputChannels);
+        if (captureRecording && !capturedThisBlock)
+            capturedThisBlock = captureInputAudio(buffer, numOutputChannels);
         clearVoicePlaybackPositions();
         updateOutputPeakLevels(buffer);
         return;
@@ -518,6 +551,10 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         && samplePreviewSamples_.load(std::memory_order_relaxed) > 0)
     {
         renderSampleFilePreview(buffer);
+        if (monitorCaptureInput && numInputChannels <= 0 && numOutputChannels > 0)
+            updateCaptureInputMonitorLevels(buffer, numOutputChannels);
+        if (captureRecording && !capturedThisBlock)
+            capturedThisBlock = captureInputAudio(buffer, numOutputChannels);
         clearVoicePlaybackPositions();
         updateOutputPeakLevels(buffer);
         return;
@@ -533,6 +570,10 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     }
 
     engine_.render(buffer, midiMessages);
+    if (monitorCaptureInput && numInputChannels <= 0 && numOutputChannels > 0)
+        updateCaptureInputMonitorLevels(buffer, numOutputChannels);
+    if (captureRecording && !capturedThisBlock)
+        capturedThisBlock = captureInputAudio(buffer, numOutputChannels);
     updateVoicePlaybackPositionsFromEngine();
     updateOutputPeakLevels(buffer);
 }
@@ -672,6 +713,14 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
             std::memcpy(generatedBytes.getData(), generatedWaveformState_.data(), generatedBytes.getSize());
             state.setProperty(kGeneratedWaveformData, juce::var(generatedBytes), nullptr);
         }
+
+        if (capturedAudioLoaded_.load(std::memory_order_relaxed) && !capturedSampleState_.empty())
+        {
+            juce::MemoryBlock capturedBytes(capturedSampleState_.size() * sizeof(float));
+            std::memcpy(capturedBytes.getData(), capturedSampleState_.data(), capturedBytes.getSize());
+            state.setProperty(kCapturedSampleData, juce::var(capturedBytes), nullptr);
+            state.setProperty(kCapturedSampleRate, capturedSampleRateState_, nullptr);
+        }
     }
     state.setProperty(kSampleBrowserRootFolder, sampleBrowserRootFolderPath_, nullptr);
     state.setProperty(kRootMidiNote, engine_.getRootMidiNote(), nullptr);
@@ -764,6 +813,10 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kGeneratePulseWidth, generatePulseWidth_.load(std::memory_order_relaxed), nullptr);
     state.setProperty(kGenerateFrequencyMidiNote, generateFrequencyMidiNote_.load(std::memory_order_relaxed), nullptr);
     state.setProperty(kGenerateSketchSmoothing, generateSketchSmoothing_.load(std::memory_order_relaxed), nullptr);
+    state.setProperty(kCaptureTargetSampleRate, captureTargetSampleRate_.load(std::memory_order_relaxed), nullptr);
+    state.setProperty(kCaptureChannelMode, captureChannelMode_.load(std::memory_order_relaxed), nullptr);
+    state.setProperty(kCaptureBitDepth, captureBitDepth_.load(std::memory_order_relaxed), nullptr);
+    state.setProperty(kCaptureInputGain, captureInputGain_.load(std::memory_order_relaxed), nullptr);
     state.setProperty(kLoopStart, getLoopStart(), nullptr);
     state.setProperty(kLoopEnd, getLoopEnd(), nullptr);
     state.setProperty(kLoopCrossfadeSamples, getLoopCrossfadeSamples(), nullptr);
@@ -819,8 +872,13 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     const auto storedRootMidiNote = static_cast<int>(state.getProperty(kRootMidiNote, engine_.getRootMidiNote()));
 
     bool restoredSample = false;
+    int restoredSampleSource = 0;
     if (samplePath.isNotEmpty())
+    {
         restoredSample = loadSampleFromFile(juce::File(samplePath));
+        if (restoredSample)
+            restoredSampleSource = 1;
+    }
 
     if (!restoredSample)
     {
@@ -834,6 +892,43 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
                 std::memcpy(waveform.data(), generatedData->getData(), totalBytes);
                 loadGeneratedWaveformAsSample(waveform, storedRootMidiNote);
                 restoredSample = true;
+                restoredSampleSource = 2;
+            }
+        }
+    }
+
+    if (!restoredSample)
+    {
+        if (const auto* capturedData = state.getProperty(kCapturedSampleData).getBinaryData(); capturedData != nullptr)
+        {
+            const auto totalBytes = capturedData->getSize();
+            if (totalBytes >= sizeof(float) && (totalBytes % sizeof(float)) == 0)
+            {
+                const auto sampleCount = static_cast<int>(totalBytes / sizeof(float));
+                const auto storedSampleRate = static_cast<double>(state.getProperty(kCapturedSampleRate, 44100.0));
+                const auto restoredSampleRate = juce::jmax(1.0, storedSampleRate);
+
+                juce::AudioBuffer<float> restoredBuffer(1, sampleCount);
+                std::memcpy(restoredBuffer.getWritePointer(0), capturedData->getData(), totalBytes);
+
+                engine_.setSampleData(restoredBuffer, restoredSampleRate, storedRootMidiNote);
+                engine_.setRootMidiNote(storedRootMidiNote);
+                engine_.clearSamplePath();
+
+                generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+                capturedAudioLoaded_.store(true, std::memory_order_relaxed);
+                {
+                    std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+                    generatedWaveformState_.clear();
+                    capturedSampleState_.resize(static_cast<std::size_t>(sampleCount));
+                    std::memcpy(capturedSampleState_.data(), capturedData->getData(), totalBytes);
+                    capturedSampleRateState_ = restoredSampleRate;
+                }
+
+                suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
+                syncSampleDerivedParametersFromEngine();
+                restoredSample = true;
+                restoredSampleSource = 3;
             }
         }
     }
@@ -841,9 +936,14 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     if (!restoredSample)
     {
         generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+        capturedAudioLoaded_.store(false, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
         generatedWaveformState_.clear();
+        capturedSampleState_.clear();
+        capturedSampleRateState_ = 44100.0;
     }
+
+    lastStateRestoreSource_.store(restoredSampleSource, std::memory_order_relaxed);
 
     sampleBrowserRootFolderPath_ = state.getProperty(kSampleBrowserRootFolder, {}).toString();
 
@@ -953,6 +1053,15 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     setGeneratePulseWidth(static_cast<float>(state.getProperty(kGeneratePulseWidth, generatePulseWidth_.load(std::memory_order_relaxed))));
     setGenerateFrequencyMidiNote(static_cast<int>(state.getProperty(kGenerateFrequencyMidiNote, generateFrequencyMidiNote_.load(std::memory_order_relaxed))));
     setGenerateSketchSmoothing(static_cast<int>(state.getProperty(kGenerateSketchSmoothing, generateSketchSmoothing_.load(std::memory_order_relaxed))));
+    setCaptureTargetSampleRate(static_cast<int>(state.getProperty(kCaptureTargetSampleRate,
+        captureTargetSampleRate_.load(std::memory_order_relaxed))));
+    setCaptureChannelMode(static_cast<int>(state.getProperty(kCaptureChannelMode,
+        captureChannelMode_.load(std::memory_order_relaxed))));
+    setCaptureBitDepth(static_cast<int>(state.getProperty(kCaptureBitDepth,
+        captureBitDepth_.load(std::memory_order_relaxed))));
+    setCaptureInputGain(static_cast<float>(state.getProperty(kCaptureInputGain,
+        captureInputGain_.load(std::memory_order_relaxed))));
+    clearInputCapture();
     setLoopPoints(
         static_cast<int>(state.getProperty(kLoopStart, getLoopStart())),
         static_cast<int>(state.getProperty(kLoopEnd, getLoopEnd())));
@@ -1005,15 +1114,29 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     }
 }
 
+juce::String AudiocityAudioProcessor::getLastStateRestoreSourceLabel() const
+{
+    switch (lastStateRestoreSource_.load(std::memory_order_relaxed))
+    {
+        case 1: return "file";
+        case 2: return "generated";
+        case 3: return "captured";
+        default: return "none";
+    }
+}
+
 bool AudiocityAudioProcessor::loadSampleFromFile(const juce::File& file)
 {
     if (!engine_.loadSampleFromFile(file))
         return false;
 
     generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
         generatedWaveformState_.clear();
+        capturedSampleState_.clear();
+        capturedSampleRateState_ = 44100.0;
     }
 
     suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
@@ -1049,9 +1172,12 @@ void AudiocityAudioProcessor::loadGeneratedWaveformAsSample(const std::vector<fl
     if (getPlaybackMode() != PlaybackMode::loop)
         setPlaybackMode(PlaybackMode::loop);
     generatedWaveformLoaded_.store(true, std::memory_order_relaxed);
+    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
         generatedWaveformState_ = waveform;
+        capturedSampleState_.clear();
+        capturedSampleRateState_ = 44100.0;
     }
     stopGeneratedWaveformPreview();
     suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
@@ -1184,12 +1310,12 @@ std::pair<int, int> AudiocityAudioProcessor::getWaveformViewRange() const noexce
 
 void AudiocityAudioProcessor::setEditorTabIndex(const int tabIndex) noexcept
 {
-    editorTabIndex_.store(juce::jlimit(0, 3, tabIndex), std::memory_order_relaxed);
+    editorTabIndex_.store(juce::jlimit(0, 4, tabIndex), std::memory_order_relaxed);
 }
 
 int AudiocityAudioProcessor::getEditorTabIndex() const noexcept
 {
-    return juce::jlimit(0, 3, editorTabIndex_.load(std::memory_order_relaxed));
+    return juce::jlimit(0, 4, editorTabIndex_.load(std::memory_order_relaxed));
 }
 
 void AudiocityAudioProcessor::setWaveformDisplayMode(const int modeId) noexcept
@@ -1281,6 +1407,382 @@ int AudiocityAudioProcessor::getGenerateSketchSmoothing() const noexcept
     return juce::jlimit(1, 2, generateSketchSmoothing_.load(std::memory_order_relaxed));
 }
 
+void AudiocityAudioProcessor::startInputCapture() noexcept
+{
+    captureInputSamples_.store(0, std::memory_order_relaxed);
+    captureOverflow_.store(false, std::memory_order_relaxed);
+    captureInputSampleRate_.store(juce::jmax(1.0, getSampleRate()), std::memory_order_relaxed);
+    captureRecording_.store(true, std::memory_order_release);
+}
+
+void AudiocityAudioProcessor::stopInputCapture() noexcept
+{
+    captureRecording_.store(false, std::memory_order_release);
+}
+
+void AudiocityAudioProcessor::clearInputCapture() noexcept
+{
+    captureRecording_.store(false, std::memory_order_release);
+    captureInputSamples_.store(0, std::memory_order_relaxed);
+    captureOverflow_.store(false, std::memory_order_relaxed);
+}
+
+void AudiocityAudioProcessor::resetInputCaptureOverflow() noexcept
+{
+    captureOverflow_.store(false, std::memory_order_relaxed);
+}
+
+void AudiocityAudioProcessor::setCaptureTargetSampleRate(const int sampleRate) noexcept
+{
+    if (sampleRate <= 0)
+    {
+        captureTargetSampleRate_.store(0, std::memory_order_relaxed);
+        return;
+    }
+
+    constexpr std::array<int, 6> kAllowedRates{ 22050, 32000, 44100, 48000, 88200, 96000 };
+    int closest = kAllowedRates.front();
+    int closestDistance = std::abs(sampleRate - closest);
+    for (const auto candidate : kAllowedRates)
+    {
+        const auto distance = std::abs(sampleRate - candidate);
+        if (distance < closestDistance)
+        {
+            closestDistance = distance;
+            closest = candidate;
+        }
+    }
+
+    captureTargetSampleRate_.store(closest, std::memory_order_relaxed);
+}
+
+int AudiocityAudioProcessor::getCaptureTargetSampleRate() const noexcept
+{
+    return captureTargetSampleRate_.load(std::memory_order_relaxed);
+}
+
+void AudiocityAudioProcessor::setCaptureChannelMode(const int modeId) noexcept
+{
+    captureChannelMode_.store(juce::jlimit(0, 3, modeId), std::memory_order_relaxed);
+}
+
+int AudiocityAudioProcessor::getCaptureChannelMode() const noexcept
+{
+    return juce::jlimit(0, 3, captureChannelMode_.load(std::memory_order_relaxed));
+}
+
+void AudiocityAudioProcessor::setCaptureBitDepth(const int bitDepth) noexcept
+{
+    int normalized = 16;
+    if (bitDepth >= 32)
+        normalized = 32;
+    else if (bitDepth >= 24)
+        normalized = 24;
+    captureBitDepth_.store(normalized, std::memory_order_relaxed);
+}
+
+int AudiocityAudioProcessor::getCaptureBitDepth() const noexcept
+{
+    const auto value = captureBitDepth_.load(std::memory_order_relaxed);
+    if (value >= 32)
+        return 32;
+    if (value >= 24)
+        return 24;
+    return 16;
+}
+
+void AudiocityAudioProcessor::setCaptureInputGain(const float gainLinear) noexcept
+{
+    captureInputGain_.store(juce::jlimit(0.0f, 2.0f, gainLinear), std::memory_order_relaxed);
+}
+
+float AudiocityAudioProcessor::getCaptureInputGain() const noexcept
+{
+    return juce::jlimit(0.0f, 2.0f, captureInputGain_.load(std::memory_order_relaxed));
+}
+
+AudiocityAudioProcessor::OutputPeakLevels AudiocityAudioProcessor::consumeCaptureInputPeakLevels() noexcept
+{
+    OutputPeakLevels levels;
+    levels.left = captureInputPeakLeft_.exchange(0.0f, std::memory_order_acq_rel);
+    levels.right = captureInputPeakRight_.exchange(0.0f, std::memory_order_acq_rel);
+    return levels;
+}
+
+std::vector<AudiocityAudioProcessor::CaptureDisplayMinMax> AudiocityAudioProcessor::buildCapturedWaveformMinMax(
+    const int maxPeaks,
+    const int startSample,
+    const int endSample) const
+{
+    const auto totalSamples = juce::jlimit(0, kCaptureMaxSamplesPerChannel,
+        captureInputSamples_.load(std::memory_order_acquire));
+    if (totalSamples <= 0)
+        return {};
+
+    const auto start = juce::jlimit(0, totalSamples, startSample);
+    const auto end = juce::jlimit(start, totalSamples, endSample <= startSample ? totalSamples : endSample);
+    if (end <= start)
+        return {};
+
+    const auto rangeSamples = end - start;
+    const auto peaks = juce::jlimit(1, 8192, maxPeaks);
+    std::vector<CaptureDisplayMinMax> result(static_cast<std::size_t>(peaks));
+
+    const auto mode = getCaptureChannelMode();
+    for (int i = 0; i < peaks; ++i)
+    {
+        const auto bucketStart64 = static_cast<long long>(start)
+            + (static_cast<long long>(rangeSamples) * static_cast<long long>(i))
+                / static_cast<long long>(peaks);
+        const auto bucketEnd64 = static_cast<long long>(start)
+            + (static_cast<long long>(rangeSamples) * static_cast<long long>(i + 1))
+                / static_cast<long long>(peaks);
+
+        const auto bucketStart = juce::jlimit(0, totalSamples - 1, static_cast<int>(bucketStart64));
+        const auto bucketEnd = juce::jlimit(bucketStart + 1, totalSamples, static_cast<int>(bucketEnd64));
+        const auto clampedBucketEnd = juce::jlimit(bucketStart + 1, totalSamples,
+            juce::jmax(bucketStart + 1, bucketEnd));
+
+        float minValue = 1.0f;
+        float maxValue = -1.0f;
+
+        for (int sample = bucketStart; sample < clampedBucketEnd; ++sample)
+        {
+            const auto left = captureInputLeft_[static_cast<std::size_t>(sample)];
+            const auto right = captureInputRight_[static_cast<std::size_t>(sample)];
+
+            float value = left;
+            if (mode == 1)
+                value = left;
+            else if (mode == 2)
+                value = right;
+            else if (mode == 3)
+            {
+                minValue = juce::jmin(minValue, juce::jmin(left, right));
+                maxValue = juce::jmax(maxValue, juce::jmax(left, right));
+                continue;
+            }
+            else
+            {
+                value = 0.5f * (left + right);
+            }
+
+            minValue = juce::jmin(minValue, value);
+            maxValue = juce::jmax(maxValue, value);
+        }
+
+        if (maxValue < minValue)
+        {
+            minValue = 0.0f;
+            maxValue = 0.0f;
+        }
+
+        result[static_cast<std::size_t>(i)] = { minValue, maxValue };
+    }
+
+    return result;
+}
+
+bool AudiocityAudioProcessor::cutCapturedAudioRange(const int startSample, const int endSample) noexcept
+{
+    stopInputCapture();
+    const auto total = juce::jlimit(0, kCaptureMaxSamplesPerChannel,
+        captureInputSamples_.load(std::memory_order_acquire));
+    const auto start = juce::jlimit(0, total, startSample);
+    const auto end = juce::jlimit(start, total, endSample);
+    if (end <= start)
+        return false;
+
+    const auto cutLength = end - start;
+    const auto tailLength = total - end;
+    if (tailLength > 0)
+    {
+        std::memmove(captureInputLeft_.data() + start,
+            captureInputLeft_.data() + end,
+            static_cast<std::size_t>(tailLength) * sizeof(float));
+        std::memmove(captureInputRight_.data() + start,
+            captureInputRight_.data() + end,
+            static_cast<std::size_t>(tailLength) * sizeof(float));
+    }
+
+    captureInputSamples_.store(total - cutLength, std::memory_order_release);
+    return true;
+}
+
+bool AudiocityAudioProcessor::trimCapturedAudioRange(const int startSample, const int endSample) noexcept
+{
+    stopInputCapture();
+    const auto total = juce::jlimit(0, kCaptureMaxSamplesPerChannel,
+        captureInputSamples_.load(std::memory_order_acquire));
+    const auto start = juce::jlimit(0, total, startSample);
+    const auto end = juce::jlimit(start, total, endSample);
+    if (end <= start)
+        return false;
+
+    const auto newLength = end - start;
+    if (start > 0)
+    {
+        std::memmove(captureInputLeft_.data(),
+            captureInputLeft_.data() + start,
+            static_cast<std::size_t>(newLength) * sizeof(float));
+        std::memmove(captureInputRight_.data(),
+            captureInputRight_.data() + start,
+            static_cast<std::size_t>(newLength) * sizeof(float));
+    }
+
+    captureInputSamples_.store(newLength, std::memory_order_release);
+    return true;
+}
+
+bool AudiocityAudioProcessor::normalizeCapturedAudio(const float targetPeak) noexcept
+{
+    stopInputCapture();
+    const auto total = juce::jlimit(0, kCaptureMaxSamplesPerChannel,
+        captureInputSamples_.load(std::memory_order_acquire));
+    if (total <= 0)
+        return false;
+
+    float peak = 0.0f;
+    for (int i = 0; i < total; ++i)
+    {
+        peak = juce::jmax(peak, std::abs(captureInputLeft_[static_cast<std::size_t>(i)]));
+        peak = juce::jmax(peak, std::abs(captureInputRight_[static_cast<std::size_t>(i)]));
+    }
+
+    if (peak < 1.0e-6f)
+        return false;
+
+    const float scale = juce::jlimit(0.0f, 100.0f, targetPeak) / peak;
+    for (int i = 0; i < total; ++i)
+    {
+        captureInputLeft_[static_cast<std::size_t>(i)] *= scale;
+        captureInputRight_[static_cast<std::size_t>(i)] *= scale;
+    }
+
+    return true;
+}
+
+bool AudiocityAudioProcessor::loadCapturedAudioAsSample(int startSample, int endSample)
+{
+    stopInputCapture();
+    const auto total = juce::jlimit(0, kCaptureMaxSamplesPerChannel,
+        captureInputSamples_.load(std::memory_order_acquire));
+    if (total <= 1)
+        return false;
+
+    startSample = juce::jlimit(0, total - 1, startSample);
+    endSample = juce::jlimit(startSample + 1, total, endSample <= startSample ? total : endSample);
+    const auto numSourceSamples = endSample - startSample;
+    if (numSourceSamples <= 1)
+        return false;
+
+    const auto mode = getCaptureChannelMode();
+    const auto bitDepth = getCaptureBitDepth();
+    const auto sourceRate = juce::jmax(1.0, captureInputSampleRate_.load(std::memory_order_relaxed));
+    const auto targetRateSetting = getCaptureTargetSampleRate();
+    const auto targetRate = targetRateSetting > 0 ? static_cast<double>(targetRateSetting) : sourceRate;
+    const auto targetChannels = mode == 3 ? 2 : 1;
+
+    auto persistCapturedState = [this](const juce::AudioBuffer<float>& buffer, const double bufferSampleRate)
+    {
+        const auto channels = juce::jmax(1, buffer.getNumChannels());
+        const auto samples = juce::jmax(0, buffer.getNumSamples());
+        std::vector<float> mono(static_cast<std::size_t>(samples), 0.0f);
+
+        if (samples > 0)
+        {
+            if (channels == 1)
+            {
+                const auto* read = buffer.getReadPointer(0);
+                std::copy(read, read + samples, mono.begin());
+            }
+            else
+            {
+                for (int i = 0; i < samples; ++i)
+                {
+                    float sum = 0.0f;
+                    for (int channel = 0; channel < channels; ++channel)
+                        sum += buffer.getSample(channel, i);
+                    mono[static_cast<std::size_t>(i)] = sum / static_cast<float>(channels);
+                }
+            }
+        }
+
+        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+        generatedWaveformState_.clear();
+        capturedSampleState_ = std::move(mono);
+        capturedSampleRateState_ = juce::jmax(1.0, bufferSampleRate);
+    };
+
+    juce::AudioBuffer<float> source(targetChannels, numSourceSamples);
+    for (int sample = 0; sample < numSourceSamples; ++sample)
+    {
+        const auto sourceIndex = startSample + sample;
+        const auto left = captureInputLeft_[static_cast<std::size_t>(sourceIndex)];
+        const auto right = captureInputRight_[static_cast<std::size_t>(sourceIndex)];
+
+        if (targetChannels == 2)
+        {
+            source.setSample(0, sample, quantizeCaptureSample(left, bitDepth));
+            source.setSample(1, sample, quantizeCaptureSample(right, bitDepth));
+        }
+        else
+        {
+            float mono = 0.5f * (left + right);
+            if (mode == 1)
+                mono = left;
+            else if (mode == 2)
+                mono = right;
+
+            source.setSample(0, sample, quantizeCaptureSample(mono, bitDepth));
+        }
+    }
+
+    if (std::abs(targetRate - sourceRate) < 0.5)
+    {
+        engine_.setSampleData(source, sourceRate, engine_.getRootMidiNote());
+        persistCapturedState(source, sourceRate);
+    }
+    else
+    {
+        const auto ratio = targetRate / sourceRate;
+        const auto resampledSamples = juce::jmax(2, static_cast<int>(std::round(static_cast<double>(numSourceSamples) * ratio)));
+        juce::AudioBuffer<float> resampled(targetChannels, resampledSamples);
+
+        const auto readStep = static_cast<float>(sourceRate / targetRate);
+        for (int channel = 0; channel < targetChannels; ++channel)
+        {
+            const auto* read = source.getReadPointer(channel);
+            auto* write = resampled.getWritePointer(channel);
+            float readPos = 0.0f;
+            for (int sample = 0; sample < resampledSamples; ++sample)
+            {
+                const auto i0 = juce::jlimit(0, numSourceSamples - 1, static_cast<int>(readPos));
+                const auto i1 = juce::jmin(numSourceSamples - 1, i0 + 1);
+                const auto frac = readPos - static_cast<float>(i0);
+                write[sample] = read[i0] + (read[i1] - read[i0]) * frac;
+                readPos += readStep;
+            }
+        }
+
+        engine_.setSampleData(resampled, targetRate, engine_.getRootMidiNote());
+        persistCapturedState(resampled, targetRate);
+    }
+
+    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+    capturedAudioLoaded_.store(true, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+        if (capturedSampleState_.empty())
+            capturedSampleRateState_ = 44100.0;
+    }
+
+    engine_.clearSamplePath();
+    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
+    syncSampleDerivedParametersFromEngine();
+    return true;
+}
+
 void AudiocityAudioProcessor::setLoopPoints(const int loopStart, const int loopEnd) noexcept
 {
     engine_.setLoopPoints(loopStart, loopEnd);
@@ -1323,6 +1825,41 @@ void AudiocityAudioProcessor::startGeneratedWaveformPreview() noexcept
 void AudiocityAudioProcessor::stopGeneratedWaveformPreview() noexcept
 {
     previewWavePlaying_.store(false, std::memory_order_relaxed);
+}
+
+bool AudiocityAudioProcessor::previewCapturedAudio()
+{
+    stopInputCapture();
+
+    const auto total = juce::jlimit(0, kCaptureMaxSamplesPerChannel,
+        captureInputSamples_.load(std::memory_order_acquire));
+    if (total <= 1)
+        return false;
+
+    const auto samplesToPreview = juce::jlimit(1, kSamplePreviewMaxSamples, total);
+    const auto mode = getCaptureChannelMode();
+    for (int sample = 0; sample < samplesToPreview; ++sample)
+    {
+        const auto left = captureInputLeft_[static_cast<std::size_t>(sample)];
+        const auto right = captureInputRight_[static_cast<std::size_t>(sample)];
+
+        float mono = 0.5f * (left + right);
+        if (mode == 1)
+            mono = left;
+        else if (mode == 2)
+            mono = right;
+
+        samplePreviewData_[static_cast<std::size_t>(sample)] = juce::jlimit(-1.0f, 1.0f, mono);
+    }
+
+    samplePreviewSourceRate_.store(juce::jmax(1.0, captureInputSampleRate_.load(std::memory_order_relaxed)),
+        std::memory_order_relaxed);
+    samplePreviewSamples_.store(samplesToPreview, std::memory_order_relaxed);
+    samplePreviewReadPos_ = 0.0f;
+    previewWavePlaying_.store(false, std::memory_order_relaxed);
+    engine_.panic();
+    samplePreviewPlaying_.store(true, std::memory_order_relaxed);
+    return true;
 }
 
 bool AudiocityAudioProcessor::previewSampleFromFile(const juce::File& file)
@@ -1454,6 +1991,117 @@ bool AudiocityAudioProcessor::popUiMidiEvent(UiMidiEvent& out) noexcept
     out = uiMidiFifo_[static_cast<std::size_t>(readPos)];
     uiMidiReadPos_.store((readPos + 1) % kUiMidiFifoSize, std::memory_order_release);
     return true;
+}
+
+void AudiocityAudioProcessor::updateCaptureInputMonitorLevels(
+    const juce::AudioBuffer<float>& buffer,
+    int sourceChannels) noexcept
+{
+    sourceChannels = juce::jlimit(0, buffer.getNumChannels(), sourceChannels);
+    if (sourceChannels <= 0)
+        return;
+
+    const auto* inLeft = sourceChannels > 0 ? buffer.getReadPointer(0) : nullptr;
+    const auto* inRight = sourceChannels > 1 ? buffer.getReadPointer(1) : inLeft;
+    if (inLeft == nullptr && inRight == nullptr)
+        return;
+
+    const auto gain = getCaptureInputGain();
+    float localPeakLeft = 0.0f;
+    float localPeakRight = 0.0f;
+    const auto numSamples = buffer.getNumSamples();
+
+    for (int sample = 0; sample < numSamples; ++sample)
+    {
+        const auto left = inLeft != nullptr ? juce::jlimit(-1.0f, 1.0f, inLeft[sample] * gain) : 0.0f;
+        const auto right = inRight != nullptr ? juce::jlimit(-1.0f, 1.0f, inRight[sample] * gain) : 0.0f;
+        localPeakLeft = juce::jmax(localPeakLeft, std::abs(left));
+        localPeakRight = juce::jmax(localPeakRight, std::abs(right));
+    }
+
+    auto accumulatePeak = [](std::atomic<float>& atomicPeak, const float candidate)
+    {
+        auto current = atomicPeak.load(std::memory_order_relaxed);
+        while (candidate > current
+            && !atomicPeak.compare_exchange_weak(current, candidate,
+                std::memory_order_release, std::memory_order_relaxed))
+        {
+        }
+    };
+
+    accumulatePeak(captureInputPeakLeft_, localPeakLeft);
+    accumulatePeak(captureInputPeakRight_, localPeakRight);
+}
+
+bool AudiocityAudioProcessor::captureInputAudio(const juce::AudioBuffer<float>& buffer, int sourceChannels) noexcept
+{
+    if (!captureRecording_.load(std::memory_order_acquire))
+        return false;
+
+    updateCaptureInputMonitorLevels(buffer, sourceChannels);
+
+    sourceChannels = juce::jlimit(0, buffer.getNumChannels(), sourceChannels);
+    if (sourceChannels <= 0)
+        return false;
+
+    auto writePos = juce::jlimit(0, kCaptureMaxSamplesPerChannel,
+        captureInputSamples_.load(std::memory_order_relaxed));
+    if (writePos >= kCaptureMaxSamplesPerChannel)
+    {
+        captureRecording_.store(false, std::memory_order_release);
+        captureOverflow_.store(true, std::memory_order_relaxed);
+        return false;
+    }
+
+    const auto samplesToCapture = juce::jmin(buffer.getNumSamples(), kCaptureMaxSamplesPerChannel - writePos);
+    if (samplesToCapture <= 0)
+    {
+        captureRecording_.store(false, std::memory_order_release);
+        captureOverflow_.store(true, std::memory_order_relaxed);
+        return false;
+    }
+
+    const auto* inLeft = sourceChannels > 0 ? buffer.getReadPointer(0) : nullptr;
+    const auto* inRight = sourceChannels > 1 ? buffer.getReadPointer(1) : inLeft;
+    const auto gain = getCaptureInputGain();
+
+    for (int sample = 0; sample < samplesToCapture; ++sample)
+    {
+        const auto rawIndex = writePos + sample;
+        if (rawIndex < 0 || rawIndex >= kCaptureMaxSamplesPerChannel)
+        {
+            captureRecording_.store(false, std::memory_order_release);
+            captureOverflow_.store(true, std::memory_order_relaxed);
+            break;
+        }
+
+        const auto index = static_cast<std::size_t>(rawIndex);
+        const auto left = inLeft != nullptr ? juce::jlimit(-1.0f, 1.0f, inLeft[sample] * gain) : 0.0f;
+        const auto right = inRight != nullptr ? juce::jlimit(-1.0f, 1.0f, inRight[sample] * gain) : 0.0f;
+        captureInputLeft_[index] = left;
+        captureInputRight_[index] = right;
+    }
+
+    writePos += samplesToCapture;
+    captureInputSamples_.store(writePos, std::memory_order_release);
+
+    if (writePos >= kCaptureMaxSamplesPerChannel)
+    {
+        captureRecording_.store(false, std::memory_order_release);
+        captureOverflow_.store(true, std::memory_order_relaxed);
+    }
+
+    return true;
+}
+
+float AudiocityAudioProcessor::quantizeCaptureSample(const float sample, const int bitDepth) noexcept
+{
+    const auto clamped = juce::jlimit(-1.0f, 1.0f, sample);
+    if (bitDepth >= 32)
+        return clamped;
+
+    const auto levels = bitDepth >= 24 ? 8388607.0f : 32767.0f;
+    return std::round(clamped * levels) / levels;
 }
 
 void AudiocityAudioProcessor::updateHostTempoFromPlayHead() noexcept

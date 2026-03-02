@@ -55,9 +55,14 @@ public:
     [[nodiscard]] bool isRexRuntimeAvailable() const noexcept { return engine_.isRexRuntimeAvailable(); }
     void loadGeneratedWaveformAsSample(const std::vector<float>& waveform, int rootMidiNote = 60);
     [[nodiscard]] juce::String getLoadedSamplePath() const;
+    [[nodiscard]] juce::String getLastStateRestoreSourceLabel() const;
     [[nodiscard]] bool isGeneratedWaveformLoaded() const noexcept
     {
         return generatedWaveformLoaded_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] bool isCapturedAudioLoaded() const noexcept
+    {
+        return capturedAudioLoaded_.load(std::memory_order_relaxed);
     }
     void setSampleBrowserRootFolder(const juce::String& folderPath) { sampleBrowserRootFolderPath_ = folderPath; }
     [[nodiscard]] juce::String getSampleBrowserRootFolder() const { return sampleBrowserRootFolderPath_; }
@@ -77,6 +82,7 @@ public:
     void setGeneratedWaveformPreviewMidiNote(int midiNote) noexcept;
     void startGeneratedWaveformPreview() noexcept;
     void stopGeneratedWaveformPreview() noexcept;
+    bool previewCapturedAudio();
     bool previewSampleFromFile(const juce::File& file);
     void panicAllAudio() noexcept;
     [[nodiscard]] bool isGeneratedWaveformPreviewPlaying() const noexcept
@@ -169,6 +175,51 @@ public:
     void setGenerateSketchSmoothing(int modeId) noexcept;
     [[nodiscard]] int getGenerateSketchSmoothing() const noexcept;
 
+    struct CaptureDisplayMinMax
+    {
+        float minValue = 0.0f;
+        float maxValue = 0.0f;
+    };
+
+    void startInputCapture() noexcept;
+    void stopInputCapture() noexcept;
+    void clearInputCapture() noexcept;
+    [[nodiscard]] bool isInputCaptureRecording() const noexcept
+    {
+        return captureRecording_.load(std::memory_order_acquire);
+    }
+    [[nodiscard]] bool didInputCaptureOverflow() const noexcept
+    {
+        return captureOverflow_.load(std::memory_order_relaxed);
+    }
+    void resetInputCaptureOverflow() noexcept;
+    [[nodiscard]] int getCapturedInputSamples() const noexcept
+    {
+        return juce::jlimit(0, kCaptureMaxSamplesPerChannel,
+            captureInputSamples_.load(std::memory_order_relaxed));
+    }
+    [[nodiscard]] double getCapturedInputSampleRate() const noexcept
+    {
+        return captureInputSampleRate_.load(std::memory_order_relaxed);
+    }
+    void setCaptureTargetSampleRate(int sampleRate) noexcept;
+    [[nodiscard]] int getCaptureTargetSampleRate() const noexcept;
+    void setCaptureChannelMode(int modeId) noexcept;
+    [[nodiscard]] int getCaptureChannelMode() const noexcept;
+    void setCaptureBitDepth(int bitDepth) noexcept;
+    [[nodiscard]] int getCaptureBitDepth() const noexcept;
+    void setCaptureInputGain(float gainLinear) noexcept;
+    [[nodiscard]] float getCaptureInputGain() const noexcept;
+    [[nodiscard]] OutputPeakLevels consumeCaptureInputPeakLevels() noexcept;
+    [[nodiscard]] std::vector<CaptureDisplayMinMax> buildCapturedWaveformMinMax(
+        int maxPeaks,
+        int startSample,
+        int endSample) const;
+    bool cutCapturedAudioRange(int startSample, int endSample) noexcept;
+    bool trimCapturedAudioRange(int startSample, int endSample) noexcept;
+    bool normalizeCapturedAudio(float targetPeak = 0.9f) noexcept;
+    bool loadCapturedAudioAsSample(int startSample, int endSample);
+
     void setLoopPoints(int loopStart, int loopEnd) noexcept;
     [[nodiscard]] int getLoopStart() const noexcept { return engine_.getLoopStart(); }
     [[nodiscard]] int getLoopEnd() const noexcept { return engine_.getLoopEnd(); }
@@ -251,6 +302,9 @@ private:
     void updateOutputPeakLevels(const juce::AudioBuffer<float>& buffer) noexcept;
     void updateVoicePlaybackPositionsFromEngine() noexcept;
     void clearVoicePlaybackPositions() noexcept;
+    void updateCaptureInputMonitorLevels(const juce::AudioBuffer<float>& buffer, int sourceChannels) noexcept;
+    [[nodiscard]] bool captureInputAudio(const juce::AudioBuffer<float>& buffer, int sourceChannels) noexcept;
+    static float quantizeCaptureSample(float sample, int bitDepth) noexcept;
 
     struct UiMidiEvent
     {
@@ -282,8 +336,12 @@ private:
     std::atomic<int> suspendParamSyncBlocks_{ 0 };
     std::atomic<float> hostBpm_{ 120.0f };
     std::atomic<bool> generatedWaveformLoaded_{ false };
+    std::atomic<bool> capturedAudioLoaded_{ false };
+    std::atomic<int> lastStateRestoreSource_{ 0 }; // 0=none, 1=file, 2=generated, 3=captured
     mutable std::mutex generatedWaveformStateMutex_;
     std::vector<float> generatedWaveformState_;
+    std::vector<float> capturedSampleState_;
+    double capturedSampleRateState_ = 44100.0;
     std::atomic<int> waveformViewStartSample_{ 0 };
     std::atomic<int> waveformViewSampleCount_{ 0 };
     std::atomic<int> editorTabIndex_{ 0 };
@@ -310,6 +368,21 @@ private:
     std::atomic<double> samplePreviewSourceRate_{ 44100.0 };
     std::atomic<bool> samplePreviewPlaying_{ false };
     float samplePreviewReadPos_ = 0.0f;
+    static constexpr int kCaptureMaxSeconds = 30;
+    static constexpr int kCaptureMaxSampleRate = 96000;
+    static constexpr int kCaptureMaxSamplesPerChannel = kCaptureMaxSeconds * kCaptureMaxSampleRate;
+    std::array<float, kCaptureMaxSamplesPerChannel> captureInputLeft_{};
+    std::array<float, kCaptureMaxSamplesPerChannel> captureInputRight_{};
+    std::atomic<int> captureInputSamples_{ 0 };
+    std::atomic<double> captureInputSampleRate_{ 44100.0 };
+    std::atomic<bool> captureRecording_{ false };
+    std::atomic<bool> captureOverflow_{ false };
+    std::atomic<int> captureTargetSampleRate_{ 0 };
+    std::atomic<int> captureChannelMode_{ 0 };
+    std::atomic<int> captureBitDepth_{ 16 };
+    std::atomic<float> captureInputGain_{ 1.0f };
+    std::atomic<float> captureInputPeakLeft_{ 0.0f };
+    std::atomic<float> captureInputPeakRight_{ 0.0f };
     void pushUiMidiEvent(int noteNumber, int velocity, bool isNoteOn) noexcept;
     [[nodiscard]] bool popUiMidiEvent(UiMidiEvent& out) noexcept;
 

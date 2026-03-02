@@ -3468,6 +3468,73 @@ bool runCcLearnDialUserClearCallbackTest()
 
     return callbackInvoked && dial.getAssignedCc() == -1 && !dial.isCcLearnArmed();
 }
+
+bool runSettingsSnapshotCaptureFieldsAffectEqualityTest()
+{
+    audiocity::engine::SettingsSnapshot baseline;
+    baseline.captureTargetSampleRate = 0;
+    baseline.captureChannelMode = 0;
+    baseline.captureBitDepth = 16;
+    baseline.captureInputGain = 1.0f;
+
+    auto changed = baseline;
+    changed.captureTargetSampleRate = 48000;
+    if (changed == baseline)
+        return false;
+
+    changed = baseline;
+    changed.captureChannelMode = 3;
+    if (changed == baseline)
+        return false;
+
+    changed = baseline;
+    changed.captureBitDepth = 24;
+    if (changed == baseline)
+        return false;
+
+    changed = baseline;
+    changed.captureInputGain = 1.25f;
+    if (changed == baseline)
+        return false;
+
+    return true;
+}
+
+bool runSettingsUndoHistoryTracksCaptureSettingsTest()
+{
+    audiocity::engine::SettingsUndoHistory history;
+    audiocity::engine::SettingsSnapshot before;
+    audiocity::engine::SettingsSnapshot after = before;
+    after.captureTargetSampleRate = 44100;
+    after.captureChannelMode = 1;
+    after.captureBitDepth = 24;
+    after.captureInputGain = 1.4f;
+
+    history.recordChange(before, after, -1, "Capture Settings");
+    if (!history.canUndo())
+        return false;
+
+    const auto undoSnapshot = history.undo(after);
+    if (!undoSnapshot.has_value())
+        return false;
+
+    if (undoSnapshot->captureTargetSampleRate != before.captureTargetSampleRate
+        || undoSnapshot->captureChannelMode != before.captureChannelMode
+        || undoSnapshot->captureBitDepth != before.captureBitDepth
+        || undoSnapshot->captureInputGain != before.captureInputGain)
+    {
+        return false;
+    }
+
+    const auto redoSnapshot = history.redo(before);
+    if (!redoSnapshot.has_value())
+        return false;
+
+    return redoSnapshot->captureTargetSampleRate == after.captureTargetSampleRate
+        && redoSnapshot->captureChannelMode == after.captureChannelMode
+        && redoSnapshot->captureBitDepth == after.captureBitDepth
+        && redoSnapshot->captureInputGain == after.captureInputGain;
+}
 }
 
 int main()
@@ -3570,6 +3637,12 @@ int main()
 
     if (!runSettingsUndoHistoryEditorStateTest())
         return 22;
+
+    if (!runSettingsSnapshotCaptureFieldsAffectEqualityTest())
+        return 65;
+
+    if (!runSettingsUndoHistoryTracksCaptureSettingsTest())
+        return 66;
 
     if (!runPlayerPadStateUtilityTest())
         return 23;

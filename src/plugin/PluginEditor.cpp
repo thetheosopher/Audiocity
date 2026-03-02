@@ -534,6 +534,149 @@ void AudiocityAudioProcessorEditor::GeneratedWaveformView::mouseUp(const juce::M
     lastDrawIndex_ = -1;
 }
 
+void AudiocityAudioProcessorEditor::CaptureWaveformView::setState(
+    const int totalSamples,
+    const int visibleStart,
+    const int visibleEnd,
+    std::vector<MinMax> waveform,
+    const int selectionStart,
+    const int selectionEnd,
+    const double sampleRate,
+    const bool recording)
+{
+    totalSamples_ = juce::jmax(0, totalSamples);
+    visibleStart_ = juce::jlimit(0, totalSamples_, visibleStart);
+    visibleEnd_ = juce::jlimit(visibleStart_, totalSamples_, visibleEnd);
+    waveform_ = std::move(waveform);
+    selectionStart_ = juce::jlimit(0, totalSamples_, selectionStart);
+    selectionEnd_ = juce::jlimit(selectionStart_, totalSamples_, selectionEnd);
+    sampleRate_ = juce::jmax(1.0, sampleRate);
+    recording_ = recording;
+    repaint();
+}
+
+void AudiocityAudioProcessorEditor::CaptureWaveformView::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colour(0xff121629));
+    g.setColour(juce::Colour(0xff3a3a52));
+    g.drawRect(getLocalBounds(), 1);
+
+    const auto bounds = getLocalBounds().toFloat().reduced(8.0f, 8.0f);
+    if (bounds.getWidth() <= 1.0f || bounds.getHeight() <= 1.0f)
+        return;
+
+    if (waveform_.empty() || totalSamples_ <= 0)
+    {
+        g.setColour(juce::Colours::white.withAlpha(0.45f));
+        g.drawText("Record input to capture audio", getLocalBounds(), juce::Justification::centred);
+        return;
+    }
+
+    if (selectionEnd_ > selectionStart_)
+    {
+        const auto sx = xFromSample(selectionStart_);
+        const auto ex = xFromSample(selectionEnd_);
+        g.setColour(juce::Colour(0xff61d9ff).withAlpha(0.18f));
+        g.fillRect(juce::Rectangle<float>(juce::jmin(sx, ex), bounds.getY(), std::abs(ex - sx), bounds.getHeight()));
+    }
+
+    const auto midY = bounds.getCentreY();
+    g.setColour(juce::Colours::white.withAlpha(0.12f));
+    g.drawLine(bounds.getX(), midY, bounds.getRight(), midY, 1.0f);
+
+    g.setColour(juce::Colour(0xff59ddff));
+    const auto peakCount = static_cast<int>(waveform_.size());
+    for (int i = 0; i < peakCount; ++i)
+    {
+        const auto norm = peakCount > 1 ? static_cast<float>(i) / static_cast<float>(peakCount - 1) : 0.0f;
+        const auto x = bounds.getX() + norm * bounds.getWidth();
+        const auto minY = midY - juce::jlimit(-1.0f, 1.0f, waveform_[static_cast<std::size_t>(i)].max) * bounds.getHeight() * 0.45f;
+        const auto maxY = midY - juce::jlimit(-1.0f, 1.0f, waveform_[static_cast<std::size_t>(i)].min) * bounds.getHeight() * 0.45f;
+        g.drawLine(x, minY, x, maxY, 1.0f);
+    }
+
+    if (recording_)
+    {
+        g.setColour(juce::Colour(0xffff5b5b));
+        g.fillEllipse(bounds.getX() + 6.0f, bounds.getY() + 6.0f, 10.0f, 10.0f);
+    }
+
+    if (selectionEnd_ > selectionStart_)
+    {
+        const auto selectionSamples = selectionEnd_ - selectionStart_;
+        const auto selectionSeconds = static_cast<double>(selectionSamples) / sampleRate_;
+        const auto selectionLabel = juce::String(selectionStart_) + ".." + juce::String(selectionEnd_)
+            + "  |  " + juce::String(selectionSamples) + " samples  ("
+            + juce::String(selectionSeconds, 3) + " s)";
+
+        auto labelArea = bounds.toNearestInt().removeFromTop(22).removeFromRight(360).reduced(6, 2);
+        g.setColour(juce::Colours::black.withAlpha(0.45f));
+        g.fillRoundedRectangle(labelArea.toFloat(), 4.0f);
+        g.setColour(juce::Colour(0xffd6ecff));
+        g.setFont(juce::Font(juce::FontOptions(12.0f)));
+        g.drawText(selectionLabel, labelArea, juce::Justification::centredRight);
+    }
+}
+
+int AudiocityAudioProcessorEditor::CaptureWaveformView::sampleFromX(const float x) const noexcept
+{
+    const auto range = juce::jmax(1, visibleEnd_ - visibleStart_);
+    const auto bounds = getLocalBounds().toFloat().reduced(8.0f, 8.0f);
+    const auto normalized = juce::jlimit(0.0f, 1.0f,
+        (x - bounds.getX()) / juce::jmax(1.0f, bounds.getWidth()));
+    return visibleStart_ + static_cast<int>(std::round(normalized * static_cast<float>(range)));
+}
+
+float AudiocityAudioProcessorEditor::CaptureWaveformView::xFromSample(const int sample) const noexcept
+{
+    const auto range = juce::jmax(1, visibleEnd_ - visibleStart_);
+    const auto bounds = getLocalBounds().toFloat().reduced(8.0f, 8.0f);
+    const auto normalized = static_cast<float>(juce::jlimit(visibleStart_, visibleEnd_, sample) - visibleStart_)
+        / static_cast<float>(range);
+    return bounds.getX() + normalized * bounds.getWidth();
+}
+
+void AudiocityAudioProcessorEditor::CaptureWaveformView::updateSelectionFromDrag(const float x)
+{
+    const auto current = juce::jlimit(0, totalSamples_, sampleFromX(x));
+    selectionStart_ = juce::jmin(dragAnchorSample_, current);
+    selectionEnd_ = juce::jmax(dragAnchorSample_, current);
+    if (onSelectionChanged)
+        onSelectionChanged(selectionStart_, selectionEnd_);
+    repaint();
+}
+
+void AudiocityAudioProcessorEditor::CaptureWaveformView::mouseDown(const juce::MouseEvent& event)
+{
+    if (!event.mods.isLeftButtonDown())
+        return;
+
+    dragging_ = true;
+    dragAnchorSample_ = juce::jlimit(0, totalSamples_, sampleFromX(event.position.x));
+    selectionStart_ = dragAnchorSample_;
+    selectionEnd_ = dragAnchorSample_;
+    if (onSelectionChanged)
+        onSelectionChanged(selectionStart_, selectionEnd_);
+    repaint();
+}
+
+void AudiocityAudioProcessorEditor::CaptureWaveformView::mouseDrag(const juce::MouseEvent& event)
+{
+    if (!dragging_)
+        return;
+
+    updateSelectionFromDrag(event.position.x);
+}
+
+void AudiocityAudioProcessorEditor::CaptureWaveformView::mouseUp(const juce::MouseEvent& event)
+{
+    if (!dragging_)
+        return;
+
+    updateSelectionFromDrag(event.position.x);
+    dragging_ = false;
+}
+
 void AudiocityAudioProcessorEditor::AmpEnvelopeGraph::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(0xff202234));
@@ -762,6 +905,25 @@ void AudiocityAudioProcessorEditor::StereoPeakMeter::paint(juce::Graphics& g)
             const auto x = meterArea.getX() + static_cast<int>(std::round((meterArea.getWidth() * i) / static_cast<float>(segmentCount)));
             g.setColour(juce::Colours::white.withAlpha(i % 5 == 0 ? 0.20f : 0.10f));
             g.drawVerticalLine(x, static_cast<float>(meterArea.getY() + 1), static_cast<float>(meterArea.getBottom() - 1));
+        }
+
+        if (clipZoneEnabled_)
+        {
+            constexpr float kClipThreshold = 0.70710678f; // ~ -3 dBFS
+            const auto thresholdX = meterArea.getX()
+                + static_cast<int>(std::round(static_cast<float>(meterArea.getWidth()) * kClipThreshold));
+
+            auto clipArea = meterArea;
+            clipArea.setX(juce::jlimit(meterArea.getX(), meterArea.getRight(), thresholdX));
+            clipArea.setWidth(meterArea.getRight() - clipArea.getX());
+            if (clipArea.getWidth() > 0)
+            {
+                g.setColour(juce::Colour(0xffff5b5b).withAlpha(0.10f));
+                g.fillRect(clipArea);
+            }
+
+            g.setColour(juce::Colour(0xffff8c8c).withAlpha(0.55f));
+            g.drawVerticalLine(thresholdX, static_cast<float>(meterArea.getY()), static_cast<float>(meterArea.getBottom()));
         }
 
         const auto clampedLevel = juce::jlimit(0.0f, 1.0f, level);
@@ -1380,6 +1542,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     tabBar_.addTab("Library", juce::Colour(0xff252538), &tabLibraryPage_, false);
     tabBar_.addTab("Player", juce::Colour(0xff252538), &tabPlayerPage_, false);
     tabBar_.addTab("Generate", juce::Colour(0xff252538), &tabGeneratePage_, false);
+    tabBar_.addTab("Capture", juce::Colour(0xff252538), &tabCapturePage_, false);
     currentTabIndex_ = 0;
     processor_.setEditorTabIndex(currentTabIndex_);
     tabBar_.setCurrentTabIndex(currentTabIndex_);
@@ -1575,6 +1738,25 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         updateGeneratePreviewButtonText();
     };
 
+    capturePlayButton_.onClick = [this]
+    {
+        if (processor_.isSamplePreviewPlaying())
+            processor_.panicAllAudio();
+        else
+            processor_.previewCapturedAudio();
+
+        updateGeneratePreviewButtonText();
+    };
+
+    captureNormalizeButton_.onClick = [this]
+    {
+        if (processor_.normalizeCapturedAudio(0.9f))
+        {
+            refreshCaptureWaveform(true);
+            updateCaptureUiState();
+        }
+    };
+
     generateLoadAsSampleButton_.onClick = [this]
     {
         processor_.stopGeneratedWaveformPreview();
@@ -1599,6 +1781,153 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     updateGeneratePulseWidthControlState();
 
     regenerateWaveform();
+
+    // Capture pane
+    addAndMakeVisible(captureWaveformView_);
+    addAndMakeVisible(captureRecordButton_);
+    addAndMakeVisible(captureClearButton_);
+    addAndMakeVisible(captureCutButton_);
+    addAndMakeVisible(captureTrimButton_);
+    addAndMakeVisible(captureLoadAsSampleButton_);
+    addAndMakeVisible(capturePlayButton_);
+    addAndMakeVisible(captureNormalizeButton_);
+    addAndMakeVisible(captureSourceLabel_);
+    addAndMakeVisible(captureSampleRateLabel_);
+    addAndMakeVisible(captureSampleRateCombo_);
+    addAndMakeVisible(captureChannelLabel_);
+    addAndMakeVisible(captureChannelCombo_);
+    addAndMakeVisible(captureBitDepthLabel_);
+    addAndMakeVisible(captureBitDepthCombo_);
+    addAndMakeVisible(captureRootNoteLabel_);
+    addAndMakeVisible(captureRootNoteCombo_);
+    addAndMakeVisible(captureInputLevelLabel_);
+    addAndMakeVisible(captureInputLevelSlider_);
+    addAndMakeVisible(captureInputVuMeter_);
+    captureInputVuMeter_.setClipZoneEnabled(true);
+    addAndMakeVisible(captureStatusLabel_);
+
+    captureSourceLabel_.setJustificationType(juce::Justification::centredLeft);
+    captureSampleRateLabel_.setJustificationType(juce::Justification::centredLeft);
+    captureChannelLabel_.setJustificationType(juce::Justification::centredLeft);
+    captureBitDepthLabel_.setJustificationType(juce::Justification::centredLeft);
+    captureRootNoteLabel_.setJustificationType(juce::Justification::centredLeft);
+    captureInputLevelLabel_.setJustificationType(juce::Justification::centredLeft);
+    captureStatusLabel_.setJustificationType(juce::Justification::centredLeft);
+    captureStatusLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8a8aa0));
+
+    captureSampleRateCombo_.addItem("Host", 1);
+    captureSampleRateCombo_.addItem("22050", 22050);
+    captureSampleRateCombo_.addItem("32000", 32000);
+    captureSampleRateCombo_.addItem("44100", 44100);
+    captureSampleRateCombo_.addItem("48000", 48000);
+    const auto targetCaptureRate = processor_.getCaptureTargetSampleRate();
+    captureSampleRateCombo_.setSelectedId(targetCaptureRate <= 0 ? 1 : targetCaptureRate, juce::dontSendNotification);
+    captureSampleRateCombo_.onChange = [this]
+    {
+        const auto id = captureSampleRateCombo_.getSelectedId();
+        processor_.setCaptureTargetSampleRate(id == 1 ? 0 : id);
+    };
+
+    captureChannelCombo_.addItem("Mono Sum", 1);
+    captureChannelCombo_.addItem("Left", 2);
+    captureChannelCombo_.addItem("Right", 3);
+    captureChannelCombo_.addItem("Stereo", 4);
+    captureChannelCombo_.setSelectedId(processor_.getCaptureChannelMode() + 1, juce::dontSendNotification);
+    captureChannelCombo_.onChange = [this]
+    {
+        processor_.setCaptureChannelMode(captureChannelCombo_.getSelectedId() - 1);
+        refreshCaptureWaveform(true);
+    };
+
+    captureBitDepthCombo_.addItem("16 bit", 16);
+    captureBitDepthCombo_.addItem("24 bit", 24);
+    captureBitDepthCombo_.addItem("32 float", 32);
+    captureBitDepthCombo_.setSelectedId(processor_.getCaptureBitDepth(), juce::dontSendNotification);
+    captureBitDepthCombo_.onChange = [this]
+    {
+        processor_.setCaptureBitDepth(captureBitDepthCombo_.getSelectedId());
+    };
+
+    for (int note = 0; note <= 127; ++note)
+        captureRootNoteCombo_.addItem(formatMidiNoteName(note), note + 1);
+    captureRootNoteCombo_.setSelectedId(61, juce::dontSendNotification); // C3 default
+
+    captureInputLevelSlider_.setRange(0.0, 200.0, 0.1);
+    captureInputLevelSlider_.setTextValueSuffix(" %");
+    captureInputLevelSlider_.setValue(processor_.getCaptureInputGain() * 100.0f, juce::dontSendNotification);
+    captureInputLevelSlider_.onValueChange = [this]
+    {
+        processor_.setCaptureInputGain(static_cast<float>(captureInputLevelSlider_.getValue()) / 100.0f);
+    };
+
+    captureWaveformView_.onSelectionChanged = [this](const int start, const int end)
+    {
+        captureSelectionStart_ = juce::jlimit(0, captureDisplayTotalSamples_, start);
+        captureSelectionEnd_ = juce::jlimit(captureSelectionStart_, captureDisplayTotalSamples_, end);
+        updateCaptureUiState();
+    };
+
+    captureRecordButton_.onClick = [this]
+    {
+        const auto shouldStop = processor_.isInputCaptureRecording();
+        if (shouldStop)
+            processor_.stopInputCapture();
+        else
+            processor_.startInputCapture();
+
+        refreshCaptureWaveform(true);
+        updateCaptureUiState();
+    };
+
+    captureClearButton_.onClick = [this]
+    {
+        processor_.clearInputCapture();
+        captureSelectionStart_ = 0;
+        captureSelectionEnd_ = 0;
+        refreshCaptureWaveform(true);
+        updateCaptureUiState();
+    };
+
+    captureCutButton_.onClick = [this]
+    {
+        if (processor_.cutCapturedAudioRange(captureSelectionStart_, captureSelectionEnd_))
+        {
+            captureSelectionEnd_ = captureSelectionStart_;
+            refreshCaptureWaveform(true);
+            updateCaptureUiState();
+        }
+    };
+
+    captureTrimButton_.onClick = [this]
+    {
+        if (processor_.trimCapturedAudioRange(captureSelectionStart_, captureSelectionEnd_))
+        {
+            captureSelectionStart_ = 0;
+            captureSelectionEnd_ = processor_.getCapturedInputSamples();
+            refreshCaptureWaveform(true);
+            updateCaptureUiState();
+        }
+    };
+
+    captureLoadAsSampleButton_.onClick = [this]
+    {
+        const auto start = captureSelectionEnd_ > captureSelectionStart_ ? captureSelectionStart_ : 0;
+        const auto end = captureSelectionEnd_ > captureSelectionStart_
+            ? captureSelectionEnd_
+            : processor_.getCapturedInputSamples();
+
+        const auto selectedRoot = juce::jlimit(0, 127, captureRootNoteCombo_.getSelectedId() - 1);
+        processor_.setRootMidiNote(selectedRoot);
+        if (!processor_.loadCapturedAudioAsSample(start, end))
+            return;
+
+        tabBar_.setCurrentTabIndex(0);
+        currentTabIndex_ = 0;
+        processor_.setEditorTabIndex(currentTabIndex_);
+        updateTabVisibility();
+        resized();
+        refreshUI(true);
+    };
 
     // Sample browser pane
     addAndMakeVisible(sampleBrowserRootLabel_);
@@ -1637,6 +1966,11 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(samplePathLabel_);
     samplePathLabel_.setJustificationType(juce::Justification::centredLeft);
     samplePathLabel_.setText("No sample loaded", juce::dontSendNotification);
+
+    addAndMakeVisible(restoreSourceLabel_);
+    restoreSourceLabel_.setJustificationType(juce::Justification::centredRight);
+    restoreSourceLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8a8aa0));
+    restoreSourceLabel_.setText("Restore: none", juce::dontSendNotification);
 
     addAndMakeVisible(loadButton_);
     loadButton_.setTooltip("Load Sample");
@@ -2295,6 +2629,8 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 
     updateTabVisibility();
     refreshUI();
+    refreshCaptureWaveform(true);
+    updateCaptureUiState();
     lastSettingsSnapshot_ = captureSettingsSnapshot();
     syncCcMappingsFromProcessor();
     startTimerHz(60);
@@ -2339,6 +2675,14 @@ void AudiocityAudioProcessorEditor::timerCallback()
 
     const auto outputPeaks = processor_.consumeOutputPeakLevels();
     outputLevelMeter_.pushLevels(outputPeaks.left, outputPeaks.right);
+
+    if (currentTabIndex_ == 4 || processor_.isInputCaptureRecording())
+    {
+        refreshCaptureWaveform(processor_.isInputCaptureRecording());
+        updateCaptureUiState();
+        const auto capturePeaks = processor_.consumeCaptureInputPeakLevels();
+        captureInputVuMeter_.pushLevels(capturePeaks.left, capturePeaks.right);
+    }
 
     for (int i = 0; i < kPlayerPadCount; ++i)
     {
@@ -2413,6 +2757,11 @@ void AudiocityAudioProcessorEditor::timerCallback()
 
         if (currentTabIndex_ == 1)
             sampleBrowserListBox_.grabKeyboardFocus();
+        else if (currentTabIndex_ == 4)
+        {
+            refreshCaptureWaveform(true);
+            updateCaptureUiState();
+        }
     }
 
     AudiocityAudioProcessor::CcEvent event{};
@@ -2446,8 +2795,12 @@ void AudiocityAudioProcessorEditor::timerCallback()
 
     if (currentTabIndex_ == 1)
     {
+        const auto scanning = sampleScanInProgress_.load(std::memory_order_relaxed);
+        const auto statusText = scanning
+            ? juce::String("Scanning...")
+            : (processor_.isSamplePreviewPlaying() ? juce::String("Previewing...") : juce::String{});
         sampleBrowserPreviewLabel_.setText(
-            processor_.isSamplePreviewPlaying() ? "Previewing..." : juce::String{},
+            statusText,
             juce::dontSendNotification);
     }
 
@@ -2609,6 +2962,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     const bool showLibraryTab = (currentTabIndex_ == 1);
     const bool showPlayerTab = (currentTabIndex_ == 2);
     const bool showGenerateTab = (currentTabIndex_ == 3);
+    const bool showCaptureTab = (currentTabIndex_ == 4);
 
     sampleBrowserRootLabel_.setVisible(showLibraryTab);
     sampleBrowserChooseRootButton_.setVisible(showLibraryTab);
@@ -2619,6 +2973,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     sampleBrowserPreviewLabel_.setVisible(showLibraryTab);
 
     samplePathLabel_.setVisible(showSampleTab);
+    restoreSourceLabel_.setVisible(showSampleTab);
     loadButton_.setVisible(showSampleTab);
     waveformDisplayModeCombo_.setVisible(showSampleTab);
     sampleControlsViewport_.setVisible(showSampleTab);
@@ -2738,6 +3093,28 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     generateFrequencyLabel_.setVisible(showGenerateTab);
     generateFrequencyCombo_.setVisible(showGenerateTab);
     generateLoadAsSampleButton_.setVisible(showGenerateTab);
+
+    captureWaveformView_.setVisible(showCaptureTab);
+    captureRecordButton_.setVisible(showCaptureTab);
+    captureClearButton_.setVisible(showCaptureTab);
+    captureCutButton_.setVisible(showCaptureTab);
+    captureTrimButton_.setVisible(showCaptureTab);
+    captureLoadAsSampleButton_.setVisible(showCaptureTab);
+    capturePlayButton_.setVisible(showCaptureTab);
+    captureNormalizeButton_.setVisible(showCaptureTab);
+    captureSourceLabel_.setVisible(showCaptureTab);
+    captureSampleRateLabel_.setVisible(showCaptureTab);
+    captureSampleRateCombo_.setVisible(showCaptureTab);
+    captureChannelLabel_.setVisible(showCaptureTab);
+    captureChannelCombo_.setVisible(showCaptureTab);
+    captureBitDepthLabel_.setVisible(showCaptureTab);
+    captureBitDepthCombo_.setVisible(showCaptureTab);
+    captureRootNoteLabel_.setVisible(showCaptureTab);
+    captureRootNoteCombo_.setVisible(showCaptureTab);
+    captureInputLevelLabel_.setVisible(showCaptureTab);
+    captureInputLevelSlider_.setVisible(showCaptureTab);
+    captureInputVuMeter_.setVisible(showCaptureTab);
+    captureStatusLabel_.setVisible(showCaptureTab);
 }
 
 int AudiocityAudioProcessorEditor::getNumRows()
@@ -2970,6 +3347,7 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
     sampleBrowserListBox_.updateContent();
     sampleBrowserListBox_.repaint();
 
+    sampleScanInProgress_.store(true, std::memory_order_relaxed);
     const auto scanGeneration = ++sampleScanGeneration_;
     auto safeThis = juce::Component::SafePointer<AudiocityAudioProcessorEditor>(this);
 
@@ -3033,6 +3411,18 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
         }
 
         flushBatchToUi(batch);
+
+        juce::MessageManager::callAsync([safeThis, scanGeneration]()
+        {
+            if (safeThis == nullptr)
+                return;
+
+            auto* self = safeThis.getComponent();
+            if (scanGeneration != self->sampleScanGeneration_.load())
+                return;
+
+            self->sampleScanInProgress_.store(false, std::memory_order_relaxed);
+        });
     }).detach();
 }
 
@@ -3314,6 +3704,56 @@ void AudiocityAudioProcessorEditor::resized()
         return;
     }
 
+    if (currentTabIndex_ == 4)
+    {
+        auto captureArea = area.reduced(8, 6);
+        auto waveformArea = captureArea.removeFromTop(juce::jmax(220, captureArea.getHeight() / 2));
+        captureWaveformView_.setBounds(waveformArea);
+
+        captureArea.removeFromTop(10);
+        auto controlsRow = captureArea.removeFromTop(32);
+        captureRecordButton_.setBounds(controlsRow.removeFromLeft(96));
+        controlsRow.removeFromLeft(8);
+        captureClearButton_.setBounds(controlsRow.removeFromLeft(88));
+        controlsRow.removeFromLeft(8);
+        captureCutButton_.setBounds(controlsRow.removeFromLeft(126));
+        controlsRow.removeFromLeft(8);
+        captureTrimButton_.setBounds(controlsRow.removeFromLeft(132));
+        controlsRow.removeFromLeft(8);
+        captureLoadAsSampleButton_.setBounds(controlsRow.removeFromLeft(150));
+        controlsRow.removeFromLeft(8);
+        capturePlayButton_.setBounds(controlsRow.removeFromLeft(120));
+        controlsRow.removeFromLeft(8);
+        captureNormalizeButton_.setBounds(controlsRow.removeFromLeft(100));
+
+        captureArea.removeFromTop(10);
+        auto settingsRow = captureArea.removeFromTop(30);
+        captureSourceLabel_.setBounds(settingsRow.removeFromLeft(250));
+        settingsRow.removeFromLeft(12);
+        captureSampleRateLabel_.setBounds(settingsRow.removeFromLeft(78));
+        captureSampleRateCombo_.setBounds(settingsRow.removeFromLeft(100));
+        settingsRow.removeFromLeft(10);
+        captureChannelLabel_.setBounds(settingsRow.removeFromLeft(58));
+        captureChannelCombo_.setBounds(settingsRow.removeFromLeft(120));
+        settingsRow.removeFromLeft(10);
+        captureBitDepthLabel_.setBounds(settingsRow.removeFromLeft(66));
+        captureBitDepthCombo_.setBounds(settingsRow.removeFromLeft(110));
+
+        captureArea.removeFromTop(8);
+        auto levelRow = captureArea.removeFromTop(40);
+        captureRootNoteLabel_.setBounds(levelRow.removeFromLeft(72));
+        captureRootNoteCombo_.setBounds(levelRow.removeFromLeft(160));
+        levelRow.removeFromLeft(12);
+        captureInputLevelLabel_.setBounds(levelRow.removeFromLeft(80));
+        captureInputLevelSlider_.setBounds(levelRow.removeFromLeft(190));
+        levelRow.removeFromLeft(12);
+        captureInputVuMeter_.setBounds(levelRow.removeFromLeft(180));
+
+        captureArea.removeFromTop(8);
+        captureStatusLabel_.setBounds(captureArea.removeFromTop(22));
+        return;
+    }
+
     // ── Top bar: Load button + file path ──
     {
         auto topRow = area.removeFromTop(kTopBarH);
@@ -3321,6 +3761,8 @@ void AudiocityAudioProcessorEditor::resized()
         topRow.removeFromRight(8);
         waveformDisplayModeCombo_.setBounds(topRow.removeFromRight(132));
         topRow.removeFromRight(8);
+        restoreSourceLabel_.setBounds(topRow.removeFromRight(150));
+        topRow.removeFromRight(10);
         samplePathLabel_.setBounds(topRow);
     }
 
@@ -3620,7 +4062,7 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
         paintSampleBrowserPane(g, content);
     else if (currentTabIndex_ == 2)
         paintPlayerPane(g, content);
-    else if (currentTabIndex_ == 3)
+    else if (currentTabIndex_ == 3 || currentTabIndex_ == 4)
     {
         g.setColour(juce::Colour(0xff252538));
         g.fillRoundedRectangle(content.reduced(6).toFloat(), 8.0f);
@@ -3685,7 +4127,7 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
     if (!commandDown && !modifiers.isAltDown())
     {
         const auto character = key.getTextCharacter();
-        if (character >= '1' && character <= '4')
+        if (character >= '1' && character <= '5')
         {
             const auto tabIndex = static_cast<int>(character - '1');
             tabBar_.setCurrentTabIndex(tabIndex);
@@ -3727,6 +4169,13 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 
     if (key == juce::KeyPress::escapeKey)
     {
+        if (processor_.isInputCaptureRecording())
+        {
+            processor_.stopInputCapture();
+            refreshCaptureWaveform(true);
+            updateCaptureUiState();
+        }
+
         processor_.panicAllAudio();
         updateGeneratePreviewButtonText();
         return true;
@@ -3767,6 +4216,94 @@ void AudiocityAudioProcessorEditor::saveStateToFile()
 void AudiocityAudioProcessorEditor::updateGeneratePreviewButtonText()
 {
     generatePreviewButton_.setButtonText(processor_.isGeneratedWaveformPreviewPlaying() ? "Stop" : "Play");
+
+    const auto hasCapturedAudio = processor_.getCapturedInputSamples() > 0;
+    const auto samplePreviewPlaying = processor_.isSamplePreviewPlaying();
+    capturePlayButton_.setEnabled(hasCapturedAudio || samplePreviewPlaying);
+    capturePlayButton_.setButtonText(samplePreviewPlaying ? "Stop Capture" : "Play Capture");
+}
+
+void AudiocityAudioProcessorEditor::refreshCaptureWaveform(const bool force)
+{
+    const auto totalSamples = processor_.getCapturedInputSamples();
+    const auto recording = processor_.isInputCaptureRecording();
+    if (!force && !recording && totalSamples == captureLastSamples_ && recording == captureLastRecording_)
+        return;
+
+    captureLastSamples_ = totalSamples;
+    captureLastRecording_ = recording;
+    captureDisplayTotalSamples_ = totalSamples;
+
+    const auto sampleRate = juce::jmax(1.0, processor_.getCapturedInputSampleRate());
+    const auto followWindowSamples = static_cast<int>(std::round(sampleRate * 4.0));
+    captureDisplayVisibleStart_ = 0;
+    captureDisplayVisibleEnd_ = totalSamples;
+    if (recording && totalSamples > followWindowSamples)
+        captureDisplayVisibleStart_ = totalSamples - followWindowSamples;
+
+    captureDisplayVisibleEnd_ = juce::jmax(captureDisplayVisibleStart_, totalSamples);
+
+    captureSelectionStart_ = juce::jlimit(0, captureDisplayTotalSamples_, captureSelectionStart_);
+    captureSelectionEnd_ = juce::jlimit(captureSelectionStart_, captureDisplayTotalSamples_, captureSelectionEnd_);
+
+    const auto peakResolution = computeWaveformPeakResolution(captureWaveformView_.getWidth());
+    const auto waveform = processor_.buildCapturedWaveformMinMax(
+        peakResolution,
+        captureDisplayVisibleStart_,
+        captureDisplayVisibleEnd_);
+
+    std::vector<CaptureWaveformView::MinMax> converted;
+    converted.reserve(waveform.size());
+    for (const auto& peak : waveform)
+        converted.push_back({ peak.minValue, peak.maxValue });
+
+    captureWaveformView_.setState(
+        captureDisplayTotalSamples_,
+        captureDisplayVisibleStart_,
+        captureDisplayVisibleEnd_,
+        std::move(converted),
+        captureSelectionStart_,
+        captureSelectionEnd_,
+        processor_.getCapturedInputSampleRate(),
+        recording);
+}
+
+void AudiocityAudioProcessorEditor::updateCaptureUiState()
+{
+    const auto recording = processor_.isInputCaptureRecording();
+    const auto totalSamples = processor_.getCapturedInputSamples();
+    const auto hasSelection = captureSelectionEnd_ > captureSelectionStart_;
+    const auto hasAudio = totalSamples > 0;
+
+    captureRecordButton_.setButtonText(recording ? "Stop" : "Record");
+    captureCutButton_.setEnabled(hasSelection && !recording);
+    captureTrimButton_.setEnabled(hasSelection && !recording);
+    captureClearButton_.setEnabled(hasAudio && !recording);
+    captureLoadAsSampleButton_.setEnabled((hasSelection || hasAudio) && !recording);
+
+    const auto sampleRate = juce::jmax(1.0, processor_.getCapturedInputSampleRate());
+    const auto totalMs = static_cast<int>(std::round((static_cast<double>(totalSamples) * 1000.0) / sampleRate));
+    const auto sec = totalMs / 1000;
+    const auto ms = totalMs % 1000;
+
+    juce::String status = recording
+        ? "Recording"
+        : "Ready";
+    status << "  |  Length: " << sec << "." << juce::String(ms).paddedLeft('0', 3) << " s";
+    if (hasSelection)
+    {
+        const auto selectedSamples = captureSelectionEnd_ - captureSelectionStart_;
+        const auto selectedMs = static_cast<int>(std::round((static_cast<double>(selectedSamples) * 1000.0) / sampleRate));
+        status << "  |  Selection: "
+            << captureSelectionStart_ << ".." << captureSelectionEnd_
+            << " [" << selectedSamples << " samples]"
+            << " (" << (selectedMs / 1000) << "." << juce::String(selectedMs % 1000).paddedLeft('0', 3) << " s)";
+    }
+
+    if (processor_.didInputCaptureOverflow())
+        status << "  |  Max length reached";
+
+    captureStatusLabel_.setText(status, juce::dontSendNotification);
 }
 
 std::vector<std::vector<AudiocityAudioProcessorEditor::WaveformView::MinMax>>
@@ -4091,7 +4628,7 @@ void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const
 void AudiocityAudioProcessorEditor::setupTooltips()
 {
     samplePathLabel_.setTooltip(
-        "Shortcuts: Ctrl+O Load  |  Ctrl+Z Undo  |  Ctrl+Y Redo  |  Ctrl+S Save State  |  Space Play/Stop (Generate)  |  1-4 Switch Tabs");
+        "Shortcuts: Ctrl+O Load  |  Ctrl+Z Undo  |  Ctrl+Y Redo  |  Ctrl+S Save State  |  Space Play/Stop (Generate)  |  1-5 Switch Tabs");
     loadButton_.setTooltip(
         "Load Sample (Ctrl+O)");
     generatePreviewButton_.setTooltip(
@@ -4107,6 +4644,26 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Scroll Keyboard Left");
     playerKeyboardScrollRight_.setTooltip(
         "Scroll Keyboard Right");
+    captureRecordButton_.setTooltip(
+        "Start/Stop Capture from Plugin Input");
+    captureClearButton_.setTooltip(
+        "Clear Captured Audio Buffer");
+    captureCutButton_.setTooltip(
+        "Cut Selected Region");
+    captureTrimButton_.setTooltip(
+        "Trim to Selected Region");
+    captureLoadAsSampleButton_.setTooltip(
+        "Load Capture (or Selection) as Current Sample");
+    capturePlayButton_.setTooltip(
+        "Play/Stop Captured Audio Preview");
+    captureNormalizeButton_.setTooltip(
+        "Normalize captured audio to 90% of maximum amplitude");
+    captureRootNoteLabel_.setTooltip(
+        "Capture Root Note - Applied when loading captured audio as sample");
+    captureRootNoteCombo_.setTooltip(
+        "Capture Root Note - Applied when loading captured audio as sample");
+    captureInputLevelSlider_.setTooltip(
+        "Capture Input Level - Scales recorded audio level from 0% to 200%");
 
     rootNoteLabel_.setTooltip(
         "Root Note - MIDI note number and pitch name for the sample's original pitch");
@@ -4435,11 +4992,16 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     const auto path = processor_.getLoadedSamplePath();
     const auto sampleIdentity = path.isNotEmpty()
         ? (juce::String("file:") + path)
-        : (processor_.isGeneratedWaveformLoaded() ? juce::String("generated") : juce::String("none"));
+        : (processor_.isGeneratedWaveformLoaded()
+            ? juce::String("generated")
+            : (processor_.isCapturedAudioLoaded() ? juce::String("captured") : juce::String("none")));
     const auto sampleLabel = path.isNotEmpty()
         ? path
-        : (processor_.isGeneratedWaveformLoaded() ? juce::String("Generated Waveform") : juce::String("No sample loaded"));
+        : (processor_.isGeneratedWaveformLoaded()
+            ? juce::String("Generated Waveform")
+            : (processor_.isCapturedAudioLoaded() ? juce::String("Captured Audio") : juce::String("No sample loaded")));
     samplePathLabel_.setText(sampleLabel, juce::dontSendNotification);
+    restoreSourceLabel_.setText("Restore: " + processor_.getLastStateRestoreSourceLabel(), juce::dontSendNotification);
     const auto isNewLoadedSample = sampleIdentity != lastWaveformSamplePath_;
 
     const bool isEditingRootNote = rootNoteCombo_.hasKeyboardFocus(true) || rootNoteCombo_.isPopupActive();
@@ -4614,6 +5176,12 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     reverseToggle_.setToggleState(processor_.getReversePlayback(), juce::dontSendNotification);
     fadeInDial_.setValue(processor_.getFadeInSamples());
     fadeOutDial_.setValue(processor_.getFadeOutSamples());
+
+    const auto captureRate = processor_.getCaptureTargetSampleRate();
+    captureSampleRateCombo_.setSelectedId(captureRate <= 0 ? 1 : captureRate, juce::dontSendNotification);
+    captureChannelCombo_.setSelectedId(processor_.getCaptureChannelMode() + 1, juce::dontSendNotification);
+    captureBitDepthCombo_.setSelectedId(processor_.getCaptureBitDepth(), juce::dontSendNotification);
+    captureInputLevelSlider_.setValue(processor_.getCaptureInputGain() * 100.0f, juce::dontSendNotification);
 
     updateDiagnosticsStatusText();
 }
@@ -4849,7 +5417,11 @@ audiocity::engine::SettingsSnapshot AudiocityAudioProcessorEditor::captureSettin
         processor_.getLoopEnd(),
         processor_.getFadeInSamples(),
         processor_.getFadeOutSamples(),
-        processor_.getReversePlayback()
+        processor_.getReversePlayback(),
+        processor_.getCaptureTargetSampleRate(),
+        processor_.getCaptureChannelMode(),
+        processor_.getCaptureBitDepth(),
+        processor_.getCaptureInputGain()
     };
 }
 
@@ -4877,7 +5449,18 @@ void AudiocityAudioProcessorEditor::applySettingsSnapshot(const audiocity::engin
     processor_.setLoopPoints(snapshot.loopStart, snapshot.loopEnd);
     processor_.setFadeSamples(snapshot.fadeInSamples, snapshot.fadeOutSamples);
     processor_.setReversePlayback(snapshot.reversePlayback);
+    processor_.setCaptureTargetSampleRate(snapshot.captureTargetSampleRate);
+    processor_.setCaptureChannelMode(snapshot.captureChannelMode);
+    processor_.setCaptureBitDepth(snapshot.captureBitDepth);
+    processor_.setCaptureInputGain(snapshot.captureInputGain);
+
+    captureSampleRateCombo_.setSelectedId(snapshot.captureTargetSampleRate <= 0 ? 1 : snapshot.captureTargetSampleRate,
+        juce::dontSendNotification);
+    captureChannelCombo_.setSelectedId(snapshot.captureChannelMode + 1, juce::dontSendNotification);
+    captureBitDepthCombo_.setSelectedId(snapshot.captureBitDepth, juce::dontSendNotification);
+    captureInputLevelSlider_.setValue(snapshot.captureInputGain * 100.0f, juce::dontSendNotification);
 
     refreshUI();
+    updateCaptureUiState();
 }
 

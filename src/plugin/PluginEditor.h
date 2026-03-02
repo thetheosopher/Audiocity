@@ -165,11 +165,13 @@ private:
     bool isResizingSampleList_ = false;
     int sampleListColumnWidth_ = 360;
     std::atomic<int> sampleScanGeneration_{ 0 };
+    std::atomic<bool> sampleScanInProgress_{ false };
     juce::TabbedComponent tabBar_{ juce::TabbedButtonBar::TabsAtTop };
     juce::Component tabSamplePage_;
     juce::Component tabLibraryPage_;
     juce::Component tabPlayerPage_;
     juce::Component tabGeneratePage_;
+    juce::Component tabCapturePage_;
     int currentTabIndex_ = 0;
 
     struct SampleListEntry
@@ -218,6 +220,7 @@ private:
 
     // ── Sample ──
     juce::Label samplePathLabel_;
+    juce::Label restoreSourceLabel_{ {}, "Restore: none" };
     juce::TextButton loadButton_{ "..." };
     juce::ComboBox waveformDisplayModeCombo_;
     juce::Label rootNoteLabel_{ {}, "Root Note" };
@@ -315,6 +318,12 @@ private:
     class StereoPeakMeter final : public juce::Component
     {
     public:
+        void setClipZoneEnabled(bool enabled)
+        {
+            clipZoneEnabled_ = enabled;
+            repaint();
+        }
+
         void pushLevels(float left, float right)
         {
             constexpr float kDecayPerTick = 0.92f;
@@ -328,6 +337,7 @@ private:
     private:
         float leftLevel_ = 0.0f;
         float rightLevel_ = 0.0f;
+        bool clipZoneEnabled_ = false;
     };
 
     GeneratedWaveformView generateWaveformView_;
@@ -370,6 +380,77 @@ private:
     };
     GeneratedWaveType selectedGeneratedWaveType_ = GeneratedWaveType::sine;
     SketchedWaveSmoothing selectedSketchSmoothing_ = SketchedWaveSmoothing::line;
+
+    class CaptureWaveformView final : public juce::Component
+    {
+    public:
+        struct MinMax
+        {
+            float min = 0.0f;
+            float max = 0.0f;
+        };
+
+        void setState(int totalSamples,
+            int visibleStart,
+            int visibleEnd,
+            std::vector<MinMax> waveform,
+            int selectionStart,
+            int selectionEnd,
+            double sampleRate,
+            bool recording);
+
+        std::function<void(int, int)> onSelectionChanged;
+
+        void paint(juce::Graphics& g) override;
+        void mouseDown(const juce::MouseEvent& event) override;
+        void mouseDrag(const juce::MouseEvent& event) override;
+        void mouseUp(const juce::MouseEvent& event) override;
+
+    private:
+        [[nodiscard]] int sampleFromX(float x) const noexcept;
+        [[nodiscard]] float xFromSample(int sample) const noexcept;
+        void updateSelectionFromDrag(float x);
+
+        int totalSamples_ = 0;
+        int visibleStart_ = 0;
+        int visibleEnd_ = 0;
+        std::vector<MinMax> waveform_;
+        int selectionStart_ = 0;
+        int selectionEnd_ = 0;
+        double sampleRate_ = 44100.0;
+        bool recording_ = false;
+        bool dragging_ = false;
+        int dragAnchorSample_ = 0;
+    };
+
+    CaptureWaveformView captureWaveformView_;
+    juce::TextButton captureRecordButton_{ "Record" };
+    juce::TextButton captureClearButton_{ "Clear" };
+    juce::TextButton captureCutButton_{ "Cut Selection" };
+    juce::TextButton captureTrimButton_{ "Trim Selection" };
+    juce::TextButton capturePlayButton_{ "Play Capture" };
+    juce::TextButton captureNormalizeButton_{ "Normalize" };
+    juce::TextButton captureLoadAsSampleButton_{ "Load as Sample" };
+    juce::Label captureSourceLabel_{ {}, "Source: Plugin Input (host-routed)" };
+    juce::Label captureSampleRateLabel_{ {}, "Sample Rate" };
+    juce::ComboBox captureSampleRateCombo_;
+    juce::Label captureChannelLabel_{ {}, "Channel" };
+    juce::ComboBox captureChannelCombo_;
+    juce::Label captureBitDepthLabel_{ {}, "Bit Depth" };
+    juce::ComboBox captureBitDepthCombo_;
+    juce::Label captureRootNoteLabel_{ {}, "Root Note" };
+    juce::ComboBox captureRootNoteCombo_;
+    juce::Label captureInputLevelLabel_{ {}, "Input Level" };
+    juce::Slider captureInputLevelSlider_{ juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+    StereoPeakMeter captureInputVuMeter_;
+    juce::Label captureStatusLabel_{ {}, "No capture" };
+    int captureSelectionStart_ = 0;
+    int captureSelectionEnd_ = 0;
+    int captureDisplayTotalSamples_ = 0;
+    int captureDisplayVisibleStart_ = 0;
+    int captureDisplayVisibleEnd_ = 0;
+    int captureLastSamples_ = -1;
+    bool captureLastRecording_ = false;
 
     // ── Playback ──
     juce::Label playbackModeLabel_{ {}, "Mode" };
@@ -505,6 +586,8 @@ private:
     void paintSampleBrowserPane(juce::Graphics& g, juce::Rectangle<int> browserArea) const;
     void updateTabVisibility();
     void updateGeneratePreviewButtonText();
+    void refreshCaptureWaveform(bool force = false);
+    void updateCaptureUiState();
     void updateGeneratePulseWidthControlState();
     void updateDiagnosticsStatusText();
     void updateAmpEnvelopeGraphFromDials();
