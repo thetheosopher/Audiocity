@@ -8,6 +8,7 @@
 #include <functional>
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <array>
 #include <string>
 #include <vector>
@@ -490,6 +491,7 @@ private:
     void pushPerformanceControls();
     void syncCcMappingsFromProcessor();
     void setupTooltips();
+    void saveStateToFile();
     void chooseSampleRootFolder();
     void scanSampleRootFolder(const juce::File& rootFolder);
     void rebuildVisibleSampleList();
@@ -520,6 +522,8 @@ private:
     [[nodiscard]] bool isSupportedSampleFile(const juce::File& file) const;
     [[nodiscard]] audiocity::engine::SettingsSnapshot captureSettingsSnapshot() const;
     void applySettingsSnapshot(const audiocity::engine::SettingsSnapshot& snapshot);
+
+    std::optional<audiocity::engine::SettingsSnapshot> lastSettingsSnapshot_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudiocityAudioProcessorEditor)
 };

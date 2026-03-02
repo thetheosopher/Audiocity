@@ -2295,6 +2295,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 
     updateTabVisibility();
     refreshUI();
+    lastSettingsSnapshot_ = captureSettingsSnapshot();
     syncCcMappingsFromProcessor();
     startTimerHz(60);
 }
@@ -2450,6 +2451,13 @@ void AudiocityAudioProcessorEditor::timerCallback()
             juce::dontSendNotification);
     }
 
+    const auto currentSnapshot = captureSettingsSnapshot();
+    if (lastSettingsSnapshot_.has_value() && *lastSettingsSnapshot_ != currentSnapshot)
+    {
+        settingsUndoHistory_.recordChange(*lastSettingsSnapshot_, currentSnapshot, 1, "Edit Settings");
+    }
+    lastSettingsSnapshot_ = currentSnapshot;
+
     syncAutomatedControlsFromProcessor();
 }
 
@@ -2544,7 +2552,10 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
     filterLfoRateKeySyncToggle_.setEnabled(filter.lfoTempoSync);
     filterLfoDivisionLabel_.setEnabled(filter.lfoTempoSync);
     filterLfoDivisionCombo_.setEnabled(filter.lfoTempoSync);
-    filterTypeCombo_.setSelectedId(filterModeToComboId(filter.mode), juce::dontSendNotification);
+    const auto filterTypeId = filterModeToComboId(filter.mode);
+    const bool isEditingFilterType = filterTypeCombo_.hasKeyboardFocus(true) || filterTypeCombo_.isPopupActive();
+    if (!isEditingFilterType && filterTypeCombo_.getSelectedId() != filterTypeId)
+        filterTypeCombo_.setSelectedId(filterTypeId, juce::dontSendNotification);
 
     const auto filterEnv = processor_.getFilterEnvelope();
     filterAttackDial_.setValue(filterEnv.attackSeconds * 1000.0f, juce::dontSendNotification);
@@ -3634,6 +3645,76 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
 
 bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 {
+    const auto modifiers = key.getModifiers();
+    const bool commandDown = modifiers.isCommandDown() || modifiers.isCtrlDown();
+
+    if (commandDown && (key.getTextCharacter() == 'o' || key.getTextCharacter() == 'O'))
+    {
+        openSampleChooser();
+        return true;
+    }
+
+    if (commandDown && (key.getTextCharacter() == 's' || key.getTextCharacter() == 'S'))
+    {
+        saveStateToFile();
+        return true;
+    }
+
+    if (commandDown && (key.getTextCharacter() == 'z' || key.getTextCharacter() == 'Z'))
+    {
+        const auto currentSnapshot = captureSettingsSnapshot();
+        if (const auto previous = settingsUndoHistory_.undo(currentSnapshot); previous.has_value())
+        {
+            applySettingsSnapshot(*previous);
+            lastSettingsSnapshot_ = *previous;
+        }
+        return true;
+    }
+
+    if (commandDown && (key.getTextCharacter() == 'y' || key.getTextCharacter() == 'Y'))
+    {
+        const auto currentSnapshot = captureSettingsSnapshot();
+        if (const auto next = settingsUndoHistory_.redo(currentSnapshot); next.has_value())
+        {
+            applySettingsSnapshot(*next);
+            lastSettingsSnapshot_ = *next;
+        }
+        return true;
+    }
+
+    if (!commandDown && !modifiers.isAltDown())
+    {
+        const auto character = key.getTextCharacter();
+        if (character >= '1' && character <= '4')
+        {
+            const auto tabIndex = static_cast<int>(character - '1');
+            tabBar_.setCurrentTabIndex(tabIndex);
+            currentTabIndex_ = tabIndex;
+            processor_.setEditorTabIndex(currentTabIndex_);
+            updateTabVisibility();
+            resized();
+            repaint();
+            return true;
+        }
+    }
+
+    if (!commandDown && !modifiers.isAltDown()
+        && key.getKeyCode() == juce::KeyPress::spaceKey
+        && currentTabIndex_ == 3)
+    {
+        if (processor_.isGeneratedWaveformPreviewPlaying())
+            processor_.stopGeneratedWaveformPreview();
+        else
+        {
+            processor_.setGeneratedWaveformPreview(generatedWaveform_);
+            processor_.setGeneratedWaveformPreviewMidiNote(getSelectedGenerateMidiNote());
+            processor_.startGeneratedWaveformPreview();
+        }
+
+        updateGeneratePreviewButtonText();
+        return true;
+    }
+
     if (key.getKeyCode() == juce::KeyPress::returnKey && currentTabIndex_ == 1)
     {
         const auto selectedRow = sampleBrowserListBox_.getSelectedRow();
@@ -3652,6 +3733,35 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
     }
 
     return juce::AudioProcessorEditor::keyPressed(key);
+}
+
+void AudiocityAudioProcessorEditor::saveStateToFile()
+{
+    fileChooser_ = std::make_unique<juce::FileChooser>(
+        "Save Audiocity State",
+        juce::File{},
+        "*.audiocitystate");
+
+    auto chooserFlags = juce::FileBrowserComponent::saveMode
+        | juce::FileBrowserComponent::canSelectFiles
+        | juce::FileBrowserComponent::warnAboutOverwriting;
+
+    fileChooser_->launchAsync(chooserFlags, [this](const juce::FileChooser& chooser)
+    {
+        auto file = chooser.getResult();
+        if (file == juce::File{})
+            return;
+
+        if (!file.hasFileExtension(".audiocitystate"))
+            file = file.withFileExtension(".audiocitystate");
+
+        juce::MemoryBlock stateData;
+        processor_.getStateInformation(stateData);
+        if (stateData.getSize() == 0)
+            return;
+
+        file.replaceWithData(stateData.getData(), stateData.getSize());
+    });
 }
 
 void AudiocityAudioProcessorEditor::updateGeneratePreviewButtonText()
@@ -3980,6 +4090,13 @@ void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const
 
 void AudiocityAudioProcessorEditor::setupTooltips()
 {
+    samplePathLabel_.setTooltip(
+        "Shortcuts: Ctrl+O Load  |  Ctrl+Z Undo  |  Ctrl+Y Redo  |  Ctrl+S Save State  |  Space Play/Stop (Generate)  |  1-4 Switch Tabs");
+    loadButton_.setTooltip(
+        "Load Sample (Ctrl+O)");
+    generatePreviewButton_.setTooltip(
+        "Play/Stop Generate Preview (Space on Generate tab)");
+
     sampleBrowserChooseRootButton_.setTooltip(
         "Select Sample Folder...");
     sampleBrowserFilterEditor_.setTooltip(
