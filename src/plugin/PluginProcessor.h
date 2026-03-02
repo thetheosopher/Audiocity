@@ -50,6 +50,8 @@ public:
 
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
+    [[nodiscard]] juce::String createPlaybackPresetXml();
+    bool loadPlaybackPresetXml(const juce::String& xmlText, juce::String& errorMessage);
 
     bool loadSampleFromFile(const juce::File& file);
     [[nodiscard]] bool isRexRuntimeAvailable() const noexcept { return engine_.isRexRuntimeAvailable(); }

@@ -1,5 +1,6 @@
 add_executable(audiocity_offline_tests
     OfflineRenderTests.cpp
+    ../src/plugin/PresetJson.cpp
     ../src/plugin/CcLearnDial.cpp
     ../src/plugin/PlayerPadState.cpp
     ../src/engine/EngineCore.cpp

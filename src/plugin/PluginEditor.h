@@ -220,6 +220,10 @@ private:
 
     // ── Sample ──
     juce::Label samplePathLabel_;
+    juce::ComboBox presetCombo_;
+    juce::TextButton presetSaveButton_{ "Save" };
+    juce::TextButton presetRenameButton_{ "Rename" };
+    juce::TextButton presetDeleteButton_{ "Delete" };
     juce::Label restoreSourceLabel_{ {}, "Restore: none" };
     juce::TextButton loadButton_{ "..." };
     juce::ComboBox waveformDisplayModeCombo_;
@@ -451,6 +455,9 @@ private:
     int captureDisplayVisibleEnd_ = 0;
     int captureLastSamples_ = -1;
     bool captureLastRecording_ = false;
+    juce::Array<juce::File> availablePresetFiles_;
+    bool suppressPresetComboChange_ = false;
+    juce::String currentPresetName_;
 
     // ── Playback ──
     juce::Label playbackModeLabel_{ {}, "Mode" };
@@ -573,6 +580,16 @@ private:
     void syncCcMappingsFromProcessor();
     void setupTooltips();
     void saveStateToFile();
+    [[nodiscard]] juce::File getPresetDirectory() const;
+    [[nodiscard]] static juce::String sanitizePresetName(const juce::String& rawName);
+    [[nodiscard]] juce::File presetFileForName(const juce::String& presetName) const;
+    void refreshPresetList(const juce::String& preferredPresetName = {});
+    void savePreset(const juce::String& presetName);
+    void promptSavePreset();
+    void showPresetLoadErrorAndOfferDelete(const juce::File& presetFile, const juce::String& errorMessage);
+    void loadPresetFromSelection();
+    void renameSelectedPreset();
+    void deleteSelectedPreset();
     void chooseSampleRootFolder();
     void scanSampleRootFolder(const juce::File& rootFolder);
     void rebuildVisibleSampleList();

@@ -4,6 +4,7 @@
 #include "../src/engine/EngineCore.h"
 #include "../src/engine/SettingsUndoHistory.h"
 #include "../src/plugin/CcLearnDial.h"
+#include "../src/plugin/PresetJson.h"
 #include "../src/plugin/PlayerPadState.h"
 
 #include <cmath>
@@ -3535,6 +3536,53 @@ bool runSettingsUndoHistoryTracksCaptureSettingsTest()
         && redoSnapshot->captureBitDepth == after.captureBitDepth
         && redoSnapshot->captureInputGain == after.captureInputGain;
 }
+
+bool runPresetXmlRoundTripWithEmbeddedSampleDataTest()
+{
+    constexpr auto kPatchRoot = "AudiocityPatch";
+
+    juce::ValueTree state(kPatchRoot);
+    state.setProperty("samplePath", juce::String("C:/Samples/Kick.wav"), nullptr);
+    state.setProperty("rootMidiNote", 60, nullptr);
+    state.setProperty("playbackMode", 2, nullptr);
+
+    std::vector<float> generatedWave{ 0.0f, 0.25f, -0.25f, 0.75f, -0.5f };
+    juce::MemoryBlock waveBytes(generatedWave.size() * sizeof(float));
+    std::memcpy(waveBytes.getData(), generatedWave.data(), waveBytes.getSize());
+    state.setProperty("generatedWaveformData", juce::var(waveBytes), nullptr);
+
+    const auto xml = audiocity::plugin::encodePresetXml(state);
+    if (xml.isEmpty())
+        return false;
+
+    juce::ValueTree decoded;
+    juce::String error;
+    if (!audiocity::plugin::decodePresetXml(xml, decoded, error))
+        return false;
+
+    if (!decoded.isValid() || !decoded.hasType(kPatchRoot))
+        return false;
+
+    if (decoded.getProperty("samplePath").toString() != "C:/Samples/Kick.wav")
+        return false;
+
+    if (static_cast<int>(decoded.getProperty("rootMidiNote", -1)) != 60)
+        return false;
+
+    const auto* decodedBinary = decoded.getProperty("generatedWaveformData").getBinaryData();
+    if (decodedBinary == nullptr || decodedBinary->getSize() != waveBytes.getSize())
+        return false;
+
+    return std::memcmp(decodedBinary->getData(), waveBytes.getData(), waveBytes.getSize()) == 0;
+}
+
+bool runPresetXmlRejectsInvalidPayloadTest()
+{
+    juce::ValueTree decoded;
+    juce::String error;
+    const auto ok = audiocity::plugin::decodePresetXml("this is not xml", decoded, error);
+    return !ok && error.isNotEmpty();
+}
 }
 
 int main()
@@ -3643,6 +3691,12 @@ int main()
 
     if (!runSettingsUndoHistoryTracksCaptureSettingsTest())
         return 66;
+
+    if (!runPresetXmlRoundTripWithEmbeddedSampleDataTest())
+        return 67;
+
+    if (!runPresetXmlRejectsInvalidPayloadTest())
+        return 68;
 
     if (!runPlayerPadStateUtilityTest())
         return 23;

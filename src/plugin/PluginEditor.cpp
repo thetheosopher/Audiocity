@@ -71,6 +71,7 @@ public:
 };
 
 TabTextLookAndFeel tabTextLookAndFeel;
+constexpr auto kPresetFileExtension = ".acp";
 
 int computeWaveformPeakResolution(const int waveformWidthPixels)
 {
@@ -1967,6 +1968,33 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     samplePathLabel_.setJustificationType(juce::Justification::centredLeft);
     samplePathLabel_.setText("No sample loaded", juce::dontSendNotification);
 
+    addAndMakeVisible(presetCombo_);
+    presetCombo_.setTextWhenNoChoicesAvailable("No Presets");
+    presetCombo_.setTextWhenNothingSelected("Preset...");
+    presetCombo_.onChange = [this]
+    {
+        if (!suppressPresetComboChange_)
+            loadPresetFromSelection();
+    };
+
+    addAndMakeVisible(presetSaveButton_);
+    presetSaveButton_.onClick = [this]
+    {
+        promptSavePreset();
+    };
+
+    addAndMakeVisible(presetRenameButton_);
+    presetRenameButton_.onClick = [this]
+    {
+        renameSelectedPreset();
+    };
+
+    addAndMakeVisible(presetDeleteButton_);
+    presetDeleteButton_.onClick = [this]
+    {
+        deleteSelectedPreset();
+    };
+
     addAndMakeVisible(restoreSourceLabel_);
     restoreSourceLabel_.setJustificationType(juce::Justification::centredRight);
     restoreSourceLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8a8aa0));
@@ -1992,6 +2020,8 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
             ? WaveformView::DisplayMode::symmetricEnvelope
             : WaveformView::DisplayMode::signedWaveform);
     };
+
+            refreshPresetList();
 
     addAndMakeVisible(rootNoteLabel_);
     rootNoteLabel_.setJustificationType(juce::Justification::centredLeft);
@@ -2973,6 +3003,10 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     sampleBrowserPreviewLabel_.setVisible(showLibraryTab);
 
     samplePathLabel_.setVisible(showSampleTab);
+    presetCombo_.setVisible(showSampleTab);
+    presetSaveButton_.setVisible(showSampleTab);
+    presetRenameButton_.setVisible(showSampleTab);
+    presetDeleteButton_.setVisible(showSampleTab);
     restoreSourceLabel_.setVisible(showSampleTab);
     loadButton_.setVisible(showSampleTab);
     waveformDisplayModeCombo_.setVisible(showSampleTab);
@@ -3763,6 +3797,16 @@ void AudiocityAudioProcessorEditor::resized()
         topRow.removeFromRight(8);
         restoreSourceLabel_.setBounds(topRow.removeFromRight(150));
         topRow.removeFromRight(10);
+
+        presetDeleteButton_.setBounds(topRow.removeFromLeft(64));
+        topRow.removeFromLeft(6);
+        presetRenameButton_.setBounds(topRow.removeFromLeft(70));
+        topRow.removeFromLeft(6);
+        presetSaveButton_.setBounds(topRow.removeFromLeft(56));
+        topRow.removeFromLeft(6);
+        presetCombo_.setBounds(topRow.removeFromLeft(220));
+        topRow.removeFromLeft(10);
+
         samplePathLabel_.setBounds(topRow);
     }
 
@@ -4096,6 +4140,13 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
+    if (commandDown && key.getModifiers().isShiftDown()
+        && (key.getTextCharacter() == 's' || key.getTextCharacter() == 'S'))
+    {
+        promptSavePreset();
+        return true;
+    }
+
     if (commandDown && (key.getTextCharacter() == 's' || key.getTextCharacter() == 'S'))
     {
         saveStateToFile();
@@ -4211,6 +4262,320 @@ void AudiocityAudioProcessorEditor::saveStateToFile()
 
         file.replaceWithData(stateData.getData(), stateData.getSize());
     });
+}
+
+juce::File AudiocityAudioProcessorEditor::getPresetDirectory() const
+{
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("Audiocity")
+        .getChildFile("Presets");
+}
+
+juce::String AudiocityAudioProcessorEditor::sanitizePresetName(const juce::String& rawName)
+{
+    auto name = rawName.trim();
+    if (name.isEmpty())
+        return {};
+
+    static const juce::String kForbidden = "\\/:*?\"<>|";
+    for (int i = 0; i < name.length(); ++i)
+    {
+        if (kForbidden.containsChar(name[i]))
+            name = name.replaceCharacter(name[i], '_');
+    }
+
+    return name.trim();
+}
+
+juce::File AudiocityAudioProcessorEditor::presetFileForName(const juce::String& presetName) const
+{
+    return getPresetDirectory().getChildFile(presetName + kPresetFileExtension);
+}
+
+void AudiocityAudioProcessorEditor::refreshPresetList(const juce::String& preferredPresetName)
+{
+    const auto presetDirectory = getPresetDirectory();
+    if (!presetDirectory.exists())
+        presetDirectory.createDirectory();
+
+    juce::Array<juce::File> presetFiles;
+    presetDirectory.findChildFiles(presetFiles, juce::File::TypesOfFileToFind::findFiles, false,
+        juce::String("*") + kPresetFileExtension);
+
+    std::sort(presetFiles.begin(), presetFiles.end(), [](const juce::File& a, const juce::File& b)
+    {
+        return a.getFileNameWithoutExtension().compareIgnoreCase(b.getFileNameWithoutExtension()) < 0;
+    });
+
+    availablePresetFiles_ = presetFiles;
+
+    suppressPresetComboChange_ = true;
+    presetCombo_.clear(juce::dontSendNotification);
+
+    for (int index = 0; index < availablePresetFiles_.size(); ++index)
+    {
+        const auto fileName = availablePresetFiles_.getReference(index).getFileName();
+        const auto label = fileName.upToLastOccurrenceOf(kPresetFileExtension, false, false);
+        presetCombo_.addItem(label, index + 1);
+    }
+
+    const auto selectionName = preferredPresetName.isNotEmpty() ? preferredPresetName : currentPresetName_;
+    int selectedId = 0;
+    for (int index = 0; index < availablePresetFiles_.size(); ++index)
+    {
+        const auto candidate = availablePresetFiles_.getReference(index)
+            .getFileName()
+            .upToLastOccurrenceOf(kPresetFileExtension, false, false);
+        if (candidate == selectionName)
+        {
+            selectedId = index + 1;
+            break;
+        }
+    }
+
+    if (selectedId > 0)
+    {
+        presetCombo_.setSelectedId(selectedId, juce::dontSendNotification);
+        currentPresetName_ = presetCombo_.getText();
+    }
+    else
+    {
+        presetCombo_.setSelectedId(0, juce::dontSendNotification);
+        if (availablePresetFiles_.isEmpty())
+            currentPresetName_.clear();
+    }
+
+    suppressPresetComboChange_ = false;
+
+    const auto hasSelection = presetCombo_.getSelectedId() > 0;
+    presetRenameButton_.setEnabled(hasSelection);
+    presetDeleteButton_.setEnabled(hasSelection);
+}
+
+void AudiocityAudioProcessorEditor::savePreset(const juce::String& presetName)
+{
+    const auto sanitizedName = sanitizePresetName(presetName);
+    if (sanitizedName.isEmpty())
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            "Preset Save",
+            "Preset name cannot be empty.");
+        return;
+    }
+
+    const auto presetDirectory = getPresetDirectory();
+    if (!presetDirectory.exists() && !presetDirectory.createDirectory())
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            "Preset Save",
+            "Unable to create preset directory.");
+        return;
+    }
+
+    const auto presetXml = processor_.createPlaybackPresetXml();
+    if (presetXml.isEmpty())
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            "Preset Save",
+            "Unable to build preset XML from current sample playback state.");
+        return;
+    }
+
+    const auto file = presetFileForName(sanitizedName);
+    if (!file.replaceWithText(presetXml))
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            "Preset Save",
+            "Failed to write preset file to disk.");
+        return;
+    }
+
+    currentPresetName_ = sanitizedName;
+    refreshPresetList(currentPresetName_);
+}
+
+void AudiocityAudioProcessorEditor::promptSavePreset()
+{
+    const auto defaultName = currentPresetName_.isNotEmpty() ? currentPresetName_ : juce::String("Preset");
+    const auto initialFile = presetFileForName(defaultName);
+
+    fileChooser_ = std::make_unique<juce::FileChooser>(
+        "Save Audiocity Preset",
+        initialFile,
+        juce::String("*") + kPresetFileExtension);
+
+    auto chooserFlags = juce::FileBrowserComponent::saveMode
+        | juce::FileBrowserComponent::canSelectFiles
+        | juce::FileBrowserComponent::warnAboutOverwriting;
+
+    fileChooser_->launchAsync(chooserFlags, [this](const juce::FileChooser& chooser)
+    {
+        auto file = chooser.getResult();
+        if (file == juce::File{})
+            return;
+
+        if (!file.hasFileExtension(kPresetFileExtension))
+            file = file.withFileExtension(kPresetFileExtension);
+
+        const auto name = file.getFileName().upToLastOccurrenceOf(kPresetFileExtension, false, false);
+        if (name.isNotEmpty())
+            savePreset(name);
+    });
+}
+
+void AudiocityAudioProcessorEditor::showPresetLoadErrorAndOfferDelete(const juce::File& presetFile,
+    const juce::String& errorMessage)
+{
+    const auto presetName = presetFile.getFileName().upToLastOccurrenceOf(kPresetFileExtension, false, false);
+    juce::String message;
+    message << "There was an error loading preset '" << presetName << "'.\n\n";
+    if (errorMessage.isNotEmpty())
+        message << errorMessage << "\n\n";
+    message << "Delete this preset from disk?";
+
+    auto options = juce::MessageBoxOptions::makeOptionsYesNo(
+        juce::MessageBoxIconType::WarningIcon,
+        "Preset Load Error",
+        message,
+        "Delete Preset",
+        "Keep Preset",
+        this);
+
+    juce::Component::SafePointer<AudiocityAudioProcessorEditor> safeThis(this);
+    juce::NativeMessageBox::showAsync(options, [safeThis, presetFile](int result)
+    {
+        if (safeThis == nullptr)
+            return;
+
+        if (result == 1)
+        {
+            const auto deletedName = presetFile.getFileName().upToLastOccurrenceOf(kPresetFileExtension, false, false);
+            if (!presetFile.deleteFile())
+            {
+                juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                    "Delete Preset",
+                    "Failed to delete preset file.");
+                return;
+            }
+
+            if (safeThis->currentPresetName_ == deletedName)
+                safeThis->currentPresetName_.clear();
+
+            safeThis->refreshPresetList();
+        }
+    });
+}
+
+void AudiocityAudioProcessorEditor::loadPresetFromSelection()
+{
+    const auto selectedId = presetCombo_.getSelectedId();
+    const auto index = selectedId - 1;
+    if (index < 0 || index >= availablePresetFiles_.size())
+        return;
+
+    const auto file = availablePresetFiles_.getReference(index);
+    if (!file.existsAsFile())
+    {
+        showPresetLoadErrorAndOfferDelete(file, "Preset file does not exist.");
+        return;
+    }
+
+    const auto presetXml = file.loadFileAsString();
+    if (presetXml.isEmpty())
+    {
+        showPresetLoadErrorAndOfferDelete(file, "Failed to read preset file.");
+        return;
+    }
+
+    juce::String errorMessage;
+    if (!processor_.loadPlaybackPresetXml(presetXml, errorMessage))
+    {
+        showPresetLoadErrorAndOfferDelete(file,
+            errorMessage.isNotEmpty() ? errorMessage : "Failed to load preset.");
+        return;
+    }
+
+    currentPresetName_ = presetCombo_.getText();
+    refreshUI(true);
+}
+
+void AudiocityAudioProcessorEditor::renameSelectedPreset()
+{
+    const auto selectedId = presetCombo_.getSelectedId();
+    const auto index = selectedId - 1;
+    if (index < 0 || index >= availablePresetFiles_.size())
+        return;
+
+    const auto currentFile = availablePresetFiles_.getReference(index);
+    const auto currentName = currentFile.getFileName().upToLastOccurrenceOf(kPresetFileExtension, false, false);
+
+    fileChooser_ = std::make_unique<juce::FileChooser>(
+        "Rename Audiocity Preset",
+        presetFileForName(currentName),
+        juce::String("*") + kPresetFileExtension);
+
+    auto chooserFlags = juce::FileBrowserComponent::saveMode
+        | juce::FileBrowserComponent::canSelectFiles
+        | juce::FileBrowserComponent::warnAboutOverwriting;
+
+    fileChooser_->launchAsync(chooserFlags, [this, currentFile, currentName](const juce::FileChooser& chooser)
+    {
+        auto selectedFile = chooser.getResult();
+        if (selectedFile == juce::File{})
+            return;
+
+        if (!selectedFile.hasFileExtension(kPresetFileExtension))
+            selectedFile = selectedFile.withFileExtension(kPresetFileExtension);
+
+        const auto renamed = sanitizePresetName(
+            selectedFile.getFileName().upToLastOccurrenceOf(kPresetFileExtension, false, false));
+        if (renamed.isEmpty() || renamed == currentName)
+            return;
+
+        const auto renamedFile = presetFileForName(renamed);
+        if (renamedFile.existsAsFile())
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                "Rename Preset",
+                "A preset with this name already exists.");
+            return;
+        }
+
+        if (!currentFile.moveFileTo(renamedFile))
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                "Rename Preset",
+                "Failed to rename preset file.");
+            return;
+        }
+
+        currentPresetName_ = renamed;
+        refreshPresetList(currentPresetName_);
+    });
+}
+
+void AudiocityAudioProcessorEditor::deleteSelectedPreset()
+{
+    const auto selectedId = presetCombo_.getSelectedId();
+    const auto index = selectedId - 1;
+    if (index < 0 || index >= availablePresetFiles_.size())
+        return;
+
+    const auto file = availablePresetFiles_.getReference(index);
+    const auto presetName = file.getFileName().upToLastOccurrenceOf(kPresetFileExtension, false, false);
+
+    if (!file.deleteFile())
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            "Delete Preset",
+            "Failed to delete preset file.");
+        return;
+    }
+
+    if (currentPresetName_ == presetName)
+        currentPresetName_.clear();
+
+    refreshPresetList();
 }
 
 void AudiocityAudioProcessorEditor::updateGeneratePreviewButtonText()
@@ -4628,7 +4993,15 @@ void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const
 void AudiocityAudioProcessorEditor::setupTooltips()
 {
     samplePathLabel_.setTooltip(
-        "Shortcuts: Ctrl+O Load  |  Ctrl+Z Undo  |  Ctrl+Y Redo  |  Ctrl+S Save State  |  Space Play/Stop (Generate)  |  1-5 Switch Tabs");
+        "Shortcuts: Ctrl+O Load  |  Ctrl+Z Undo  |  Ctrl+Y Redo  |  Ctrl+S Save State  |  Ctrl+Shift+S Save Preset  |  Space Play/Stop (Generate)  |  1-5 Switch Tabs");
+    presetCombo_.setTooltip(
+        "Preset Browser - Select a saved sample playback preset");
+    presetSaveButton_.setTooltip(
+        "Save Preset - Save current sample playback settings to XML (.acp)");
+    presetRenameButton_.setTooltip(
+        "Rename Preset - Rename selected preset file");
+    presetDeleteButton_.setTooltip(
+        "Delete Preset - Remove selected preset file");
     loadButton_.setTooltip(
         "Load Sample (Ctrl+O)");
     generatePreviewButton_.setTooltip(

@@ -44,6 +44,37 @@ Fast path:
 - Standalone output is generated under `build/Audiocity_artefacts/Debug/Standalone/`.
 - VS Code CMake Tools test runs are configured to pass `-C Debug` via workspace settings.
 
+## Preset management (built-in)
+- The Sample tab includes a preset dropdown with `Save`, `Rename`, and `Delete` actions.
+- Presets are saved as XML files in the user preset folder:
+  - Windows: `%APPDATA%/Audiocity/Presets/`
+  - Extension: `.acp`
+- Selecting a preset in the dropdown reloads that persisted sample-playback state.
+
+### What preset XML stores
+- Current sample playback settings needed to load/play the sample (pitch, playback mode, loop/trim, envelopes, filter, output, pad/CC mappings, and related sample playback parameters).
+- If the sample source is generated or captured audio, the sample data is embedded in the preset file.
+- If the sample source is a file, the preset stores the sample file path.
+
+### What preset XML does not store
+- State associated with non-sample-playback tabs/workflows (for example: library browsing state, generate-tab editor state, capture-tab recording UI state).
+- Host preset behavior is unchanged (`getStateInformation`/`setStateInformation` still manages full plugin state for DAW save/load).
+
+### Preset XML example (.acp)
+```xml
+<AudiocityPatch samplePath="C:/Samples/Kick.wav" rootMidiNote="60" playbackMode="2" ... />
+```
+
+Notes:
+- The `.acp` file is the serialized sample-playback patch payload.
+- For generated/captured sample sources, embedded sample data is stored inside the XML payload.
+
+### Common preset load issues
+- `Preset XML payload is invalid.`
+  - The file is truncated/corrupted or not valid XML.
+- Preset loads but referenced sample is missing.
+  - File-based presets store sample paths; move/restore the sample file or re-save preset with an embedded source (generated/captured).
+
 ## Windows installer (WiX)
 - Installer project: `installer/AudiocityInstaller.wixproj`
 - WiX source: `installer/AudiocityInstaller.wxs`

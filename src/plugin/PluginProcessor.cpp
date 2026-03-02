@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 
 #include "PluginEditor.h"
+#include "PresetJson.h"
 
 #include <algorithm>
 #include <cmath>
@@ -169,6 +170,40 @@ constexpr auto kParamSaturationMode = "p_saturationMode";
 constexpr auto kParamPan = "p_pan";
 constexpr auto kParamMasterVolume = "p_masterVolume";
 constexpr float kMaxSamplePositionParam = 16000000.0f;
+
+bool isPlaybackPresetExcludedProperty(const juce::Identifier& property)
+{
+    const auto propertyName = property.toString();
+    return propertyName == kSampleBrowserRootFolder
+        || propertyName == kWaveformViewStartSample
+        || propertyName == kWaveformViewSampleCount
+        || propertyName == kEditorTabIndex
+        || propertyName == kWaveformDisplayMode
+        || propertyName == kGenerateWaveType
+        || propertyName == kGenerateSampleCount
+        || propertyName == kGenerateBitDepth
+        || propertyName == kGeneratePulseWidth
+        || propertyName == kGenerateFrequencyMidiNote
+        || propertyName == kGenerateSketchSmoothing
+        || propertyName == kCaptureTargetSampleRate
+        || propertyName == kCaptureChannelMode
+        || propertyName == kCaptureBitDepth
+        || propertyName == kCaptureInputGain;
+}
+
+juce::ValueTree buildPlaybackPresetStateTree(const juce::ValueTree& fullState)
+{
+    auto presetState = fullState.createCopy();
+
+    for (int propertyIndex = presetState.getNumProperties() - 1; propertyIndex >= 0; --propertyIndex)
+    {
+        const auto propertyName = presetState.getPropertyName(propertyIndex);
+        if (isPlaybackPresetExcludedProperty(propertyName))
+            presetState.removeProperty(propertyName, nullptr);
+    }
+
+    return presetState;
+}
 }
 
 AudiocityAudioProcessor::AudiocityAudioProcessor()
@@ -1112,6 +1147,97 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
             }
         }
     }
+}
+
+juce::String AudiocityAudioProcessor::createPlaybackPresetXml()
+{
+    juce::MemoryBlock stateData;
+    getStateInformation(stateData);
+    if (stateData.getSize() == 0)
+        return {};
+
+    std::unique_ptr<juce::XmlElement> xml(getXmlFromBinary(stateData.getData(),
+        static_cast<int>(stateData.getSize())));
+    if (xml == nullptr)
+        return {};
+
+    const auto state = juce::ValueTree::fromXml(*xml);
+    if (!state.isValid() || !state.hasType(kPatchRoot))
+        return {};
+
+    return audiocity::plugin::encodePresetXml(buildPlaybackPresetStateTree(state));
+}
+
+bool AudiocityAudioProcessor::loadPlaybackPresetXml(const juce::String& xmlText, juce::String& errorMessage)
+{
+    juce::ValueTree presetState;
+    if (!audiocity::plugin::decodePresetXml(xmlText, presetState, errorMessage))
+        return false;
+
+    if (!presetState.isValid() || !presetState.hasType(kPatchRoot))
+    {
+        errorMessage = "Preset payload is not a valid Audiocity patch.";
+        return false;
+    }
+
+    juce::MemoryBlock currentStateData;
+    getStateInformation(currentStateData);
+    if (currentStateData.getSize() == 0)
+    {
+        errorMessage = "Unable to read current processor state.";
+        return false;
+    }
+
+    std::unique_ptr<juce::XmlElement> currentXml(getXmlFromBinary(currentStateData.getData(),
+        static_cast<int>(currentStateData.getSize())));
+    if (currentXml == nullptr)
+    {
+        errorMessage = "Unable to parse current processor state.";
+        return false;
+    }
+
+    auto currentState = juce::ValueTree::fromXml(*currentXml);
+    if (!currentState.isValid() || !currentState.hasType(kPatchRoot))
+    {
+        errorMessage = "Current processor state is invalid.";
+        return false;
+    }
+
+    const auto filteredPresetState = buildPlaybackPresetStateTree(presetState);
+    for (int propertyIndex = 0; propertyIndex < filteredPresetState.getNumProperties(); ++propertyIndex)
+    {
+        const auto propertyName = filteredPresetState.getPropertyName(propertyIndex);
+        currentState.setProperty(propertyName, filteredPresetState.getProperty(propertyName), nullptr);
+    }
+
+    const auto presetPads = filteredPresetState.getChildWithName(audiocity::plugin::kPlayerPads);
+    if (presetPads.isValid())
+    {
+        const auto existingPads = currentState.getChildWithName(audiocity::plugin::kPlayerPads);
+        if (existingPads.isValid())
+            currentState.removeChild(existingPads, nullptr);
+        currentState.appendChild(presetPads.createCopy(), nullptr);
+    }
+
+    const auto presetCcMappings = filteredPresetState.getChildWithName(kCcMappings);
+    if (presetCcMappings.isValid())
+    {
+        const auto existingCcMappings = currentState.getChildWithName(kCcMappings);
+        if (existingCcMappings.isValid())
+            currentState.removeChild(existingCcMappings, nullptr);
+        currentState.appendChild(presetCcMappings.createCopy(), nullptr);
+    }
+
+    if (auto xml = currentState.createXml())
+    {
+        juce::MemoryBlock mergedStateData;
+        copyXmlToBinary(*xml, mergedStateData);
+        setStateInformation(mergedStateData.getData(), static_cast<int>(mergedStateData.getSize()));
+        return true;
+    }
+
+    errorMessage = "Failed to serialize merged preset state.";
+    return false;
 }
 
 juce::String AudiocityAudioProcessor::getLastStateRestoreSourceLabel() const

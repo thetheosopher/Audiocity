@@ -63,6 +63,7 @@ target_sources(Audiocity
     PRIVATE
         src/plugin/PluginProcessor.cpp
         src/plugin/PluginEditor.cpp
+        src/plugin/PresetJson.cpp
         src/plugin/PlayerPadState.cpp
         src/plugin/CcLearnDial.cpp
         src/engine/EngineCore.cpp
