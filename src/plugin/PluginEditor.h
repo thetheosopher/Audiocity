@@ -229,6 +229,8 @@ private:
     // ── Sample Browser ──
     juce::Label sampleBrowserRootLabel_{ {}, "< Select Folder >" };
     juce::TextButton sampleBrowserChooseRootButton_{ "..." };
+    juce::TextButton sampleBrowserRefreshButton_{ "Refresh" };
+    juce::TextButton sampleBrowserCancelButton_{ "Cancel" };
     juce::TextEditor sampleBrowserFilterEditor_;
     juce::ComboBox sampleBrowserSortCombo_;
     juce::ListBox sampleBrowserListBox_;
@@ -645,6 +647,7 @@ private:
     void deleteSelectedPreset();
     void clearSelectedPresetAfterSourceLoad();
     void chooseSampleRootFolder();
+    void cancelSampleRootScan();
     void scanSampleRootFolder(const juce::File& rootFolder);
     void rebuildVisibleSampleList();
     void loadSampleFromBrowserRow(int row);

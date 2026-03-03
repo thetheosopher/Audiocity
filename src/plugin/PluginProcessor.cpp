@@ -1275,6 +1275,9 @@ bool AudiocityAudioProcessor::loadSampleFromFile(const juce::File& file)
 
     syncSampleDerivedParametersFromEngine();
 
+    // Reset the stored waveform view range so the editor shows the full sample
+    setWaveformViewRange(0, engine_.getLoadedSampleLength());
+
     return true;
 }
 
@@ -1308,6 +1311,7 @@ void AudiocityAudioProcessor::loadGeneratedWaveformAsSample(const std::vector<fl
     stopGeneratedWaveformPreview();
     suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
     syncSampleDerivedParametersFromEngine();
+    setWaveformViewRange(0, engine_.getLoadedSampleLength());
 }
 
 juce::String AudiocityAudioProcessor::getLoadedSamplePath() const
@@ -1906,6 +1910,7 @@ bool AudiocityAudioProcessor::loadCapturedAudioAsSample(int startSample, int end
     engine_.clearSamplePath();
     suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
     syncSampleDerivedParametersFromEngine();
+    setWaveformViewRange(0, engine_.getLoadedSampleLength());
     return true;
 }
 

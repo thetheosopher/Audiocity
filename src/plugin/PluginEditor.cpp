@@ -2030,6 +2030,28 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(sampleBrowserChooseRootButton_);
     sampleBrowserChooseRootButton_.onClick = [this] { chooseSampleRootFolder(); };
 
+    addAndMakeVisible(sampleBrowserRefreshButton_);
+    sampleBrowserRefreshButton_.onClick = [this]
+    {
+        if (sampleRootFolderPath_.isEmpty())
+            return;
+
+        const juce::File rootFolder(sampleRootFolderPath_);
+        if (!rootFolder.isDirectory())
+            return;
+
+        if (sampleScanInProgress_.load(std::memory_order_relaxed))
+            cancelSampleRootScan();
+
+        scanSampleRootFolder(rootFolder);
+    };
+
+    addAndMakeVisible(sampleBrowserCancelButton_);
+    sampleBrowserCancelButton_.onClick = [this]
+    {
+        cancelSampleRootScan();
+    };
+
     addAndMakeVisible(sampleBrowserFilterEditor_);
     sampleBrowserFilterEditor_.setTextToShowWhenEmpty("Search samples...", juce::Colours::grey);
     sampleBrowserFilterEditor_.onTextChange = [this] { rebuildVisibleSampleList(); };
@@ -2090,6 +2112,10 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     presetCombo_.setTextWhenNothingSelected("Preset...");
     presetCombo_.onChange = [this]
     {
+        const auto hasSelection = presetCombo_.getSelectedId() > 0;
+        presetRenameButton_.setEnabled(hasSelection);
+        presetDeleteButton_.setEnabled(hasSelection);
+
         if (!suppressPresetComboChange_)
             loadPresetFromSelection();
     };
@@ -3130,6 +3156,8 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
 
     sampleBrowserRootLabel_.setVisible(showLibraryTab);
     sampleBrowserChooseRootButton_.setVisible(showLibraryTab);
+    sampleBrowserRefreshButton_.setVisible(showLibraryTab);
+    sampleBrowserCancelButton_.setVisible(showLibraryTab);
     sampleBrowserFilterEditor_.setVisible(showLibraryTab);
     sampleBrowserSortCombo_.setVisible(showLibraryTab);
     sampleBrowserListBox_.setVisible(showLibraryTab);
@@ -3498,6 +3526,15 @@ void AudiocityAudioProcessorEditor::chooseSampleRootFolder()
     });
 }
 
+void AudiocityAudioProcessorEditor::cancelSampleRootScan()
+{
+    if (!sampleScanInProgress_.load(std::memory_order_relaxed))
+        return;
+
+    ++sampleScanGeneration_;
+    sampleScanInProgress_.store(false, std::memory_order_relaxed);
+}
+
 void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootFolder)
 {
     const auto newRootPath = rootFolder.getFullPathName();
@@ -3517,12 +3554,10 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
     sampleRootFolderPath_ = newRootPath;
     processor_.setSampleBrowserRootFolder(sampleRootFolderPath_);
     sampleBrowserRootLabel_.setText(sampleRootFolderPath_, juce::dontSendNotification);
-    sampleBrowserCountLabel_.setText("Scanning...", juce::dontSendNotification);
 
     allSampleEntries_.clear();
     visibleSampleEntryIndices_.clear();
-    sampleBrowserListBox_.updateContent();
-    sampleBrowserListBox_.repaint();
+    rebuildVisibleSampleList();
 
     sampleScanInProgress_.store(true, std::memory_order_relaxed);
     const auto scanGeneration = ++sampleScanGeneration_;
@@ -3710,7 +3745,7 @@ void AudiocityAudioProcessorEditor::loadSampleFromBrowserRow(const int row)
         updateTabVisibility();
         resized();
         repaint();
-        refreshUI();
+        refreshUI(true);
     }
 }
 
@@ -3790,6 +3825,10 @@ void AudiocityAudioProcessorEditor::resized()
         auto browserArea = area.reduced(8, 6);
 
         auto header = browserArea.removeFromTop(28);
+        sampleBrowserCancelButton_.setBounds(header.removeFromRight(76));
+        header.removeFromRight(6);
+        sampleBrowserRefreshButton_.setBounds(header.removeFromRight(84));
+        header.removeFromRight(6);
         sampleBrowserChooseRootButton_.setBounds(header.removeFromRight(30));
         header.removeFromRight(6);
         sampleBrowserRootLabel_.setBounds(header);
@@ -3970,13 +4009,13 @@ void AudiocityAudioProcessorEditor::resized()
         loadButton_.setBounds(topRow.removeFromRight(32));
         topRow.removeFromRight(10);
 
-        presetDeleteButton_.setBounds(topRow.removeFromLeft(64));
-        topRow.removeFromLeft(6);
-        presetRenameButton_.setBounds(topRow.removeFromLeft(70));
+        presetCombo_.setBounds(topRow.removeFromLeft(220));
         topRow.removeFromLeft(6);
         presetSaveButton_.setBounds(topRow.removeFromLeft(56));
         topRow.removeFromLeft(6);
-        presetCombo_.setBounds(topRow.removeFromLeft(220));
+        presetRenameButton_.setBounds(topRow.removeFromLeft(70));
+        topRow.removeFromLeft(6);
+        presetDeleteButton_.setBounds(topRow.removeFromLeft(64));
     }
 
     area.removeFromTop(kGrpGap);
@@ -5696,6 +5735,8 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     if (forceWaveformReset || isNewLoadedSample)
     {
         waveformView_.resetView();
+        processor_.setWaveformViewRange(waveformView_.getViewStartSample(),
+                                        waveformView_.getViewSampleCount());
     }
     else
     {
@@ -5714,14 +5755,14 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     playbackModeLoopButton_.setToggleState(playbackMode == AudiocityAudioProcessor::PlaybackMode::loop,
         juce::dontSendNotification);
 
-    // Loop points
-    loopStartDial_.setValue(processor_.getLoopStart());
-    loopEndDial_.setValue(processor_.getLoopEnd());
-    loopCrossfadeDial_.setValue(processor_.getLoopCrossfadeSamples());
-
     // Playback window
-    playbackStartDial_.setValue(processor_.getSampleWindowStart());
-    playbackEndDial_.setValue(processor_.getSampleWindowEnd());
+    playbackStartDial_.setValue(processor_.getSampleWindowStart(), juce::dontSendNotification);
+    playbackEndDial_.setValue(processor_.getSampleWindowEnd(), juce::dontSendNotification);
+
+    // Loop points
+    loopStartDial_.setValue(processor_.getLoopStart(), juce::dontSendNotification);
+    loopEndDial_.setValue(processor_.getLoopEnd(), juce::dontSendNotification);
+    loopCrossfadeDial_.setValue(processor_.getLoopCrossfadeSamples(), juce::dontSendNotification);
 
     // Performance
     monoToggle_.setToggleState(processor_.getMonoMode(), juce::dontSendNotification);
