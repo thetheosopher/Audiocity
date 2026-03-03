@@ -30,6 +30,10 @@ Audiocity/
 Fast path:
 - `./scripts/bootstrap.ps1`
 
+Cleanup rebuildable artifacts (keeps installer `.msi`/`.zip` packages):
+- `./scripts/cleanup_artifacts.ps1`
+- Optional deeper cleanup (also prunes `output/` while keeping `.msi`/`.zip`): `./scripts/cleanup_artifacts.ps1 -IncludeOutput`
+
 1. Configure:
   - `cmake --preset default`
 2. Build plugin targets (Standalone + VST3 shared processor):

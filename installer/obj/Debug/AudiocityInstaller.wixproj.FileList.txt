@@ -1,8 +1,0 @@
-C:\Projects\other\Audiocity\installer\bin\Debug\AudiocityInstaller.msi
-C:\Projects\other\Audiocity\installer\bin\Debug\AudiocityInstaller.wixpdb
-obj\Debug\AudiocityInstaller.wixobj
-obj\Debug\AudiocityInstaller.wixproj.BindContentsFileListnull.txt
-obj\Debug\AudiocityInstaller.wixproj.BindOutputsFileListnull.txt
-obj\Debug\AudiocityInstaller.wixproj.BindBuiltOutputsFileListnull.txt
-C:\Projects\other\Audiocity\output\installer\Debug\AudiocityInstaller.msi
-C:\Projects\other\Audiocity\output\installer\Debug\AudiocityInstaller.wixpdb
