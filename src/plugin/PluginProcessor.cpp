@@ -511,11 +511,15 @@ void AudiocityAudioProcessor::prepareToPlay(const double sampleRate, const int s
 {
     engine_.prepare(sampleRate, samplesPerBlock, getTotalNumOutputChannels());
     captureInputSampleRate_.store(juce::jmax(1.0, sampleRate), std::memory_order_relaxed);
+    outputBoundaryLastSample_.fill(0.0f);
+    outputBoundaryHasLastSample_ = false;
 }
 
 void AudiocityAudioProcessor::releaseResources()
 {
     engine_.release();
+    outputBoundaryLastSample_.fill(0.0f);
+    outputBoundaryHasLastSample_ = false;
 }
 
 bool AudiocityAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
@@ -573,6 +577,7 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         && previewWaveSamples_.load(std::memory_order_relaxed) > 0)
     {
         renderGeneratedWavePreview(buffer);
+        applyOutputBoundarySmoothing(buffer);
         if (monitorCaptureInput && numInputChannels <= 0 && numOutputChannels > 0)
             updateCaptureInputMonitorLevels(buffer, numOutputChannels);
         if (captureRecording && !capturedThisBlock)
@@ -586,6 +591,7 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         && samplePreviewSamples_.load(std::memory_order_relaxed) > 0)
     {
         renderSampleFilePreview(buffer);
+        applyOutputBoundarySmoothing(buffer);
         if (monitorCaptureInput && numInputChannels <= 0 && numOutputChannels > 0)
             updateCaptureInputMonitorLevels(buffer, numOutputChannels);
         if (captureRecording && !capturedThisBlock)
@@ -605,6 +611,7 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     }
 
     engine_.render(buffer, midiMessages);
+    applyOutputBoundarySmoothing(buffer);
     if (monitorCaptureInput && numInputChannels <= 0 && numOutputChannels > 0)
         updateCaptureInputMonitorLevels(buffer, numOutputChannels);
     if (captureRecording && !capturedThisBlock)
@@ -2415,6 +2422,48 @@ void AudiocityAudioProcessor::renderSampleFilePreview(juce::AudioBuffer<float>& 
 
     if (samplePreviewReadPos_ >= static_cast<float>(count))
         samplePreviewPlaying_.store(false, std::memory_order_relaxed);
+}
+
+void AudiocityAudioProcessor::applyOutputBoundarySmoothing(juce::AudioBuffer<float>& buffer) noexcept
+{
+    const auto channels = buffer.getNumChannels();
+    const auto samples = buffer.getNumSamples();
+    if (channels <= 0 || samples <= 0)
+        return;
+
+    constexpr int kRampSamples = 32;
+    const auto smoothingSamples = juce::jmin(kRampSamples, samples);
+
+    if (outputBoundaryHasLastSample_)
+    {
+        const auto smoothedChannels = juce::jmin(channels, static_cast<int>(outputBoundaryLastSample_.size()));
+        constexpr float kDiscontinuityThreshold = 0.05f;
+        for (int channel = 0; channel < smoothedChannels; ++channel)
+        {
+            auto* write = buffer.getWritePointer(channel);
+            const auto delta = outputBoundaryLastSample_[static_cast<std::size_t>(channel)] - write[0];
+
+            if (std::abs(delta) < kDiscontinuityThreshold)
+                continue;
+
+            for (int sample = 0; sample < smoothingSamples; ++sample)
+            {
+                const auto t = static_cast<float>(sample + 1) / static_cast<float>(smoothingSamples);
+                write[sample] += (1.0f - t) * delta;
+            }
+        }
+    }
+
+    const auto trackedChannels = static_cast<int>(outputBoundaryLastSample_.size());
+    for (int channel = 0; channel < trackedChannels; ++channel)
+    {
+        if (channel < channels)
+            outputBoundaryLastSample_[static_cast<std::size_t>(channel)] = buffer.getSample(channel, samples - 1);
+        else
+            outputBoundaryLastSample_[static_cast<std::size_t>(channel)] = 0.0f;
+    }
+
+    outputBoundaryHasLastSample_ = true;
 }
 
 void AudiocityAudioProcessor::updateOutputPeakLevels(const juce::AudioBuffer<float>& buffer) noexcept

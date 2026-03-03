@@ -82,6 +82,57 @@ private:
         }
     };
 
+    class PlayerPadButton final : public juce::TextButton
+    {
+    public:
+        std::function<void(bool)> onEngagementChanged;
+
+        void mouseDown(const juce::MouseEvent& event) override
+        {
+            juce::TextButton::mouseDown(event);
+            updateEngagement(true, isEventInside(event));
+        }
+
+        void mouseDrag(const juce::MouseEvent& event) override
+        {
+            juce::TextButton::mouseDrag(event);
+            updateEngagement(event.mods.isLeftButtonDown() || event.mods.isRightButtonDown() || event.mods.isMiddleButtonDown(),
+                isEventInside(event));
+        }
+
+        void mouseUp(const juce::MouseEvent& event) override
+        {
+            juce::TextButton::mouseUp(event);
+            updateEngagement(false, false);
+        }
+
+        void mouseExit(const juce::MouseEvent& event) override
+        {
+            juce::TextButton::mouseExit(event);
+            if (event.mods.isAnyMouseButtonDown())
+                updateEngagement(true, false);
+        }
+
+    private:
+        [[nodiscard]] bool isEventInside(const juce::MouseEvent& event) const
+        {
+            return getLocalBounds().contains(event.getPosition());
+        }
+
+        void updateEngagement(const bool mouseDown, const bool inside)
+        {
+            const auto next = mouseDown && inside;
+            if (next == engaged_)
+                return;
+
+            engaged_ = next;
+            if (onEngagementChanged)
+                onEngagementChanged(engaged_);
+        }
+
+        bool engaged_ = false;
+    };
+
     class InfoBadge final : public juce::Component
     {
     public:
@@ -244,10 +295,9 @@ private:
     juce::MidiKeyboardComponent playerKeyboard_{ playerKeyboardState_, juce::MidiKeyboardComponent::horizontalKeyboard };
     juce::Label playerPadsLabel_{ {}, "Drum Pads" };
     static constexpr int kPlayerPadCount = audiocity::plugin::kPlayerPadCount;
-    std::array<juce::TextButton, kPlayerPadCount> playerPadButtons_;
+    std::array<PlayerPadButton, kPlayerPadCount> playerPadButtons_;
     std::array<juce::TextButton, kPlayerPadCount> playerPadAssignButtons_;
-    std::array<int, kPlayerPadCount> playerPadPendingOffTicks_{};
-    std::array<int, kPlayerPadCount> playerPadPendingOffNotes_{};
+    std::array<bool, kPlayerPadCount> playerPadHeld_{};
     std::array<audiocity::plugin::PlayerPadAssignment, kPlayerPadCount> playerPadAssignments_{};
 
     // ── Sample ──

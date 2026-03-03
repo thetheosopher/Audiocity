@@ -305,6 +305,7 @@ private:
     void syncSampleDerivedParametersFromEngine() noexcept;
     void renderGeneratedWavePreview(juce::AudioBuffer<float>& buffer) noexcept;
     void renderSampleFilePreview(juce::AudioBuffer<float>& buffer) noexcept;
+    void applyOutputBoundarySmoothing(juce::AudioBuffer<float>& buffer) noexcept;
     void updateOutputPeakLevels(const juce::AudioBuffer<float>& buffer) noexcept;
     void updateVoicePlaybackPositionsFromEngine() noexcept;
     void clearVoicePlaybackPositions() noexcept;
@@ -360,6 +361,8 @@ private:
     std::atomic<int> generateSketchSmoothing_{ 1 };
     std::atomic<float> outputPeakLeft_{ 0.0f };
     std::atomic<float> outputPeakRight_{ 0.0f };
+    std::array<float, 2> outputBoundaryLastSample_{};
+    bool outputBoundaryHasLastSample_ = false;
     std::array<std::atomic<int>, audiocity::engine::VoicePool::maxVoices> voicePlaybackPositions_{};
     static constexpr int kPreviewWaveMaxSamples = 2048;
     std::array<float, kPreviewWaveMaxSamples> previewWaveData_{};

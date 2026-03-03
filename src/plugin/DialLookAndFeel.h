@@ -114,7 +114,34 @@ public:
         }
 
         // Value arc (fill)
-        if (sliderPosProportional > 0.0f)
+        const auto isPanDial = slider.getName().equalsIgnoreCase("Pan");
+        if (isPanDial)
+        {
+            const auto sliderMin = slider.getMinimum();
+            const auto sliderMax = slider.getMaximum();
+            const auto sliderValue = slider.getValue();
+            const auto sliderRange = sliderMax - sliderMin;
+
+            if (sliderRange > 0.0 && sliderMin < 0.0 && sliderMax > 0.0)
+            {
+                const auto zeroPosProportional = static_cast<float>(juce::jlimit(0.0, 1.0, (0.0 - sliderMin) / sliderRange));
+                const auto zeroAngle = rotaryStartAngle + zeroPosProportional * (rotaryEndAngle - rotaryStartAngle);
+
+                if (std::abs(sliderValue) > 1.0e-6)
+                {
+                    const auto fillStart = juce::jmin(zeroAngle, angle);
+                    const auto fillEnd = juce::jmax(zeroAngle, angle);
+
+                    juce::Path fill;
+                    fill.addCentredArc(centreX, centreY, radius - trackWidth * 0.5f, radius - trackWidth * 0.5f,
+                                       0.0f, fillStart, fillEnd, true);
+                    g.setColour(fillColour);
+                    g.strokePath(fill, juce::PathStrokeType(trackWidth, juce::PathStrokeType::curved,
+                                                             juce::PathStrokeType::rounded));
+                }
+            }
+        }
+        else if (sliderPosProportional > 0.0f)
         {
             juce::Path fill;
             fill.addCentredArc(centreX, centreY, radius - trackWidth * 0.5f, radius - trackWidth * 0.5f,

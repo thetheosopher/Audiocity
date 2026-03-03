@@ -72,6 +72,7 @@ CcLearnDial::CcLearnDial(const juce::String& name,
 
     slider_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     slider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 70, 13);
+    slider_.setName(name);
     slider_.setRange(rangeMin, rangeMax, step);
     slider_.setShiftWheelFineFactor(8.0);
     slider_.setValue(defaultValue, juce::dontSendNotification);

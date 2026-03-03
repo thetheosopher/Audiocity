@@ -800,11 +800,23 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
                 }
                 else
                 {
-                    voicePool_.stopVoiceAtIndex(voiceIndex);
-                    voice.noteHeld = false;
-                    voice.ampEnvelope.reset();
-                    voice.filterEnvelope.reset();
-                    continue;
+                    voice.samplePosition = static_cast<float>(sampleLength - 1);
+
+                    if (voice.noteHeld)
+                    {
+                        voice.noteHeld = false;
+                        voice.ampEnvelope.noteOff();
+                        voice.filterEnvelope.noteOff();
+                    }
+
+                    if (!voice.ampEnvelope.isActive())
+                    {
+                        voicePool_.stopVoiceAtIndex(voiceIndex);
+                        voice.noteHeld = false;
+                        voice.ampEnvelope.reset();
+                        voice.filterEnvelope.reset();
+                        continue;
+                    }
                 }
             }
 

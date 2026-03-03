@@ -1683,14 +1683,21 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         addAndMakeVisible(assignButton);
 
         assignButton.setButtonText("...");
+        padButton.setClickingTogglesState(false);
 
-        padButton.onClick = [this, i]
+        padButton.onEngagementChanged = [this, i](const bool engaged)
         {
-            const auto assignment = playerPadAssignments_[static_cast<std::size_t>(i)];
+            auto& wasHeld = playerPadHeld_[static_cast<std::size_t>(i)];
+            if (engaged == wasHeld)
+                return;
 
-            processor_.enqueueUiMidiNoteOn(assignment.noteNumber, assignment.velocity);
-            playerPadPendingOffNotes_[static_cast<std::size_t>(i)] = assignment.noteNumber;
-            playerPadPendingOffTicks_[static_cast<std::size_t>(i)] = 7; // ~117ms at 60Hz
+            const auto assignment = playerPadAssignments_[static_cast<std::size_t>(i)];
+            if (engaged)
+                processor_.enqueueUiMidiNoteOn(assignment.noteNumber, assignment.velocity);
+            else
+                processor_.enqueueUiMidiNoteOff(assignment.noteNumber);
+
+            wasHeld = engaged;
         };
 
         assignButton.onClick = [this, i]
@@ -2871,17 +2878,6 @@ void AudiocityAudioProcessorEditor::timerCallback()
         updateCaptureUiState();
         const auto capturePeaks = processor_.consumeCaptureInputPeakLevels();
         captureInputVuMeter_.pushLevels(capturePeaks.left, capturePeaks.right);
-    }
-
-    for (int i = 0; i < kPlayerPadCount; ++i)
-    {
-        auto& ticks = playerPadPendingOffTicks_[static_cast<std::size_t>(i)];
-        if (ticks <= 0)
-            continue;
-
-        --ticks;
-        if (ticks == 0)
-            processor_.enqueueUiMidiNoteOff(playerPadPendingOffNotes_[static_cast<std::size_t>(i)]);
     }
 
     // ── Process deferred drag-and-drop (safe: outside OLE modal loop) ──
