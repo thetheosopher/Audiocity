@@ -44,6 +44,22 @@ Fast path:
 - Standalone output is generated under `build/Audiocity_artefacts/Debug/Standalone/`.
 - VS Code CMake Tools test runs are configured to pass `-C Debug` via workspace settings.
 
+## Release 0.9.0
+- Current project version: `0.9.0`
+- Release standalone artifact: `build/Audiocity_artefacts/Release/Standalone/Audiocity.exe`
+- Release VST3 artifact: `build/Audiocity_artefacts/Release/VST3/Audiocity.vst3`
+- Release installer artifact: `output/installer/Release/AudiocityInstaller.msi`
+
+### Highlights
+- Added standalone preset workflow (`Save` / `Rename` / `Delete`) with `.acp` XML payloads.
+- Added robust preset load failure handling with delete/keep recovery flow.
+- Expanded Generate options (up to 8192 samples), updated defaults, and removed Noise waveform mode.
+- Added Sample Information panel improvements and live playback/loop range synchronization.
+- Added persistent library peak-preview cache with invalidation on library root change and file-size changes.
+
+Build release + installer in one command:
+- `cmake --build build --config Release --target audiocity_wix_installer`
+
 ## Preset management (built-in)
 - The Sample tab includes a preset dropdown with `Save`, `Rename`, and `Delete` actions.
 - Presets are saved as XML files in the user preset folder:
@@ -88,7 +104,7 @@ VST3 installs to the standard system location:
 - `C:\Program Files\Common Files\VST3\Audiocity.vst3`
 
 Build MSI directly with MSBuild (WiX Toolset v3 required):
-- `msbuild installer/AudiocityInstaller.wixproj /p:Configuration=Debug /p:Platform=x64 /p:ProductVersion=0.1.0`
+- `msbuild installer/AudiocityInstaller.wixproj /p:Configuration=Debug /p:Platform=x64 /p:ProductVersion=0.9.0`
 
 Installer outputs are written under:
 - `output/installer/Debug/`

@@ -4,6 +4,7 @@
 #include "../src/engine/EngineCore.h"
 #include "../src/engine/SettingsUndoHistory.h"
 #include "../src/plugin/CcLearnDial.h"
+#include "../src/plugin/PeakPreviewCache.h"
 #include "../src/plugin/PresetJson.h"
 #include "../src/plugin/PlayerPadState.h"
 
@@ -328,6 +329,31 @@ bool runDisplayMinMaxPreservesPolarityTest()
     const bool hasPositiveOnlyBucket = buckets[2].minValue > 0.0f && buckets[3].minValue > 0.0f;
 
     return hasNegativeOnlyBucket && hasPositiveOnlyBucket;
+}
+
+bool runLoadedSampleMetadataForGeneratedDataTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    audiocity::engine::EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+
+    juce::AudioBuffer<float> generated(2, 512);
+    generated.clear();
+    for (int i = 0; i < generated.getNumSamples(); ++i)
+    {
+        generated.setSample(0, i, std::sin(static_cast<float>(i) * 0.05f));
+        generated.setSample(1, i, std::cos(static_cast<float>(i) * 0.05f));
+    }
+
+    engine.setSampleData(generated, 32000.0, 60);
+
+    return engine.getLoadedSampleLength() == 512
+        && engine.getLoadedSampleChannels() == 2
+        && std::abs(engine.getLoadedSampleRateHz() - 32000.0) < 0.01
+        && engine.getLoadedSampleBitDepth() < 0;
 }
 
 bool runPlaybackModesTest()
@@ -3590,6 +3616,86 @@ bool runPresetXmlRejectsInvalidPayloadTest()
     const auto ok = audiocity::plugin::decodePresetXml("this is not xml", decoded, error);
     return !ok && error.isNotEmpty();
 }
+
+bool runPeakPreviewCacheRoundTripTest()
+{
+    const auto tempRoot = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getChildFile("audiocity_peak_cache_tests");
+    tempRoot.createDirectory();
+
+    const auto cacheFile = tempRoot.getChildFile("peak_preview_cache.xml");
+    audiocity::plugin::PeakPreviewCacheStore store(cacheFile);
+    store.reset();
+
+    audiocity::plugin::PeakPreviewCacheData saveData;
+    saveData.libraryRootPath = "C:/Library/Samples";
+    saveData.entries["c:/library/samples/kick.wav"] = {
+        2048,
+        { 0.1f, 0.5f, 0.9f },
+        "SR: 48000 Hz  Ch: 1",
+        "Acidized",
+        "Loop: 100-800"
+    };
+
+    if (!store.save(saveData))
+        return false;
+
+    const auto loaded = store.load();
+    if (!loaded.libraryRootPath.equalsIgnoreCase(saveData.libraryRootPath))
+        return false;
+
+    const auto it = loaded.entries.find("c:/library/samples/kick.wav");
+    if (it == loaded.entries.end())
+        return false;
+
+    const auto& entry = it->second;
+    if (entry.fileSizeBytes != 2048)
+        return false;
+    if (entry.metadataLine != "SR: 48000 Hz  Ch: 1")
+        return false;
+    if (entry.loopFormatBadge != "Acidized")
+        return false;
+    if (entry.loopMetadataLine != "Loop: 100-800")
+        return false;
+    if (entry.peaks.size() != 3)
+        return false;
+
+    return std::abs(entry.peaks[0] - 0.1f) < 1.0e-5f
+        && std::abs(entry.peaks[1] - 0.5f) < 1.0e-5f
+        && std::abs(entry.peaks[2] - 0.9f) < 1.0e-5f;
+}
+
+bool runPeakPreviewCacheResetClearsFileTest()
+{
+    const auto tempRoot = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getChildFile("audiocity_peak_cache_tests");
+    tempRoot.createDirectory();
+
+    const auto cacheFile = tempRoot.getChildFile("peak_preview_cache_reset.xml");
+    audiocity::plugin::PeakPreviewCacheStore store(cacheFile);
+    store.reset();
+
+    audiocity::plugin::PeakPreviewCacheData saveData;
+    saveData.libraryRootPath = "C:/Library/A";
+    saveData.entries["c:/library/a/snare.wav"] = {
+        100,
+        { 0.2f },
+        "meta",
+        {},
+        {}
+    };
+
+    if (!store.save(saveData))
+        return false;
+    if (!cacheFile.existsAsFile())
+        return false;
+
+    if (!store.reset())
+        return false;
+
+    const auto loaded = store.load();
+    return loaded.libraryRootPath.isEmpty() && loaded.entries.empty();
+}
 }
 
 int main()
@@ -3629,6 +3735,9 @@ int main()
 
     if (!runDisplayMinMaxPreservesPolarityTest())
         return 48;
+
+    if (!runLoadedSampleMetadataForGeneratedDataTest())
+        return 69;
 
     if (!runEditorSampleEditControlsTest())
         return 5;
@@ -3704,6 +3813,12 @@ int main()
 
     if (!runPresetXmlRejectsInvalidPayloadTest())
         return 68;
+
+    if (!runPeakPreviewCacheRoundTripTest())
+        return 70;
+
+    if (!runPeakPreviewCacheResetClearsFileTest())
+        return 71;
 
     if (!runPlayerPadStateUtilityTest())
         return 23;

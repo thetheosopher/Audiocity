@@ -82,6 +82,37 @@ private:
         }
     };
 
+    class InfoBadge final : public juce::Component
+    {
+    public:
+        void setBadge(const juce::String& text, juce::Colour colour)
+        {
+            text_ = text;
+            colour_ = colour;
+            setVisible(text_.isNotEmpty());
+            repaint();
+        }
+
+        [[nodiscard]] juce::String getText() const { return text_; }
+
+        void paint(juce::Graphics& g) override
+        {
+            if (text_.isEmpty())
+                return;
+
+            auto area = getLocalBounds().toFloat();
+            g.setColour(colour_);
+            g.fillRoundedRectangle(area, 4.0f);
+            g.setColour(juce::Colour(0xffdfe6ff));
+            g.setFont(juce::Font(juce::FontOptions(10.0f)).boldened());
+            g.drawText(text_, getLocalBounds(), juce::Justification::centred, false);
+        }
+
+    private:
+        juce::String text_;
+        juce::Colour colour_{ 0xff3a3a52 };
+    };
+
     std::vector<GroupBox> groupBoxes_;
     void paintGroupBoxes(juce::Graphics& g) const;
 
@@ -224,6 +255,33 @@ private:
     juce::TextButton presetRenameButton_{ "Rename" };
     juce::TextButton presetDeleteButton_{ "Delete" };
     juce::TextButton loadButton_{ "..." };
+    juce::Label sampleInfoSourceLabel_{ {}, "Source" };
+    juce::Label sampleInfoSourceValue_{ {}, "None" };
+    juce::Label sampleInfoRateLabel_{ {}, "Sample Rate" };
+    juce::Label sampleInfoRateValue_{ {}, "-" };
+    juce::Label sampleInfoBitDepthLabel_{ {}, "Bit Depth" };
+    juce::Label sampleInfoBitDepthValue_{ {}, "-" };
+    juce::Label sampleInfoChannelsLabel_{ {}, "Channels" };
+    juce::Label sampleInfoChannelsValue_{ {}, "-" };
+    juce::Label sampleInfoDurationLabel_{ {}, "Duration" };
+    juce::Label sampleInfoDurationValue_{ {}, "-" };
+    juce::Label sampleInfoFileSizeLabel_{ {}, "File Size" };
+    juce::Label sampleInfoFileSizeValue_{ {}, "-" };
+    juce::Label sampleInfoSamplesLabel_{ {}, "Samples" };
+    juce::Label sampleInfoSamplesValue_{ {}, "-" };
+    juce::Label sampleInfoPlaybackLabel_{ {}, "Playback Position" };
+    juce::Label sampleInfoPlaybackValue_{ {}, "-" };
+    juce::Label sampleInfoPlaybackDurationLabel_{ {}, "Playback Duration" };
+    juce::Label sampleInfoPlaybackDurationValue_{ {}, "-" };
+    juce::Label sampleInfoLoopLabel_{ {}, "Loop Points" };
+    juce::Label sampleInfoLoopValue_{ {}, "-" };
+    juce::Label sampleInfoLoopDurationLabel_{ {}, "Loop Duration" };
+    juce::Label sampleInfoLoopDurationValue_{ {}, "-" };
+    juce::Label sampleInfoTempoLabel_{ {}, "Tempo" };
+    juce::Label sampleInfoTempoValue_{ {}, "-" };
+    juce::Label sampleInfoMetaRootLabel_{ {}, "Root Note" };
+    juce::Label sampleInfoMetaRootValue_{ {}, "-" };
+    InfoBadge sampleInfoBadge_;
     juce::Label rootNoteLabel_{ {}, "Root Note" };
     juce::ComboBox rootNoteCombo_;
     CcLearnDial tuneCoarseDial_{ "Coarse", -24, 24, 1, "st", 0 };
@@ -349,7 +407,6 @@ private:
     juce::TextButton generateTriangleButton_{ "Triangle" };
     juce::TextButton generatePulseButton_{ "Pulse" };
     juce::TextButton generateRandomButton_{ "Random" };
-    juce::TextButton generateNoiseButton_{ "Noise" };
     juce::Label generateSamplesLabel_{ {}, "Samples" };
     juce::ComboBox generateSamplesCombo_;
     juce::Label generateBitDepthLabel_{ {}, "Bit Depth" };
@@ -371,8 +428,7 @@ private:
         sawtooth,
         triangle,
         pulse,
-        random,
-        noise
+        random
     };
     enum class SketchedWaveSmoothing
     {
@@ -587,6 +643,7 @@ private:
     void loadPresetFromSelection();
     void renameSelectedPreset();
     void deleteSelectedPreset();
+    void clearSelectedPresetAfterSourceLoad();
     void chooseSampleRootFolder();
     void scanSampleRootFolder(const juce::File& rootFolder);
     void rebuildVisibleSampleList();
@@ -604,6 +661,7 @@ private:
     void updateCaptureUiState();
     void updateGeneratePulseWidthControlState();
     void updateDiagnosticsStatusText();
+    void updateSampleInformationDisplay();
     void updateAmpEnvelopeGraphFromDials();
     void updateFilterEnvelopeGraphFromDials();
     void updateFilterResponseGraphFromControls();

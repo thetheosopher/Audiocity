@@ -160,6 +160,10 @@ public:
     [[nodiscard]] int getLoadedStreamSamples() const noexcept;
     [[nodiscard]] int getLoadedSampleLength() const noexcept;
     [[nodiscard]] int getLoadedSampleChannels() const noexcept;
+    [[nodiscard]] double getLoadedSampleRateHz() const noexcept { return sampleDataRate_; }
+    [[nodiscard]] int getLoadedSampleBitDepth() const noexcept { return loadedSampleBitDepth_; }
+    [[nodiscard]] int getLoadedMetadataRootMidiNote() const noexcept { return loadedMetadataRootMidiNote_; }
+    [[nodiscard]] double getLoadedMetadataTempoBpm() const noexcept { return loadedMetadataTempoBpm_; }
     [[nodiscard]] juce::String getLoadedSampleLoopFormatBadge() const noexcept { return loadedSampleLoopFormatBadge_; }
     [[nodiscard]] std::vector<float> buildDisplayPeaks(int maxPeaks) const noexcept;
     [[nodiscard]] std::vector<std::vector<float>> buildDisplayPeaksByChannel(int maxPeaks) const noexcept;
@@ -339,6 +343,9 @@ private:
     std::atomic<std::shared_ptr<const SampleSegments>> sampleSegments_{};
     juce::AudioBuffer<float> displaySampleData_;
     juce::String loadedSampleLoopFormatBadge_;
+    int loadedSampleBitDepth_ = -1;
+    int loadedMetadataRootMidiNote_ = -1;
+    double loadedMetadataTempoBpm_ = 0.0;
     juce::String samplePath_;
     double sampleDataRate_ = 44100.0;
     int rootMidiNote_ = 60;

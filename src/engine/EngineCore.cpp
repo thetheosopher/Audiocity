@@ -125,6 +125,35 @@ std::optional<int> findEmbeddedRootMidiNote(const juce::StringPairArray& metadat
     return std::nullopt;
 }
 
+std::optional<double> findEmbeddedTempoBpm(const juce::StringPairArray& metadata)
+{
+    static const juce::StringArray candidateKeys
+    {
+        "Tempo",
+        "BPM",
+        "ACID Tempo",
+        "AcidTempo",
+        "acidtempo"
+    };
+
+    for (const auto& key : candidateKeys)
+    {
+        const auto maybeValue = getMetadataValueCaseInsensitive(metadata, key);
+        if (!maybeValue.has_value())
+            continue;
+
+        auto numeric = maybeValue->trim().retainCharacters("0123456789.");
+        if (numeric.isEmpty())
+            continue;
+
+        const auto tempo = numeric.getDoubleValue();
+        if (tempo > 0.0)
+            return tempo;
+    }
+
+    return std::nullopt;
+}
+
 std::optional<int> findEmbeddedLoopPoint(const juce::StringPairArray& metadata,
                                          const juce::StringArray& candidateKeys)
 {
@@ -449,6 +478,9 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
         setFilterEnvelope(defaultFilterEnvelopeForLoadedSample());
         setFilterSettings(defaultFilterSettingsForLoadedSample());
         displaySampleData_ = decoded.audio;
+        loadedSampleBitDepth_ = -1;
+        loadedMetadataRootMidiNote_ = -1;
+        loadedMetadataTempoBpm_ = 0.0;
         samplePath_ = file.getFullPathName();
         loadedSampleLoopFormatBadge_ = "REX";
 
@@ -490,8 +522,12 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
     int embeddedRootNote = rootMidiNote_;
     const auto& metadata = reader->metadataValues;
     const auto loadedLoopFormatBadge = detectLoopFormatBadge(file, metadata);
-    if (const auto parsedRootNote = findEmbeddedRootMidiNote(metadata); parsedRootNote.has_value())
+    const auto parsedRootNote = findEmbeddedRootMidiNote(metadata);
+    if (parsedRootNote.has_value())
         embeddedRootNote = *parsedRootNote;
+    loadedMetadataRootMidiNote_ = parsedRootNote.has_value() ? *parsedRootNote : -1;
+    const auto parsedTempoBpm = findEmbeddedTempoBpm(metadata);
+    loadedMetadataTempoBpm_ = parsedTempoBpm.has_value() ? *parsedTempoBpm : 0.0;
 
     setSampleData(mono, reader->sampleRate, embeddedRootNote);
     setAmpEnvelope(defaultAmpEnvelopeForLoadedSample());
@@ -500,6 +536,7 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
     setFilterEnvelope(defaultFilterEnvelopeForLoadedSample());
     setFilterSettings(defaultFilterSettingsForLoadedSample());
     displaySampleData_ = loaded;
+    loadedSampleBitDepth_ = static_cast<int>(reader->bitsPerSample);
     samplePath_ = file.getFullPathName();
     loadedSampleLoopFormatBadge_ = {};
 
@@ -536,6 +573,9 @@ void EngineCore::setSampleData(const juce::AudioBuffer<float>& sampleData, const
 {
     displaySampleData_ = sampleData;
     loadedSampleLoopFormatBadge_ = {};
+    loadedSampleBitDepth_ = -1;
+    loadedMetadataRootMidiNote_ = -1;
+    loadedMetadataTempoBpm_ = 0.0;
 
     auto monoSample = sampleData;
     sampleDataRate_ = sampleRate > 0.0 ? sampleRate : sampleRate_;
