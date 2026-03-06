@@ -111,6 +111,16 @@ void CcLearnDial::setRange(const double rangeMin, const double rangeMax, const d
     slider_.setRange(rangeMin, rangeMax, step);
 }
 
+void CcLearnDial::setSkewFactor(const double factor)
+{
+    slider_.setSkewFactor(factor);
+}
+
+void CcLearnDial::setSkewFactorFromMidPoint(const double midpointValue)
+{
+    slider_.setSkewFactorFromMidPoint(midpointValue);
+}
+
 void CcLearnDial::armCcLearn()
 {
     ccLearnArmed_ = true;
@@ -153,7 +163,7 @@ void CcLearnDial::clearCcByUser()
 void CcLearnDial::handleCcValue(const int ccValue)
 {
     const auto normalized = static_cast<double>(juce::jlimit(0, 127, ccValue)) / 127.0;
-    const auto mapped = slider_.getMinimum() + normalized * (slider_.getMaximum() - slider_.getMinimum());
+    const auto mapped = slider_.proportionOfLengthToValue(normalized);
     slider_.setValue(mapped, juce::sendNotificationSync);
 }
 

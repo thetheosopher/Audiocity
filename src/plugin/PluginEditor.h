@@ -591,7 +591,7 @@ private:
     // ── Amp Envelope ──
     CcLearnDial ampAttackDial_{ "Attack", 0.1, 5000, 0.1, "ms", 0.1 };
     CcLearnDial ampDecayDial_{ "Decay", 0.1, 5000, 0.1, "ms", 1 };
-    CcLearnDial ampSustainDial_{ "Sustain", 0, 1.0, 0.01, {}, 1.0 };
+    CcLearnDial ampSustainDial_{ "Sustain", 0, 100.0, 1.0, "%", 100.0 };
     CcLearnDial ampReleaseDial_{ "Release", 0.1, 5000, 0.1, "ms", 5 };
     CcLearnDial ampLfoRateDial_{ "A LFO Hz", 0, 40, 0.001, "Hz", 0 };
     CcLearnDial ampLfoDepthDial_{ "A LFO D", 0, 100, 1, "%", 0 };
@@ -602,17 +602,17 @@ private:
     // ── Filter ──
     CcLearnDial filterCutoffDial_{ "Cutoff", 20, 20000, 1, "Hz", 18000 };
     CcLearnDial filterResDial_{ "Res", 0, 100, 1, "%", 0 };
-    CcLearnDial filterEnvAmtDial_{ "Env", 0, 20000, 1, "Hz", 0 };
+    CcLearnDial filterEnvAmtDial_{ "Env", -12000, 12000, 1, "Hz", 0 };
     juce::Label filterTypeLabel_{ {}, "Type" };
     juce::ComboBox filterTypeCombo_;
     FilterResponseGraph filterResponseGraph_;
     CcLearnDial filterAttackDial_{ "F Attack", 0.1, 5000, 0.1, "ms", 0.1 };
     CcLearnDial filterDecayDial_{ "F Decay", 0.1, 5000, 0.1, "ms", 1 };
-    CcLearnDial filterSustainDial_{ "F Sustain", 0, 1.0, 0.01, {}, 1.0 };
+    CcLearnDial filterSustainDial_{ "F Sustain", 0, 100.0, 1.0, "%", 100.0 };
     CcLearnDial filterReleaseDial_{ "F Release", 0.1, 5000, 0.1, "ms", 5 };
     AmpEnvelopeGraph filterEnvelopeGraph_;
     CcLearnDial filterKeytrackDial_{ "Key %", -100, 200, 1, "%", 0 };
-    CcLearnDial filterVelDial_{ "Vel Hz", 0, 12000, 1, "Hz", 0 };
+    CcLearnDial filterVelDial_{ "Vel Hz", -12000, 12000, 1, "Hz", 0 };
     juce::Label filterKeytrackSnapLabel_{ {}, "Key Snap" };
     juce::ComboBox filterKeytrackSnapCombo_;
     CcLearnDial filterLfoRateDial_{ "LFO Hz", 0, 40, 0.001, "Hz", 0 };

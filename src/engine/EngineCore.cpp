@@ -1047,11 +1047,11 @@ void EngineCore::setFilterEnvelope(const AdsrSettings& settings) noexcept
 void EngineCore::setFilterSettings(const FilterSettings& settings) noexcept
 {
     filterSettings_.baseCutoffHz = juce::jlimit(20.0f, 20000.0f, settings.baseCutoffHz);
-    filterSettings_.envAmountHz = juce::jmax(0.0f, settings.envAmountHz);
+    filterSettings_.envAmountHz = juce::jlimit(-12000.0f, 12000.0f, settings.envAmountHz);
     filterSettings_.resonance = juce::jlimit(0.0f, 1.0f, settings.resonance);
     filterSettings_.mode = settings.mode;
     filterSettings_.keyTracking = juce::jlimit(-1.0f, 2.0f, settings.keyTracking);
-    filterSettings_.velocityAmountHz = juce::jmax(0.0f, settings.velocityAmountHz);
+    filterSettings_.velocityAmountHz = juce::jlimit(-12000.0f, 12000.0f, settings.velocityAmountHz);
     filterSettings_.lfoRateHz = juce::jlimit(0.0f, 40.0f, settings.lfoRateHz);
     filterSettings_.lfoRateKeyTracking = juce::jlimit(-1.0f, 2.0f, settings.lfoRateKeyTracking);
     filterSettings_.lfoAmountHz = juce::jlimit(-20000.0f, 20000.0f, settings.lfoAmountHz);

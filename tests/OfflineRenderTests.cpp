@@ -754,6 +754,36 @@ bool runLoadSampleResetsEnvelopeAndFilterDefaultsTest()
         && std::abs(pitchLfo.depthCents - 0.0f) <= 1.0e-6f;
 }
 
+bool runFilterModulationAmountsAreBipolarTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    audiocity::engine::EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+
+    auto filter = engine.getFilterSettings();
+    filter.envAmountHz = -3000.0f;
+    filter.velocityAmountHz = 4500.0f;
+    engine.setFilterSettings(filter);
+
+    auto applied = engine.getFilterSettings();
+    if (std::abs(applied.envAmountHz - (-3000.0f)) > 1.0e-6f
+        || std::abs(applied.velocityAmountHz - 4500.0f) > 1.0e-6f)
+    {
+        return false;
+    }
+
+    filter.envAmountHz = -50000.0f;
+    filter.velocityAmountHz = 50000.0f;
+    engine.setFilterSettings(filter);
+
+    applied = engine.getFilterSettings();
+    return std::abs(applied.envAmountHz - (-12000.0f)) <= 1.0e-6f
+        && std::abs(applied.velocityAmountHz - 12000.0f) <= 1.0e-6f;
+}
+
 bool runEmbeddedLoopMetadataLoadsWithoutRootNoteTest()
 {
     constexpr int channels = 2;
@@ -3720,6 +3750,9 @@ int main()
 
     if (!runLoadSampleResetsEnvelopeAndFilterDefaultsTest())
         return 45;
+
+    if (!runFilterModulationAmountsAreBipolarTest())
+        return 70;
 
     if (!runEmbeddedLoopMetadataLoadsWithoutRootNoteTest())
         return 64;

@@ -25,6 +25,8 @@ public:
     void setValue(double newValue, juce::NotificationType notification = juce::dontSendNotification);
     [[nodiscard]] double getValue() const noexcept;
     void setRange(double rangeMin, double rangeMax, double step = 0.0);
+    void setSkewFactor(double factor);
+    void setSkewFactorFromMidPoint(double midpointValue);
 
     // Callbacks
     std::function<void()> onValueChange;

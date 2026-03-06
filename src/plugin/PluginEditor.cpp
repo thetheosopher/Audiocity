@@ -2195,6 +2195,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     };
     addAndMakeVisible(pitchLfoRateDial_);
     pitchLfoRateDial_.setDoubleClickResetValue(0.0);
+    pitchLfoRateDial_.setSkewFactorFromMidPoint(2.0);
     pitchLfoRateDial_.onValueChange = [this] { pushPitchLfoSettings(); };
     addAndMakeVisible(pitchLfoDepthDial_);
     pitchLfoDepthDial_.setDoubleClickResetValue(0.0);
@@ -2340,6 +2341,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 
     addAndMakeVisible(glideDial_);
     glideDial_.setDoubleClickResetValue(0.0);
+    glideDial_.setSkewFactorFromMidPoint(80.0);
     glideDial_.onValueChange = [this]
     {
         processor_.setGlideSeconds(static_cast<float>(glideDial_.getValue()) / 1000.0f);
@@ -2355,14 +2357,18 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     // Amp ADSR
     addAndMakeVisible(ampAttackDial_);
     ampAttackDial_.setDoubleClickResetValue(0.1);
+    ampAttackDial_.setSkewFactorFromMidPoint(100.0);
     addAndMakeVisible(ampDecayDial_);
     ampDecayDial_.setDoubleClickResetValue(1.0);
+    ampDecayDial_.setSkewFactorFromMidPoint(100.0);
     addAndMakeVisible(ampSustainDial_);
-    ampSustainDial_.setDoubleClickResetValue(1.0);
+    ampSustainDial_.setDoubleClickResetValue(100.0);
     addAndMakeVisible(ampReleaseDial_);
     ampReleaseDial_.setDoubleClickResetValue(5.0);
+    ampReleaseDial_.setSkewFactorFromMidPoint(100.0);
     addAndMakeVisible(ampLfoRateDial_);
     ampLfoRateDial_.setDoubleClickResetValue(0.0);
+    ampLfoRateDial_.setSkewFactorFromMidPoint(2.0);
     addAndMakeVisible(ampLfoDepthDial_);
     ampLfoDepthDial_.setDoubleClickResetValue(0.0);
     addAndMakeVisible(ampLfoShapeLabel_);
@@ -2386,6 +2392,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     // Filter
     addAndMakeVisible(filterCutoffDial_);
     filterCutoffDial_.setDoubleClickResetValue(18000.0);
+    filterCutoffDial_.setSkewFactorFromMidPoint(1000.0);
     addAndMakeVisible(filterResDial_);
     filterResDial_.setDoubleClickResetValue(0.0);
     addAndMakeVisible(filterEnvAmtDial_);
@@ -2405,12 +2412,15 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 
     addAndMakeVisible(filterAttackDial_);
     filterAttackDial_.setDoubleClickResetValue(0.1);
+    filterAttackDial_.setSkewFactorFromMidPoint(100.0);
     addAndMakeVisible(filterDecayDial_);
     filterDecayDial_.setDoubleClickResetValue(1.0);
+    filterDecayDial_.setSkewFactorFromMidPoint(100.0);
     addAndMakeVisible(filterSustainDial_);
-    filterSustainDial_.setDoubleClickResetValue(1.0);
+    filterSustainDial_.setDoubleClickResetValue(100.0);
     addAndMakeVisible(filterReleaseDial_);
     filterReleaseDial_.setDoubleClickResetValue(5.0);
+    filterReleaseDial_.setSkewFactorFromMidPoint(100.0);
     addAndMakeVisible(filterEnvelopeGraph_);
     addAndMakeVisible(filterKeytrackDial_);
     filterKeytrackDial_.setDoubleClickResetValue(0.0);
@@ -2418,6 +2428,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     filterVelDial_.setDoubleClickResetValue(0.0);
     addAndMakeVisible(filterLfoRateDial_);
     filterLfoRateDial_.setDoubleClickResetValue(0.0);
+    filterLfoRateDial_.setSkewFactorFromMidPoint(2.0);
     addAndMakeVisible(filterLfoRateKeyDial_);
     addAndMakeVisible(filterLfoAmtDial_);
     filterLfoAmtDial_.setDoubleClickResetValue(0.0);
@@ -2425,6 +2436,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(filterLfoStartPhaseDial_);
     addAndMakeVisible(filterLfoStartRandDial_);
     addAndMakeVisible(filterLfoFadeInDial_);
+    filterLfoFadeInDial_.setSkewFactorFromMidPoint(200.0);
     addAndMakeVisible(filterLfoShapeLabel_);
     filterLfoShapeLabel_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(filterLfoShapeCombo_);
@@ -2569,10 +2581,13 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     panDial_.setDoubleClickResetValue(0.0);
     reverbMixDial_.setDoubleClickResetValue(0.0);
     delayTimeDial_.setDoubleClickResetValue(320.0);
+    delayTimeDial_.setSkewFactorFromMidPoint(250.0);
     delayFeedbackDial_.setDoubleClickResetValue(35.0);
     delayMixDial_.setDoubleClickResetValue(0.0);
     dcFilterCutoffDial_.setDoubleClickResetValue(10.0);
+    dcFilterCutoffDial_.setSkewFactorFromMidPoint(10.0);
     autopanRateDial_.setDoubleClickResetValue(0.5);
+    autopanRateDial_.setSkewFactorFromMidPoint(1.0);
     autopanDepthDial_.setDoubleClickResetValue(0.0);
     saturationDriveDial_.setDoubleClickResetValue(0.0);
     saturationModeCombo_.addItem("Soft Clip", 1);
@@ -3062,7 +3077,7 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
     const auto amp = processor_.getAmpEnvelope();
     ampAttackDial_.setValue(amp.attackSeconds * 1000.0f, juce::dontSendNotification);
     ampDecayDial_.setValue(amp.decaySeconds * 1000.0f, juce::dontSendNotification);
-    ampSustainDial_.setValue(amp.sustainLevel, juce::dontSendNotification);
+    ampSustainDial_.setValue(amp.sustainLevel * 100.0f, juce::dontSendNotification);
     ampReleaseDial_.setValue(amp.releaseSeconds * 1000.0f, juce::dontSendNotification);
     const auto ampLfo = processor_.getAmpLfoSettings();
     ampLfoRateDial_.setValue(ampLfo.rateHz, juce::dontSendNotification);
@@ -3099,7 +3114,7 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
     const auto filterEnv = processor_.getFilterEnvelope();
     filterAttackDial_.setValue(filterEnv.attackSeconds * 1000.0f, juce::dontSendNotification);
     filterDecayDial_.setValue(filterEnv.decaySeconds * 1000.0f, juce::dontSendNotification);
-    filterSustainDial_.setValue(filterEnv.sustainLevel, juce::dontSendNotification);
+    filterSustainDial_.setValue(filterEnv.sustainLevel * 100.0f, juce::dontSendNotification);
     filterReleaseDial_.setValue(filterEnv.releaseSeconds * 1000.0f, juce::dontSendNotification);
 
     const auto velCurve = processor_.getVelocityCurve();
@@ -5094,7 +5109,7 @@ void AudiocityAudioProcessorEditor::updateAmpEnvelopeGraphFromDials()
 {
     ampEnvelopeGraph_.setEnvelope(static_cast<float>(ampAttackDial_.getValue()),
                                   static_cast<float>(ampDecayDial_.getValue()),
-                                  static_cast<float>(ampSustainDial_.getValue()),
+                                  static_cast<float>(ampSustainDial_.getValue()) / 100.0f,
                                   static_cast<float>(ampReleaseDial_.getValue()));
 }
 
@@ -5102,7 +5117,7 @@ void AudiocityAudioProcessorEditor::updateFilterEnvelopeGraphFromDials()
 {
     filterEnvelopeGraph_.setEnvelope(static_cast<float>(filterAttackDial_.getValue()),
                                      static_cast<float>(filterDecayDial_.getValue()),
-                                     static_cast<float>(filterSustainDial_.getValue()),
+                                     static_cast<float>(filterSustainDial_.getValue()) / 100.0f,
                                      static_cast<float>(filterReleaseDial_.getValue()));
 }
 
@@ -5371,7 +5386,7 @@ void AudiocityAudioProcessorEditor::setupTooltips()
     ampDecayDial_.setLabelTooltip(
         "Decay - Amplitude envelope decay time in milliseconds");
     ampSustainDial_.setLabelTooltip(
-        "Sustain - Amplitude envelope sustain level (0 to 1)");
+        "Sustain - Amplitude envelope sustain level (0% to 100%)");
     ampReleaseDial_.setLabelTooltip(
         "Release - Amplitude envelope release time in milliseconds");
     ampLfoRateDial_.setLabelTooltip(
@@ -5387,19 +5402,19 @@ void AudiocityAudioProcessorEditor::setupTooltips()
     filterResDial_.setLabelTooltip(
         "Resonance - Filter emphasis at the cutoff frequency");
     filterEnvAmtDial_.setLabelTooltip(
-        "Envelope Amount - Filter envelope modulation depth in Hz");
+        "Envelope Amount - Bipolar filter envelope modulation depth in Hz");
     filterAttackDial_.setLabelTooltip(
         "Filter Attack - Filter envelope attack time in milliseconds");
     filterDecayDial_.setLabelTooltip(
         "Filter Decay - Filter envelope decay time in milliseconds");
     filterSustainDial_.setLabelTooltip(
-        "Filter Sustain - Filter envelope sustain level (0 to 1)");
+        "Filter Sustain - Filter envelope sustain level (0% to 100%)");
     filterReleaseDial_.setLabelTooltip(
         "Filter Release - Filter envelope release time in milliseconds");
     filterKeytrackDial_.setLabelTooltip(
         "Filter Key Tracking - Scales cutoff by keyboard pitch (-100% to 200%)");
     filterVelDial_.setLabelTooltip(
-        "Filter Velocity Amount - Extra cutoff added at high velocity");
+        "Filter Velocity Amount - Bipolar cutoff offset driven by note velocity");
     filterLfoRateDial_.setLabelTooltip(
         "Filter LFO Rate - Modulation speed in Hz");
     filterLfoRateKeyDial_.setLabelTooltip(
@@ -5771,7 +5786,7 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     const auto amp = processor_.getAmpEnvelope();
     ampAttackDial_.setValue(amp.attackSeconds * 1000.0f);
     ampDecayDial_.setValue(amp.decaySeconds * 1000.0f);
-    ampSustainDial_.setValue(amp.sustainLevel);
+    ampSustainDial_.setValue(amp.sustainLevel * 100.0f);
     ampReleaseDial_.setValue(amp.releaseSeconds * 1000.0f);
     const auto ampLfo = processor_.getAmpLfoSettings();
     ampLfoRateDial_.setValue(ampLfo.rateHz);
@@ -5810,7 +5825,7 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     const auto filterEnv = processor_.getFilterEnvelope();
     filterAttackDial_.setValue(filterEnv.attackSeconds * 1000.0f);
     filterDecayDial_.setValue(filterEnv.decaySeconds * 1000.0f);
-    filterSustainDial_.setValue(filterEnv.sustainLevel);
+    filterSustainDial_.setValue(filterEnv.sustainLevel * 100.0f);
     filterReleaseDial_.setValue(filterEnv.releaseSeconds * 1000.0f);
     updateFilterEnvelopeGraphFromDials();
 
@@ -6072,7 +6087,7 @@ void AudiocityAudioProcessorEditor::pushAmpEnvelope()
     AudiocityAudioProcessor::AdsrSettings adsr;
     adsr.attackSeconds = juce::jmax(0.0001f, static_cast<float>(ampAttackDial_.getValue()) / 1000.0f);
     adsr.decaySeconds = juce::jmax(0.0001f, static_cast<float>(ampDecayDial_.getValue()) / 1000.0f);
-    adsr.sustainLevel = juce::jlimit(0.0f, 1.0f, static_cast<float>(ampSustainDial_.getValue()));
+    adsr.sustainLevel = juce::jlimit(0.0f, 1.0f, static_cast<float>(ampSustainDial_.getValue()) / 100.0f);
     adsr.releaseSeconds = juce::jmax(0.0001f, static_cast<float>(ampReleaseDial_.getValue()) / 1000.0f);
     processor_.setAmpEnvelope(adsr);
 }
@@ -6134,10 +6149,10 @@ void AudiocityAudioProcessorEditor::pushFilterSettings()
     AudiocityAudioProcessor::FilterSettings settings;
     settings.baseCutoffHz = juce::jmax(20.0f, static_cast<float>(filterCutoffDial_.getValue()));
     settings.resonance = juce::jlimit(0.0f, 1.0f, static_cast<float>(filterResDial_.getValue()) / 100.0f);
-    settings.envAmountHz = juce::jmax(0.0f, static_cast<float>(filterEnvAmtDial_.getValue()));
+    settings.envAmountHz = juce::jlimit(-12000.0f, 12000.0f, static_cast<float>(filterEnvAmtDial_.getValue()));
     settings.mode = comboIdToFilterMode(filterTypeCombo_.getSelectedId());
     settings.keyTracking = juce::jlimit(-1.0f, 2.0f, static_cast<float>(filterKeytrackDial_.getValue()) / 100.0f);
-    settings.velocityAmountHz = juce::jmax(0.0f, static_cast<float>(filterVelDial_.getValue()));
+    settings.velocityAmountHz = juce::jlimit(-12000.0f, 12000.0f, static_cast<float>(filterVelDial_.getValue()));
     settings.lfoRateHz = juce::jlimit(0.0f, 40.0f, static_cast<float>(filterLfoRateDial_.getValue()));
     settings.lfoRateKeyTracking = 0.0f;
     settings.lfoAmountHz = juce::jlimit(-20000.0f, 20000.0f, static_cast<float>(filterLfoAmtDial_.getValue()));
@@ -6161,7 +6176,7 @@ void AudiocityAudioProcessorEditor::pushFilterEnvelope()
     AudiocityAudioProcessor::AdsrSettings adsr;
     adsr.attackSeconds = juce::jmax(0.0001f, static_cast<float>(filterAttackDial_.getValue()) / 1000.0f);
     adsr.decaySeconds = juce::jmax(0.0001f, static_cast<float>(filterDecayDial_.getValue()) / 1000.0f);
-    adsr.sustainLevel = juce::jlimit(0.0f, 1.0f, static_cast<float>(filterSustainDial_.getValue()));
+    adsr.sustainLevel = juce::jlimit(0.0f, 1.0f, static_cast<float>(filterSustainDial_.getValue()) / 100.0f);
     adsr.releaseSeconds = juce::jmax(0.0001f, static_cast<float>(filterReleaseDial_.getValue()) / 1000.0f);
     processor_.setFilterEnvelope(adsr);
 }
