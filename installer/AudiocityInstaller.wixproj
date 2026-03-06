@@ -13,6 +13,7 @@
     <StandaloneSourceDir Condition=" '$(StandaloneSourceDir)' == '' ">$(MSBuildProjectDirectory)\..\build\Audiocity_artefacts\$(Configuration)\Standalone</StandaloneSourceDir>
     <Vst3SourceDir Condition=" '$(Vst3SourceDir)' == '' ">$(MSBuildProjectDirectory)\..\build\Audiocity_artefacts\$(Configuration)\VST3</Vst3SourceDir>
     <DefineConstants>ProductVersion=$(ProductVersion);StandaloneSourceDir=$(StandaloneSourceDir);Vst3SourceDir=$(Vst3SourceDir)</DefineConstants>
+    <SuppressIces>ICE91</SuppressIces>
     <DefineSolutionProperties>false</DefineSolutionProperties>
   </PropertyGroup>
 

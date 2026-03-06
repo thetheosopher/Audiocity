@@ -1,0 +1,6 @@
+C:\Projects\other\Audiocity\output\installer\Release\AudiocitySetup.exe
+C:\Projects\other\Audiocity\output\installer\Release\AudiocitySetup.wixpdb
+obj\BundleRelease\AudiocityBootstrapper.wixobj
+obj\BundleRelease\AudiocityBootstrapper.wixproj.BindContentsFileList.txt
+obj\BundleRelease\AudiocityBootstrapper.wixproj.BindOutputsFileList.txt
+obj\BundleRelease\AudiocityBootstrapper.wixproj.BindBuiltOutputsFileList.txt

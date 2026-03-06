@@ -1,0 +1,2 @@
+C:\Projects\other\Audiocity\installer\redist\VC_redist.x64.exe
+C:\Projects\other\Audiocity\output\installer\Release\AudiocityInstaller.msi

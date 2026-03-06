@@ -1,0 +1,12 @@
+C:\Projects\other\Audiocity\installer\..\build\Audiocity_artefacts\Release\Standalone\Audiocity.exe
+C:\Projects\other\Audiocity\installer\..\build\Audiocity_artefacts\Release\Standalone\Audiocity.exe
+C:\Projects\other\Audiocity\installer\..\build\Audiocity_artefacts\Release\Standalone\REX Shared Library.dll
+C:\Projects\other\Audiocity\installer\..\build\Audiocity_artefacts\Release\Standalone\REX Shared Library.dll
+C:\Projects\other\Audiocity\installer\..\build\Audiocity_artefacts\Release\VST3\Audiocity.vst3\Contents\x86_64-win\Audiocity.vst3
+C:\Projects\other\Audiocity\installer\..\build\Audiocity_artefacts\Release\VST3\Audiocity.vst3\Contents\x86_64-win\Audiocity.vst3
+C:\Projects\other\Audiocity\installer\..\build\Audiocity_artefacts\Release\VST3\Audiocity.vst3\Contents\Resources\moduleinfo.json
+C:\Projects\other\Audiocity\installer\..\build\Audiocity_artefacts\Release\VST3\Audiocity.vst3\Contents\Resources\moduleinfo.json
+C:\Projects\other\Audiocity\installer\..\build\Audiocity_artefacts\Release\VST3\Audiocity.vst3\Plugin.ico
+C:\Projects\other\Audiocity\installer\..\build\Audiocity_artefacts\Release\VST3\Audiocity.vst3\Plugin.ico
+C:\Projects\other\Audiocity\installer\..\build\Audiocity_artefacts\Release\VST3\Audiocity.vst3\Contents\x86_64-win\REX Shared Library.dll
+C:\Projects\other\Audiocity\installer\..\build\Audiocity_artefacts\Release\VST3\Audiocity.vst3\Contents\x86_64-win\REX Shared Library.dll

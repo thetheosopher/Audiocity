@@ -1,9 +1,9 @@
 {
   "cmake.configureOnOpen": true,
   "cmake.buildDirectory": "${workspaceFolder}/build",
-  "cmake.configureSettings": {
-    "CMAKE_CONFIGURATION_TYPES": "Debug"
-  },
+  "cmake.defaultConfigurePreset": "default",
+  "cmake.defaultBuildPreset": "default",
+  "cmake.defaultTestPreset": "default",
   "cmake.ctestArgs": [
     "-C",
     "Debug",

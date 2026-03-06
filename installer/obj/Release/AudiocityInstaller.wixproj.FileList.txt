@@ -1,0 +1,6 @@
+C:\Projects\other\Audiocity\output\installer\Release\AudiocityInstaller.msi
+C:\Projects\other\Audiocity\output\installer\Release\AudiocityInstaller.wixpdb
+obj\Release\AudiocityInstaller.wixobj
+obj\Release\AudiocityInstaller.wixproj.BindContentsFileListnull.txt
+obj\Release\AudiocityInstaller.wixproj.BindOutputsFileListnull.txt
+obj\Release\AudiocityInstaller.wixproj.BindBuiltOutputsFileListnull.txt

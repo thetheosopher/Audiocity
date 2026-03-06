@@ -13,6 +13,7 @@
       "binaryDir": "${sourceDir}/build",
       "architecture": "x64",
       "cacheVariables": {
+        "AUDIOCITY_ENABLE_ASIO": "OFF",
         "CMAKE_BUILD_TYPE": "Debug"
       }
     },
@@ -31,6 +32,51 @@
       "inherits": "default",
       "cacheVariables": {
         "AUDIOCITY_ENABLE_WIX_INSTALLER": "ON",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "package-release-selfcontained",
+      "displayName": "Package Release Self-Contained (WiX)",
+      "inherits": "default",
+      "cacheVariables": {
+        "AUDIOCITY_ENABLE_WIX_INSTALLER": "ON",
+        "AUDIOCITY_SELF_CONTAINED_RUNTIME": "ON",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "package-release-bootstrapper",
+      "displayName": "Package Release Bootstrapper (WiX)",
+      "inherits": "default",
+      "cacheVariables": {
+        "AUDIOCITY_ENABLE_WIX_INSTALLER": "ON",
+        "AUDIOCITY_ENABLE_WIX_BOOTSTRAPPER": "ON",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "package-release-bootstrapper-asio",
+      "displayName": "Package Release Bootstrapper (WiX, ASIO, Self-Contained)",
+      "inherits": "default",
+      "cacheVariables": {
+        "AUDIOCITY_ENABLE_WIX_INSTALLER": "ON",
+        "AUDIOCITY_ENABLE_WIX_BOOTSTRAPPER": "ON",
+        "AUDIOCITY_SELF_CONTAINED_RUNTIME": "ON",
+        "AUDIOCITY_ENABLE_ASIO": "ON",
+        "AUDIOCITY_ASIO_SDK_DIR": "${sourceDir}/third_party/asiosdk",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "package-release-bootstrapper-signed",
+      "displayName": "Package Release Bootstrapper Signed (WiX)",
+      "inherits": "default",
+      "cacheVariables": {
+        "AUDIOCITY_ENABLE_WIX_INSTALLER": "ON",
+        "AUDIOCITY_ENABLE_WIX_BOOTSTRAPPER": "ON",
+        "AUDIOCITY_ENABLE_CODESIGN": "ON",
+        "AUDIOCITY_CODESIGN_CERT_SHA1": "<SET_CERT_THUMBPRINT>",
         "CMAKE_BUILD_TYPE": "Release"
       }
     }
@@ -59,6 +105,46 @@
       "targets": [
         "Audiocity_All",
         "audiocity_wix_installer"
+      ]
+    },
+    {
+      "name": "package-release-selfcontained",
+      "displayName": "Build MSI (Release, Self-Contained)",
+      "configurePreset": "package-release-selfcontained",
+      "configuration": "Release",
+      "targets": [
+        "Audiocity_All",
+        "audiocity_wix_installer"
+      ]
+    },
+    {
+      "name": "package-release-bootstrapper",
+      "displayName": "Build Bootstrapper (Release)",
+      "configurePreset": "package-release-bootstrapper",
+      "configuration": "Release",
+      "targets": [
+        "Audiocity_All",
+        "audiocity_wix_bootstrapper"
+      ]
+    },
+    {
+      "name": "package-release-bootstrapper-asio",
+      "displayName": "Build Bootstrapper (Release, ASIO, Self-Contained)",
+      "configurePreset": "package-release-bootstrapper-asio",
+      "configuration": "Release",
+      "targets": [
+        "Audiocity_All",
+        "audiocity_wix_bootstrapper"
+      ]
+    },
+    {
+      "name": "package-release-bootstrapper-signed",
+      "displayName": "Build Bootstrapper (Release, Signed)",
+      "configurePreset": "package-release-bootstrapper-signed",
+      "configuration": "Release",
+      "targets": [
+        "Audiocity_All",
+        "audiocity_wix_bootstrapper"
       ]
     }
   ],

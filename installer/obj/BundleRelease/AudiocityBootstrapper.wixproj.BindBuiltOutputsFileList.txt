@@ -1,0 +1,2 @@
+C:\Projects\other\Audiocity\output\installer\Release\AudiocitySetup.exe
+C:\Projects\other\Audiocity\output\installer\Release\AudiocitySetup.wixpdb

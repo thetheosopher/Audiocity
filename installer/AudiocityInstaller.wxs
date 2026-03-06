@@ -8,29 +8,37 @@
       Language="1033"
       UpgradeCode="{7A0C79C3-8AB4-4FD7-9B3C-B00FC2D98EB4}">
 
-    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" />
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" InstallPrivileges="elevated" Platform="x64" />
     <MajorUpgrade DowngradeErrorMessage="A newer version of Audiocity is already installed." />
     <MediaTemplate EmbedCab="yes" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com" />
     <Property Id="ARPCONTACT" Value="Audiocity" />
+    <Property Id="ApplicationFolderName" Value="Audiocity" />
+    <Property Id="WixAppFolder" Value="WixPerMachineFolder" />
+    <Property Id="WixUISupportPerMachine" Value="1" />
+    <Property Id="WixUISupportPerUser" Value="1" />
 
-    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="MIT-LICENSE.rtf" />
 
-    <UIRef Id="WixUI_FeatureTree" />
+    <UIRef Id="WixUI_Advanced" />
     <UIRef Id="WixUI_ErrorProgressText" />
 
-    <Feature Id="ProductFeature" Title="Audiocity" Level="1" Display="expand" ConfigurableDirectory="INSTALLFOLDER">
+    <Feature Id="ProductFeature" Title="Audiocity" Level="1" Display="expand">
+      <ComponentRef Id="cmpPerUserCleanup" />
       <Feature
           Id="StandaloneFeature"
           Title="Standalone Application"
           Description="Installs the Audiocity standalone application and runtime dependencies."
           Level="1"
           Absent="allow">
-        <ComponentRef Id="cmpStandaloneExe" />
-        <ComponentRef Id="cmpStandaloneRexDll" />
-        <ComponentRef Id="cmpDesktopShortcut" />
-        <ComponentRef Id="cmpStartMenuShortcut" />
+        <ComponentRef Id="cmpStandaloneExeMachine" />
+        <ComponentRef Id="cmpStandaloneRexDllMachine" />
+        <ComponentRef Id="cmpDesktopShortcutMachine" />
+        <ComponentRef Id="cmpStartMenuShortcutMachine" />
+        <ComponentRef Id="cmpStandaloneExeUser" />
+        <ComponentRef Id="cmpStandaloneRexDllUser" />
+        <ComponentRef Id="cmpDesktopShortcutUser" />
+        <ComponentRef Id="cmpStartMenuShortcutUser" />
       </Feature>
 
       <Feature
@@ -39,10 +47,14 @@
           Description="Installs Audiocity VST3 to the standard VST3 location and runtime dependencies."
           Level="1"
           Absent="allow">
-        <ComponentRef Id="cmpVst3Binary" />
-        <ComponentRef Id="cmpVst3RexDll" />
-        <ComponentRef Id="cmpVst3ModuleInfo" />
-        <ComponentRef Id="cmpVst3PluginIco" />
+        <ComponentRef Id="cmpVst3BinaryMachine" />
+        <ComponentRef Id="cmpVst3RexDllMachine" />
+        <ComponentRef Id="cmpVst3ModuleInfoMachine" />
+        <ComponentRef Id="cmpVst3PluginIcoMachine" />
+        <ComponentRef Id="cmpVst3BinaryUser" />
+        <ComponentRef Id="cmpVst3RexDllUser" />
+        <ComponentRef Id="cmpVst3ModuleInfoUser" />
+        <ComponentRef Id="cmpVst3PluginIcoUser" />
       </Feature>
     </Feature>
   </Product>
@@ -50,13 +62,37 @@
   <Fragment>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="Audiocity" />
+        <Directory Id="WixPerMachineFolder" Name="Audiocity" />
+      </Directory>
+
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="AppsFolder" Name="Apps">
+          <Directory Id="WixPerUserFolder" Name="Audiocity" />
+        </Directory>
+
+        <Directory Id="UserProgramsRootFolder" Name="Programs">
+          <Directory Id="UserProgramsCommonFolder" Name="Common">
+            <Directory Id="UserVST3ROOTFOLDER" Name="VST3">
+              <Directory Id="UserVST3BUNDLEFOLDER" Name="Audiocity.vst3">
+                <Directory Id="UserVST3CONTENTSFOLDER" Name="Contents">
+                  <Directory Id="UserVST3RESOURCESFOLDER" Name="Resources" />
+                  <Directory Id="UserVST3X64FOLDER" Name="x86_64-win" />
+                </Directory>
+              </Directory>
+            </Directory>
+          </Directory>
+        </Directory>
       </Directory>
 
       <Directory Id="CommonDesktopFolder" Name="Desktop" />
+      <Directory Id="DesktopFolder" Name="Desktop" />
 
       <Directory Id="CommonProgramsFolder">
-        <Directory Id="AudiocityStartMenuFolder" Name="Audiocity" />
+        <Directory Id="AudiocityStartMenuFolderMachine" Name="Audiocity" />
+      </Directory>
+
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="AudiocityStartMenuFolderUser" Name="Audiocity" />
       </Directory>
 
       <Directory Id="CommonFiles64Folder">
@@ -73,49 +109,134 @@
   </Fragment>
 
   <Fragment>
-    <Component Id="cmpStandaloneExe" Directory="INSTALLFOLDER" Guid="*" Win64="yes">
+    <Component Id="cmpStandaloneExeMachine" Directory="WixPerMachineFolder" Guid="*" Win64="yes">
+      <Condition>NOT MSIINSTALLPERUSER</Condition>
       <File Id="filStandaloneExe" Source="$(var.StandaloneSourceDir)\Audiocity.exe" KeyPath="yes" />
     </Component>
 
-    <Component Id="cmpStandaloneRexDll" Directory="INSTALLFOLDER" Guid="*" Win64="yes">
+    <Component Id="cmpStandaloneRexDllMachine" Directory="WixPerMachineFolder" Guid="*" Win64="yes">
+      <Condition>NOT MSIINSTALLPERUSER</Condition>
       <File Id="filStandaloneRexDll" Source="$(var.StandaloneSourceDir)\REX Shared Library.dll" KeyPath="yes" />
     </Component>
 
-    <Component Id="cmpVst3Binary" Directory="VST3X64FOLDER" Guid="*" Win64="yes">
+    <Component Id="cmpStandaloneExeUser" Directory="WixPerUserFolder" Guid="{0A32934F-2CB7-4D86-8FD5-8E5060313045}" Win64="yes">
+      <Condition>MSIINSTALLPERUSER=1</Condition>
+      <File Id="filStandaloneExeUser" Source="$(var.StandaloneSourceDir)\Audiocity.exe" KeyPath="no" />
+      <RegistryValue Root="HKCU" Key="Software\Audiocity\Installer" Name="StandaloneExeUser" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="cmpStandaloneRexDllUser" Directory="WixPerUserFolder" Guid="{AB64A8E0-A7FC-4E38-AAB2-18E6F621EF0E}" Win64="yes">
+      <Condition>MSIINSTALLPERUSER=1</Condition>
+      <File Id="filStandaloneRexDllUser" Source="$(var.StandaloneSourceDir)\REX Shared Library.dll" KeyPath="no" />
+      <RegistryValue Root="HKCU" Key="Software\Audiocity\Installer" Name="StandaloneRexDllUser" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="cmpVst3BinaryMachine" Directory="VST3X64FOLDER" Guid="*" Win64="yes">
+      <Condition>NOT MSIINSTALLPERUSER</Condition>
       <File Id="filVst3Binary" Source="$(var.Vst3SourceDir)\Audiocity.vst3\Contents\x86_64-win\Audiocity.vst3" KeyPath="yes" />
     </Component>
 
-    <Component Id="cmpVst3RexDll" Directory="VST3X64FOLDER" Guid="*" Win64="yes">
+    <Component Id="cmpVst3RexDllMachine" Directory="VST3X64FOLDER" Guid="*" Win64="yes">
+      <Condition>NOT MSIINSTALLPERUSER</Condition>
       <File Id="filVst3RexDll" Source="$(var.Vst3SourceDir)\Audiocity.vst3\Contents\x86_64-win\REX Shared Library.dll" KeyPath="yes" />
     </Component>
 
-    <Component Id="cmpVst3ModuleInfo" Directory="VST3RESOURCESFOLDER" Guid="*" Win64="yes">
+    <Component Id="cmpVst3ModuleInfoMachine" Directory="VST3RESOURCESFOLDER" Guid="*" Win64="yes">
+      <Condition>NOT MSIINSTALLPERUSER</Condition>
       <File Id="filVst3ModuleInfo" Source="$(var.Vst3SourceDir)\Audiocity.vst3\Contents\Resources\moduleinfo.json" KeyPath="yes" />
     </Component>
 
-    <Component Id="cmpVst3PluginIco" Directory="VST3BUNDLEFOLDER" Guid="*" Win64="yes">
+    <Component Id="cmpVst3PluginIcoMachine" Directory="VST3BUNDLEFOLDER" Guid="*" Win64="yes">
+      <Condition>NOT MSIINSTALLPERUSER</Condition>
       <File Id="filVst3PluginIco" Source="$(var.Vst3SourceDir)\Audiocity.vst3\Plugin.ico" KeyPath="yes" />
     </Component>
 
-    <Component Id="cmpDesktopShortcut" Directory="CommonDesktopFolder" Guid="*" Win64="yes">
+    <Component Id="cmpVst3BinaryUser" Directory="UserVST3X64FOLDER" Guid="{B3B2F089-A318-49BE-A526-E9D172F58D4E}" Win64="yes">
+      <Condition>MSIINSTALLPERUSER=1</Condition>
+      <File Id="filVst3BinaryUser" Source="$(var.Vst3SourceDir)\Audiocity.vst3\Contents\x86_64-win\Audiocity.vst3" KeyPath="no" />
+      <RegistryValue Root="HKCU" Key="Software\Audiocity\Installer" Name="Vst3BinaryUser" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="cmpVst3RexDllUser" Directory="UserVST3X64FOLDER" Guid="{7E3D0838-4505-4A5B-93FE-EF42A247FF13}" Win64="yes">
+      <Condition>MSIINSTALLPERUSER=1</Condition>
+      <File Id="filVst3RexDllUser" Source="$(var.Vst3SourceDir)\Audiocity.vst3\Contents\x86_64-win\REX Shared Library.dll" KeyPath="no" />
+      <RegistryValue Root="HKCU" Key="Software\Audiocity\Installer" Name="Vst3RexDllUser" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="cmpVst3ModuleInfoUser" Directory="UserVST3RESOURCESFOLDER" Guid="{9A3A0BDE-CF57-44DD-AF2E-B8E38D80A561}" Win64="yes">
+      <Condition>MSIINSTALLPERUSER=1</Condition>
+      <File Id="filVst3ModuleInfoUser" Source="$(var.Vst3SourceDir)\Audiocity.vst3\Contents\Resources\moduleinfo.json" KeyPath="no" />
+      <RegistryValue Root="HKCU" Key="Software\Audiocity\Installer" Name="Vst3ModuleInfoUser" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="cmpVst3PluginIcoUser" Directory="UserVST3BUNDLEFOLDER" Guid="{91D1F8C7-D99A-4F33-A0E9-128EA8E66B1B}" Win64="yes">
+      <Condition>MSIINSTALLPERUSER=1</Condition>
+      <File Id="filVst3PluginIcoUser" Source="$(var.Vst3SourceDir)\Audiocity.vst3\Plugin.ico" KeyPath="no" />
+      <RegistryValue Root="HKCU" Key="Software\Audiocity\Installer" Name="Vst3PluginIcoUser" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="cmpPerUserCleanup" Directory="WixPerUserFolder" Guid="*" Win64="yes">
+      <Condition>MSIINSTALLPERUSER=1</Condition>
+      <RemoveFolder Id="RemoveUserVST3X64FOLDER" Directory="UserVST3X64FOLDER" On="uninstall" />
+      <RemoveFolder Id="RemoveUserVST3RESOURCESFOLDER" Directory="UserVST3RESOURCESFOLDER" On="uninstall" />
+      <RemoveFolder Id="RemoveUserVST3CONTENTSFOLDER" Directory="UserVST3CONTENTSFOLDER" On="uninstall" />
+      <RemoveFolder Id="RemoveUserVST3BUNDLEFOLDER" Directory="UserVST3BUNDLEFOLDER" On="uninstall" />
+      <RemoveFolder Id="RemoveUserVST3ROOTFOLDER" Directory="UserVST3ROOTFOLDER" On="uninstall" />
+      <RemoveFolder Id="RemoveUserProgramsCommonFolder" Directory="UserProgramsCommonFolder" On="uninstall" />
+      <RemoveFolder Id="RemoveUserProgramsRootFolder" Directory="UserProgramsRootFolder" On="uninstall" />
+      <RemoveFolder Id="RemoveWixPerUserFolder" Directory="WixPerUserFolder" On="uninstall" />
+      <RemoveFolder Id="RemoveAppsFolder" Directory="AppsFolder" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="Software\Audiocity\Installer" Name="PerUserCleanup" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="cmpDesktopShortcutMachine" Directory="CommonDesktopFolder" Guid="*" Win64="yes">
+      <Condition>NOT MSIINSTALLPERUSER</Condition>
       <Shortcut
           Id="DesktopShortcut"
           Name="Audiocity"
           Description="Launch Audiocity"
-          Target="[INSTALLFOLDER]Audiocity.exe"
-          WorkingDirectory="INSTALLFOLDER" />
+          Target="[WixPerMachineFolder]Audiocity.exe"
+          WorkingDirectory="WixPerMachineFolder" />
+      <RemoveFile Id="RemoveDesktopShortcutMachine" Name="Audiocity.lnk" On="uninstall" />
       <RegistryValue Root="HKLM" Key="Software\Audiocity\Installer" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
     </Component>
 
-    <Component Id="cmpStartMenuShortcut" Directory="AudiocityStartMenuFolder" Guid="*" Win64="yes">
+    <Component Id="cmpStartMenuShortcutMachine" Directory="AudiocityStartMenuFolderMachine" Guid="*" Win64="yes">
+      <Condition>NOT MSIINSTALLPERUSER</Condition>
       <Shortcut
           Id="StartMenuShortcut"
           Name="Audiocity"
           Description="Launch Audiocity"
-          Target="[INSTALLFOLDER]Audiocity.exe"
-          WorkingDirectory="INSTALLFOLDER" />
-      <RemoveFolder Id="RemoveAudiocityStartMenuFolder" Directory="AudiocityStartMenuFolder" On="uninstall" />
+          Target="[WixPerMachineFolder]Audiocity.exe"
+          WorkingDirectory="WixPerMachineFolder" />
+      <RemoveFile Id="RemoveStartMenuShortcutMachine" Name="Audiocity.lnk" On="uninstall" />
+      <RemoveFolder Id="RemoveAudiocityStartMenuFolderMachine" Directory="AudiocityStartMenuFolderMachine" On="uninstall" />
       <RegistryValue Root="HKLM" Key="Software\Audiocity\Installer" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="cmpDesktopShortcutUser" Directory="DesktopFolder" Guid="*" Win64="yes">
+      <Condition>MSIINSTALLPERUSER=1</Condition>
+      <Shortcut
+          Id="DesktopShortcutUser"
+          Name="Audiocity"
+          Description="Launch Audiocity"
+          Target="[WixPerUserFolder]Audiocity.exe"
+          WorkingDirectory="WixPerUserFolder" />
+      <RemoveFile Id="RemoveDesktopShortcutUser" Name="Audiocity.lnk" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="Software\Audiocity\Installer" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="cmpStartMenuShortcutUser" Directory="AudiocityStartMenuFolderUser" Guid="*" Win64="yes">
+      <Condition>MSIINSTALLPERUSER=1</Condition>
+      <Shortcut
+          Id="StartMenuShortcutUser"
+          Name="Audiocity"
+          Description="Launch Audiocity"
+          Target="[WixPerUserFolder]Audiocity.exe"
+          WorkingDirectory="WixPerUserFolder" />
+      <RemoveFile Id="RemoveStartMenuShortcutUser" Name="Audiocity.lnk" On="uninstall" />
+      <RemoveFolder Id="RemoveAudiocityStartMenuFolderUser" Directory="AudiocityStartMenuFolderUser" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="Software\Audiocity\Installer" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
     </Component>
   </Fragment>
 </Wix>

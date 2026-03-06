@@ -6,7 +6,43 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(AUDIOCITY_SELF_CONTAINED_RUNTIME "Statically link MSVC runtime (/MT, /MTd) for self-contained binaries." OFF)
+
+if (MSVC AND AUDIOCITY_SELF_CONTAINED_RUNTIME)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif ()
+
 option(AUDIOCITY_FETCH_JUCE "Fetch JUCE automatically when third_party/JUCE is unavailable" ON)
+option(AUDIOCITY_ENABLE_ASIO "Enable ASIO device backend for Standalone builds (requires Steinberg ASIO SDK headers)." OFF)
+set(AUDIOCITY_ASIO_SDK_DIR "" CACHE PATH "Path to Steinberg ASIO SDK directory that contains common/iasiodrv.h")
+
+set(AUDIOCITY_JUCE_ASIO 0)
+set(AUDIOCITY_ASIO_HEADER_DIR "")
+set(AUDIOCITY_ASIO_HOST_DIR "")
+
+if (WIN32 AND AUDIOCITY_ENABLE_ASIO)
+    if (AUDIOCITY_ASIO_SDK_DIR STREQUAL "")
+        set(AUDIOCITY_ASIO_CANDIDATE "${CMAKE_SOURCE_DIR}/third_party/asiosdk")
+    else ()
+        set(AUDIOCITY_ASIO_CANDIDATE "${AUDIOCITY_ASIO_SDK_DIR}")
+    endif ()
+
+    if (EXISTS "${AUDIOCITY_ASIO_CANDIDATE}/common/iasiodrv.h")
+        set(AUDIOCITY_ASIO_HEADER_DIR "${AUDIOCITY_ASIO_CANDIDATE}/common")
+        if (EXISTS "${AUDIOCITY_ASIO_CANDIDATE}/host")
+            set(AUDIOCITY_ASIO_HOST_DIR "${AUDIOCITY_ASIO_CANDIDATE}/host")
+        endif ()
+    elseif (EXISTS "${AUDIOCITY_ASIO_CANDIDATE}/ASIOSDK/common/iasiodrv.h")
+        set(AUDIOCITY_ASIO_HEADER_DIR "${AUDIOCITY_ASIO_CANDIDATE}/ASIOSDK/common")
+        if (EXISTS "${AUDIOCITY_ASIO_CANDIDATE}/ASIOSDK/host")
+            set(AUDIOCITY_ASIO_HOST_DIR "${AUDIOCITY_ASIO_CANDIDATE}/ASIOSDK/host")
+        endif ()
+    else ()
+        message(FATAL_ERROR "AUDIOCITY_ENABLE_ASIO is ON but ASIO SDK headers were not found at '${AUDIOCITY_ASIO_CANDIDATE}'. Set AUDIOCITY_ASIO_SDK_DIR to a valid ASIO SDK path containing common/iasiodrv.h.")
+    endif ()
+
+    set(AUDIOCITY_JUCE_ASIO 1)
+endif ()
 
 if (EXISTS "${CMAKE_SOURCE_DIR}/third_party/JUCE/CMakeLists.txt")
     add_subdirectory(third_party/JUCE)
@@ -75,12 +111,21 @@ target_include_directories(Audiocity
     PRIVATE
         src)
 
+if (NOT AUDIOCITY_ASIO_HEADER_DIR STREQUAL "")
+    target_include_directories(Audiocity PRIVATE "${AUDIOCITY_ASIO_HEADER_DIR}")
+endif ()
+
+if (NOT AUDIOCITY_ASIO_HOST_DIR STREQUAL "")
+    target_include_directories(Audiocity PRIVATE "${AUDIOCITY_ASIO_HOST_DIR}")
+endif ()
+
 target_compile_definitions(Audiocity
     PRIVATE
         REX_WINDOWS=1
         REX_MAC=0
         JUCE_WEB_BROWSER=0
-        JUCE_USE_CURL=0)
+        JUCE_USE_CURL=0
+        JUCE_ASIO=${AUDIOCITY_JUCE_ASIO})
 
 target_link_libraries(Audiocity
     PRIVATE
@@ -118,6 +163,27 @@ endif ()
 
 if (WIN32)
     option(AUDIOCITY_ENABLE_WIX_INSTALLER "Enable WiX MSI installer build target (requires WiX Toolset v3)." OFF)
+    option(AUDIOCITY_ENABLE_WIX_BOOTSTRAPPER "Enable WiX bootstrapper EXE target that chains VC++ Redistributable and MSI." OFF)
+    option(AUDIOCITY_ENABLE_CODESIGN "Enable Authenticode signing for installer artifacts." OFF)
+    set(AUDIOCITY_VC_REDIST_SOURCE "${CMAKE_SOURCE_DIR}/installer/redist/VC_redist.x64.exe" CACHE FILEPATH "Path to VC_redist.x64.exe used by WiX bootstrapper builds.")
+    set(AUDIOCITY_SIGNTOOL_EXECUTABLE "" CACHE FILEPATH "Path to signtool.exe used for signing installer artifacts.")
+    set(AUDIOCITY_CODESIGN_CERT_SHA1 "" CACHE STRING "SHA1 thumbprint of the code-signing certificate in the Windows cert store.")
+    set(AUDIOCITY_CODESIGN_TIMESTAMP_URL "http://timestamp.digicert.com" CACHE STRING "RFC3161 timestamp server URL used for signing installer artifacts.")
+
+    set(AUDIOCITY_CODESIGN_READY OFF)
+    if (AUDIOCITY_ENABLE_CODESIGN)
+        if (AUDIOCITY_SIGNTOOL_EXECUTABLE STREQUAL "")
+            find_program(AUDIOCITY_SIGNTOOL_EXECUTABLE NAMES signtool.exe)
+        endif ()
+
+        if (AUDIOCITY_SIGNTOOL_EXECUTABLE STREQUAL "")
+            message(WARNING "AUDIOCITY_ENABLE_CODESIGN is ON, but signtool.exe was not found. Signing steps will be skipped.")
+        elseif (AUDIOCITY_CODESIGN_CERT_SHA1 STREQUAL "")
+            message(WARNING "AUDIOCITY_ENABLE_CODESIGN is ON, but AUDIOCITY_CODESIGN_CERT_SHA1 is empty. Signing steps will be skipped.")
+        else ()
+            set(AUDIOCITY_CODESIGN_READY ON)
+        endif ()
+    endif ()
 
     if (AUDIOCITY_ENABLE_WIX_INSTALLER)
         set(AUDIOCITY_MSBUILD_EXECUTABLE "")
@@ -139,8 +205,58 @@ if (WIN32)
                 DEPENDS Audiocity_Standalone Audiocity_VST3
                 WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/installer"
                 COMMENT "Building Audiocity MSI via WiX Toolset")
+
+            if (AUDIOCITY_CODESIGN_READY)
+                add_custom_command(TARGET audiocity_wix_installer POST_BUILD
+                    COMMAND "${AUDIOCITY_SIGNTOOL_EXECUTABLE}"
+                        sign
+                        /fd SHA256
+                        /td SHA256
+                        /tr "${AUDIOCITY_CODESIGN_TIMESTAMP_URL}"
+                        /sha1 "${AUDIOCITY_CODESIGN_CERT_SHA1}"
+                        "${CMAKE_SOURCE_DIR}/output/installer/$<CONFIG>/AudiocityInstaller.msi"
+                    COMMENT "Signing AudiocityInstaller.msi")
+            endif ()
         else ()
             message(WARNING "AUDIOCITY_ENABLE_WIX_INSTALLER is ON, but MSBuild was not found. Installer target will not be created.")
+        endif ()
+    endif ()
+
+    if (AUDIOCITY_ENABLE_WIX_BOOTSTRAPPER)
+        if (NOT AUDIOCITY_ENABLE_WIX_INSTALLER)
+            message(WARNING "AUDIOCITY_ENABLE_WIX_BOOTSTRAPPER is ON but AUDIOCITY_ENABLE_WIX_INSTALLER is OFF. Bootstrapper target will not be created.")
+        elseif (NOT TARGET audiocity_wix_installer)
+            message(WARNING "AUDIOCITY_ENABLE_WIX_BOOTSTRAPPER is ON but audiocity_wix_installer target is unavailable. Bootstrapper target will not be created.")
+        elseif (NOT AUDIOCITY_MSBUILD_EXECUTABLE)
+            message(WARNING "AUDIOCITY_ENABLE_WIX_BOOTSTRAPPER is ON, but MSBuild was not found. Bootstrapper target will not be created.")
+        elseif (NOT EXISTS "${AUDIOCITY_VC_REDIST_SOURCE}")
+            message(WARNING "AUDIOCITY_ENABLE_WIX_BOOTSTRAPPER is ON, but VC_redist.x64.exe was not found at '${AUDIOCITY_VC_REDIST_SOURCE}'. Bootstrapper target will not be created.")
+        else ()
+            add_custom_target(audiocity_wix_bootstrapper
+                COMMAND "${AUDIOCITY_MSBUILD_EXECUTABLE}"
+                    "${CMAKE_SOURCE_DIR}/installer/AudiocityBootstrapper.wixproj"
+                    /t:Build
+                    /p:Configuration=$<CONFIG>
+                    /p:Platform=x64
+                    /p:ProductVersion=${PROJECT_VERSION}
+                    /p:InstallerOutputRoot=${CMAKE_SOURCE_DIR}/output/installer
+                    /p:MsiSourcePath=${CMAKE_SOURCE_DIR}/output/installer/$<CONFIG>/AudiocityInstaller.msi
+                    /p:VcRedistSourcePath=${AUDIOCITY_VC_REDIST_SOURCE}
+                DEPENDS audiocity_wix_installer
+                WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/installer"
+                COMMENT "Building Audiocity bootstrapper EXE via WiX Toolset")
+
+            if (AUDIOCITY_CODESIGN_READY)
+                add_custom_command(TARGET audiocity_wix_bootstrapper POST_BUILD
+                    COMMAND "${AUDIOCITY_SIGNTOOL_EXECUTABLE}"
+                        sign
+                        /fd SHA256
+                        /td SHA256
+                        /tr "${AUDIOCITY_CODESIGN_TIMESTAMP_URL}"
+                        /sha1 "${AUDIOCITY_CODESIGN_CERT_SHA1}"
+                        "${CMAKE_SOURCE_DIR}/output/installer/$<CONFIG>/AudiocitySetup.exe"
+                    COMMENT "Signing AudiocitySetup.exe")
+            endif ()
         endif ()
     endif ()
 endif ()
