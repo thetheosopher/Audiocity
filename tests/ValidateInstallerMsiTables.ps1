@@ -44,17 +44,13 @@ while ($componentRecord) {
 }
 
 $expectedShortcuts = @{
-    "DesktopShortcut" = @{ Directory = "CommonDesktopFolder"; Component = "cmpDesktopShortcutMachine"; Target = "[WixPerMachineFolder]Audiocity.exe" }
-    "StartMenuShortcut" = @{ Directory = "AudiocityStartMenuFolderMachine"; Component = "cmpStartMenuShortcutMachine"; Target = "[WixPerMachineFolder]Audiocity.exe" }
-    "DesktopShortcutUser" = @{ Directory = "DesktopFolder"; Component = "cmpDesktopShortcutUser"; Target = "[WixPerUserFolder]Audiocity.exe" }
-    "StartMenuShortcutUser" = @{ Directory = "AudiocityStartMenuFolderUser"; Component = "cmpStartMenuShortcutUser"; Target = "[WixPerUserFolder]Audiocity.exe" }
+    "DesktopShortcut" = @{ Directory = "CommonDesktopFolder"; Component = "cmpDesktopShortcut"; Target = "[INSTALLFOLDER]Audiocity.exe" }
+    "StartMenuShortcut" = @{ Directory = "AudiocityStartMenuFolder"; Component = "cmpStartMenuShortcut"; Target = "[INSTALLFOLDER]Audiocity.exe" }
 }
 
 $expectedComponentConditions = @{
-    "cmpDesktopShortcutMachine" = "NOT MSIINSTALLPERUSER"
-    "cmpStartMenuShortcutMachine" = "NOT MSIINSTALLPERUSER"
-    "cmpDesktopShortcutUser" = "MSIINSTALLPERUSER=1"
-    "cmpStartMenuShortcutUser" = "MSIINSTALLPERUSER=1"
+    "cmpDesktopShortcut" = ""
+    "cmpStartMenuShortcut" = ""
 }
 
 $errors = New-Object System.Collections.Generic.List[string]
@@ -90,7 +86,7 @@ foreach ($componentId in $expectedComponentConditions.Keys) {
     $actualCondition = $componentRows[$componentId]
     $expectedCondition = $expectedComponentConditions[$componentId]
 
-    if ($actualCondition -ne $expectedCondition) {
+    if (($actualCondition ?? "") -ne $expectedCondition) {
         $errors.Add("Component $componentId has Condition='$actualCondition' expected '$expectedCondition'")
     }
 }

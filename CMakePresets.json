@@ -13,7 +13,8 @@
       "binaryDir": "${sourceDir}/build",
       "architecture": "x64",
       "cacheVariables": {
-        "AUDIOCITY_ENABLE_ASIO": "OFF",
+        "AUDIOCITY_ENABLE_ASIO": "ON",
+        "AUDIOCITY_ASIO_SDK_DIR": "${sourceDir}/third_party/asiosdk",
         "CMAKE_BUILD_TYPE": "Debug"
       }
     },

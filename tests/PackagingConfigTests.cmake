@@ -18,7 +18,6 @@ endif ()
 
 if (AUDIOCITY_ENABLE_WIX_INSTALLER)
     file(READ "${_audiocity_source_dir}/installer/AudiocityInstaller.wxs" _audiocity_installer_wxs)
-    file(READ "${_audiocity_source_dir}/installer/AudiocityInstaller.wixproj" _audiocity_installer_wixproj)
 
     if (NOT _audiocity_installer_wxs MATCHES "InstallScope=\"perMachine\"")
         message(FATAL_ERROR "AudiocityInstaller.wxs must keep InstallScope=\"perMachine\" for machine-default scope.")
@@ -28,16 +27,16 @@ if (AUDIOCITY_ENABLE_WIX_INSTALLER)
         message(FATAL_ERROR "AudiocityInstaller.wxs must keep InstallPrivileges=\"elevated\" with perMachine scope.")
     endif ()
 
-    if (NOT _audiocity_installer_wxs MATCHES "<Property Id=\"WixUISupportPerUser\" Value=\"1\" />")
-        message(FATAL_ERROR "AudiocityInstaller.wxs must enable WixUISupportPerUser.")
+    if (_audiocity_installer_wxs MATCHES "WixUISupportPerUser")
+        message(FATAL_ERROR "AudiocityInstaller.wxs must not include per-user scope UI support in per-machine-only mode.")
     endif ()
 
-    if (NOT _audiocity_installer_wxs MATCHES "<Property Id=\"WixUISupportPerMachine\" Value=\"1\" />")
-        message(FATAL_ERROR "AudiocityInstaller.wxs must enable WixUISupportPerMachine.")
+    if (NOT _audiocity_installer_wxs MATCHES "<UIRef Id=\"WixUI_FeatureTree\" />")
+        message(FATAL_ERROR "AudiocityInstaller.wxs must use WixUI_FeatureTree so Standalone/VST3 feature selection is exposed.")
     endif ()
 
-    if (NOT _audiocity_installer_wixproj MATCHES "<SuppressIces>ICE91</SuppressIces>")
-        message(FATAL_ERROR "AudiocityInstaller.wixproj must suppress ICE91 for expected dual-scope per-user directory authoring.")
+    if (_audiocity_installer_wxs MATCHES "MSIINSTALLPERUSER|WixPerUserFolder")
+        message(FATAL_ERROR "AudiocityInstaller.wxs must not contain per-user install conditions or directories in per-machine-only mode.")
     endif ()
 endif ()
 
