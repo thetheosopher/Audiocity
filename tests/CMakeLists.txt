@@ -46,25 +46,4 @@ add_test(
     NAME audiocity_packaging_config
     COMMAND "${CMAKE_COMMAND}"
         -DAUDIOCITY_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-        -DAUDIOCITY_SELF_CONTAINED_RUNTIME=${AUDIOCITY_SELF_CONTAINED_RUNTIME}
-        -DCMAKE_MSVC_RUNTIME_LIBRARY=${CMAKE_MSVC_RUNTIME_LIBRARY}
-        -DAUDIOCITY_ENABLE_WIX_INSTALLER=${AUDIOCITY_ENABLE_WIX_INSTALLER}
-        -DAUDIOCITY_ENABLE_WIX_BOOTSTRAPPER=${AUDIOCITY_ENABLE_WIX_BOOTSTRAPPER}
-        -DAUDIOCITY_ENABLE_CODESIGN=${AUDIOCITY_ENABLE_CODESIGN}
-        -DAUDIOCITY_CODESIGN_CERT_SHA1=${AUDIOCITY_CODESIGN_CERT_SHA1}
-        -DAUDIOCITY_SIGNTOOL_EXECUTABLE=${AUDIOCITY_SIGNTOOL_EXECUTABLE}
         -P "${CMAKE_CURRENT_LIST_DIR}/PackagingConfigTests.cmake")
-
-if (WIN32 AND AUDIOCITY_ENABLE_WIX_INSTALLER)
-    find_program(AUDIOCITY_POWERSHELL_EXECUTABLE NAMES pwsh powershell)
-    if (AUDIOCITY_POWERSHELL_EXECUTABLE)
-        add_test(
-            NAME audiocity_packaging_msi_tables
-            COMMAND "${AUDIOCITY_POWERSHELL_EXECUTABLE}"
-                -NoProfile
-                -ExecutionPolicy
-                Bypass
-                -File "${CMAKE_CURRENT_LIST_DIR}/ValidateInstallerMsiTables.ps1"
-                -InstallerRoot "${CMAKE_SOURCE_DIR}/output/installer")
-    endif ()
-endif ()

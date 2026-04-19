@@ -29,4 +29,5 @@
 - For optional runtime codecs (like REX), fail soft and keep feature disabled when runtime binaries are unavailable.
 
 ## Build / Packaging
-- **WiX Toolset v3** (Windows): builds MSI installer (`installer/AudiocityInstaller.wixproj`) with optional Standalone and VST3 features.
+- **Inno Setup 6** (Windows): builds the versioned installer from `installer/AudiocityInstaller.iss` with per-user or machine install support.
+- **PowerShell**: stages the self-contained release files and produces the portable zip via `scripts/build_release.ps1`.

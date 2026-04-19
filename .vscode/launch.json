@@ -2,24 +2,41 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Launch Audiocity Standalone",
-      "type": "cppvsdbg",
-      "request": "launch",
-      "program": "${workspaceFolder}/build/Audiocity_artefacts/Release/Standalone/Audiocity.exe",
-      "args": [],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "stopAtEntry": false
-    },
-    {
-      "name": "Launch Audiocity Standalone (Debug)",
+      "name": "Debug: Audiocity Standalone",
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}/build/Audiocity_artefacts/Debug/Standalone/Audiocity.exe",
       "args": [],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
-      "stopAtEntry": false
+      "stopAtEntry": false,
+      "preLaunchTask": "CMake: Build Audiocity (Debug)",
+      "visualizerFile": "",
+      "environment": []
+    },
+    {
+      "name": "Release: Audiocity Standalone",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/release-selfcontained/Audiocity_artefacts/Release/Standalone/Audiocity.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false,
+      "preLaunchTask": "CMake: Build Audiocity (Release Self-Contained)",
+      "visualizerFile": "",
+      "environment": []
+    },
+    {
+      "name": "Debug: Offline Tests",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/tests/Debug/audiocity_offline_tests.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false,
+      "preLaunchTask": "CMake: Build Tests (Debug)"
     }
   ]
 }

@@ -1,0 +1,81 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "CMake: Build Audiocity (Debug)",
+      "type": "process",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "cmake --preset default; if ($LASTEXITCODE -ne 0) { Write-Host 'Retrying configure after deleting the stale build directory.'; if (Test-Path -LiteralPath 'build') { Remove-Item -LiteralPath 'build' -Recurse -Force }; cmake --preset default; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }; cmake --build --preset default --config Debug --target Audiocity_All; exit $LASTEXITCODE"
+      ],
+      "group": "build",
+      "problemMatcher": "$msCompile",
+      "detail": "Build Standalone + VST3 in Debug mode"
+    },
+    {
+      "label": "CMake: Build Audiocity (Release Self-Contained)",
+      "type": "process",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "cmake --preset release-selfcontained; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; cmake --build --preset release-selfcontained"
+      ],
+      "group": "build",
+      "problemMatcher": "$msCompile",
+      "detail": "Build Standalone + VST3 in self-contained Release mode"
+    },
+    {
+      "label": "Release: Build Artifacts",
+      "type": "process",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/build_release.ps1"
+      ],
+      "group": "build",
+      "problemMatcher": "$msCompile",
+      "detail": "Build self-contained release artifacts (Inno Setup installer + portable zip)"
+    },
+    {
+      "label": "CMake: Build Tests (Debug)",
+      "type": "process",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "cmake --preset default; if ($LASTEXITCODE -ne 0) { Write-Host 'Retrying configure after deleting the stale build directory.'; if (Test-Path -LiteralPath 'build') { Remove-Item -LiteralPath 'build' -Recurse -Force }; cmake --preset default; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }; cmake --build --preset default --config Debug --target audiocity_offline_tests; exit $LASTEXITCODE"
+      ],
+      "group": "build",
+      "problemMatcher": "$msCompile",
+      "detail": "Build offline test runner in Debug mode"
+    },
+    {
+      "label": "CMake: Run Tests",
+      "type": "process",
+      "command": "ctest",
+      "args": [
+        "--test-dir",
+        "build",
+        "-C",
+        "Debug",
+        "--output-on-failure"
+      ],
+      "group": "test",
+      "dependsOn": "CMake: Build Tests (Debug)",
+      "problemMatcher": [],
+      "detail": "Run CTest suite (Debug)"
+    }
+  ]
+}

@@ -1,186 +1,168 @@
-# Audiocity — Hybrid Sampler (Standalone + VST3)
+# Audiocity
 
-This bundle contains the **specs and prompts** to build **Audiocity**, a hybrid sampler (Standalone + VST3) using JUCE/C++.
+![Audiocity](assets/icons/audiocity_icon_256.png)
 
-## Contents
-- `docs/` — authoritative specifications (roadmap, RT rules, SFZ import, browser index, etc.)
-- `.github/copilot-instructions.md` — persistent Copilot guidance for this repo
-- `prompts/` — ready-to-run Copilot prompts per milestone
+A high-performance hybrid sampler built with JUCE and C++20, shipped as a Standalone Windows app and a VST3 instrument plugin.
 
-## Recommended folder structure
+![Version 1.0.0](https://img.shields.io/badge/version-1.0.0-blue)
+![C++20](https://img.shields.io/badge/C%2B%2B-20-blue?logo=cplusplus)
+![JUCE 8.0.4](https://img.shields.io/badge/JUCE-8.0.4-orange)
+![Windows x64](https://img.shields.io/badge/platform-Windows%20x64-lightgrey?logo=windows)
+![MIT License](https://img.shields.io/badge/license-MIT-green)
 
+## Overview
+
+Audiocity is a Windows-focused sampler that runs from a single JUCE `AudioProcessor` implementation and is delivered in two forms:
+
+- a standalone desktop application
+- a VST3 instrument plugin
+
+The engine and UI are developed against a spec-first architecture with explicit real-time safety rules, deterministic offline testing, and shared behavior across plugin and standalone targets.
+
+## Current Feature Set
+
+- Sample playback with pitch shifting by resampling
+- Polyphony with explicit voice stealing
+- Amp ADSR and filter ADSR with low-pass filtering
+- Sampler-style UI with Browser, Mapping, Editor, Settings, and Diagnostics panels
+- Preset save, rename, delete, and reload workflow using `.acp` XML payloads
+- Library peak-preview caching with invalidation when the source library changes
+- REX import support through the bundled REX SDK runtime
+- Optional ASIO support when the Steinberg ASIO SDK is available at configure time
+- Offline render test coverage for deterministic engine behavior
+
+## Build Requirements
+
+| Dependency | Version |
+| --- | --- |
+| CMake | 3.22 or newer |
+| Visual Studio | 2022 |
+| Compiler | MSVC with C++20 support |
+| JUCE | 8.0.4 |
+| Inno Setup | 6.x, for release installer builds |
+
+Optional:
+
+- Steinberg ASIO SDK for ASIO-enabled builds
+
+## Quick Start
+
+Bootstrap the development build and run tests:
+
+```powershell
+./scripts/bootstrap.ps1
 ```
+
+Manual development build:
+
+```bash
+cmake --preset default
+cmake --build --preset default --config Debug --target Audiocity_All
+cmake --build --preset default --config Debug --target audiocity_offline_tests
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+## Release Builds
+
+Release artifacts are built from a dedicated self-contained preset. The release executable is linked with the static MSVC runtime so it is as self-contained as practical on Windows.
+
+Configure and build the self-contained release binaries only:
+
+```bash
+cmake --preset release-selfcontained
+cmake --build --preset release-selfcontained
+```
+
+Build the complete release package set:
+
+```powershell
+./scripts/build_release.ps1
+```
+
+Optional ASIO-enabled release build:
+
+```powershell
+./scripts/build_release.ps1 -EnableAsio
+```
+
+The release script produces two artifacts in `output/`:
+
+- `Audiocity-1.0.0-windows-x64-setup.exe`
+- `Audiocity-1.0.0-windows-x64-portable.zip`
+
+### Installer Behavior
+
+The Inno Setup installer supports:
+
+- per-user or per-machine installation
+- Add/Remove Programs integration
+- desktop shortcut creation
+- Start Menu shortcuts for the standalone app
+- automatic VST3 installation to the correct path for the selected install scope
+
+VST3 install locations:
+
+- per-user: `%LOCALAPPDATA%\Programs\Common\VST3`
+- machine-wide: `%CommonProgramFiles%\VST3`
+
+### Portable Package
+
+The portable zip contains:
+
+- the standalone application files ready to run after extraction
+- a `VST3/` subfolder containing `Audiocity.vst3`
+- `PortableInstall.txt` with manual plugin install instructions
+- the MIT license
+
+The plugin bundle is intentionally left in a separate subfolder so the end user can choose whether to copy it to the per-user or machine-wide VST3 location.
+
+## VS Code Workflow
+
+The workspace includes:
+
+- Debug and Release launch configurations for the standalone app
+- a debug launch configuration for the offline test runner
+- build tasks for Debug and self-contained Release builds
+- a `Release: Build Artifacts` task that runs the full release script
+
+## Project Structure
+
+```text
 Audiocity/
-  docs/
-  prompts/
-  .github/
-  src/
-  tests/
-  third_party/
+├── assets/             # Icons and artwork
+├── docs/               # Architecture, roadmap, RT rules, testing specs
+├── installer/          # Inno Setup script and portable package docs
+├── prompts/            # Milestone-oriented Copilot prompts
+├── scripts/            # Bootstrap, cleanup, ASIO integration, release packaging
+├── src/engine/         # EngineCore, VoicePool, RexLoader, engine-side utilities
+├── src/plugin/         # PluginProcessor, PluginEditor, UI components, presets
+├── tests/              # Offline render and packaging validation tests
+├── third_party/        # JUCE, REX SDK, optional ASIO SDK
+├── CMakeLists.txt
+└── CMakePresets.json
 ```
 
-## Quick start
-1. Create a new folder `Audiocity`.
-2. Copy the contents of this zip to the folder root.
-3. Open the folder in VS Code.
-4. In Copilot Chat, paste and run `prompts/00-bootstrap.md`.
-5. Iterate milestone-by-milestone with prompts.
+## Architecture Notes
 
-## Build and test (Windows)
-Fast path:
-- `./scripts/bootstrap.ps1`
+Audiocity is designed around a single processor shared by standalone and VST3 targets.
 
-Cleanup rebuildable artifacts (keeps installer `.msi`/`.zip` packages):
-- `./scripts/cleanup_artifacts.ps1`
-- Optional deeper cleanup (also prunes `output/` while keeping `.msi`/`.zip`): `./scripts/cleanup_artifacts.ps1 -IncludeOutput`
+- Audio thread: rendering, mixing, DSP, and strict real-time-safe execution
+- UI thread: parameter editing, browser actions, and diagnostic presentation
+- Testing model: offline deterministic renders and regression-oriented packaging checks
 
-1. Configure:
-  - `cmake --preset default`
-2. Build plugin targets (Standalone + VST3 shared processor):
-  - `cmake --build --preset default --target Audiocity_All`
-3. Build offline tests:
-  - `cmake --build --preset default --target audiocity_offline_tests`
-4. Run tests (Visual Studio generator requires config):
-  - `ctest --test-dir build -C Debug --output-on-failure`
+Real-time rules are defined in `docs/02-real-time-rules.md`, and the higher-level architecture lives in `docs/01-architecture.md`.
 
-### Notes
-- VST3 output is generated under `build/Audiocity_artefacts/Debug/VST3/`.
-- Standalone output is generated under `build/Audiocity_artefacts/Debug/Standalone/`.
-- VS Code CMake Tools test runs are configured to pass `-C Debug` via workspace settings.
+## Cleanup
 
-## Release 0.9.0
-- Current project version: `0.9.0`
-- Release standalone artifact: `build/Audiocity_artefacts/Release/Standalone/Audiocity.exe`
-- Release VST3 artifact: `build/Audiocity_artefacts/Release/VST3/Audiocity.vst3`
-- Release installer artifact: `output/installer/Release/AudiocityInstaller.msi`
+Remove rebuildable artifacts while preserving packaged release outputs:
 
-### Highlights
-- Added standalone preset workflow (`Save` / `Rename` / `Delete`) with `.acp` XML payloads.
-- Added robust preset load failure handling with delete/keep recovery flow.
-- Expanded Generate options (up to 8192 samples), updated defaults, and removed Noise waveform mode.
-- Added Sample Information panel improvements and live playback/loop range synchronization.
-- Added persistent library peak-preview cache with invalidation on library root change and file-size changes.
-
-Build release + installer in one command:
-- `cmake --build build --config Release --target audiocity_wix_installer`
-
-### VC++ runtime on target machines (`MSVCP140.dll`)
-- If the target machine is missing Microsoft VC++ runtime, startup can fail with errors like `MSVCP140.dll` not found.
-- To produce a self-contained Release build (static MSVC runtime), use:
-  - `cmake --preset package-release-selfcontained`
-  - `cmake --build --preset package-release-selfcontained`
-- This generates binaries that do not require the VC++ redistributable for the MSVC C/C++ runtime.
-- For non-self-contained builds, you can ship a bootstrapper EXE that installs VC++ Redistributable automatically.
-
-### Bootstrapper EXE (installs VC++ runtime + MSI)
-- Place Microsoft `VC_redist.x64.exe` at `installer/redist/VC_redist.x64.exe`.
-- Build with:
-  - `cmake --preset package-release-bootstrapper`
-  - `cmake --build --preset package-release-bootstrapper`
-- Output bundle:
-  - `output/installer/Release/AudiocitySetup.exe`
-- The bootstrapper chains:
-  1. VC++ Redistributable x64 installer (silent)
-  2. `AudiocityInstaller.msi`
-
-### Desktop shortcut behavior
-- The MSI now creates a per-user Desktop shortcut for the installing user when `Standalone Application` is selected.
-- Shortcut target is the installed `Audiocity.exe` in `INSTALLFOLDER`.
-
-### ASIO devices in Standalone
-- ASIO is not auto-enabled unless the Steinberg ASIO SDK headers are available at build time.
-- Enable with CMake options:
-  - `-DAUDIOCITY_ENABLE_ASIO=ON`
-  - `-DAUDIOCITY_ASIO_SDK_DIR=<path-to-asiosdk>` (must contain `common/iasiodrv.h`)
-- If `AUDIOCITY_ENABLE_ASIO=ON` and headers are missing, CMake configure fails explicitly.
-- Helper integration script:
-  - `./scripts/integrate_asio_sdk.ps1 -SourceDir <path-to-extracted-asio-sdk> -CleanDestination`
-- Default integrated location is `third_party/asiosdk`.
-- Convenience preset:
-  - `cmake --preset package-release-bootstrapper-asio`
-  - `cmake --build --preset package-release-bootstrapper-asio`
-
-### Optional code signing (MSI + bootstrapper)
-- Enable signing in CMake with:
-  - `-DAUDIOCITY_ENABLE_CODESIGN=ON`
-  - `-DAUDIOCITY_CODESIGN_CERT_SHA1=<thumbprint>`
-- Optional overrides:
-  - `-DAUDIOCITY_SIGNTOOL_EXECUTABLE="C:/Program Files (x86)/Windows Kits/10/bin/<ver>/x64/signtool.exe"`
-  - `-DAUDIOCITY_CODESIGN_TIMESTAMP_URL="http://timestamp.digicert.com"`
-- Signed preset workflow:
-  - `cmake --preset package-release-bootstrapper-signed`
-  - replace `<SET_CERT_THUMBPRINT>` in `CMakePresets.json`
-  - `cmake --build --preset package-release-bootstrapper-signed`
-- When enabled and configured, signing is applied automatically to:
-  - `output/installer/<Config>/AudiocityInstaller.msi`
-  - `output/installer/<Config>/AudiocitySetup.exe`
-
-## Preset management (built-in)
-- The Sample tab includes a preset dropdown with `Save`, `Rename`, and `Delete` actions.
-- Presets are saved as XML files in the user preset folder:
-  - Windows: `%APPDATA%/Audiocity/Presets/`
-  - Extension: `.acp`
-- Selecting a preset in the dropdown reloads that persisted sample-playback state.
-
-### What preset XML stores
-- Current sample playback settings needed to load/play the sample (pitch, playback mode, loop/trim, envelopes, filter, output, pad/CC mappings, and related sample playback parameters).
-- If the sample source is generated or captured audio, the sample data is embedded in the preset file.
-- If the sample source is a file, the preset stores the sample file path.
-
-### What preset XML does not store
-- State associated with non-sample-playback tabs/workflows (for example: library browsing state, generate-tab editor state, capture-tab recording UI state).
-- Host preset behavior is unchanged (`getStateInformation`/`setStateInformation` still manages full plugin state for DAW save/load).
-
-### Preset XML example (.acp)
-```xml
-<AudiocityPatch samplePath="C:/Samples/Kick.wav" rootMidiNote="60" playbackMode="2" ... />
+```powershell
+./scripts/cleanup_artifacts.ps1
+./scripts/cleanup_artifacts.ps1 -IncludeOutput
 ```
 
-Notes:
-- The `.acp` file is the serialized sample-playback patch payload.
-- For generated/captured sample sources, embedded sample data is stored inside the XML payload.
+With `-IncludeOutput`, packaged `.exe` and `.zip` artifacts at the output root are preserved.
 
-### Common preset load issues
-- `Preset XML payload is invalid.`
-  - The file is truncated/corrupted or not valid XML.
-- Preset loads but referenced sample is missing.
-  - File-based presets store sample paths; move/restore the sample file or re-save preset with an embedded source (generated/captured).
+## License
 
-## Windows installer (WiX)
-- Installer project: `installer/AudiocityInstaller.wixproj`
-- WiX source: `installer/AudiocityInstaller.wxs`
-- License shown in installer: `installer/MIT-LICENSE.rtf` (MIT)
-
-The installer exposes optional features so users can install:
-- Standalone application (`Audiocity.exe` + `REX Shared Library.dll`)
-- VST3 plugin (`Audiocity.vst3` + `REX Shared Library.dll` and bundle metadata)
-
-The MSI now supports both install scopes from the UI:
-- Per-machine (all users, admin rights required)
-- Per-user (current user only, no elevation)
-
-VST3 install location depends on selected scope:
-- Per-machine: `C:\Program Files\Common Files\VST3\Audiocity.vst3`
-- Per-user: `%LOCALAPPDATA%\Programs\Common\VST3\Audiocity.vst3`
-
-Build MSI directly with MSBuild (WiX Toolset v3 required):
-- `msbuild installer/AudiocityInstaller.wixproj /p:Configuration=Debug /p:Platform=x64 /p:ProductVersion=0.9.0`
-
-Installer outputs are written under:
-- `output/installer/Debug/`
-- `output/installer/Release/`
-
-Optional CMake target:
-- Configure with `-DAUDIOCITY_ENABLE_WIX_INSTALLER=ON`
-- Build target `audiocity_wix_installer`
-
-Preset-based packaging flow:
-- `cmake --preset package-debug`
-- `cmake --build --preset package-debug`
-- `cmake --preset package-release`
-- `cmake --build --preset package-release`
-
-## Working agreement
-- Specs in `docs/` are the source of truth.
-- Every milestone expands tests.
-- Keep the audio thread RT-safe.
+Audiocity is released under the MIT License. See `LICENSE`.

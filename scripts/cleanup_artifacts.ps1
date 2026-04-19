@@ -42,7 +42,7 @@ foreach ($relativePath in $targets) {
             }
             else {
                 $ext = $_.Extension.ToLowerInvariant()
-                if ($ext -eq '.msi' -or $ext -eq '.zip') {
+                if ($ext -eq '.exe' -or $ext -eq '.msi' -or $ext -eq '.zip') {
                     $skipped.Add("output/$($_.Name) (kept package)")
                     return
                 }

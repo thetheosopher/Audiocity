@@ -1,0 +1,21 @@
+Audiocity Portable Install
+==========================
+
+This portable package includes:
+
+Portable usage
+
+1. Extract the zip to a folder you control.
+2. Run Audiocity.exe from the extracted folder.
+3. No installer, registry writes, or shortcuts are created by the portable package.
+
+Manual VST3 installation
+
+Copy the entire VST3\Audiocity.vst3 bundle to one of these locations:
+
+
+Do not copy only the files inside the bundle. Copy the full Audiocity.vst3 folder.
+
+Notes
+
+
