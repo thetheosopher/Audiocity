@@ -2,6 +2,8 @@
 
 #include "PeakPreviewCache.h"
 #include "PluginProcessor.h"
+#include <BinaryData.h>
+#include <JuceHeader.h>
 
 #include <algorithm>
 #include <cmath>
@@ -1646,6 +1648,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     tabBar_.addTab("Player", juce::Colour(0xff252538), &tabPlayerPage_, false);
     tabBar_.addTab("Generate", juce::Colour(0xff252538), &tabGeneratePage_, false);
     tabBar_.addTab("Capture", juce::Colour(0xff252538), &tabCapturePage_, false);
+    tabBar_.addTab("About", juce::Colour(0xff252538), &tabAboutPage_, false);
     currentTabIndex_ = 0;
     processor_.setEditorTabIndex(currentTabIndex_);
     tabBar_.setCurrentTabIndex(currentTabIndex_);
@@ -2825,6 +2828,20 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addToSampleControls(saturationModeCombo_);
     addToSampleControls(diagnosticsLabel_);
 
+    // About pane
+    aboutIconImage_ = juce::ImageFileFormat::loadFrom(BinaryData::audiocity_icon_128_png,
+                                                       BinaryData::audiocity_icon_128_pngSize);
+    addAndMakeVisible(aboutGitHubButton_);
+    aboutGitHubButton_.onClick = []
+    {
+        juce::URL("https://github.com/thetheosopher/Audiocity").launchInDefaultBrowser();
+    };
+    addAndMakeVisible(aboutCoffeeButton_);
+    aboutCoffeeButton_.onClick = []
+    {
+        juce::URL("https://buymeacoffee.com/theosopher").launchInDefaultBrowser();
+    };
+
     setupTooltips();
     rebuildVisibleSampleList();
 
@@ -3164,6 +3181,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     const bool showPlayerTab = (currentTabIndex_ == 2);
     const bool showGenerateTab = (currentTabIndex_ == 3);
     const bool showCaptureTab = (currentTabIndex_ == 4);
+    const bool showAboutTab = (currentTabIndex_ == 5);
 
     sampleBrowserRootLabel_.setVisible(showLibraryTab);
     sampleBrowserChooseRootButton_.setVisible(showLibraryTab);
@@ -3317,6 +3335,9 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     captureInputLevelSlider_.setVisible(showCaptureTab);
     captureInputVuMeter_.setVisible(showCaptureTab);
     captureStatusLabel_.setVisible(showCaptureTab);
+
+    aboutGitHubButton_.setVisible(showAboutTab);
+    aboutCoffeeButton_.setVisible(showAboutTab);
 }
 
 int AudiocityAudioProcessorEditor::getNumRows()
@@ -3804,6 +3825,118 @@ void AudiocityAudioProcessorEditor::paintPlayerPane(juce::Graphics& g, juce::Rec
     g.drawRoundedRectangle(padsPanel.toFloat().reduced(0.5f), 6.0f, 1.0f);
 }
 
+void AudiocityAudioProcessorEditor::paintAboutPane(juce::Graphics& g, juce::Rectangle<int> area) const
+{
+    area = area.reduced(14, 14);
+
+    const int iconSize = 96;
+    const int iconY = area.getY() + 20;
+    const int iconX = area.getCentreX() - iconSize / 2;
+
+    if (aboutIconImage_.isValid())
+        g.drawImage(aboutIconImage_,
+                    juce::Rectangle<float>(static_cast<float>(iconX), static_cast<float>(iconY),
+                                           static_cast<float>(iconSize), static_cast<float>(iconSize)),
+                    juce::RectanglePlacement::centred);
+
+    int textY = iconY + iconSize + 16;
+
+    // Title
+    g.setColour(juce::Colours::white);
+    g.setFont(juce::Font(juce::FontOptions(28.0f)).boldened());
+    g.drawText("Audiocity", area.getX(), textY, area.getWidth(), 34, juce::Justification::centredTop);
+    textY += 38;
+
+    // Subtitle
+    g.setColour(juce::Colour(0xffaab0cc));
+    g.setFont(juce::Font(juce::FontOptions(15.0f)));
+    g.drawText("A high-performance sampler instrument", area.getX(), textY, area.getWidth(), 22,
+               juce::Justification::centredTop);
+    textY += 28;
+
+    g.setFont(juce::Font(juce::FontOptions(13.0f)));
+    g.drawText("VST3 Plugin & Standalone Application", area.getX(), textY, area.getWidth(), 20,
+               juce::Justification::centredTop);
+    textY += 32;
+
+    // Version
+    g.setColour(juce::Colour(0xff61d9ff));
+    g.setFont(juce::Font(juce::FontOptions(13.0f)).boldened());
+    g.drawText("Version " + juce::String(ProjectInfo::versionString),
+               area.getX(), textY, area.getWidth(), 20,
+               juce::Justification::centredTop);
+    textY += 32;
+
+    // Key features
+    g.setColour(juce::Colour(0xffc0c8e0));
+    g.setFont(juce::Font(juce::FontOptions(13.5f)).boldened());
+    g.drawText("Key Features", area.getX(), textY, area.getWidth(), 20, juce::Justification::centredTop);
+    textY += 24;
+
+    g.setFont(juce::Font(juce::FontOptions(12.5f)));
+    g.setColour(juce::Colour(0xff9098b4));
+
+    const juce::StringArray features = {
+        "Multi-format sample loading (WAV, AIFF, REX/RX2)",
+        "Full amp & filter envelopes with LFO modulation",
+        "Built-in reverb, delay, autopan & saturation effects",
+        "Waveform generator with sine, saw, square, triangle & more",
+        "Live audio capture with cut, trim & normalize editing",
+        "Sample library browser with search & preview",
+        "Piano keyboard & drum pad player interfaces",
+        "Preset management with save, rename & delete",
+        "MIDI CC learn for all dial controls"
+    };
+
+    for (const auto& feature : features)
+    {
+           g.drawText("- " + feature,
+                   area.getX() + 60, textY, area.getWidth() - 120, 18,
+                   juce::Justification::centredLeft);
+        textY += 20;
+    }
+
+    textY += 16;
+
+    // Keyboard shortcuts
+    g.setColour(juce::Colour(0xffc0c8e0));
+    g.setFont(juce::Font(juce::FontOptions(13.5f)).boldened());
+    g.drawText("Keyboard Shortcuts", area.getX(), textY, area.getWidth(), 20, juce::Justification::centredTop);
+    textY += 24;
+
+    g.setFont(juce::Font(juce::FontOptions(12.5f)));
+    g.setColour(juce::Colour(0xff9098b4));
+
+    const juce::StringArray shortcuts = {
+           "1-6   Switch tabs (Sample, Library, Player, Generate, Capture, About)",
+        "Ctrl+O   Open sample file",
+        "Ctrl+S   Save state  |  Ctrl+Shift+S   Save preset",
+        "Ctrl+Z   Undo  |  Ctrl+Y   Redo",
+        "Space   Play/stop generated waveform preview (Generate tab)",
+        "Enter   Load selected sample (Library tab)",
+           "Esc   Panic - stop all audio and recording"
+    };
+
+    for (const auto& shortcut : shortcuts)
+    {
+        g.drawText(shortcut,
+                   area.getX() + 60, textY, area.getWidth() - 120, 18,
+                   juce::Justification::centredLeft);
+        textY += 20;
+    }
+
+    textY += 20;
+
+    // Copyright & License
+    g.setColour(juce::Colour(0xff7a80a0));
+    g.setFont(juce::Font(juce::FontOptions(12.0f)));
+        g.drawText("(C) 2026 Michael A. McCloskey",
+               area.getX(), textY, area.getWidth(), 18, juce::Justification::centredTop);
+    textY += 20;
+    g.drawText("Released under the MIT License",
+               area.getX(), textY, area.getWidth(), 18, juce::Justification::centredTop);
+}
+
 // ─── Layout ────────────────────────────────────────────────────────────────────
 
 void AudiocityAudioProcessorEditor::resized()
@@ -4011,6 +4144,25 @@ void AudiocityAudioProcessorEditor::resized()
 
         captureArea.removeFromTop(8);
         captureStatusLabel_.setBounds(captureArea.removeFromTop(22));
+        return;
+    }
+
+    if (currentTabIndex_ == 5)
+    {
+        auto aboutArea = area.reduced(8, 6);
+        // Buttons are positioned at the bottom-center of the pane
+        constexpr int kButtonW = 200;
+        constexpr int kButtonH = 36;
+        constexpr int kButtonGap = 16;
+
+        // Reserve space from bottom for buttons
+        auto buttonStrip = aboutArea.removeFromBottom(kButtonH);
+        aboutArea.removeFromBottom(8);
+
+        const int totalButtonsW = kButtonW * 2 + kButtonGap;
+        const int buttonX = buttonStrip.getX() + (buttonStrip.getWidth() - totalButtonsW) / 2;
+        aboutGitHubButton_.setBounds(buttonX, buttonStrip.getY(), kButtonW, kButtonH);
+        aboutCoffeeButton_.setBounds(buttonX + kButtonW + kButtonGap, buttonStrip.getY(), kButtonW, kButtonH);
         return;
     }
 
@@ -4397,6 +4549,12 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xff252538));
         g.fillRoundedRectangle(content.reduced(6).toFloat(), 8.0f);
     }
+    else if (currentTabIndex_ == 5)
+    {
+        g.setColour(juce::Colour(0xff252538));
+        g.fillRoundedRectangle(content.reduced(6).toFloat(), 8.0f);
+        paintAboutPane(g, content);
+    }
 
     if (!isHoveringValidDrop_)
         return;
@@ -4464,7 +4622,7 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
     if (!commandDown && !modifiers.isAltDown())
     {
         const auto character = key.getTextCharacter();
-        if (character >= '1' && character <= '5')
+        if (character >= '1' && character <= '6')
         {
             const auto tabIndex = static_cast<int>(character - '1');
             tabBar_.setCurrentTabIndex(tabIndex);

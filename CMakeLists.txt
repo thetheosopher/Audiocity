@@ -76,6 +76,9 @@ juce_add_plugin(Audiocity
 
 juce_generate_juce_header(Audiocity)
 
+juce_add_binary_data(AudiocityBinaryData SOURCES
+    assets/icons/audiocity_icon_128.png)
+
 add_library(audiocity_rex_sdk STATIC
     third_party/REXSDK_Win_1.9.2/REX.c)
 
@@ -129,6 +132,7 @@ target_compile_definitions(Audiocity
 
 target_link_libraries(Audiocity
     PRIVATE
+        AudiocityBinaryData
         audiocity_rex_sdk
         juce::juce_audio_utils
         juce::juce_data_structures

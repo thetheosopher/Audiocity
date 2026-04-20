@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <set>
 #include <utility>
 
 namespace
@@ -354,6 +355,47 @@ bool runLoadedSampleMetadataForGeneratedDataTest()
         && engine.getLoadedSampleChannels() == 2
         && std::abs(engine.getLoadedSampleRateHz() - 32000.0) < 0.01
         && engine.getLoadedSampleBitDepth() < 0;
+}
+
+bool runParameterIdSafetyTest()
+{
+    constexpr int kAaxSafeParamIdLength = 31;
+
+    const auto processorFile = fixtureFile("src/plugin/PluginProcessor.cpp");
+    if (!processorFile.existsAsFile())
+        return false;
+
+    juce::StringArray lines;
+    lines.addLines(processorFile.loadFileAsString());
+
+    std::set<juce::String> trimmedIds;
+    int paramIdCount = 0;
+
+    for (const auto& rawLine : lines)
+    {
+        const auto line = rawLine.trim();
+        if (!line.startsWith("constexpr auto kParam"))
+            continue;
+
+        const auto firstQuote = line.indexOfChar('"');
+        if (firstQuote < 0)
+            return false;
+
+        const auto secondQuote = line.indexOfChar(firstQuote + 1, '"');
+        if (secondQuote <= firstQuote)
+            return false;
+
+        const auto paramId = line.substring(firstQuote + 1, secondQuote);
+        ++paramIdCount;
+
+        if (paramId.length() > kAaxSafeParamIdLength)
+            return false;
+
+        if (!trimmedIds.insert(paramId.substring(0, kAaxSafeParamIdLength)).second)
+            return false;
+    }
+
+    return paramIdCount > 0;
 }
 
 bool runPlaybackModesTest()
@@ -3771,6 +3813,9 @@ int main()
 
     if (!runLoadedSampleMetadataForGeneratedDataTest())
         return 69;
+
+    if (!runParameterIdSafetyTest())
+        return 72;
 
     if (!runEditorSampleEditControlsTest())
         return 5;

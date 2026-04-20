@@ -255,6 +255,7 @@ private:
     juce::Component tabPlayerPage_;
     juce::Component tabGeneratePage_;
     juce::Component tabCapturePage_;
+    juce::Component tabAboutPage_;
     int currentTabIndex_ = 0;
 
     struct SampleListEntry
@@ -619,8 +620,8 @@ private:
     CcLearnDial filterLfoRateKeyDial_{ "LFO Rate %", -100, 200, 1, "%", 0 };
     CcLearnDial filterLfoAmtDial_{ "LFO Amt", -20000, 20000, 1, "Hz", 0 };
     CcLearnDial filterLfoAmtKeyDial_{ "LFO Key %", -100, 200, 1, "%", 0 };
-    CcLearnDial filterLfoStartPhaseDial_{ "LFO Phase", 0, 360, 1, "\u00b0", 0 };
-    CcLearnDial filterLfoStartRandDial_{ "LFO Rand", 0, 180, 1, "\u00b0", 0 };
+        CcLearnDial filterLfoStartPhaseDial_{ "LFO Phase", 0, 360, 1, "deg", 0 };
+        CcLearnDial filterLfoStartRandDial_{ "LFO Rand", 0, 180, 1, "deg", 0 };
     CcLearnDial filterLfoFadeInDial_{ "LFO Fade", 0, 5000, 1, "ms", 0 };
     juce::Label filterLfoShapeLabel_{ {}, "LFO Shape" };
     juce::ComboBox filterLfoShapeCombo_;
@@ -658,6 +659,11 @@ private:
 
     // ── Diagnostics ──
     juce::Label diagnosticsLabel_;
+
+    // ── About ──
+    juce::TextButton aboutGitHubButton_{ "GitHub" };
+    juce::TextButton aboutCoffeeButton_{ "Buy Me a Coffee" };
+    juce::Image aboutIconImage_;
 
     // ── CC routing ──
     struct DialMapping
@@ -708,6 +714,7 @@ private:
     void syncAutomatedControlsFromProcessor();
     void paintPlayerPane(juce::Graphics& g, juce::Rectangle<int> area) const;
     void paintSampleBrowserPane(juce::Graphics& g, juce::Rectangle<int> browserArea) const;
+    void paintAboutPane(juce::Graphics& g, juce::Rectangle<int> area) const;
     void updateTabVisibility();
     void updateGeneratePreviewButtonText();
     void refreshCaptureWaveform(bool force = false);
