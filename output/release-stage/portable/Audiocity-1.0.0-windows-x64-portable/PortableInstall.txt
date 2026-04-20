@@ -3,6 +3,10 @@ Audiocity Portable Install
 
 This portable package includes:
 
+- Audiocity.exe and its runtime files for standalone use
+- VST3\Audiocity.vst3 for manual plugin installation
+- LICENSE and this instruction file
+
 Portable usage
 
 1. Extract the zip to a folder you control.
@@ -13,9 +17,15 @@ Manual VST3 installation
 
 Copy the entire VST3\Audiocity.vst3 bundle to one of these locations:
 
+- Per-user: %LOCALAPPDATA%\Programs\Common\VST3
+- Machine-wide: %CommonProgramFiles%\VST3
+
 
 Do not copy only the files inside the bundle. Copy the full Audiocity.vst3 folder.
 
 Notes
+
+- The portable package does not register uninstall information or create shortcuts.
+- Use the Inno Setup installer if you want Add/Remove Programs integration and optional desktop/start menu shortcuts.
 
 
