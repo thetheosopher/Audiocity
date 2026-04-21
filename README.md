@@ -224,4 +224,4 @@ With `-IncludeOutput`, packaged `.exe` and `.zip` artifacts at the output root a
 
 ## License
 
-Audiocity is released under the MIT License. See `LICENSE`.
+Copyright (c) 2026 Michael A. McCloskey. Audiocity is released under the MIT License. See `LICENSE`.

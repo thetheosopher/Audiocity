@@ -19,6 +19,7 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher=Audiocity
+AppCopyright=Copyright (c) 2026 Michael A. McCloskey
 AppPublisherURL=https://github.com/thetheosopher/Audiocity
 AppSupportURL=https://github.com/thetheosopher/Audiocity
 AppUpdatesURL=https://github.com/thetheosopher/Audiocity

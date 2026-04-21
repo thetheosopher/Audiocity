@@ -3981,7 +3981,7 @@ void AudiocityAudioProcessorEditor::paintAboutPane(juce::Graphics& g, juce::Rect
 
     g.setColour(juce::Colour(0xffdfe6ff));
     g.setFont(juce::Font(juce::FontOptions(14.0f)).boldened());
-    g.drawFittedText("Copyright 2026 Michael A. McCloskey | Released under the MIT License",
+    g.drawFittedText("Copyright (c) 2026 Michael A. McCloskey | Released under the MIT License",
                      footerArea, juce::Justification::centred, 1, 0.82f);
 }
 
