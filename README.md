@@ -19,6 +19,61 @@ Audiocity is a Windows-focused sampler that runs from a single JUCE `AudioProces
 
 The engine and UI are developed against a spec-first architecture with explicit real-time safety rules, deterministic offline testing, and shared behavior across plugin and standalone targets.
 
+## Screenshots
+
+### Main Window
+
+<p align="center">
+	<img src="docs/MainWindow1.png" alt="Audiocity main window showing waveform editing and sample controls" width="32%" />
+	<img src="docs/MainWindow2.png" alt="Audiocity main window showing envelope and filter sections" width="32%" />
+	<img src="docs/MainWindow3.png" alt="Audiocity main window showing effects, output, and diagnostics sections" width="32%" />
+</p>
+
+- Screenshot 1: sample preset controls, waveform display, and sample information
+- Screenshot 2: amp/filter envelopes, modulation controls, and filter response views
+- Screenshot 3: effects, output metering, and diagnostics
+
+### Tab Gallery
+
+<table>
+	<tr>
+		<td valign="top" width="50%">
+			<strong>Librarian</strong><br />
+			<img src="docs/LibrarianWindow.PNG" alt="Audiocity Librarian tab with searchable sample browser and preview thumbnails" width="100%" /><br />
+			<ul>
+				<li>Search and sort the sample library</li>
+				<li>Preview files with metadata and waveform thumbnails</li>
+			</ul>
+		</td>
+		<td valign="top" width="50%">
+			<strong>Player</strong><br />
+			<img src="docs/PlayerTab.PNG" alt="Audiocity Player tab with piano keyboard and drum pad layout" width="100%" /><br />
+			<ul>
+				<li>Play samples from the piano keyboard</li>
+				<li>Trigger and assign the drum pad bank</li>
+			</ul>
+		</td>
+	</tr>
+	<tr>
+		<td valign="top" width="50%">
+			<strong>Generate</strong><br />
+			<img src="docs/GenerateTab.PNG" alt="Audiocity Generate tab with waveform sketching and synthesis controls" width="100%" /><br />
+			<ul>
+				<li>Create waveforms with sketching and one-click generators</li>
+				<li>Choose sample count, bit depth, and playback preview settings</li>
+			</ul>
+		</td>
+		<td valign="top" width="50%">
+			<strong>Capture</strong><br />
+			<img src="docs/CaptureTab.PNG" alt="Audiocity Capture tab with recording controls and input metering" width="100%" /><br />
+			<ul>
+				<li>Record live input with gain and channel controls</li>
+				<li>Trim, cut, normalize, and load the capture as a sample</li>
+			</ul>
+		</td>
+	</tr>
+</table>
+
 ## Current Feature Set
 
 - Sample playback with pitch shifting by resampling
@@ -30,6 +85,10 @@ The engine and UI are developed against a spec-first architecture with explicit 
 - REX import support through the bundled REX SDK runtime
 - Optional ASIO support when the Steinberg ASIO SDK is available at configure time
 - Offline render test coverage for deterministic engine behavior
+
+## Support
+
+Support the project: &#9749; [Buy Me A Coffee](https://buymeacoffee.com/theosopher)
 
 ## Build Requirements
 

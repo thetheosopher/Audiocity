@@ -1,6 +1,6 @@
 {
   "cmake.configureOnOpen": false,
-  "cmake.buildDirectory": "${workspaceFolder}/build",
+  "cmake.useCMakePresets": "always",
   "cmake.defaultConfigurePreset": "default",
   "cmake.defaultBuildPreset": "default",
   "cmake.defaultTestPreset": "default",

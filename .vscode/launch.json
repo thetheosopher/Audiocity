@@ -15,6 +15,18 @@
       "environment": []
     },
     {
+      "name": "Debug: Audiocity Standalone (Quick Launch)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/Audiocity_artefacts/Debug/Standalone/Audiocity.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false,
+      "visualizerFile": "",
+      "environment": []
+    },
+    {
       "name": "Release: Audiocity Standalone",
       "type": "cppvsdbg",
       "request": "launch",

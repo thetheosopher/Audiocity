@@ -3829,25 +3829,61 @@ void AudiocityAudioProcessorEditor::paintAboutPane(juce::Graphics& g, juce::Rect
 {
     area = area.reduced(14, 14);
 
-    const int iconSize = 96;
+    constexpr int kIconSize = 96;
+    constexpr int kButtonHeight = 36;
+    constexpr int kButtonBottomPadding = 22;
+    constexpr int kFooterHeight = 26;
+    constexpr int kFooterGap = 14;
+    constexpr int kTableGap = 16;
+    constexpr int kTableTitleHeight = 28;
+    constexpr int kTableHeaderHeight = 28;
+    constexpr int kFeatureLabelWidth = 108;
+    constexpr int kShortcutLabelWidth = 90;
+
+    struct AboutRow
+    {
+        const char* label;
+        const char* detail;
+    };
+
+    constexpr std::array<AboutRow, 9> featureRows{{
+        { "Loading", "Import WAV, AIFF, REX and RX2 samples" },
+        { "Modulation", "Shape pitch, amp and filter motion with LFOs" },
+        { "Effects", "Use reverb, delay, autopan and saturation" },
+        { "Synthesis", "Sketch sine, saw, square, triangle and pulse waves" },
+        { "Capture", "Record, cut, trim and normalize live audio" },
+        { "Browser", "Search and preview the sample library quickly" },
+        { "Performance", "Play from piano keys and assignable drum pads" },
+        { "Presets", "Save, rename and delete reusable patches" },
+        { "MIDI", "Map hardware controls with MIDI CC learn" }
+    }};
+
+    constexpr std::array<AboutRow, 7> shortcutRows{{
+        { "1-6", "Switch between the six top-level tabs" },
+        { "Ctrl+O", "Open a sample file" },
+        { "Ctrl+S", "Save the current state to disk" },
+        { "Ctrl+Shift+S", "Save the current preset" },
+        { "Ctrl+Z / Y", "Undo or redo parameter edits" },
+        { "Space", "Play or stop generated waveform preview" },
+        { "Enter / Esc", "Load selected browser row or panic audio" }
+    }};
+
     const int iconY = area.getY() + 20;
-    const int iconX = area.getCentreX() - iconSize / 2;
+    const int iconX = area.getCentreX() - kIconSize / 2;
 
     if (aboutIconImage_.isValid())
         g.drawImage(aboutIconImage_,
                     juce::Rectangle<float>(static_cast<float>(iconX), static_cast<float>(iconY),
-                                           static_cast<float>(iconSize), static_cast<float>(iconSize)),
+                                           static_cast<float>(kIconSize), static_cast<float>(kIconSize)),
                     juce::RectanglePlacement::centred);
 
-    int textY = iconY + iconSize + 16;
+    int textY = iconY + kIconSize + 16;
 
-    // Title
     g.setColour(juce::Colours::white);
     g.setFont(juce::Font(juce::FontOptions(28.0f)).boldened());
     g.drawText("Audiocity", area.getX(), textY, area.getWidth(), 34, juce::Justification::centredTop);
     textY += 38;
 
-    // Subtitle
     g.setColour(juce::Colour(0xffaab0cc));
     g.setFont(juce::Font(juce::FontOptions(15.0f)));
     g.drawText("A high-performance sampler instrument", area.getX(), textY, area.getWidth(), 22,
@@ -3865,76 +3901,88 @@ void AudiocityAudioProcessorEditor::paintAboutPane(juce::Graphics& g, juce::Rect
     g.drawText("Version " + juce::String(ProjectInfo::versionString),
                area.getX(), textY, area.getWidth(), 20,
                juce::Justification::centredTop);
-    textY += 32;
+    textY += 28;
 
-    // Key features
-    g.setColour(juce::Colour(0xffc0c8e0));
-    g.setFont(juce::Font(juce::FontOptions(13.5f)).boldened());
-    g.drawText("Key Features", area.getX(), textY, area.getWidth(), 20, juce::Justification::centredTop);
-    textY += 24;
+    auto lowerArea = area.withTrimmedTop(textY - area.getY());
+    lowerArea.removeFromBottom(kButtonHeight + kButtonBottomPadding);
+    auto footerArea = lowerArea.removeFromBottom(kFooterHeight);
+    lowerArea.removeFromBottom(kFooterGap);
 
-    g.setFont(juce::Font(juce::FontOptions(12.5f)));
-    g.setColour(juce::Colour(0xff9098b4));
+    auto drawTable = [&](juce::Rectangle<int> bounds,
+                         const juce::String& title,
+                         const juce::String& leftHeader,
+                         const juce::String& rightHeader,
+                         const int leftColumnWidth,
+                         const auto& rows)
+    {
+        g.setColour(juce::Colour(0xff2c2f45));
+        g.fillRoundedRectangle(bounds.toFloat(), 10.0f);
+        g.setColour(juce::Colour(0xff434a65));
+        g.drawRoundedRectangle(bounds.toFloat().reduced(0.5f), 10.0f, 1.0f);
 
-    const juce::StringArray features = {
-        "Multi-format sample loading (WAV, AIFF, REX/RX2)",
-        "Full amp & filter envelopes with LFO modulation",
-        "Built-in reverb, delay, autopan & saturation effects",
-        "Waveform generator with sine, saw, square, triangle & more",
-        "Live audio capture with cut, trim & normalize editing",
-        "Sample library browser with search & preview",
-        "Piano keyboard & drum pad player interfaces",
-        "Preset management with save, rename & delete",
-        "MIDI CC learn for all dial controls"
+        auto content = bounds.reduced(12);
+        auto titleArea = content.removeFromTop(kTableTitleHeight);
+        g.setColour(juce::Colour(0xffdfe6ff));
+        g.setFont(juce::Font(juce::FontOptions(14.5f)).boldened());
+        g.drawText(title, titleArea, juce::Justification::centred, false);
+
+        content.removeFromTop(6);
+        auto headerArea = content.removeFromTop(kTableHeaderHeight);
+        g.setColour(juce::Colour(0xff23273a));
+        g.fillRoundedRectangle(headerArea.toFloat(), 6.0f);
+
+        auto headerLeft = headerArea.removeFromLeft(leftColumnWidth);
+        headerArea.removeFromLeft(8);
+        g.setColour(juce::Colour(0xff61d9ff));
+        g.setFont(juce::Font(juce::FontOptions(11.5f)).boldened());
+        g.drawText(leftHeader, headerLeft.reduced(8, 0), juce::Justification::centredLeft, false);
+        g.drawText(rightHeader, headerArea.reduced(8, 0), juce::Justification::centredLeft, false);
+
+        auto rowsArea = content;
+        const int dividerX = rowsArea.getX() + leftColumnWidth;
+        g.setColour(juce::Colour(0x30dfe6ff));
+        g.drawLine(static_cast<float>(dividerX), static_cast<float>(headerLeft.getY()),
+                   static_cast<float>(dividerX), static_cast<float>(rowsArea.getBottom()), 1.0f);
+
+        const auto rowCount = static_cast<int>(rows.size());
+        const int rowHeight = juce::jlimit(28, 40, rowsArea.getHeight() / juce::jmax(1, rowCount));
+
+        for (int rowIndex = 0; rowIndex < rowCount; ++rowIndex)
+        {
+            auto rowArea = rowsArea.removeFromTop(rowHeight);
+            if (rowIndex > 0)
+            {
+                g.setColour(juce::Colour(0x203f4762));
+                g.drawHorizontalLine(rowArea.getY(), static_cast<float>(rowArea.getX()),
+                                     static_cast<float>(rowArea.getRight()));
+            }
+
+            auto rowLeft = rowArea.removeFromLeft(leftColumnWidth).reduced(8, 4);
+            auto rowRight = rowArea.reduced(8, 4);
+
+            g.setColour(juce::Colour(0xfff4f6ff));
+            g.setFont(juce::Font(juce::FontOptions(11.5f)).boldened());
+            g.drawFittedText(rows[static_cast<std::size_t>(rowIndex)].label, rowLeft,
+                             juce::Justification::centredLeft, 1, 0.9f);
+
+            g.setColour(juce::Colour(0xff9ba5c3));
+            g.setFont(juce::Font(juce::FontOptions(11.5f)));
+            g.drawFittedText(rows[static_cast<std::size_t>(rowIndex)].detail, rowRight,
+                             juce::Justification::centredLeft, 2, 0.82f);
+        }
     };
 
-    for (const auto& feature : features)
-    {
-           g.drawText("- " + feature,
-                   area.getX() + 60, textY, area.getWidth() - 120, 18,
-                   juce::Justification::centredLeft);
-        textY += 20;
-    }
+    auto featuresArea = lowerArea.removeFromLeft((lowerArea.getWidth() - kTableGap) / 2);
+    lowerArea.removeFromLeft(kTableGap);
+    auto shortcutsArea = lowerArea;
 
-    textY += 16;
+    drawTable(featuresArea, "Key Features", "Area", "Details", kFeatureLabelWidth, featureRows);
+    drawTable(shortcutsArea, "Keyboard Shortcuts", "Keys", "Action", kShortcutLabelWidth, shortcutRows);
 
-    // Keyboard shortcuts
-    g.setColour(juce::Colour(0xffc0c8e0));
-    g.setFont(juce::Font(juce::FontOptions(13.5f)).boldened());
-    g.drawText("Keyboard Shortcuts", area.getX(), textY, area.getWidth(), 20, juce::Justification::centredTop);
-    textY += 24;
-
-    g.setFont(juce::Font(juce::FontOptions(12.5f)));
-    g.setColour(juce::Colour(0xff9098b4));
-
-    const juce::StringArray shortcuts = {
-           "1-6   Switch tabs (Sample, Library, Player, Generate, Capture, About)",
-        "Ctrl+O   Open sample file",
-        "Ctrl+S   Save state  |  Ctrl+Shift+S   Save preset",
-        "Ctrl+Z   Undo  |  Ctrl+Y   Redo",
-        "Space   Play/stop generated waveform preview (Generate tab)",
-        "Enter   Load selected sample (Library tab)",
-           "Esc   Panic - stop all audio and recording"
-    };
-
-    for (const auto& shortcut : shortcuts)
-    {
-        g.drawText(shortcut,
-                   area.getX() + 60, textY, area.getWidth() - 120, 18,
-                   juce::Justification::centredLeft);
-        textY += 20;
-    }
-
-    textY += 20;
-
-    // Copyright & License
-    g.setColour(juce::Colour(0xff7a80a0));
-    g.setFont(juce::Font(juce::FontOptions(12.0f)));
-        g.drawText("(C) 2026 Michael A. McCloskey",
-               area.getX(), textY, area.getWidth(), 18, juce::Justification::centredTop);
-    textY += 20;
-    g.drawText("Released under the MIT License",
-               area.getX(), textY, area.getWidth(), 18, juce::Justification::centredTop);
+    g.setColour(juce::Colour(0xffdfe6ff));
+    g.setFont(juce::Font(juce::FontOptions(14.0f)).boldened());
+    g.drawFittedText("Copyright 2026 Michael A. McCloskey | Released under the MIT License",
+                     footerArea, juce::Justification::centred, 1, 0.82f);
 }
 
 // ─── Layout ────────────────────────────────────────────────────────────────────
@@ -4150,14 +4198,13 @@ void AudiocityAudioProcessorEditor::resized()
     if (currentTabIndex_ == 5)
     {
         auto aboutArea = area.reduced(8, 6);
-        // Buttons are positioned at the bottom-center of the pane
         constexpr int kButtonW = 200;
         constexpr int kButtonH = 36;
         constexpr int kButtonGap = 16;
+        constexpr int kButtonBottomPadding = 22;
 
-        // Reserve space from bottom for buttons
+        aboutArea.removeFromBottom(kButtonBottomPadding);
         auto buttonStrip = aboutArea.removeFromBottom(kButtonH);
-        aboutArea.removeFromBottom(8);
 
         const int totalButtonsW = kButtonW * 2 + kButtonGap;
         const int buttonX = buttonStrip.getX() + (buttonStrip.getWidth() - totalButtonsW) / 2;
