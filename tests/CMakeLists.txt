@@ -39,8 +39,17 @@ endif ()
 
 set(AUDIOCITY_OFFLINE_TEST_EXE "$<TARGET_FILE:audiocity_offline_tests>")
 
-add_test(NAME audiocity_offline_tests COMMAND "${AUDIOCITY_OFFLINE_TEST_EXE}")
-add_test(NAME c:/projects/other/audiocity COMMAND "${AUDIOCITY_OFFLINE_TEST_EXE}")
+add_test(
+    NAME audiocity_offline_tests
+    COMMAND "${CMAKE_COMMAND}"
+        -DAUDIOCITY_TEST_EXE=${AUDIOCITY_OFFLINE_TEST_EXE}
+        -P "${CMAKE_CURRENT_LIST_DIR}/RunOfflineTestExecutable.cmake")
+
+add_test(
+    NAME c:/projects/other/audiocity
+    COMMAND "${CMAKE_COMMAND}"
+        -DAUDIOCITY_TEST_EXE=${AUDIOCITY_OFFLINE_TEST_EXE}
+        -P "${CMAKE_CURRENT_LIST_DIR}/RunOfflineTestExecutable.cmake")
 
 add_test(
     NAME audiocity_packaging_config

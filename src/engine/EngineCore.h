@@ -7,7 +7,9 @@
 
 #include <atomic>
 #include <memory>
+#include <vector>
 
+#include "ProgramSnapshot.h"
 #include "VoicePool.h"
 
 namespace audiocity::engine
@@ -147,6 +149,8 @@ public:
     {
         bool active = false;
         int sampleIndex = -1;
+        int zoneIndex = -1;
+        int sampleAssetIndex = -1;
     };
 
     using VoicePlaybackStates = std::array<VoicePlaybackState, VoicePool::maxVoices>;
@@ -154,6 +158,11 @@ public:
     bool loadSampleFromFile(const juce::File& file);
     [[nodiscard]] bool isRexRuntimeAvailable() const noexcept;
     void setSampleData(const juce::AudioBuffer<float>& sampleData, double sampleRate, int rootNote) noexcept;
+    void setProgram(const Program& program);
+    void setProgram(const Program& program, const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset);
+    void clearProgram() noexcept;
+    [[nodiscard]] bool hasProgram() const noexcept;
+    [[nodiscard]] int getProgramZoneCount() const noexcept;
     void setPreloadSamples(int preloadSamples) noexcept;
     [[nodiscard]] int getPreloadSamples() const noexcept { return preloadSamples_; }
     [[nodiscard]] int getLoadedPreloadSamples() const noexcept;
@@ -260,6 +269,7 @@ public:
 
 private:
     struct SampleSegments;
+    struct ProgramAudioSnapshot;
 
     struct VoiceState
     {
@@ -275,6 +285,13 @@ private:
         int filterLfoFadeSamplesRemaining = 0;
         float glideTargetIncrement = 1.0f;
         int glideSamplesRemaining = 0;
+        int rootMidiNote = 60;
+        int zoneIndex = -1;
+        int sampleAssetIndex = -1;
+        float zoneGain = 1.0f;
+        float zoneTuneCents = 0.0f;
+        int sampleStart = 0;
+        int sampleEndExclusive = -1;
         juce::ADSR ampEnvelope;
         juce::ADSR filterEnvelope;
     };
@@ -297,15 +314,44 @@ private:
     bool enqueuePendingEvent(EventType type, int noteNumber, float velocity, int sampleOffsetInBlock) noexcept;
 
     void generateFallbackSample() noexcept;
-    void flushPendingEventsAtOffset(int offset) noexcept;
-    void startVoice(int voiceIndex, int noteNumber, float velocity) noexcept;
-    void retargetVoiceLegato(int voiceIndex, int noteNumber, float velocity) noexcept;
+    void sortPendingEventsByOffset() noexcept;
+    void flushPendingEventsAtOffset(int offset,
+                                    const ProgramSnapshot* programSnapshot,
+                                    const ProgramAudioSnapshot* programAudioSnapshot) noexcept;
+    void startVoice(int voiceIndex,
+                    int noteNumber,
+                    float velocity,
+                    int rootMidiNote,
+                    int zoneIndex,
+                    int sampleAssetIndex,
+                    float zoneGain,
+                    float zoneTuneCents,
+                    int sampleStart,
+                    int sampleEndExclusive,
+                    double sourceSampleRateHz) noexcept;
+    void retargetVoiceLegato(int voiceIndex,
+                             int noteNumber,
+                             float velocity,
+                             int rootMidiNote,
+                             int zoneIndex,
+                             int sampleAssetIndex,
+                             float zoneGain,
+                             float zoneTuneCents,
+                             int sampleStart,
+                             int sampleEndExclusive,
+                             double sourceSampleRateHz) noexcept;
     void stopAllVoicesImmediate() noexcept;
     void stopVoicesForNoteImmediate(int noteNumber) noexcept;
     void releaseVoicesForNote(int noteNumber) noexcept;
     void applyEnvelopeParamsToVoices() noexcept;
     void applyFilterParamsToVoices() noexcept;
     [[nodiscard]] float computeSampleIncrementForNote(int noteNumber) const noexcept;
+    [[nodiscard]] float computeSampleIncrementForNote(int noteNumber, int rootMidiNote) const noexcept;
+    [[nodiscard]] float computeSampleIncrementForNote(int noteNumber, int rootMidiNote, double sourceSampleRateHz) const noexcept;
+    [[nodiscard]] float computeSampleIncrementForNote(int noteNumber,
+                                                       int rootMidiNote,
+                                                       double sourceSampleRateHz,
+                                                       float zoneTuneCents) const noexcept;
     void rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData) noexcept;
     [[nodiscard]] std::shared_ptr<const SampleSegments> getSampleSegmentsSnapshot() const noexcept;
     [[nodiscard]] static std::shared_ptr<const SampleSegments> buildSampleSegments(const juce::AudioBuffer<float>& monoSampleData,
@@ -313,15 +359,30 @@ private:
     [[nodiscard]] int getTotalSampleLength(const SampleSegments& segments) const noexcept;
     [[nodiscard]] int getTotalSampleLength() const noexcept;
     [[nodiscard]] int getEffectivePlaybackLength(const SampleSegments& segments) const noexcept;
+    [[nodiscard]] int getEffectivePlaybackLength(const SampleSegments& segments,
+                                                 int sampleStart,
+                                                 int sampleEndExclusive) const noexcept;
     [[nodiscard]] int getEffectivePlaybackLength() const noexcept;
     [[nodiscard]] int mapPlaybackIndexToSampleIndex(const SampleSegments& segments, int playbackIndex) const noexcept;
+    [[nodiscard]] int mapPlaybackIndexToSampleIndex(const SampleSegments& segments,
+                                                    int playbackIndex,
+                                                    int sampleStart,
+                                                    int sampleEndExclusive) const noexcept;
     [[nodiscard]] float computeEditGain(float playbackPosition, int playbackLength) const noexcept;
     [[nodiscard]] float readSampleAt(const SampleSegments& segments, int index) const noexcept;
     [[nodiscard]] float readSampleAt(int index) const noexcept;
 
     [[nodiscard]] float readSampleLinear(const SampleSegments& segments, float position) const noexcept;
+    [[nodiscard]] float readSampleLinear(const SampleSegments& segments,
+                                         float position,
+                                         int sampleStart,
+                                         int sampleEndExclusive) const noexcept;
     [[nodiscard]] float readSampleLinear(float position) const noexcept;
     [[nodiscard]] float readSampleCubic(const SampleSegments& segments, float position) const noexcept;
+    [[nodiscard]] float readSampleCubic(const SampleSegments& segments,
+                                        float position,
+                                        int sampleStart,
+                                        int sampleEndExclusive) const noexcept;
     [[nodiscard]] float computeFilterSample(float inputSample,
                                             float envValue,
                                             float lfoValue,
@@ -340,6 +401,8 @@ private:
     std::array<PendingEvent, 1024> pendingEvents_{};
     int pendingEventCount_ = 0;
 
+    std::atomic<std::shared_ptr<const ProgramSnapshot>> programSnapshot_{};
+    std::atomic<std::shared_ptr<const ProgramAudioSnapshot>> programAudioSnapshot_{};
     std::atomic<std::shared_ptr<const SampleSegments>> sampleSegments_{};
     juce::AudioBuffer<float> displaySampleData_;
     juce::String loadedSampleLoopFormatBadge_;
