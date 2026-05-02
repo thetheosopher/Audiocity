@@ -309,6 +309,14 @@ private:
         juce::ADSR filterEnvelope;
     };
 
+    struct GlobalModulationFrame
+    {
+        float combinedPitchRatio = 1.0f;
+        float filterLfoValue = 0.0f;
+        float ampLfoGain = 1.0f;
+        bool filterLfoActive = false;
+    };
+
     enum class EventType
     {
         noteOn,
@@ -469,6 +477,17 @@ private:
                                             float velocity,
                                             VoiceState& voice,
                                             int filterChannel) const noexcept;
+    [[nodiscard]] float computeFilterCutoffHz(float envValue,
+                                              float lfoValue,
+                                              int noteNumber,
+                                              float velocity,
+                                              const VoiceState& voice) const noexcept;
+    [[nodiscard]] float computeFilterResonanceQ() const noexcept;
+    [[nodiscard]] GlobalModulationFrame advanceGlobalModulationFrame() noexcept;
+    [[nodiscard]] float computeVoiceFilterLfoValue(int voiceIndex,
+                                                   VoiceState& voice,
+                                                   const GlobalModulationFrame& frame) noexcept;
+    void advanceVoiceGlide(VoiceState& voice) noexcept;
     void processDelay(float** outputs, int numChannels, int numSamples) noexcept;
     void processDcFilter(float** outputs, int numChannels, int numSamples) noexcept;
     [[nodiscard]] float processSaturationSample(float sample) const noexcept;

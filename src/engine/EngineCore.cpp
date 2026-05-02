@@ -1315,45 +1315,7 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     for (int sampleIndex = 0; sampleIndex < numSamples; ++sampleIndex)
     {
         flushPendingEventsAtOffset(sampleIndex, program, programAudio);
-        const auto pitchBendRatio = std::pow(2.0f, currentPitchBendSemitones_ / 12.0f);
-
-        float pitchLfoRatio = 1.0f;
-        const bool hasActivePitchLfo = pitchLfoSettings_.rateHz > 0.0f && pitchLfoSettings_.depthCents > 0.0001f;
-        if (hasActivePitchLfo)
-        {
-            const auto pitchLfoWave = computeLfoWave(FilterSettings::LfoShape::sine, globalPitchLfoPhase_);
-            const auto pitchLfoSemitones = (pitchLfoSettings_.depthCents / 100.0f) * pitchLfoWave;
-            pitchLfoRatio = std::pow(2.0f, pitchLfoSemitones / 12.0f);
-
-            globalPitchLfoPhase_ += pitchLfoSettings_.rateHz / static_cast<float>(sampleRate_);
-            if (globalPitchLfoPhase_ >= 1.0f)
-                globalPitchLfoPhase_ -= std::floor(globalPitchLfoPhase_);
-        }
-
-        const auto combinedPitchRatio = pitchBendRatio * pitchLfoRatio;
-
-        float globalLfoValue = 0.0f;
-        const bool hasActiveLfo = filterSettings_.lfoRateHz > 0.0f && std::abs(filterSettings_.lfoAmountHz) > 0.0001f;
-        if (hasActiveLfo)
-        {
-            globalLfoValue = computeLfoWave(filterSettings_.lfoShape, globalFilterLfoPhase_);
-            globalFilterLfoPhase_ += filterSettings_.lfoRateHz / static_cast<float>(sampleRate_);
-            if (globalFilterLfoPhase_ >= 1.0f)
-                globalFilterLfoPhase_ -= std::floor(globalFilterLfoPhase_);
-        }
-
-        float ampLfoGain = 1.0f;
-        const bool hasActiveAmpLfo = ampLfoSettings_.rateHz > 0.0f && ampLfoSettings_.depth > 0.0001f;
-        if (hasActiveAmpLfo)
-        {
-            const auto ampLfoWave = computeLfoWave(ampLfoSettings_.shape, globalAmpLfoPhase_);
-            const auto ampLfoUnipolar = 0.5f * (ampLfoWave + 1.0f);
-            ampLfoGain = (1.0f - ampLfoSettings_.depth) + (ampLfoSettings_.depth * ampLfoUnipolar);
-
-            globalAmpLfoPhase_ += ampLfoSettings_.rateHz / static_cast<float>(sampleRate_);
-            if (globalAmpLfoPhase_ >= 1.0f)
-                globalAmpLfoPhase_ -= std::floor(globalAmpLfoPhase_);
-        }
+        const auto modulationFrame = advanceGlobalModulationFrame();
 
         float mixedLeft = 0.0f;
         float mixedRight = 0.0f;
@@ -1477,7 +1439,7 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
             }
 
             const float mappedVelocity = mapVelocity(voice.velocity);
-            const float ampLevel = voice.ampEnvelope.getNextSample() * mappedVelocity * ampLfoGain;
+            const float ampLevel = voice.ampEnvelope.getNextSample() * mappedVelocity * modulationFrame.ampLfoGain;
 
             if (!voice.ampEnvelope.isActive())
             {
@@ -1487,50 +1449,7 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
                 continue;
             }
 
-            float lfoValue = 0.0f;
-            if (hasActiveLfo)
-            {
-                if (filterSettings_.lfoRetrigger)
-                {
-                    lfoValue = computeLfoWave(filterSettings_.lfoShape, voice.filterLfoPhase);
-                    auto lfoRateKeyTrackRatio = 1.0f;
-                    if (!filterSettings_.lfoTempoSync || filterSettings_.lfoRateKeytrackInTempoSync)
-                    {
-                        const auto noteSemitoneOffset = static_cast<float>(voicePool_.noteAt(voiceIndex) - voice.rootMidiNote);
-                        if (filterSettings_.lfoKeytrackLinear)
-                        {
-                            lfoRateKeyTrackRatio = juce::jmax(0.0f,
-                                1.0f + (noteSemitoneOffset / 12.0f) * filterSettings_.lfoRateKeyTracking);
-                        }
-                        else
-                        {
-                            lfoRateKeyTrackRatio = std::pow(2.0f,
-                                (noteSemitoneOffset / 12.0f) * filterSettings_.lfoRateKeyTracking);
-                        }
-                    }
-                    const auto trackedLfoRateHz = juce::jlimit(0.0f, 40.0f,
-                        filterSettings_.lfoRateHz * lfoRateKeyTrackRatio);
-                    voice.filterLfoPhase += trackedLfoRateHz / static_cast<float>(sampleRate_);
-                    if (voice.filterLfoPhase >= 1.0f)
-                        voice.filterLfoPhase -= std::floor(voice.filterLfoPhase);
-                }
-                else
-                {
-                    lfoValue = globalLfoValue;
-                }
-
-                if (filterSettings_.lfoUnipolar)
-                    lfoValue = 0.5f * (lfoValue + 1.0f);
-
-                if (voice.filterLfoFadeSamplesTotal > 0 && voice.filterLfoFadeSamplesRemaining > 0)
-                {
-                    const auto remaining = static_cast<float>(voice.filterLfoFadeSamplesRemaining);
-                    const auto total = static_cast<float>(voice.filterLfoFadeSamplesTotal);
-                    const auto depthScale = juce::jlimit(0.0f, 1.0f, 1.0f - (remaining / total));
-                    lfoValue *= depthScale;
-                    --voice.filterLfoFadeSamplesRemaining;
-                }
-            }
+            const auto lfoValue = computeVoiceFilterLfoValue(voiceIndex, voice, modulationFrame);
 
             auto rawLeft = readSampleLinear(
                 *voiceSegments, voice.samplePosition, voice.sampleStart, voice.sampleEndExclusive, 0);
@@ -1583,15 +1502,9 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
             voice.lastAmpLevel = ampLevel;
             voicePool_.setCurrentLevel(voiceIndex, ampLevel);
 
-            if (voice.glideSamplesRemaining > 0)
-            {
-                const auto glideStep = (voice.glideTargetIncrement - voice.sampleIncrement)
-                    / static_cast<float>(voice.glideSamplesRemaining);
-                voice.sampleIncrement += glideStep;
-                --voice.glideSamplesRemaining;
-            }
+            advanceVoiceGlide(voice);
 
-            voice.samplePosition += voice.sampleIncrement * combinedPitchRatio;
+            voice.samplePosition += voice.sampleIncrement * modulationFrame.combinedPitchRatio;
         }
 
         mixedLeft = processSaturationSample(mixedLeft);
@@ -1682,6 +1595,113 @@ void EngineCore::render(juce::AudioBuffer<float>& audioBuffer, const juce::MidiB
         outputPointers[static_cast<std::size_t>(channel)] = audioBuffer.getWritePointer(channel);
 
     render(outputPointers.data(), clampedChannels, numSamples);
+}
+
+EngineCore::GlobalModulationFrame EngineCore::advanceGlobalModulationFrame() noexcept
+{
+    GlobalModulationFrame frame;
+
+    const auto pitchBendRatio = std::pow(2.0f, currentPitchBendSemitones_ / 12.0f);
+    auto pitchLfoRatio = 1.0f;
+    const auto hasActivePitchLfo = pitchLfoSettings_.rateHz > 0.0f && pitchLfoSettings_.depthCents > 0.0001f;
+    if (hasActivePitchLfo)
+    {
+        const auto pitchLfoWave = computeLfoWave(FilterSettings::LfoShape::sine, globalPitchLfoPhase_);
+        const auto pitchLfoSemitones = (pitchLfoSettings_.depthCents / 100.0f) * pitchLfoWave;
+        pitchLfoRatio = std::pow(2.0f, pitchLfoSemitones / 12.0f);
+
+        globalPitchLfoPhase_ += pitchLfoSettings_.rateHz / static_cast<float>(sampleRate_);
+        if (globalPitchLfoPhase_ >= 1.0f)
+            globalPitchLfoPhase_ -= std::floor(globalPitchLfoPhase_);
+    }
+    frame.combinedPitchRatio = pitchBendRatio * pitchLfoRatio;
+
+    frame.filterLfoActive = filterSettings_.lfoRateHz > 0.0f && std::abs(filterSettings_.lfoAmountHz) > 0.0001f;
+    if (frame.filterLfoActive)
+    {
+        frame.filterLfoValue = computeLfoWave(filterSettings_.lfoShape, globalFilterLfoPhase_);
+        globalFilterLfoPhase_ += filterSettings_.lfoRateHz / static_cast<float>(sampleRate_);
+        if (globalFilterLfoPhase_ >= 1.0f)
+            globalFilterLfoPhase_ -= std::floor(globalFilterLfoPhase_);
+    }
+
+    const auto hasActiveAmpLfo = ampLfoSettings_.rateHz > 0.0f && ampLfoSettings_.depth > 0.0001f;
+    if (hasActiveAmpLfo)
+    {
+        const auto ampLfoWave = computeLfoWave(ampLfoSettings_.shape, globalAmpLfoPhase_);
+        const auto ampLfoUnipolar = 0.5f * (ampLfoWave + 1.0f);
+        frame.ampLfoGain = (1.0f - ampLfoSettings_.depth) + (ampLfoSettings_.depth * ampLfoUnipolar);
+
+        globalAmpLfoPhase_ += ampLfoSettings_.rateHz / static_cast<float>(sampleRate_);
+        if (globalAmpLfoPhase_ >= 1.0f)
+            globalAmpLfoPhase_ -= std::floor(globalAmpLfoPhase_);
+    }
+
+    return frame;
+}
+
+float EngineCore::computeVoiceFilterLfoValue(const int voiceIndex,
+                                             VoiceState& voice,
+                                             const GlobalModulationFrame& frame) noexcept
+{
+    if (!frame.filterLfoActive)
+        return 0.0f;
+
+    auto lfoValue = 0.0f;
+    if (filterSettings_.lfoRetrigger)
+    {
+        lfoValue = computeLfoWave(filterSettings_.lfoShape, voice.filterLfoPhase);
+        auto lfoRateKeyTrackRatio = 1.0f;
+        if (!filterSettings_.lfoTempoSync || filterSettings_.lfoRateKeytrackInTempoSync)
+        {
+            const auto noteSemitoneOffset = static_cast<float>(voicePool_.noteAt(voiceIndex) - voice.rootMidiNote);
+            if (filterSettings_.lfoKeytrackLinear)
+            {
+                lfoRateKeyTrackRatio = juce::jmax(0.0f,
+                    1.0f + (noteSemitoneOffset / 12.0f) * filterSettings_.lfoRateKeyTracking);
+            }
+            else
+            {
+                lfoRateKeyTrackRatio = std::pow(2.0f,
+                    (noteSemitoneOffset / 12.0f) * filterSettings_.lfoRateKeyTracking);
+            }
+        }
+
+        const auto trackedLfoRateHz = juce::jlimit(0.0f, 40.0f,
+            filterSettings_.lfoRateHz * lfoRateKeyTrackRatio);
+        voice.filterLfoPhase += trackedLfoRateHz / static_cast<float>(sampleRate_);
+        if (voice.filterLfoPhase >= 1.0f)
+            voice.filterLfoPhase -= std::floor(voice.filterLfoPhase);
+    }
+    else
+    {
+        lfoValue = frame.filterLfoValue;
+    }
+
+    if (filterSettings_.lfoUnipolar)
+        lfoValue = 0.5f * (lfoValue + 1.0f);
+
+    if (voice.filterLfoFadeSamplesTotal > 0 && voice.filterLfoFadeSamplesRemaining > 0)
+    {
+        const auto remaining = static_cast<float>(voice.filterLfoFadeSamplesRemaining);
+        const auto total = static_cast<float>(voice.filterLfoFadeSamplesTotal);
+        const auto depthScale = juce::jlimit(0.0f, 1.0f, 1.0f - (remaining / total));
+        lfoValue *= depthScale;
+        --voice.filterLfoFadeSamplesRemaining;
+    }
+
+    return lfoValue;
+}
+
+void EngineCore::advanceVoiceGlide(VoiceState& voice) noexcept
+{
+    if (voice.glideSamplesRemaining <= 0)
+        return;
+
+    const auto glideStep = (voice.glideTargetIncrement - voice.sampleIncrement)
+        / static_cast<float>(voice.glideSamplesRemaining);
+    voice.sampleIncrement += glideStep;
+    --voice.glideSamplesRemaining;
 }
 
 void EngineCore::panic() noexcept
@@ -3309,21 +3329,8 @@ float EngineCore::computeFilterSample(const float inputSample,
                                       const int filterChannel) const noexcept
 {
     const auto clampedFilterChannel = juce::jlimit(0, static_cast<int>(voice.filterA.size()) - 1, filterChannel);
-    const auto semitoneOffset = static_cast<float>(noteNumber - voice.rootMidiNote);
-    const auto lfoAmountKeyTrackRatio = filterSettings_.lfoKeytrackLinear
-        ? juce::jmax(0.0f, 1.0f + (semitoneOffset / 12.0f) * filterSettings_.lfoAmountKeyTracking)
-        : std::pow(2.0f, (semitoneOffset / 12.0f) * filterSettings_.lfoAmountKeyTracking);
-
-    auto cutoff = filterSettings_.baseCutoffHz
-        + envValue * filterSettings_.envAmountHz
-        + velocity * filterSettings_.velocityAmountHz
-        + lfoValue * (filterSettings_.lfoAmountHz * lfoAmountKeyTrackRatio);
-
-    const auto keyTrackRatio = std::pow(2.0f, (semitoneOffset / 12.0f) * filterSettings_.keyTracking);
-    cutoff *= keyTrackRatio;
-    cutoff = juce::jlimit(20.0f, static_cast<float>(sampleRate_ * 0.45), cutoff);
-
-    const auto q = juce::jlimit(0.5f, 20.0f, 0.5f + filterSettings_.resonance * 19.5f);
+    const auto cutoff = computeFilterCutoffHz(envValue, lfoValue, noteNumber, velocity, voice);
+    const auto q = computeFilterResonanceQ();
     auto& filterA = voice.filterA[static_cast<std::size_t>(clampedFilterChannel)];
     auto& filterB = voice.filterB[static_cast<std::size_t>(clampedFilterChannel)];
     filterA.setCutoffFrequency(cutoff);
@@ -3343,6 +3350,33 @@ float EngineCore::computeFilterSample(const float inputSample,
     }
 
     return out;
+}
+
+float EngineCore::computeFilterCutoffHz(const float envValue,
+                                        const float lfoValue,
+                                        const int noteNumber,
+                                        const float velocity,
+                                        const VoiceState& voice) const noexcept
+{
+    const auto semitoneOffset = static_cast<float>(noteNumber - voice.rootMidiNote);
+    const auto lfoAmountKeyTrackRatio = filterSettings_.lfoKeytrackLinear
+        ? juce::jmax(0.0f, 1.0f + (semitoneOffset / 12.0f) * filterSettings_.lfoAmountKeyTracking)
+        : std::pow(2.0f, (semitoneOffset / 12.0f) * filterSettings_.lfoAmountKeyTracking);
+
+    auto cutoff = filterSettings_.baseCutoffHz
+        + envValue * filterSettings_.envAmountHz
+        + velocity * filterSettings_.velocityAmountHz
+        + lfoValue * (filterSettings_.lfoAmountHz * lfoAmountKeyTrackRatio);
+
+    const auto keyTrackRatio = std::pow(2.0f, (semitoneOffset / 12.0f) * filterSettings_.keyTracking);
+    cutoff *= keyTrackRatio;
+
+    return juce::jlimit(20.0f, static_cast<float>(sampleRate_ * 0.45), cutoff);
+}
+
+float EngineCore::computeFilterResonanceQ() const noexcept
+{
+    return juce::jlimit(0.5f, 20.0f, 0.5f + filterSettings_.resonance * 19.5f);
 }
 
 void EngineCore::processDelay(float** outputs, const int numChannels, const int numSamples) noexcept
