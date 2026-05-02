@@ -69,11 +69,13 @@ public:
     [[nodiscard]] juce::String getImportedProgramPath() const;
     [[nodiscard]] juce::String getImportedProgramName() const;
     [[nodiscard]] juce::String getImportedProgramMapSummary() const;
+    [[nodiscard]] juce::StringArray getImportedProgramSampleAssetNames() const;
     [[nodiscard]] std::vector<audiocity::plugin::ProgramZoneListRow> getImportedProgramZoneRows() const;
     [[nodiscard]] juce::ValueTree createImportedProgramMappingState() const;
     bool applyImportedProgramMappingState(const juce::ValueTree& mappingState);
     bool updateImportedProgramZoneMapping(const audiocity::plugin::ProgramZoneEdit& edit);
     bool updateImportedProgramZoneMappings(const std::vector<audiocity::plugin::ProgramZoneEdit>& edits);
+    [[nodiscard]] int createImportedProgramZoneForSampleAsset(int sampleAssetIndex, int seedZoneIndex = -1);
     [[nodiscard]] int createImportedProgramZone(int seedZoneIndex = -1);
     [[nodiscard]] int duplicateImportedProgramZone(int zoneIndex);
     bool deleteImportedProgramZone(int zoneIndex);

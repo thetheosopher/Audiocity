@@ -313,6 +313,7 @@ std::vector<ProgramZoneListRow> buildProgramZoneListRows(const audiocity::engine
 
         ProgramZoneListRow row;
         row.zoneIndex = static_cast<int>(zoneIndex);
+        row.sampleAssetIndex = zone.sampleAssetIndex;
         row.sampleLength = resolveSampleLength(program, zone);
         row.keyLow = zone.keyRange.low;
         row.keyHigh = zone.keyRange.high;
@@ -494,18 +495,22 @@ bool applyProgramZoneEditsAtomic(audiocity::engine::Program& program,
     return true;
 }
 
-int createProgramZone(audiocity::engine::Program& program, const int seedZoneIndex)
+int createProgramZoneForSampleAsset(audiocity::engine::Program& program,
+                                    const int sampleAssetIndex,
+                                    const int seedZoneIndex)
 {
     const auto hasSeedZone = seedZoneIndex >= 0 && static_cast<std::size_t>(seedZoneIndex) < program.zones.size();
     const auto* seedZone = hasSeedZone ? &program.zones[static_cast<std::size_t>(seedZoneIndex)] : nullptr;
-    const auto sampleAssetIndex = findDefaultSampleAssetIndex(program, seedZone != nullptr ? seedZone->sampleAssetIndex : -1);
-    if (!isValidSampleAssetIndex(program, sampleAssetIndex))
+    const auto resolvedSampleAssetIndex = findDefaultSampleAssetIndex(
+        program,
+        sampleAssetIndex >= 0 ? sampleAssetIndex : (seedZone != nullptr ? seedZone->sampleAssetIndex : -1));
+    if (!isValidSampleAssetIndex(program, resolvedSampleAssetIndex))
         return -1;
 
-    const auto& sampleAsset = program.sampleAssets[static_cast<std::size_t>(sampleAssetIndex)];
+    const auto& sampleAsset = program.sampleAssets[static_cast<std::size_t>(resolvedSampleAssetIndex)];
 
     audiocity::engine::Zone newZone;
-    newZone.sampleAssetIndex = sampleAssetIndex;
+    newZone.sampleAssetIndex = resolvedSampleAssetIndex;
     newZone.groupIndex = seedZone != nullptr && isValidGroupIndex(program, seedZone->groupIndex)
         ? seedZone->groupIndex
         : (program.groups.size() == 1 ? 0 : -1);
@@ -532,6 +537,11 @@ int createProgramZone(audiocity::engine::Program& program, const int seedZoneInd
     program.zones.push_back(newZone);
     recomputeGroupRangeFromZones(program, newZone.groupIndex);
     return static_cast<int>(program.zones.size() - 1);
+}
+
+int createProgramZone(audiocity::engine::Program& program, const int seedZoneIndex)
+{
+    return createProgramZoneForSampleAsset(program, -1, seedZoneIndex);
 }
 
 int duplicateProgramZone(audiocity::engine::Program& program, const int zoneIndex)

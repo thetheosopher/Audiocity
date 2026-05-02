@@ -12,13 +12,13 @@
   - voice stealing
   - looping
   - round robin determinism
-  - quality-tier resampler differences, determinism, and runtime switching across CPU/Fidelity/Ultra playback modes
+  - quality-tier resampler differences, determinism, runtime switching across CPU/Fidelity/Ultra playback modes, and an objective high-frequency spectral preservation check that requires Ultra to retain more main-tone energy with lower side-energy than Fidelity at a non-integer pitch ratio
   - preload segmentation and runtime preload changes for single-sample and imported-program playback
   - single-sample file-backed disk streaming across preload rebuilds
   - imported-program bounded disk-stream cache, processor-worker prime servicing, and note-on/lookahead hit-miss telemetry
   - SFZ import (#include/default_path/seq_length/release-trigger)
   - Mapping state structural round-trip, imported-program state subtree round-trip, legacy replay fallback, and imported-program derived-state summaries
-  - Mapping zone create, duplicate, split, delete, and velocity fade edits
+  - Mapping zone create, duplicate, split, delete, and velocity fade edits, including explicit sample-asset selection for new zones
   - atomic imported-program batch mapping apply/delete rollback semantics
   - chronological editor undo-history behavior across imported-program mapping snapshots and sample/settings edits, including coalescing, undo labels, and create/duplicate/split structural zone operations
   - SFZ diagnostics for unsupported opcode values

@@ -4816,8 +4816,47 @@ void AudiocityAudioProcessorEditor::createMappingZone()
         ? mappingZoneRows_[static_cast<std::size_t>(selectedRows.front())].zoneIndex
         : -1;
 
+    auto defaultSampleAssetIndex = -1;
+    if (selectedRows.size() == 1)
+        defaultSampleAssetIndex = mappingZoneRows_[static_cast<std::size_t>(selectedRows.front())].sampleAssetIndex;
+
+    const auto sampleAssetNames = processor_.getImportedProgramSampleAssetNames();
+    if (sampleAssetNames.size() <= 1)
+    {
+        createMappingZoneForSampleAsset(defaultSampleAssetIndex, seedZoneIndex);
+        return;
+    }
+
+    if (defaultSampleAssetIndex < 0 || defaultSampleAssetIndex >= sampleAssetNames.size())
+        defaultSampleAssetIndex = 0;
+
+    juce::PopupMenu menu;
+    for (int sampleAssetIndex = 0; sampleAssetIndex < sampleAssetNames.size(); ++sampleAssetIndex)
+    {
+        menu.addItem(sampleAssetIndex + 1,
+                     sampleAssetNames[sampleAssetIndex],
+                     true,
+                     sampleAssetIndex == defaultSampleAssetIndex);
+    }
+
+    juce::Component::SafePointer<AudiocityAudioProcessorEditor> safeThis(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&mappingCreateZoneButton_),
+        [safeThis, seedZoneIndex](const int selectedId)
+        {
+            if (safeThis == nullptr || selectedId <= 0)
+                return;
+
+            safeThis->createMappingZoneForSampleAsset(selectedId - 1, seedZoneIndex);
+        });
+}
+
+void AudiocityAudioProcessorEditor::createMappingZoneForSampleAsset(const int sampleAssetIndex,
+                                                                    const int seedZoneIndex)
+{
     const auto beforeState = captureImportedProgramMappingState();
-    const auto newZoneIndex = processor_.createImportedProgramZone(seedZoneIndex);
+    const auto newZoneIndex = sampleAssetIndex >= 0
+        ? processor_.createImportedProgramZoneForSampleAsset(sampleAssetIndex, seedZoneIndex)
+        : processor_.createImportedProgramZone(seedZoneIndex);
     if (newZoneIndex < 0)
     {
         mappingEditStatusLabel_.setText("Create failed", juce::dontSendNotification);

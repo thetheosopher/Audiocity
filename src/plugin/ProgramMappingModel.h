@@ -22,6 +22,7 @@ enum class ProgramZoneOverviewDragMode
 struct ProgramZoneListRow
 {
     int zoneIndex = -1;
+    int sampleAssetIndex = -1;
     int sampleLength = 0;
     int keyLow = 0;
     int keyHigh = 0;
@@ -107,6 +108,9 @@ struct ProgramZoneEdit
 [[nodiscard]] bool applyProgramZoneEdit(audiocity::engine::Program& program, const ProgramZoneEdit& edit);
 [[nodiscard]] bool applyProgramZoneEditsAtomic(audiocity::engine::Program& program,
                                                const std::vector<ProgramZoneEdit>& edits);
+[[nodiscard]] int createProgramZoneForSampleAsset(audiocity::engine::Program& program,
+                                                  int sampleAssetIndex,
+                                                  int seedZoneIndex = -1);
 [[nodiscard]] int createProgramZone(audiocity::engine::Program& program, int seedZoneIndex = -1);
 [[nodiscard]] int duplicateProgramZone(audiocity::engine::Program& program, int zoneIndex);
 [[nodiscard]] bool deleteProgramZone(audiocity::engine::Program& program, int zoneIndex);

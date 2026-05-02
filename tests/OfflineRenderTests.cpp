@@ -1,5 +1,6 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
+#include <juce_dsp/juce_dsp.h>
 
 #include "../src/engine/EngineCore.h"
 #include "../src/engine/ProgramModel.h"
@@ -709,6 +710,19 @@ bool runProgramMappingCreateZoneTest()
         && program.zones[1].loopStart == -1
         && program.zones[1].loopEndExclusive == -1
         && std::abs(program.zones[1].tuneCents - 12.5f) <= 1.0e-6f))
+    {
+        return false;
+    }
+
+    const auto explicitAssetIndex = audiocity::plugin::createProgramZoneForSampleAsset(program, 0, 0);
+    if (!(explicitAssetIndex == 2
+        && program.zones.size() == 3
+        && program.zones[2].sampleAssetIndex == 0
+        && program.zones[2].groupIndex == 0
+        && program.zones[2].rootMidiNote == 69
+        && program.zones[2].keyRange.low == 69
+        && program.zones[2].keyRange.high == 69
+        && program.zones[2].sampleEndExclusive == 512))
     {
         return false;
     }
@@ -6548,6 +6562,136 @@ bool runUltraQualityDifferenceTest()
     return !buffersAreEqual(fidelity, ultra, 1.0e-7f);
 }
 
+struct UltraSpectralMetric
+{
+    double mainBandEnergy = 0.0;
+    double artifactEnergy = 0.0;
+    double artifactRatio = std::numeric_limits<double>::infinity();
+    int targetBin = 0;
+    int peakBin = 0;
+};
+
+UltraSpectralMetric measureUltraSpectralMetric(const audiocity::engine::EngineCore::QualityTier tier)
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 256;
+    constexpr int fftOrder = 12;
+    constexpr int fftSize = 1 << fftOrder;
+    constexpr int warmupBlocks = 4;
+    constexpr int captureBlocks = fftSize / blockSize;
+    constexpr int sampleLength = 32768;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sourceRootNote = 60;
+    constexpr int playedNote = 79;
+    constexpr int targetBin = 1450;
+    constexpr int mainBandRadius = 2;
+
+    const auto pitchRatio = std::pow(2.0, static_cast<double>(playedNote - sourceRootNote) / 12.0);
+    const auto targetFrequencyHz = static_cast<double>(targetBin) * sampleRate / static_cast<double>(fftSize);
+    const auto sourceToneFrequencyHz = targetFrequencyHz / pitchRatio;
+
+    juce::AudioBuffer<float> sample(1, sampleLength);
+    for (int i = 0; i < sample.getNumSamples(); ++i)
+    {
+        const auto phase = 2.0 * juce::MathConstants<double>::pi * sourceToneFrequencyHz * static_cast<double>(i) / sampleRate;
+        sample.setSample(0, i, static_cast<float>(0.9 * std::sin(phase)));
+    }
+
+    audiocity::engine::EngineCore::AdsrSettings adsr;
+    adsr.attackSeconds = 0.0001f;
+    adsr.decaySeconds = 0.0001f;
+    adsr.sustainLevel = 1.0f;
+    adsr.releaseSeconds = 0.1f;
+
+    audiocity::engine::EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setSampleData(sample, sampleRate, sourceRootNote);
+    engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::gate);
+    engine.setAmpEnvelope(adsr);
+    engine.setQualityTier(tier);
+
+    juce::AudioBuffer<float> renderedBlock(channels, blockSize);
+    juce::AudioBuffer<float> captured(1, fftSize);
+
+    for (int blockIndex = 0; blockIndex < warmupBlocks + captureBlocks; ++blockIndex)
+    {
+        juce::MidiBuffer midi;
+        if (blockIndex == 0)
+            midi.addEvent(juce::MidiMessage::noteOn(1, playedNote, 1.0f), 0);
+
+        engine.render(renderedBlock, midi);
+
+        if (blockIndex >= warmupBlocks)
+        {
+            const auto capturedOffset = (blockIndex - warmupBlocks) * blockSize;
+            captured.copyFrom(0, capturedOffset, renderedBlock, 0, 0, blockSize);
+        }
+    }
+
+    std::array<float, fftSize * 2> fftData {};
+    std::copy(captured.getReadPointer(0), captured.getReadPointer(0) + fftSize, fftData.begin());
+
+    juce::dsp::WindowingFunction<float> window(fftSize,
+                                               juce::dsp::WindowingFunction<float>::hann,
+                                               true);
+    window.multiplyWithWindowingTable(fftData.data(), fftSize);
+
+    juce::dsp::FFT fft(fftOrder);
+    fft.performRealOnlyForwardTransform(fftData.data());
+
+    auto magnitudeSquaredAtBin = [&](const int bin)
+    {
+        const auto real = static_cast<double>(fftData[static_cast<std::size_t>(bin * 2)]);
+        const auto imag = static_cast<double>(fftData[static_cast<std::size_t>(bin * 2 + 1)]);
+        return real * real + imag * imag;
+    };
+
+    UltraSpectralMetric metric;
+    metric.targetBin = targetBin;
+
+    double peakMagnitude = 0.0;
+    for (int bin = 1; bin < fftSize / 2; ++bin)
+    {
+        const auto magnitudeSquared = magnitudeSquaredAtBin(bin);
+        if (magnitudeSquared > peakMagnitude)
+        {
+            peakMagnitude = magnitudeSquared;
+            metric.peakBin = bin;
+        }
+    }
+
+    for (int bin = 1; bin < fftSize / 2; ++bin)
+    {
+        const auto magnitudeSquared = magnitudeSquaredAtBin(bin);
+        if (std::abs(bin - targetBin) <= mainBandRadius)
+            metric.mainBandEnergy += magnitudeSquared;
+        else
+            metric.artifactEnergy += magnitudeSquared;
+    }
+
+    const auto denominator = juce::jmax(metric.mainBandEnergy, 1.0e-12);
+    metric.artifactRatio = metric.artifactEnergy / denominator;
+    return metric;
+}
+
+bool runUltraQualitySpectralTonePreservationTest()
+{
+    const auto fidelity = measureUltraSpectralMetric(audiocity::engine::EngineCore::QualityTier::fidelity);
+    const auto ultra = measureUltraSpectralMetric(audiocity::engine::EngineCore::QualityTier::ultra);
+
+    return std::isfinite(fidelity.mainBandEnergy)
+        && std::isfinite(fidelity.artifactRatio)
+        && std::isfinite(ultra.mainBandEnergy)
+        && std::isfinite(ultra.artifactRatio)
+        && std::abs(fidelity.peakBin - fidelity.targetBin) <= 1
+        && std::abs(ultra.peakBin - ultra.targetBin) <= 1
+        && fidelity.mainBandEnergy > 1.0
+        && ultra.mainBandEnergy > 1.0
+        && ultra.mainBandEnergy > fidelity.mainBandEnergy * 1.02
+        && ultra.artifactEnergy < fidelity.artifactEnergy
+        && ultra.artifactRatio < fidelity.artifactRatio * 0.90;
+}
+
 bool runReverbMixTailTest()
 {
     constexpr int channels = 2;
@@ -7925,6 +8069,9 @@ int main()
 
     if (!runUltraQualityDifferenceTest())
         return 27;
+
+    if (!runUltraQualitySpectralTonePreservationTest())
+        return 178;
 
     if (!runReverbMixTailTest())
         return 28;

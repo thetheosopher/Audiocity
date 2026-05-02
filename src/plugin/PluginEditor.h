@@ -868,6 +868,7 @@ private:
     void updateMappingEditControls();
     void applySelectedMappingZoneEdit();
     void createMappingZone();
+    void createMappingZoneForSampleAsset(int sampleAssetIndex, int seedZoneIndex);
     void duplicateSelectedMappingZone();
     void splitSelectedMappingZone();
     void deleteSelectedMappingZone();

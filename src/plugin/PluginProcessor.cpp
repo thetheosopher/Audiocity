@@ -194,6 +194,17 @@ constexpr auto kParamPan = "p_pan";
 constexpr auto kParamMasterVolume = "p_masterVolume";
 constexpr float kMaxSamplePositionParam = 16000000.0f;
 
+juce::String formatImportedProgramSampleAssetName(const audiocity::engine::SampleAsset& asset, const int sampleAssetIndex)
+{
+    if (!asset.displayName.empty())
+        return juce::String::fromUTF8(asset.displayName.c_str());
+
+    if (!asset.sourcePath.empty())
+        return juce::File(juce::String::fromUTF8(asset.sourcePath.c_str())).getFileName();
+
+    return "sample " + juce::String(sampleAssetIndex + 1);
+}
+
 bool isPlaybackPresetExcludedProperty(const juce::Identifier& property)
 {
     const auto propertyName = property.toString();
@@ -1547,6 +1558,25 @@ juce::String AudiocityAudioProcessor::getImportedProgramMapSummary() const
     return importedProgramMapSummary_;
 }
 
+juce::StringArray AudiocityAudioProcessor::getImportedProgramSampleAssetNames() const
+{
+    std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+
+    juce::StringArray sampleAssetNames;
+    sampleAssetNames.ensureStorageAllocated(static_cast<int>(importedProgram_.sampleAssets.size()));
+    for (std::size_t index = 0; index < importedProgram_.sampleAssets.size(); ++index)
+    {
+        const auto& asset = importedProgram_.sampleAssets[index];
+        auto label = formatImportedProgramSampleAssetName(asset, static_cast<int>(index));
+        if (!asset.hasAudio())
+            label += " (missing)";
+
+        sampleAssetNames.add(label);
+    }
+
+    return sampleAssetNames;
+}
+
 std::vector<audiocity::plugin::ProgramZoneListRow> AudiocityAudioProcessor::getImportedProgramZoneRows() const
 {
     std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
@@ -1626,7 +1656,8 @@ bool AudiocityAudioProcessor::updateImportedProgramZoneMappings(
     return true;
 }
 
-int AudiocityAudioProcessor::createImportedProgramZone(const int seedZoneIndex)
+int AudiocityAudioProcessor::createImportedProgramZoneForSampleAsset(const int sampleAssetIndex,
+                                                                     const int seedZoneIndex)
 {
     audiocity::engine::Program programToPublish;
     std::vector<juce::AudioBuffer<float>> sampleDataToPublish;
@@ -1641,7 +1672,9 @@ int AudiocityAudioProcessor::createImportedProgramZone(const int seedZoneIndex)
         }
 
         auto updatedProgram = importedProgram_;
-        newZoneIndex = audiocity::plugin::createProgramZone(updatedProgram, seedZoneIndex);
+        newZoneIndex = audiocity::plugin::createProgramZoneForSampleAsset(updatedProgram,
+                                                                          sampleAssetIndex,
+                                                                          seedZoneIndex);
         if (newZoneIndex < 0)
             return -1;
 
@@ -1653,6 +1686,11 @@ int AudiocityAudioProcessor::createImportedProgramZone(const int seedZoneIndex)
     engine_.panic();
     engine_.setProgram(programToPublish, sampleDataToPublish);
     return newZoneIndex;
+}
+
+int AudiocityAudioProcessor::createImportedProgramZone(const int seedZoneIndex)
+{
+    return createImportedProgramZoneForSampleAsset(-1, seedZoneIndex);
 }
 
 int AudiocityAudioProcessor::duplicateImportedProgramZone(const int zoneIndex)

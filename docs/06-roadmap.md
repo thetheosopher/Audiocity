@@ -104,12 +104,18 @@
 ## Release v1.1 — “Scale up libraries” (performance + streaming + quality modes)
 
 ### Epic G — Disk streaming (DFD) + preload/priming
+
+**Current validated slice**
+- Preload segmentation and rebuild behavior are live for both single-sample and imported-program playback, with engine metrics exposing loaded preload versus streamed sample counts.
+- Single-sample playback and imported-program sample tails can stream from disk through a bounded cache instead of requiring the full tail in memory.
+- Stream priming is serviced off the audio thread, and offline tests cover preload rebuilds, single-sample file-backed streaming, imported-program cache hit/miss telemetry, and note-on/lookahead priming behavior.
+
 ### Epic H — Quality tiers (CPU vs fidelity)
 
 **Current validated slice**
 - CPU, Fidelity, and Ultra playback tiers are wired end-to-end through processor state and UI controls.
 - Ultra now uses a higher-quality windowed-sinc resampler path while CPU and Fidelity remain the lighter playback modes.
-- Offline tests cover audible tier differences, deterministic output per tier, and runtime switching across all three tiers.
+- Offline tests cover audible tier differences, deterministic output per tier, runtime switching across all three tiers, and a near-Nyquist pure-tone spectral regression that requires Ultra to preserve more main-tone energy with lower side-energy than Fidelity at a non-integer pitch ratio.
 
 ### Epic I — Undo/Redo across mapping and sample edits
 
@@ -117,7 +123,7 @@
 - Imported-program structural mapping undo/redo uses serialized mapping snapshots.
 - Editor undo/redo is now chronological across mapping changes and sample/settings edits rather than split by tab or edit domain.
 - Multi-zone imported-program mapping apply/delete commits atomically at the processor publish boundary so failed batch edits roll back cleanly.
-- The Mapping tab now has a true create-zone workflow that appends a new playable zone, seeded from the current selection when available.
+- The Mapping tab now has a true create-zone workflow that appends a new playable zone, seeded from the current selection when available and able to target a chosen imported sample asset.
 - Duplicate and split structural zone operations are covered by the same unified mapping history path.
 
 ---
