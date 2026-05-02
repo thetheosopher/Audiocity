@@ -131,6 +131,12 @@
 ## Release v2 — “Sound design depth” (modulation + slicing)
 
 ### Epic J — Modulation matrix + multi-LFO/envelopes
+
+**Current validated slice**
+- `EngineCore` now has an RT-safe modulation-routing settings snapshot for the first mod-wheel destinations: pitch, filter cutoff, and amp gain.
+- The processor exposes those routes through automatable parameters and patch-state persistence, so host automation and saved presets can drive the first modulation-routed behavior without relying on the editor timer path.
+- Offline tests now cover real-time CC1 routing during playback and verify audible response across pitch, filter, and amp destinations.
+
 ### Epic K — Slicing + slice mapping
 ### Epic L — Mapping productivity tools
 

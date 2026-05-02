@@ -7278,6 +7278,167 @@ bool runPitchBendRangeAndRealtimeModulationTest()
         && ratio12 > ratio2 * 1.5f;
 }
 
+bool runModWheelRoutingRealtimeTest()
+{
+    constexpr int channels = 2;
+    constexpr int blockSize = 256;
+    constexpr int blocks = 56;
+    constexpr double outputSampleRate = 48000.0;
+    constexpr int rootMidiNote = 60;
+    constexpr int cycleSamples = 512;
+
+    const auto targetHz = juce::MidiMessage::getMidiNoteInHertz(rootMidiNote);
+    const auto sourceSampleRate = targetHz * static_cast<double>(cycleSamples);
+
+    auto renderPitchFrequency = [&](const float modWheelToPitchCents, const bool applyWheel) -> float
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(outputSampleRate, blockSize, channels);
+
+        audiocity::engine::EngineCore::AdsrSettings sustain;
+        sustain.attackSeconds = 0.0001f;
+        sustain.decaySeconds = 0.0001f;
+        sustain.sustainLevel = 1.0f;
+        sustain.releaseSeconds = 0.25f;
+        engine.setAmpEnvelope(sustain);
+
+        auto routing = engine.getModulationRoutingSettings();
+        routing.modWheelToPitchCents = modWheelToPitchCents;
+        engine.setModulationRoutingSettings(routing);
+
+        engine.setSampleData(createOneCycleSine(cycleSamples), sourceSampleRate, rootMidiNote);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+
+        juce::AudioBuffer<float> output(channels, blockSize * blocks);
+        for (int block = 0; block < blocks; ++block)
+        {
+            juce::AudioBuffer<float> blockBuffer(channels, blockSize);
+            juce::MidiBuffer midi;
+
+            if (block == 0)
+                midi.addEvent(juce::MidiMessage::noteOn(1, rootMidiNote, 1.0f), 0);
+
+            if (applyWheel && block == 8)
+                midi.addEvent(juce::MidiMessage::controllerEvent(1, 1, 127), 0);
+
+            engine.render(blockBuffer, midi);
+
+            for (int ch = 0; ch < channels; ++ch)
+                output.copyFrom(ch, block * blockSize, blockBuffer, ch, 0, blockSize);
+        }
+
+        return estimateFrequencyFromPositiveCrossings(output, outputSampleRate, blockSize * 20);
+    };
+
+    auto renderAmpEnergy = [&](const float modWheelToAmp, const bool applyWheel) -> float
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(outputSampleRate, blockSize, channels);
+
+        audiocity::engine::EngineCore::AdsrSettings sustain;
+        sustain.attackSeconds = 0.0001f;
+        sustain.decaySeconds = 0.0001f;
+        sustain.sustainLevel = 1.0f;
+        sustain.releaseSeconds = 0.25f;
+        engine.setAmpEnvelope(sustain);
+
+        auto routing = engine.getModulationRoutingSettings();
+        routing.modWheelToAmp = modWheelToAmp;
+        engine.setModulationRoutingSettings(routing);
+
+        engine.setSampleData(createOneCycleSine(cycleSamples), sourceSampleRate, rootMidiNote);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+
+        float accumulatedEnergy = 0.0f;
+        for (int block = 0; block < blocks; ++block)
+        {
+            juce::AudioBuffer<float> blockBuffer(channels, blockSize);
+            juce::MidiBuffer midi;
+
+            if (block == 0)
+                midi.addEvent(juce::MidiMessage::noteOn(1, rootMidiNote, 1.0f), 0);
+
+            if (applyWheel && block == 8)
+                midi.addEvent(juce::MidiMessage::controllerEvent(1, 1, 127), 0);
+
+            engine.render(blockBuffer, midi);
+            if (block >= 16)
+                accumulatedEnergy += blockEnergy(blockBuffer);
+        }
+
+        return accumulatedEnergy;
+    };
+
+    auto renderFilterEnergy = [&](const float modWheelToFilterHz, const bool applyWheel) -> float
+    {
+        juce::AudioBuffer<float> brightSample(1, 4096);
+        for (int i = 0; i < brightSample.getNumSamples(); ++i)
+        {
+            const auto low = std::sin(2.0 * juce::MathConstants<double>::pi * i * 180.0 / outputSampleRate);
+            const auto high = 0.7 * std::sin(2.0 * juce::MathConstants<double>::pi * i * 5200.0 / outputSampleRate);
+            brightSample.setSample(0, i, static_cast<float>(0.25 * low + high));
+        }
+
+        audiocity::engine::EngineCore engine;
+        engine.prepare(outputSampleRate, blockSize, channels);
+
+        audiocity::engine::EngineCore::AdsrSettings sustain;
+        sustain.attackSeconds = 0.0001f;
+        sustain.decaySeconds = 0.0001f;
+        sustain.sustainLevel = 1.0f;
+        sustain.releaseSeconds = 0.25f;
+        engine.setAmpEnvelope(sustain);
+
+        audiocity::engine::EngineCore::FilterSettings filter;
+        filter.mode = audiocity::engine::EngineCore::FilterSettings::Mode::lowPass12;
+        filter.baseCutoffHz = 900.0f;
+        filter.envAmountHz = 0.0f;
+        filter.resonance = 0.1f;
+        engine.setFilterSettings(filter);
+
+        auto routing = engine.getModulationRoutingSettings();
+        routing.modWheelToFilterHz = modWheelToFilterHz;
+        engine.setModulationRoutingSettings(routing);
+
+        engine.setSampleData(brightSample, outputSampleRate, rootMidiNote);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+
+        float accumulatedEnergy = 0.0f;
+        for (int block = 0; block < blocks; ++block)
+        {
+            juce::AudioBuffer<float> blockBuffer(channels, blockSize);
+            juce::MidiBuffer midi;
+
+            if (block == 0)
+                midi.addEvent(juce::MidiMessage::noteOn(1, rootMidiNote, 1.0f), 0);
+
+            if (applyWheel && block == 8)
+                midi.addEvent(juce::MidiMessage::controllerEvent(1, 1, 127), 0);
+
+            engine.render(blockBuffer, midi);
+            if (block >= 16)
+                accumulatedEnergy += blockEnergy(blockBuffer);
+        }
+
+        return accumulatedEnergy;
+    };
+
+    const auto basePitchHz = renderPitchFrequency(200.0f, false);
+    const auto wheelPitchHz = renderPitchFrequency(200.0f, true);
+    if (basePitchHz <= 0.0f || wheelPitchHz <= 0.0f)
+        return false;
+
+    const auto ampBaseEnergy = renderAmpEnergy(-1.0f, false);
+    const auto ampWheelEnergy = renderAmpEnergy(-1.0f, true);
+    const auto filterBaseEnergy = renderFilterEnergy(6000.0f, false);
+    const auto filterWheelEnergy = renderFilterEnergy(6000.0f, true);
+
+    return wheelPitchHz > basePitchHz * 1.08f
+        && ampBaseEnergy > 0.1f
+        && ampWheelEnergy < ampBaseEnergy * 0.2f
+        && filterWheelEnergy > filterBaseEnergy * 1.15f;
+}
+
 bool runVoicePlaybackStateSnapshotTest()
 {
     constexpr int channels = 2;
@@ -8102,6 +8263,9 @@ int main()
 
     if (!runPitchBendRangeAndRealtimeModulationTest())
         return 50;
+
+    if (!runModWheelRoutingRealtimeTest())
+        return 179;
 
     if (!runVoicePlaybackStateSnapshotTest())
         return 54;

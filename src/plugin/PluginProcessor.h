@@ -307,6 +307,9 @@ public:
     using PitchLfoSettings = audiocity::engine::EngineCore::PitchLfoSettings;
     void setPitchLfoSettings(const PitchLfoSettings& settings) noexcept;
     [[nodiscard]] PitchLfoSettings getPitchLfoSettings() const noexcept { return engine_.getPitchLfoSettings(); }
+    using ModulationRoutingSettings = audiocity::engine::EngineCore::ModulationRoutingSettings;
+    void setModulationRoutingSettings(const ModulationRoutingSettings& settings) noexcept;
+    [[nodiscard]] ModulationRoutingSettings getModulationRoutingSettings() const noexcept { return engine_.getModulationRoutingSettings(); }
     void setFilterEnvelope(const AdsrSettings& settings) noexcept;
     [[nodiscard]] AdsrSettings getFilterEnvelope() const noexcept { return engine_.getFilterEnvelope(); }
 

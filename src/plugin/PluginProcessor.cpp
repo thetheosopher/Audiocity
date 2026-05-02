@@ -46,6 +46,9 @@ constexpr auto kFineTuneCents = "fineTuneCents";
 constexpr auto kPitchBendRangeSemitones = "pitchBendRangeSemitones";
 constexpr auto kPitchLfoRate = "pitchLfoRate";
 constexpr auto kPitchLfoDepth = "pitchLfoDepth";
+constexpr auto kModWheelToPitch = "modWheelToPitch";
+constexpr auto kModWheelToFilter = "modWheelToFilter";
+constexpr auto kModWheelToAmp = "modWheelToAmp";
 
 constexpr auto kAmpAttack = "ampAttack";
 constexpr auto kAmpDecay = "ampDecay";
@@ -172,6 +175,9 @@ constexpr auto kParamTuneFine = "p_tuneFine";
 constexpr auto kParamPitchBendRange = "p_pitchBendRange";
 constexpr auto kParamPitchLfoRate = "p_pitchLfoRate";
 constexpr auto kParamPitchLfoDepth = "p_pitchLfoDepth";
+constexpr auto kParamModWheelToPitch = "p_modWheelPitch";
+constexpr auto kParamModWheelToFilter = "p_modWheelFilter";
+constexpr auto kParamModWheelToAmp = "p_modWheelAmp";
 constexpr auto kParamPlaybackStart = "p_playbackStart";
 constexpr auto kParamPlaybackEnd = "p_playbackEnd";
 constexpr auto kParamLoopStart = "p_loopStart";
@@ -433,6 +439,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout AudiocityAudioProcessor::cre
         juce::NormalisableRange<float>(0.0f, 40.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPitchLfoDepth, "Pitch LFO Depth",
         juce::NormalisableRange<float>(0.0f, 100.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamModWheelToPitch, "Mod Wheel To Pitch",
+        juce::NormalisableRange<float>(-1200.0f, 1200.0f, 1.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamModWheelToFilter, "Mod Wheel To Filter",
+        juce::NormalisableRange<float>(-20000.0f, 20000.0f, 0.01f, 0.35f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamModWheelToAmp, "Mod Wheel To Amp",
+        juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPlaybackStart, "Playback Start",
         juce::NormalisableRange<float>(0.0f, kMaxSamplePositionParam, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPlaybackEnd, "Playback End",
@@ -559,6 +571,13 @@ void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
     pitchLfo.rateHz = apvts_.getRawParameterValue(kParamPitchLfoRate)->load();
     pitchLfo.depthCents = apvts_.getRawParameterValue(kParamPitchLfoDepth)->load();
     engine_.setPitchLfoSettings(pitchLfo);
+
+    auto modulationRouting = engine_.getModulationRoutingSettings();
+    modulationRouting.modWheelToPitchCents = apvts_.getRawParameterValue(kParamModWheelToPitch)->load();
+    modulationRouting.modWheelToFilterHz = apvts_.getRawParameterValue(kParamModWheelToFilter)->load();
+    modulationRouting.modWheelToAmp = apvts_.getRawParameterValue(kParamModWheelToAmp)->load();
+    engine_.setModulationRoutingSettings(modulationRouting);
+
     engine_.setSampleWindow(
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamPlaybackStart)->load())),
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamPlaybackEnd)->load())));
@@ -906,6 +925,10 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     const auto pitchLfo = engine_.getPitchLfoSettings();
     state.setProperty(kPitchLfoRate, pitchLfo.rateHz, nullptr);
     state.setProperty(kPitchLfoDepth, pitchLfo.depthCents, nullptr);
+    const auto modulationRouting = engine_.getModulationRoutingSettings();
+    state.setProperty(kModWheelToPitch, modulationRouting.modWheelToPitchCents, nullptr);
+    state.setProperty(kModWheelToFilter, modulationRouting.modWheelToFilterHz, nullptr);
+    state.setProperty(kModWheelToAmp, modulationRouting.modWheelToAmp, nullptr);
 
     const auto amp = engine_.getAmpEnvelope();
     state.setProperty(kAmpAttack, amp.attackSeconds, nullptr);
@@ -1176,6 +1199,12 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     pitchLfo.rateHz = static_cast<float>(state.getProperty(kPitchLfoRate, pitchLfo.rateHz));
     pitchLfo.depthCents = static_cast<float>(state.getProperty(kPitchLfoDepth, pitchLfo.depthCents));
     setPitchLfoSettings(pitchLfo);
+
+    auto modulationRouting = engine_.getModulationRoutingSettings();
+    modulationRouting.modWheelToPitchCents = static_cast<float>(state.getProperty(kModWheelToPitch, modulationRouting.modWheelToPitchCents));
+    modulationRouting.modWheelToFilterHz = static_cast<float>(state.getProperty(kModWheelToFilter, modulationRouting.modWheelToFilterHz));
+    modulationRouting.modWheelToAmp = static_cast<float>(state.getProperty(kModWheelToAmp, modulationRouting.modWheelToAmp));
+    setModulationRoutingSettings(modulationRouting);
 
     auto amp = engine_.getAmpEnvelope();
     amp.attackSeconds = static_cast<float>(state.getProperty(kAmpAttack, amp.attackSeconds));
@@ -2025,6 +2054,15 @@ void AudiocityAudioProcessor::setPitchLfoSettings(const PitchLfoSettings& settin
     const auto applied = engine_.getPitchLfoSettings();
     updateParameterFromPlainValue(kParamPitchLfoRate, applied.rateHz);
     updateParameterFromPlainValue(kParamPitchLfoDepth, applied.depthCents);
+}
+
+void AudiocityAudioProcessor::setModulationRoutingSettings(const ModulationRoutingSettings& settings) noexcept
+{
+    engine_.setModulationRoutingSettings(settings);
+    const auto applied = engine_.getModulationRoutingSettings();
+    updateParameterFromPlainValue(kParamModWheelToPitch, applied.modWheelToPitchCents);
+    updateParameterFromPlainValue(kParamModWheelToFilter, applied.modWheelToFilterHz);
+    updateParameterFromPlainValue(kParamModWheelToAmp, applied.modWheelToAmp);
 }
 
 void AudiocityAudioProcessor::setSampleWindow(const int startSample, const int endSample) noexcept

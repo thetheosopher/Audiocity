@@ -103,6 +103,13 @@ public:
         float depthCents = 0.0f;
     };
 
+    struct ModulationRoutingSettings
+    {
+        float modWheelToPitchCents = 0.0f;
+        float modWheelToFilterHz = 0.0f;
+        float modWheelToAmp = 0.0f;
+    };
+
     struct DelaySettings
     {
         float timeMs = 320.0f;
@@ -229,12 +236,14 @@ public:
     void setAmpEnvelope(const AdsrSettings& settings) noexcept;
     void setAmpLfoSettings(const AmpLfoSettings& settings) noexcept;
     void setPitchLfoSettings(const PitchLfoSettings& settings) noexcept;
+    void setModulationRoutingSettings(const ModulationRoutingSettings& settings) noexcept;
     void setFilterEnvelope(const AdsrSettings& settings) noexcept;
     void setFilterSettings(const FilterSettings& settings) noexcept;
 
     [[nodiscard]] AdsrSettings getAmpEnvelope() const noexcept { return ampEnvelopeSettings_; }
     [[nodiscard]] AmpLfoSettings getAmpLfoSettings() const noexcept { return ampLfoSettings_; }
     [[nodiscard]] PitchLfoSettings getPitchLfoSettings() const noexcept { return pitchLfoSettings_; }
+    [[nodiscard]] ModulationRoutingSettings getModulationRoutingSettings() const noexcept { return modulationRoutingSettings_; }
     [[nodiscard]] AdsrSettings getFilterEnvelope() const noexcept { return filterEnvelopeSettings_; }
     [[nodiscard]] FilterSettings getFilterSettings() const noexcept { return filterSettings_; }
 
@@ -314,6 +323,7 @@ private:
         float combinedPitchRatio = 1.0f;
         float filterLfoValue = 0.0f;
         float ampLfoGain = 1.0f;
+        float modWheelValue = 0.0f;
         bool filterLfoActive = false;
     };
 
@@ -321,14 +331,15 @@ private:
     {
         noteOn,
         noteOff,
-        pitchBend
+        pitchBend,
+        controller
     };
 
     struct PendingEvent
     {
         EventType type = EventType::noteOn;
-        int noteNumber = 0;
-        float velocity = 0.0f;
+        int data = 0;
+        float value = 0.0f;
         int offset = 0;
     };
 
@@ -516,12 +527,14 @@ private:
     float fineTuneCents_ = 0.0f;
     float pitchBendRangeSemitones_ = 2.0f;
     float currentPitchBendSemitones_ = 0.0f;
+    float currentModWheelValue_ = 0.0f;
     int preloadSamples_ = 32768;
     int segmentRebuildCount_ = 0;
 
     AdsrSettings ampEnvelopeSettings_{};
     AmpLfoSettings ampLfoSettings_{};
     PitchLfoSettings pitchLfoSettings_{};
+    ModulationRoutingSettings modulationRoutingSettings_{};
     AdsrSettings filterEnvelopeSettings_{ 0.001f, 0.120f, 0.0f, 0.100f };
     FilterSettings filterSettings_{};
     PlaybackMode playbackMode_ = PlaybackMode::gate;

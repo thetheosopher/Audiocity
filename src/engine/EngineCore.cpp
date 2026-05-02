@@ -1586,6 +1586,13 @@ void EngineCore::render(juce::AudioBuffer<float>& audioBuffer, const juce::MidiB
             noteOff(message.getNoteNumber(), offset);
         else if (message.isPitchWheel())
             pitchBend(message.getPitchWheelValue(), offset);
+        else if (message.isController() && message.getControllerNumber() == 1)
+        {
+            enqueuePendingEvent(EventType::controller,
+                1,
+                static_cast<float>(juce::jlimit(0, 127, message.getControllerValue())) / 127.0f,
+                offset);
+        }
     }
 
     std::array<float*, 32> outputPointers{};
@@ -1602,19 +1609,20 @@ EngineCore::GlobalModulationFrame EngineCore::advanceGlobalModulationFrame() noe
     GlobalModulationFrame frame;
 
     const auto pitchBendRatio = std::pow(2.0f, currentPitchBendSemitones_ / 12.0f);
-    auto pitchLfoRatio = 1.0f;
+    auto pitchModSemitones = 0.0f;
     const auto hasActivePitchLfo = pitchLfoSettings_.rateHz > 0.0f && pitchLfoSettings_.depthCents > 0.0001f;
     if (hasActivePitchLfo)
     {
         const auto pitchLfoWave = computeLfoWave(FilterSettings::LfoShape::sine, globalPitchLfoPhase_);
-        const auto pitchLfoSemitones = (pitchLfoSettings_.depthCents / 100.0f) * pitchLfoWave;
-        pitchLfoRatio = std::pow(2.0f, pitchLfoSemitones / 12.0f);
+        pitchModSemitones += (pitchLfoSettings_.depthCents / 100.0f) * pitchLfoWave;
 
         globalPitchLfoPhase_ += pitchLfoSettings_.rateHz / static_cast<float>(sampleRate_);
         if (globalPitchLfoPhase_ >= 1.0f)
             globalPitchLfoPhase_ -= std::floor(globalPitchLfoPhase_);
     }
-    frame.combinedPitchRatio = pitchBendRatio * pitchLfoRatio;
+    frame.modWheelValue = currentModWheelValue_;
+    pitchModSemitones += (modulationRoutingSettings_.modWheelToPitchCents / 100.0f) * frame.modWheelValue;
+    frame.combinedPitchRatio = pitchBendRatio * std::pow(2.0f, pitchModSemitones / 12.0f);
 
     frame.filterLfoActive = filterSettings_.lfoRateHz > 0.0f && std::abs(filterSettings_.lfoAmountHz) > 0.0001f;
     if (frame.filterLfoActive)
@@ -1636,6 +1644,8 @@ EngineCore::GlobalModulationFrame EngineCore::advanceGlobalModulationFrame() noe
         if (globalAmpLfoPhase_ >= 1.0f)
             globalAmpLfoPhase_ -= std::floor(globalAmpLfoPhase_);
     }
+
+    frame.ampLfoGain *= juce::jmax(0.0f, 1.0f + (modulationRoutingSettings_.modWheelToAmp * frame.modWheelValue));
 
     return frame;
 }
@@ -1709,6 +1719,7 @@ void EngineCore::panic() noexcept
     stopAllVoicesImmediate();
     pendingEventCount_ = 0;
     currentPitchBendSemitones_ = 0.0f;
+    currentModWheelValue_ = 0.0f;
     delayBuffer_.clear();
     delayWritePos_ = 0;
     autopanPhase_ = 0.0f;
@@ -1733,6 +1744,13 @@ void EngineCore::setPitchLfoSettings(const PitchLfoSettings& settings) noexcept
 {
     pitchLfoSettings_.rateHz = juce::jlimit(0.0f, 40.0f, settings.rateHz);
     pitchLfoSettings_.depthCents = juce::jlimit(0.0f, 100.0f, settings.depthCents);
+}
+
+void EngineCore::setModulationRoutingSettings(const ModulationRoutingSettings& settings) noexcept
+{
+    modulationRoutingSettings_.modWheelToPitchCents = juce::jlimit(-1200.0f, 1200.0f, settings.modWheelToPitchCents);
+    modulationRoutingSettings_.modWheelToFilterHz = juce::jlimit(-20000.0f, 20000.0f, settings.modWheelToFilterHz);
+    modulationRoutingSettings_.modWheelToAmp = juce::jlimit(-1.0f, 1.0f, settings.modWheelToAmp);
 }
 
 void EngineCore::setFilterEnvelope(const AdsrSettings& settings) noexcept
@@ -1834,8 +1852,8 @@ bool EngineCore::enqueuePendingEvent(const EventType type,
     {
         auto& event = pendingEvents_[static_cast<std::size_t>(pendingEventCount_++)];
         event.type = type;
-        event.noteNumber = noteNumber;
-        event.velocity = velocity;
+        event.data = noteNumber;
+        event.value = velocity;
         event.offset = clampedOffset;
         return true;
     }
@@ -1863,8 +1881,8 @@ bool EngineCore::enqueuePendingEvent(const EventType type,
 
     auto& event = pendingEvents_[static_cast<std::size_t>(replaceIndex)];
     event.type = type;
-    event.noteNumber = noteNumber;
-    event.velocity = velocity;
+    event.data = noteNumber;
+    event.value = velocity;
     event.offset = clampedOffset;
     return true;
 }
@@ -2187,7 +2205,7 @@ void EngineCore::flushPendingEventsAtOffset(const int offset,
             auto loopMode = ZoneLoopMode::noLoop;
             auto releaseOnNoteOff = playbackMode_ != PlaybackMode::oneShot;
             auto sourceSampleRateHz = sampleDataRate_;
-            const auto midiVelocity = juce::jlimit(0, 127, static_cast<int>(std::round(event.velocity * 127.0f)));
+            const auto midiVelocity = juce::jlimit(0, 127, static_cast<int>(std::round(event.value * 127.0f)));
 
             if (programSnapshot != nullptr)
             {
@@ -2236,8 +2254,8 @@ void EngineCore::flushPendingEventsAtOffset(const int offset,
             if (existingVoiceIndex >= 0)
             {
                 retargetVoiceLegato(existingVoiceIndex,
-                    event.noteNumber,
-                    event.velocity,
+                    event.data,
+                    event.value,
                     rootNote,
                     zoneIndex,
                     sampleAssetIndex,
@@ -2256,10 +2274,10 @@ void EngineCore::flushPendingEventsAtOffset(const int offset,
                 return true;
             }
 
-            const auto voiceIndex = voicePool_.startVoiceForNote(event.noteNumber);
+            const auto voiceIndex = voicePool_.startVoiceForNote(event.data);
             startVoice(voiceIndex,
-                event.noteNumber,
-                event.velocity,
+                event.data,
+                event.value,
                 rootNote,
                 zoneIndex,
                 sampleAssetIndex,
@@ -2284,10 +2302,10 @@ void EngineCore::flushPendingEventsAtOffset(const int offset,
             if (programSnapshot != nullptr)
             {
                 std::array<int, ProgramSnapshot::maxZones> selectedZoneIndices{};
-                const auto midiVelocity = juce::jlimit(0, 127, static_cast<int>(std::round(event.velocity * 127.0f)));
+                const auto midiVelocity = juce::jlimit(0, 127, static_cast<int>(std::round(event.value * 127.0f)));
                 const auto selectedZoneCount = chooseProgramZoneIndices(
                     *programSnapshot,
-                    event.noteNumber,
+                    event.data,
                     midiVelocity,
                     false,
                     selectedZoneIndices.data(),
@@ -2303,7 +2321,7 @@ void EngineCore::flushPendingEventsAtOffset(const int offset,
                     stopVoicesInChokeGroupImmediate(programSnapshot->getZoneChokeGroup(zone));
                 }
 
-                stopVoicesForNoteImmediate(event.noteNumber);
+                stopVoicesForNoteImmediate(event.data);
 
                 if (monoMode_)
                 {
@@ -2325,7 +2343,7 @@ void EngineCore::flushPendingEventsAtOffset(const int offset,
                 continue;
             }
 
-            stopVoicesForNoteImmediate(event.noteNumber);
+            stopVoicesForNoteImmediate(event.data);
 
             if (monoMode_)
             {
@@ -2343,16 +2361,16 @@ void EngineCore::flushPendingEventsAtOffset(const int offset,
         }
         else if (event.type == EventType::noteOff)
         {
-            releaseVoicesForNote(event.noteNumber);
+            releaseVoicesForNote(event.data);
 
             if (programSnapshot == nullptr)
                 continue;
 
             std::array<int, ProgramSnapshot::maxZones> selectedZoneIndices{};
-            const auto midiVelocity = juce::jlimit(0, 127, static_cast<int>(std::round(event.velocity * 127.0f)));
+            const auto midiVelocity = juce::jlimit(0, 127, static_cast<int>(std::round(event.value * 127.0f)));
             const auto selectedZoneCount = chooseProgramZoneIndices(
                 *programSnapshot,
-                event.noteNumber,
+                event.data,
                 midiVelocity,
                 true,
                 selectedZoneIndices.data(),
@@ -2368,8 +2386,15 @@ void EngineCore::flushPendingEventsAtOffset(const int offset,
         }
         else
         {
-            currentPitchBendSemitones_ = juce::jlimit(-pitchBendRangeSemitones_, pitchBendRangeSemitones_,
-                event.velocity * pitchBendRangeSemitones_);
+            if (event.type == EventType::pitchBend)
+            {
+                currentPitchBendSemitones_ = juce::jlimit(-pitchBendRangeSemitones_, pitchBendRangeSemitones_,
+                    event.value * pitchBendRangeSemitones_);
+            }
+            else if (event.data == 1)
+            {
+                currentModWheelValue_ = juce::jlimit(0.0f, 1.0f, event.value);
+            }
         }
     }
 }
@@ -3366,7 +3391,8 @@ float EngineCore::computeFilterCutoffHz(const float envValue,
     auto cutoff = filterSettings_.baseCutoffHz
         + envValue * filterSettings_.envAmountHz
         + velocity * filterSettings_.velocityAmountHz
-        + lfoValue * (filterSettings_.lfoAmountHz * lfoAmountKeyTrackRatio);
+        + lfoValue * (filterSettings_.lfoAmountHz * lfoAmountKeyTrackRatio)
+        + currentModWheelValue_ * modulationRoutingSettings_.modWheelToFilterHz;
 
     const auto keyTrackRatio = std::pow(2.0f, (semitoneOffset / 12.0f) * filterSettings_.keyTracking);
     cutoff *= keyTrackRatio;
