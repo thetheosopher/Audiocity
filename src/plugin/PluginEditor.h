@@ -18,6 +18,7 @@
 #include "DialLookAndFeel.h"
 #include "PlayerPadState.h"
 #include "ProgramMappingModel.h"
+#include "ProgramMappingUndoHistory.h"
 #include "../engine/VoicePool.h"
 
 class AudiocityAudioProcessor;
@@ -293,7 +294,7 @@ private:
     AudiocityAudioProcessor& processor_;
     std::unique_ptr<juce::FileChooser> fileChooser_;
     std::unique_ptr<juce::TooltipWindow> tooltipWindow_;
-    audiocity::engine::SettingsUndoHistory settingsUndoHistory_;
+    audiocity::plugin::EditorUndoHistory editorUndoHistory_;
     bool isHoveringValidDrop_ = false;
     bool isResizingSampleList_ = false;
     int sampleListColumnWidth_ = 360;
@@ -848,8 +849,15 @@ private:
     void scanSelectedSampleBrowserBookmark();
     void addCurrentSampleRootBookmark();
     void removeSelectedSampleBrowserBookmark();
+    void syncImportedProgramMappingUndoContext();
     void refreshMappingZoneRows();
     std::vector<int> getSelectedMappingRowIndices() const;
+    std::vector<int> getSelectedMappingZoneIndices() const;
+    [[nodiscard]] audiocity::plugin::ProgramMappingStateSnapshot captureImportedProgramMappingState() const;
+    void recordImportedProgramMappingChange(const audiocity::plugin::ProgramMappingStateSnapshot& beforeState,
+                                           const juce::String& label);
+    bool applyImportedProgramMappingHistoryState(const audiocity::plugin::ProgramMappingStateSnapshot& mappingState,
+                                                 const juce::String& statusText);
     void selectMappingZoneIndices(const std::vector<int>& zoneIndices);
     void selectAllMappingZones();
     bool selectMappingZoneByIndex(int zoneIndex);
@@ -912,6 +920,7 @@ private:
     [[nodiscard]] audiocity::engine::SettingsSnapshot captureSettingsSnapshot() const;
     void applySettingsSnapshot(const audiocity::engine::SettingsSnapshot& snapshot);
 
+    juce::String mappingUndoProgramPath_;
     std::optional<audiocity::engine::SettingsSnapshot> lastSettingsSnapshot_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudiocityAudioProcessorEditor)

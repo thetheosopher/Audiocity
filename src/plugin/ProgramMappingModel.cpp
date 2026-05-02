@@ -463,6 +463,23 @@ bool applyProgramZoneEdit(audiocity::engine::Program& program, const ProgramZone
     return true;
 }
 
+bool applyProgramZoneEditsAtomic(audiocity::engine::Program& program,
+                                 const std::vector<ProgramZoneEdit>& edits)
+{
+    if (edits.empty())
+        return false;
+
+    auto updatedProgram = program;
+    for (const auto& edit : edits)
+    {
+        if (!applyProgramZoneEdit(updatedProgram, edit))
+            return false;
+    }
+
+    program = std::move(updatedProgram);
+    return true;
+}
+
 int duplicateProgramZone(audiocity::engine::Program& program, const int zoneIndex)
 {
     if (zoneIndex < 0 || static_cast<std::size_t>(zoneIndex) >= program.zones.size())
@@ -482,6 +499,27 @@ bool deleteProgramZone(audiocity::engine::Program& program, const int zoneIndex)
     const auto groupIndex = program.zones[static_cast<std::size_t>(zoneIndex)].groupIndex;
     program.zones.erase(program.zones.begin() + zoneIndex);
     recomputeGroupRangeFromZones(program, groupIndex);
+    return true;
+}
+
+bool deleteProgramZonesAtomic(audiocity::engine::Program& program,
+                              const std::vector<int>& zoneIndices)
+{
+    if (zoneIndices.empty())
+        return false;
+
+    auto sortedZoneIndices = zoneIndices;
+    std::sort(sortedZoneIndices.begin(), sortedZoneIndices.end(), std::greater<int>());
+    sortedZoneIndices.erase(std::unique(sortedZoneIndices.begin(), sortedZoneIndices.end()), sortedZoneIndices.end());
+
+    auto updatedProgram = program;
+    for (const auto zoneIndex : sortedZoneIndices)
+    {
+        if (!deleteProgramZone(updatedProgram, zoneIndex))
+            return false;
+    }
+
+    program = std::move(updatedProgram);
     return true;
 }
 

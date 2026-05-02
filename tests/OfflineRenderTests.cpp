@@ -14,6 +14,7 @@
 #include "../src/plugin/ImportedProgramState.h"
 #include "../src/plugin/PlayerPadState.h"
 #include "../src/plugin/ProgramMappingModel.h"
+#include "../src/plugin/ProgramMappingUndoHistory.h"
 
 #include <cmath>
 #include <array>
@@ -643,6 +644,101 @@ bool runProgramMappingZoneOperationsTest()
     return program.zones.size() == 3
         && program.groups[0].keyRange.low == 36
         && program.groups[0].keyRange.high == 40;
+}
+
+bool runProgramMappingAtomicBatchEditRollbackTest()
+{
+    using namespace audiocity::engine;
+
+    Program program;
+    SampleAsset sample;
+    sample.displayName = "batch.wav";
+    sample.lengthSamples = 512;
+    program.sampleAssets.push_back(sample);
+
+    Zone first;
+    first.sampleAssetIndex = 0;
+    first.keyRange = MidiRange::single(60);
+    first.velocityRange = VelocityRange::full();
+    first.rootMidiNote = 60;
+    program.zones.push_back(first);
+
+    Zone second = first;
+    second.keyRange = MidiRange::single(61);
+    second.rootMidiNote = 61;
+    program.zones.push_back(second);
+
+    const auto beforeFailure = audiocity::plugin::createProgramZoneMappingState(program);
+
+    std::vector<audiocity::plugin::ProgramZoneEdit> failingEdits;
+    failingEdits.push_back({ 0, 48, 52, 8, 96, -1, -1, -1, -1, 50 });
+    failingEdits.push_back({ 99, 0, 127, 0, 127, 60 });
+
+    if (audiocity::plugin::applyProgramZoneEditsAtomic(program, failingEdits))
+        return false;
+
+    const auto afterFailure = audiocity::plugin::createProgramZoneMappingState(program);
+    if (!beforeFailure.isEquivalentTo(afterFailure))
+        return false;
+
+    std::vector<audiocity::plugin::ProgramZoneEdit> successfulEdits;
+    successfulEdits.push_back({ 0, 48, 52, 8, 96, -1, -1, -1, -1, 50 });
+    successfulEdits.push_back({ 1, 53, 57, 16, 100, -1, -1, -1, -1, 55 });
+
+    if (!audiocity::plugin::applyProgramZoneEditsAtomic(program, successfulEdits))
+        return false;
+
+    return program.zones[0].keyRange.low == 48
+        && program.zones[0].keyRange.high == 52
+        && program.zones[0].velocityRange.low == 8
+        && program.zones[0].velocityRange.high == 96
+        && program.zones[0].rootMidiNote == 50
+        && program.zones[1].keyRange.low == 53
+        && program.zones[1].keyRange.high == 57
+        && program.zones[1].velocityRange.low == 16
+        && program.zones[1].velocityRange.high == 100
+        && program.zones[1].rootMidiNote == 55;
+}
+
+bool runProgramMappingAtomicBatchDeleteRollbackTest()
+{
+    using namespace audiocity::engine;
+
+    Program program;
+    SampleAsset sample;
+    sample.displayName = "batch_delete.wav";
+    sample.lengthSamples = 512;
+    program.sampleAssets.push_back(sample);
+
+    Zone first;
+    first.sampleAssetIndex = 0;
+    first.keyRange = MidiRange::single(60);
+    first.rootMidiNote = 60;
+    program.zones.push_back(first);
+
+    Zone second = first;
+    second.keyRange = MidiRange::single(61);
+    second.rootMidiNote = 61;
+    program.zones.push_back(second);
+
+    Zone third = first;
+    third.keyRange = MidiRange::single(62);
+    third.rootMidiNote = 62;
+    program.zones.push_back(third);
+
+    const auto beforeFailure = audiocity::plugin::createProgramZoneMappingState(program);
+    if (audiocity::plugin::deleteProgramZonesAtomic(program, { 2, 99 }))
+        return false;
+
+    const auto afterFailure = audiocity::plugin::createProgramZoneMappingState(program);
+    if (!beforeFailure.isEquivalentTo(afterFailure))
+        return false;
+
+    if (!audiocity::plugin::deleteProgramZonesAtomic(program, { 2, 0 }))
+        return false;
+
+    return program.zones.size() == 1
+        && program.zones.front().rootMidiNote == 61;
 }
 
 bool runProgramMappingStateRoundTripTest()
@@ -4325,6 +4421,149 @@ bool runProgramPreloadMetricsAndRebuildTest()
         && engine.getLoadedStreamSamples() == 4608;
 }
 
+bool runSingleSampleFileStreamingPreloadMetricsTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 4096;
+
+    const auto tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_single_stream_metrics", ".wav");
+
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(tempFile.createOutputStream());
+        if (output == nullptr)
+            return false;
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+            return false;
+
+        output.release();
+
+        juce::AudioBuffer<float> buffer(1, sampleLength);
+        for (int i = 0; i < sampleLength; ++i)
+        {
+            const float phase = static_cast<float>(2.0 * juce::MathConstants<double>::pi * i * 220.0 / sampleRate);
+            buffer.setSample(0, i, 0.35f * std::sin(phase));
+        }
+
+        if (!writer->writeFromAudioSampleBuffer(buffer, 0, sampleLength))
+            return false;
+    }
+
+    auto cleanup = [&]() { tempFile.deleteFile(); };
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setPreloadSamples(256);
+
+    if (!engine.loadSampleFromFile(tempFile))
+    {
+        cleanup();
+        return false;
+    }
+
+    auto renderBlock = [&](const bool noteOn) -> float
+    {
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        if (noteOn)
+            midi.addEvent(juce::MidiMessage::noteOn(1, 60, 0.9f), 0);
+
+        engine.render(block, midi);
+        return blockEnergy(block);
+    };
+
+    if (engine.getLoadedPreloadSamples() != 256
+        || engine.getLoadedStreamSamples() != (sampleLength - 256))
+    {
+        cleanup();
+        return false;
+    }
+
+    const auto afterLoadCount = engine.getSegmentRebuildCount();
+    if (renderBlock(true) <= 0.001f)
+    {
+        cleanup();
+        return false;
+    }
+
+    renderBlock(false);
+    renderBlock(false);
+
+    if (engine.getStreamPrimeRequestCount() != 4
+        || engine.getStreamPrimeCacheHitCount() != 3
+        || engine.getStreamPrimeCacheMissCount() != 1
+        || engine.getStreamPrimeServiceCount() != 0)
+    {
+        cleanup();
+        return false;
+    }
+
+    engine.serviceStreamPriming();
+    renderBlock(false);
+
+    if (engine.getStreamPrimeRequestCount() != 5
+        || engine.getStreamPrimeCacheHitCount() != 4
+        || engine.getStreamPrimeCacheMissCount() != 1
+        || engine.getStreamPrimeServiceCount() != 1)
+    {
+        cleanup();
+        return false;
+    }
+
+    engine.panic();
+    engine.setPreloadSamples(512);
+
+    if (engine.getSegmentRebuildCount() <= afterLoadCount
+        || engine.getLoadedPreloadSamples() != 512
+        || engine.getLoadedStreamSamples() != (sampleLength - 512)
+        || engine.getStreamPrimeRequestCount() != 0
+        || engine.getStreamPrimeCacheHitCount() != 0
+        || engine.getStreamPrimeCacheMissCount() != 0
+        || engine.getStreamPrimeServiceCount() != 0)
+    {
+        cleanup();
+        return false;
+    }
+
+    if (renderBlock(true) <= 0.001f)
+    {
+        cleanup();
+        return false;
+    }
+
+    renderBlock(false);
+    renderBlock(false);
+    renderBlock(false);
+    renderBlock(false);
+
+    if (engine.getStreamPrimeRequestCount() != 6
+        || engine.getStreamPrimeCacheHitCount() != 5
+        || engine.getStreamPrimeCacheMissCount() != 1
+        || engine.getStreamPrimeServiceCount() != 0)
+    {
+        cleanup();
+        return false;
+    }
+
+    engine.serviceStreamPriming();
+    renderBlock(false);
+
+    const auto passed = engine.getStreamPrimeRequestCount() == 7
+        && engine.getStreamPrimeCacheHitCount() == 6
+        && engine.getStreamPrimeCacheMissCount() == 1
+        && engine.getStreamPrimeServiceCount() == 1;
+
+    cleanup();
+    return passed;
+}
+
 bool runProgramStreamPrimingAndCacheMetricsTest()
 {
     using namespace audiocity::engine;
@@ -4615,7 +4854,8 @@ bool runQualityTierDeterminismTest()
     };
 
     return renderPairForTier(audiocity::engine::EngineCore::QualityTier::cpu)
-        && renderPairForTier(audiocity::engine::EngineCore::QualityTier::fidelity);
+        && renderPairForTier(audiocity::engine::EngineCore::QualityTier::fidelity)
+        && renderPairForTier(audiocity::engine::EngineCore::QualityTier::ultra);
 }
 
 double computeAverage(const std::vector<float>& values, const int startIndex, const int endIndexExclusive)
@@ -4707,7 +4947,7 @@ bool runRuntimeQualitySwitchSmokeTest()
 {
     constexpr int channels = 2;
     constexpr int blockSize = 128;
-    constexpr int blocks = 12;
+    constexpr int blocks = 14;
     constexpr double sampleRate = 48000.0;
 
     juce::AudioBuffer<float> sample(1, 3072);
@@ -4726,15 +4966,17 @@ bool runRuntimeQualitySwitchSmokeTest()
     for (int block = 0; block < blocks; ++block)
     {
         if (block == 4)
-            engine.setQualityTier(audiocity::engine::EngineCore::QualityTier::cpu);
+            engine.setQualityTier(audiocity::engine::EngineCore::QualityTier::ultra);
         if (block == 8)
+            engine.setQualityTier(audiocity::engine::EngineCore::QualityTier::cpu);
+        if (block == 11)
             engine.setQualityTier(audiocity::engine::EngineCore::QualityTier::fidelity);
 
         juce::AudioBuffer<float> blockBuffer(channels, blockSize);
         juce::MidiBuffer midi;
         if (block == 0)
             midi.addEvent(juce::MidiMessage::noteOn(1, 67, 0.9f), 0);
-        if (block == 10)
+        if (block == 12)
             midi.addEvent(juce::MidiMessage::noteOff(1, 67), 32);
 
         engine.render(blockBuffer, midi);
@@ -4754,6 +4996,226 @@ bool runRuntimeQualitySwitchSmokeTest()
     }
 
     return totalEnergy > 0.01 && totalEnergy < 20000.0;
+}
+
+bool runEditorUndoHistoryMixedOrderTest()
+{
+    using namespace audiocity::engine;
+
+    Program initialProgram;
+    SampleAsset sample;
+    sample.displayName = "undo.wav";
+    sample.lengthSamples = 512;
+    initialProgram.sampleAssets.push_back(sample);
+
+    Zone first;
+    first.sampleAssetIndex = 0;
+    first.keyRange = MidiRange::single(60);
+    first.rootMidiNote = 60;
+    initialProgram.zones.push_back(first);
+
+    Zone second = first;
+    second.keyRange = MidiRange::single(61);
+    second.rootMidiNote = 61;
+    initialProgram.zones.push_back(second);
+
+    const auto initialState = audiocity::plugin::createProgramZoneMappingState(initialProgram);
+
+    auto editedProgram = initialProgram;
+    audiocity::plugin::ProgramZoneEdit edit;
+    edit.zoneIndex = 0;
+    edit.keyLow = 48;
+    edit.keyHigh = 52;
+    edit.velocityLow = 8;
+    edit.velocityHigh = 96;
+    edit.rootMidiNote = 50;
+    if (!audiocity::plugin::applyProgramZoneEdit(editedProgram, edit))
+        return false;
+
+    const auto editedState = audiocity::plugin::createProgramZoneMappingState(editedProgram);
+
+    auto finalProgram = editedProgram;
+    if (!audiocity::plugin::deleteProgramZone(finalProgram, 1))
+        return false;
+
+    const auto finalState = audiocity::plugin::createProgramZoneMappingState(finalProgram);
+
+    audiocity::engine::SettingsSnapshot initialSettings;
+    initialSettings.preloadSamples = 32768;
+    initialSettings.sampleWindowStart = 0;
+
+    auto changedSettings = initialSettings;
+    changedSettings.preloadSamples = 4096;
+    changedSettings.sampleWindowStart = 12;
+
+    audiocity::plugin::ProgramMappingStateSnapshot initialMapping;
+    initialMapping.hasImportedProgram = true;
+    initialMapping.programPath = "C:/Library/undo.sfz";
+    initialMapping.mappingState = initialState;
+
+    auto editedMapping = initialMapping;
+    editedMapping.mappingState = editedState;
+
+    auto finalMapping = initialMapping;
+    finalMapping.mappingState = finalState;
+
+    audiocity::plugin::EditorUndoHistory history;
+    history.recordSettingsChange(initialSettings, changedSettings, 1, "Edit Settings");
+    history.recordMappingChange(editedMapping, finalMapping, "Delete Mapping Zone");
+
+    if (!history.canUndo() || history.canRedo() || history.undoLabel() != "Delete Mapping Zone")
+        return false;
+
+    auto currentSettings = changedSettings;
+    auto currentMapping = finalMapping;
+    const auto undo1 = history.undo(currentSettings, currentMapping);
+    if (!undo1.has_value() || undo1->kind != audiocity::plugin::EditorUndoHistory::EntryKind::mapping)
+        return false;
+
+    if (undo1->mappingSnapshot != editedMapping)
+        return false;
+
+    currentMapping = undo1->mappingSnapshot;
+    const auto undo2 = history.undo(currentSettings, currentMapping);
+    if (!undo2.has_value() || undo2->kind != audiocity::plugin::EditorUndoHistory::EntryKind::settings)
+        return false;
+
+    if (!(undo2->settingsSnapshot == initialSettings))
+        return false;
+
+    if (history.canUndo() || !history.canRedo())
+        return false;
+
+    currentSettings = undo2->settingsSnapshot;
+    const auto redo1 = history.redo(currentSettings, currentMapping);
+    if (!redo1.has_value() || redo1->kind != audiocity::plugin::EditorUndoHistory::EntryKind::settings)
+        return false;
+
+    if (!(redo1->settingsSnapshot == changedSettings))
+        return false;
+
+    currentSettings = redo1->settingsSnapshot;
+    const auto redo2 = history.redo(currentSettings, currentMapping);
+    if (!redo2.has_value() || redo2->kind != audiocity::plugin::EditorUndoHistory::EntryKind::mapping)
+        return false;
+
+    if (redo2->mappingSnapshot != finalMapping)
+        return false;
+
+    return !history.canRedo() && history.canUndo();
+}
+
+bool runEditorUndoHistoryCoalesceAndLabelsTest()
+{
+    audiocity::engine::SettingsSnapshot a;
+    a.preloadSamples = 32768;
+
+    auto b = a;
+    b.preloadSamples = 24000;
+
+    auto c = b;
+    c.preloadSamples = 16000;
+
+    audiocity::plugin::EditorUndoHistory history;
+    history.recordSettingsChange(a, b, 1, "Edit Settings");
+    history.recordSettingsChange(b, c, 1, "Edit Settings");
+
+    if (history.undoLabel() != "Edit Settings")
+        return false;
+
+    auto currentMapping = audiocity::plugin::ProgramMappingStateSnapshot{};
+    auto currentSettings = c;
+    const auto undo = history.undo(currentSettings, currentMapping);
+    if (!undo.has_value() || undo->kind != audiocity::plugin::EditorUndoHistory::EntryKind::settings)
+        return false;
+
+    if (!(undo->settingsSnapshot == a))
+        return false;
+
+    if (!history.undoLabel().empty())
+        return false;
+
+    return history.canRedo();
+}
+
+bool runEditorUndoHistoryDuplicateAndSplitTest()
+{
+    using namespace audiocity::engine;
+
+    Program initialProgram;
+    SampleAsset sample;
+    sample.displayName = "undo.wav";
+    sample.lengthSamples = 512;
+    initialProgram.sampleAssets.push_back(sample);
+
+    Zone zone;
+    zone.sampleAssetIndex = 0;
+    zone.keyRange = MidiRange::fromUnordered(36, 47);
+    zone.rootMidiNote = 42;
+    initialProgram.zones.push_back(zone);
+
+    audiocity::plugin::ProgramMappingStateSnapshot initialMapping;
+    initialMapping.hasImportedProgram = true;
+    initialMapping.programPath = "C:/Library/undo.sfz";
+    initialMapping.mappingState = audiocity::plugin::createProgramZoneMappingState(initialProgram);
+
+    auto duplicatedProgram = initialProgram;
+    const auto duplicatedIndex = audiocity::plugin::duplicateProgramZone(duplicatedProgram, 0);
+    if (duplicatedIndex != 1)
+        return false;
+
+    auto duplicatedMapping = initialMapping;
+    duplicatedMapping.mappingState = audiocity::plugin::createProgramZoneMappingState(duplicatedProgram);
+
+    auto splitProgram = duplicatedProgram;
+    const auto splitIndex = audiocity::plugin::splitProgramZoneByKey(splitProgram, duplicatedIndex);
+    if (splitIndex != 2)
+        return false;
+
+    auto splitMapping = initialMapping;
+    splitMapping.mappingState = audiocity::plugin::createProgramZoneMappingState(splitProgram);
+
+    audiocity::plugin::EditorUndoHistory history;
+    history.recordMappingChange(initialMapping, duplicatedMapping, "Duplicate Mapping Zone");
+    history.recordMappingChange(duplicatedMapping, splitMapping, "Split Mapping Zone");
+
+    if (!history.canUndo() || history.canRedo() || history.undoLabel() != "Split Mapping Zone")
+        return false;
+
+    auto currentSettings = audiocity::engine::SettingsSnapshot{};
+    auto currentMapping = splitMapping;
+    const auto undo1 = history.undo(currentSettings, currentMapping);
+    if (!undo1.has_value() || undo1->kind != audiocity::plugin::EditorUndoHistory::EntryKind::mapping)
+        return false;
+
+    if (undo1->mappingSnapshot != duplicatedMapping || history.undoLabel() != "Duplicate Mapping Zone")
+        return false;
+
+    currentMapping = undo1->mappingSnapshot;
+    const auto undo2 = history.undo(currentSettings, currentMapping);
+    if (!undo2.has_value() || undo2->kind != audiocity::plugin::EditorUndoHistory::EntryKind::mapping)
+        return false;
+
+    if (undo2->mappingSnapshot != initialMapping)
+        return false;
+
+    currentMapping = undo2->mappingSnapshot;
+    const auto redo1 = history.redo(currentSettings, currentMapping);
+    if (!redo1.has_value() || redo1->kind != audiocity::plugin::EditorUndoHistory::EntryKind::mapping)
+        return false;
+
+    if (redo1->mappingSnapshot != duplicatedMapping)
+        return false;
+
+    currentMapping = redo1->mappingSnapshot;
+    const auto redo2 = history.redo(currentSettings, currentMapping);
+    if (!redo2.has_value() || redo2->kind != audiocity::plugin::EditorUndoHistory::EntryKind::mapping)
+        return false;
+
+    if (redo2->mappingSnapshot != splitMapping)
+        return false;
+
+    return !history.canRedo() && history.canUndo();
 }
 
 bool runSettingsUndoHistoryTest()
@@ -7018,6 +7480,12 @@ int main()
     if (!runProgramMappingZoneOperationsTest())
         return 102;
 
+    if (!runProgramMappingAtomicBatchEditRollbackTest())
+        return 111;
+
+    if (!runProgramMappingAtomicBatchDeleteRollbackTest())
+        return 112;
+
     if (!runProgramMappingStateRoundTripTest())
         return 101;
 
@@ -7180,6 +7648,9 @@ int main()
     if (!runProgramPreloadMetricsAndRebuildTest())
         return 14;
 
+    if (!runSingleSampleFileStreamingPreloadMetricsTest())
+        return 170;
+
     if (!runProgramStreamPrimingAndCacheMetricsTest())
         return 171;
 
@@ -7197,6 +7668,15 @@ int main()
 
     if (!runRuntimeQualitySwitchSmokeTest())
         return 18;
+
+    if (!runEditorUndoHistoryMixedOrderTest())
+        return 173;
+
+    if (!runEditorUndoHistoryCoalesceAndLabelsTest())
+        return 174;
+
+    if (!runEditorUndoHistoryDuplicateAndSplitTest())
+        return 175;
 
     if (!runSettingsUndoHistoryTest())
         return 18;

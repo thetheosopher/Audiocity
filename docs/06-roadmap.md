@@ -105,7 +105,18 @@
 
 ### Epic G — Disk streaming (DFD) + preload/priming
 ### Epic H — Quality tiers (CPU vs fidelity)
+
+**Current validated slice**
+- CPU, Fidelity, and Ultra playback tiers are wired end-to-end through processor state and UI controls.
+- Offline tests cover audible tier differences, deterministic output per tier, and runtime switching across all three tiers.
+
 ### Epic I — Undo/Redo across mapping and sample edits
+
+**Current validated slice**
+- Imported-program structural mapping undo/redo uses serialized mapping snapshots.
+- Editor undo/redo is now chronological across mapping changes and sample/settings edits rather than split by tab or edit domain.
+- Multi-zone imported-program mapping apply/delete commits atomically at the processor publish boundary so failed batch edits roll back cleanly.
+- Duplicate and split structural zone operations are covered by the same unified mapping history path.
 
 ---
 

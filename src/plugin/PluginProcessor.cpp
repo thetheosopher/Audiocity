@@ -1553,7 +1553,49 @@ std::vector<audiocity::plugin::ProgramZoneListRow> AudiocityAudioProcessor::getI
     return importedProgramZoneRows_;
 }
 
+juce::ValueTree AudiocityAudioProcessor::createImportedProgramMappingState() const
+{
+    std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+    if (!importedProgramLoaded_.load(std::memory_order_relaxed))
+        return {};
+
+    return audiocity::plugin::createProgramZoneMappingState(importedProgram_);
+}
+
+bool AudiocityAudioProcessor::applyImportedProgramMappingState(const juce::ValueTree& mappingState)
+{
+    audiocity::engine::Program programToPublish;
+    std::vector<juce::AudioBuffer<float>> sampleDataToPublish;
+
+    {
+        std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+        if (!importedProgramLoaded_.load(std::memory_order_relaxed)
+            || importedProgramSampleDataByAsset_.empty())
+        {
+            return false;
+        }
+
+        auto restoredProgram = importedProgram_;
+        if (!audiocity::plugin::restoreImportedProgramMappingState(restoredProgram, mappingState))
+            return false;
+
+        importedProgram_ = std::move(restoredProgram);
+        refreshImportedProgramDerivedStateLocked("Mapping restored");
+        captureImportedProgramSnapshotLocked(programToPublish, sampleDataToPublish);
+    }
+
+    engine_.panic();
+    engine_.setProgram(programToPublish, sampleDataToPublish);
+    return true;
+}
+
 bool AudiocityAudioProcessor::updateImportedProgramZoneMapping(const audiocity::plugin::ProgramZoneEdit& edit)
+{
+    return updateImportedProgramZoneMappings({ edit });
+}
+
+bool AudiocityAudioProcessor::updateImportedProgramZoneMappings(
+    const std::vector<audiocity::plugin::ProgramZoneEdit>& edits)
 {
     audiocity::engine::Program programToPublish;
     std::vector<juce::AudioBuffer<float>> sampleDataToPublish;
@@ -1567,10 +1609,15 @@ bool AudiocityAudioProcessor::updateImportedProgramZoneMapping(const audiocity::
             return false;
         }
 
-        if (!audiocity::plugin::applyProgramZoneEdit(importedProgram_, edit))
+        auto updatedProgram = importedProgram_;
+        if (!audiocity::plugin::applyProgramZoneEditsAtomic(updatedProgram, edits))
             return false;
 
-        refreshImportedProgramDerivedStateLocked("Mapping updated: zone " + juce::String(edit.zoneIndex + 1));
+        importedProgram_ = std::move(updatedProgram);
+        refreshImportedProgramDerivedStateLocked(
+            edits.size() == 1
+                ? "Mapping updated: zone " + juce::String(edits.front().zoneIndex + 1)
+                : "Mapping updated: batch");
         captureImportedProgramSnapshotLocked(programToPublish, sampleDataToPublish);
     }
 
@@ -1609,6 +1656,11 @@ int AudiocityAudioProcessor::duplicateImportedProgramZone(const int zoneIndex)
 
 bool AudiocityAudioProcessor::deleteImportedProgramZone(const int zoneIndex)
 {
+    return deleteImportedProgramZones({ zoneIndex });
+}
+
+bool AudiocityAudioProcessor::deleteImportedProgramZones(const std::vector<int>& zoneIndices)
+{
     audiocity::engine::Program programToPublish;
     std::vector<juce::AudioBuffer<float>> sampleDataToPublish;
 
@@ -1621,10 +1673,15 @@ bool AudiocityAudioProcessor::deleteImportedProgramZone(const int zoneIndex)
             return false;
         }
 
-        if (!audiocity::plugin::deleteProgramZone(importedProgram_, zoneIndex))
+        auto updatedProgram = importedProgram_;
+        if (!audiocity::plugin::deleteProgramZonesAtomic(updatedProgram, zoneIndices))
             return false;
 
-        refreshImportedProgramDerivedStateLocked("Mapping deleted: zone " + juce::String(zoneIndex + 1));
+        importedProgram_ = std::move(updatedProgram);
+        refreshImportedProgramDerivedStateLocked(
+            zoneIndices.size() == 1
+                ? "Mapping deleted: zone " + juce::String(zoneIndices.front() + 1)
+                : "Mapping deleted: batch");
         captureImportedProgramSnapshotLocked(programToPublish, sampleDataToPublish);
     }
 

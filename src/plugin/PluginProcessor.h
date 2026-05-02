@@ -70,9 +70,13 @@ public:
     [[nodiscard]] juce::String getImportedProgramName() const;
     [[nodiscard]] juce::String getImportedProgramMapSummary() const;
     [[nodiscard]] std::vector<audiocity::plugin::ProgramZoneListRow> getImportedProgramZoneRows() const;
+    [[nodiscard]] juce::ValueTree createImportedProgramMappingState() const;
+    bool applyImportedProgramMappingState(const juce::ValueTree& mappingState);
     bool updateImportedProgramZoneMapping(const audiocity::plugin::ProgramZoneEdit& edit);
+    bool updateImportedProgramZoneMappings(const std::vector<audiocity::plugin::ProgramZoneEdit>& edits);
     [[nodiscard]] int duplicateImportedProgramZone(int zoneIndex);
     bool deleteImportedProgramZone(int zoneIndex);
+    bool deleteImportedProgramZones(const std::vector<int>& zoneIndices);
     [[nodiscard]] int splitImportedProgramZone(int zoneIndex);
     [[nodiscard]] juce::String getLastImportDiagnosticSummary() const;
     [[nodiscard]] bool isRexRuntimeAvailable() const noexcept { return engine_.isRexRuntimeAvailable(); }

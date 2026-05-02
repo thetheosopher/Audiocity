@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <optional>
 
 namespace audiocity::engine
@@ -430,6 +431,8 @@ struct DiskSampleStreamSource final : SampleStreamSource
                                                     juce::jmin(4096, juce::jmax(0, absoluteStreamStartSample))))
               : 0)
     {
+        formatManager.registerBasicFormats();
+
         if (const auto initialState = seedInitialCacheState(seedTail))
             cacheState.store(initialState, std::memory_order_release);
     }
@@ -551,14 +554,7 @@ private:
 
     [[nodiscard]] std::shared_ptr<const StreamCacheWindow> loadCacheWindow(const int requestedWindowStart) const
     {
-        if (!file.existsAsFile() || totalSamples <= 0 || primeWindowSamples <= 0)
-            return {};
-
-        juce::AudioFormatManager formatManager;
-        formatManager.registerBasicFormats();
-
-        std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
-        if (reader == nullptr || reader->numChannels <= 0)
+        if (totalSamples <= 0 || primeWindowSamples <= 0)
             return {};
 
         const auto windowStart = juce::jlimit(0, juce::jmax(0, totalSamples - primeWindowSamples), requestedWindowStart);
@@ -566,13 +562,18 @@ private:
         if (windowSamples <= 0)
             return {};
 
-        juce::AudioBuffer<float> fileData(static_cast<int>(reader->numChannels), windowSamples);
-        if (!reader->read(&fileData,
-                          0,
-                          windowSamples,
-                          static_cast<juce::int64>(streamStartSample + windowStart),
-                          true,
-                          true))
+        std::lock_guard<std::mutex> lock(readerMutex);
+        auto* currentReader = getOrCreateReaderLocked();
+        if (currentReader == nullptr)
+            return {};
+
+        juce::AudioBuffer<float> fileData(static_cast<int>(currentReader->numChannels), windowSamples);
+        if (!currentReader->read(&fileData,
+                                 0,
+                                 windowSamples,
+                                 static_cast<juce::int64>(streamStartSample + windowStart),
+                                 true,
+                                 true))
         {
             return {};
         }
@@ -605,6 +606,17 @@ private:
         return cache;
     }
 
+    [[nodiscard]] juce::AudioFormatReader* getOrCreateReaderLocked() const
+    {
+        if (reader == nullptr && file.existsAsFile())
+            reader.reset(formatManager.createReaderFor(file));
+
+        if (reader == nullptr || reader->numChannels <= 0)
+            return nullptr;
+
+        return reader.get();
+    }
+
     [[nodiscard]] std::shared_ptr<const StreamCacheState> mergeCacheWindow(
         const std::shared_ptr<const StreamCacheState>& currentState,
         const StreamCacheWindow& nextWindow) const
@@ -635,6 +647,9 @@ private:
     int totalSamples = 0;
     int streamStartSample = 0;
     int primeWindowSamples = 0;
+    mutable juce::AudioFormatManager formatManager;
+    mutable std::unique_ptr<juce::AudioFormatReader> reader;
+    mutable std::mutex readerMutex;
     mutable std::atomic<int> pendingPrimeWindowStart{ -1 };
     mutable std::atomic<int> primeRequestCount{ 0 };
     mutable std::atomic<int> primeCacheHitCount{ 0 };
@@ -909,7 +924,7 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
     const auto parsedTempoBpm = findEmbeddedTempoBpm(metadata);
     loadedMetadataTempoBpm_ = parsedTempoBpm.has_value() ? *parsedTempoBpm : 0.0;
 
-    setSampleData(mono, reader->sampleRate, embeddedRootNote);
+    setSampleDataInternal(mono, reader->sampleRate, embeddedRootNote, file);
     setAmpEnvelope(defaultAmpEnvelopeForLoadedSample());
     setAmpLfoSettings(defaultAmpLfoSettingsForLoadedSample());
     setPitchLfoSettings(defaultPitchLfoSettingsForLoadedSample());
@@ -952,6 +967,14 @@ bool EngineCore::isRexRuntimeAvailable() const noexcept
 
 void EngineCore::setSampleData(const juce::AudioBuffer<float>& sampleData, const double sampleRate, const int rootNote) noexcept
 {
+    setSampleDataInternal(sampleData, sampleRate, rootNote, {});
+}
+
+void EngineCore::setSampleDataInternal(const juce::AudioBuffer<float>& sampleData,
+                                      const double sampleRate,
+                                      const int rootNote,
+                                      const juce::File& backingFile) noexcept
+{
     displaySampleData_ = sampleData;
     loadedSampleLoopFormatBadge_ = {};
     loadedSampleBitDepth_ = -1;
@@ -979,7 +1002,7 @@ void EngineCore::setSampleData(const juce::AudioBuffer<float>& sampleData, const
         monoSample = mono;
     }
 
-    rebuildSampleSegments(monoSample);
+    rebuildSampleSegments(monoSample, backingFile);
 
     if (getTotalSampleLength() <= 0)
         generateFallbackSample();
@@ -1071,7 +1094,7 @@ void EngineCore::setPreloadSamples(const int preloadSamples) noexcept
     const auto segments = getSampleSegmentsSnapshot();
     if (segments != nullptr && getTotalSampleLength(*segments) > 0)
     {
-        rebuildSampleSegments(materializeSampleData(*segments));
+        rebuildSampleSegments(materializeSampleData(*segments), juce::File(segments->backingFilePath));
         rebuiltSingleSampleSegments = true;
     }
 
@@ -2809,9 +2832,15 @@ float EngineCore::readSampleLinear(const float position) const noexcept
 
 void EngineCore::rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData) noexcept
 {
+    rebuildSampleSegments(monoSampleData, {});
+}
+
+void EngineCore::rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData,
+                                       const juce::File& backingFile) noexcept
+{
     ++segmentRebuildCount_;
 
-    sampleSegments_.store(buildSampleSegments(monoSampleData, preloadSamples_), std::memory_order_release);
+    sampleSegments_.store(buildSampleSegments(monoSampleData, preloadSamples_, backingFile), std::memory_order_release);
 }
 
 std::shared_ptr<const EngineCore::SampleSegments> EngineCore::getSampleSegmentsSnapshot() const noexcept

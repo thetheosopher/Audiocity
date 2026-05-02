@@ -105,8 +105,12 @@ struct ProgramZoneEdit
 
 [[nodiscard]] std::vector<ProgramZoneListRow> buildProgramZoneListRows(const audiocity::engine::Program& program);
 [[nodiscard]] bool applyProgramZoneEdit(audiocity::engine::Program& program, const ProgramZoneEdit& edit);
+[[nodiscard]] bool applyProgramZoneEditsAtomic(audiocity::engine::Program& program,
+                                               const std::vector<ProgramZoneEdit>& edits);
 [[nodiscard]] int duplicateProgramZone(audiocity::engine::Program& program, int zoneIndex);
 [[nodiscard]] bool deleteProgramZone(audiocity::engine::Program& program, int zoneIndex);
+[[nodiscard]] bool deleteProgramZonesAtomic(audiocity::engine::Program& program,
+                                            const std::vector<int>& zoneIndices);
 [[nodiscard]] int splitProgramZoneByKey(audiocity::engine::Program& program, int zoneIndex);
 [[nodiscard]] juce::Identifier programZoneMappingStateType();
 [[nodiscard]] juce::ValueTree createProgramZoneMappingState(const audiocity::engine::Program& program);

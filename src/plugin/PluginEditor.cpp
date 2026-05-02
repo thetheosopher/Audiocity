@@ -3553,11 +3553,12 @@ void AudiocityAudioProcessorEditor::timerCallback()
             juce::dontSendNotification);
     }
 
+    syncImportedProgramMappingUndoContext();
+
     const auto currentSnapshot = captureSettingsSnapshot();
     if (lastSettingsSnapshot_.has_value() && *lastSettingsSnapshot_ != currentSnapshot)
-    {
-        settingsUndoHistory_.recordChange(*lastSettingsSnapshot_, currentSnapshot, 1, "Edit Settings");
-    }
+        editorUndoHistory_.recordSettingsChange(*lastSettingsSnapshot_, currentSnapshot, 1, "Edit Settings");
+
     lastSettingsSnapshot_ = currentSnapshot;
 
     syncAutomatedControlsFromProcessor();
@@ -4176,6 +4177,7 @@ void AudiocityAudioProcessorEditor::MappingZoneListModel::returnKeyPressed(const
 
 void AudiocityAudioProcessorEditor::refreshMappingZoneRows()
 {
+    syncImportedProgramMappingUndoContext();
     mappingZoneRows_ = processor_.getImportedProgramZoneRows();
     mappingOverview_.setRows(mappingZoneRows_);
 
@@ -4197,6 +4199,28 @@ void AudiocityAudioProcessorEditor::refreshMappingZoneRows()
     mappingZoneListBox_.repaint();
 }
 
+void AudiocityAudioProcessorEditor::syncImportedProgramMappingUndoContext()
+{
+    const auto programPath = processor_.getImportedProgramPath();
+    if (programPath.isEmpty())
+    {
+        if (mappingUndoProgramPath_.isNotEmpty())
+        {
+            editorUndoHistory_.clear();
+            lastSettingsSnapshot_ = captureSettingsSnapshot();
+            mappingUndoProgramPath_.clear();
+        }
+        return;
+    }
+
+    if (!programPath.equalsIgnoreCase(mappingUndoProgramPath_))
+    {
+        editorUndoHistory_.clear();
+        lastSettingsSnapshot_ = captureSettingsSnapshot();
+        mappingUndoProgramPath_ = programPath;
+    }
+}
+
 std::vector<int> AudiocityAudioProcessorEditor::getSelectedMappingRowIndices() const
 {
     std::vector<int> selectedRows;
@@ -4206,6 +4230,73 @@ std::vector<int> AudiocityAudioProcessorEditor::getSelectedMappingRowIndices() c
         selectedRows.push_back(rows[index]);
 
     return selectedRows;
+}
+
+std::vector<int> AudiocityAudioProcessorEditor::getSelectedMappingZoneIndices() const
+{
+    std::vector<int> zoneIndices;
+    const auto selectedRows = getSelectedMappingRowIndices();
+    zoneIndices.reserve(selectedRows.size());
+
+    for (const auto row : selectedRows)
+    {
+        if (row < 0 || row >= static_cast<int>(mappingZoneRows_.size()))
+            continue;
+
+        zoneIndices.push_back(mappingZoneRows_[static_cast<std::size_t>(row)].zoneIndex);
+    }
+
+    return zoneIndices;
+}
+
+audiocity::plugin::ProgramMappingStateSnapshot AudiocityAudioProcessorEditor::captureImportedProgramMappingState() const
+{
+    audiocity::plugin::ProgramMappingStateSnapshot snapshot;
+    snapshot.hasImportedProgram = processor_.hasImportedProgram();
+    snapshot.programPath = processor_.getImportedProgramPath();
+    if (snapshot.hasImportedProgram)
+        snapshot.mappingState = processor_.createImportedProgramMappingState();
+
+    return snapshot;
+}
+
+void AudiocityAudioProcessorEditor::recordImportedProgramMappingChange(
+    const audiocity::plugin::ProgramMappingStateSnapshot& beforeState,
+                                                                      const juce::String& label)
+{
+    const auto afterState = captureImportedProgramMappingState();
+    editorUndoHistory_.recordMappingChange(beforeState, afterState, label.toStdString());
+    mappingUndoProgramPath_ = afterState.programPath;
+}
+
+bool AudiocityAudioProcessorEditor::applyImportedProgramMappingHistoryState(
+    const audiocity::plugin::ProgramMappingStateSnapshot& mappingState,
+                                                                            const juce::String& statusText)
+{
+    if (!mappingState.hasImportedProgram)
+        return false;
+
+    const auto currentProgramPath = processor_.getImportedProgramPath();
+    if (!currentProgramPath.equalsIgnoreCase(mappingState.programPath))
+        return false;
+
+    const auto selectedZoneIndices = getSelectedMappingZoneIndices();
+    const auto preferredRow = mappingZoneListBox_.getSelectedRow();
+    if (!processor_.applyImportedProgramMappingState(mappingState.mappingState))
+        return false;
+
+    mappingEditStatusLabel_.setText(statusText, juce::dontSendNotification);
+    refreshMappingZoneRows();
+
+    if (!selectedZoneIndices.empty())
+        selectMappingZoneIndices(selectedZoneIndices);
+
+    if (mappingZoneListBox_.getSelectedRow() < 0)
+        selectClosestMappingRow(preferredRow >= 0 ? preferredRow : 0);
+
+    updateMappingDetails();
+    updateDiagnosticsStatusText();
+    return true;
 }
 
 void AudiocityAudioProcessorEditor::resetMappingBatchEditTracking(const std::vector<int>& selectedRows)
@@ -4532,6 +4623,9 @@ void AudiocityAudioProcessorEditor::applySelectedMappingZoneEdit()
             return;
         }
 
+        const auto beforeState = captureImportedProgramMappingState();
+        std::vector<audiocity::plugin::ProgramZoneEdit> edits;
+        edits.reserve(selectedRows.size());
         std::vector<int> zoneIndices;
         zoneIndices.reserve(selectedRows.size());
         for (const auto selectedRowValue : selectedRows)
@@ -4615,16 +4709,18 @@ void AudiocityAudioProcessorEditor::applySelectedMappingZoneEdit()
                 edit.hasLoopMode = true;
             }
 
-            if (!processor_.updateImportedProgramZoneMapping(edit))
-            {
-                mappingEditStatusLabel_.setText("Batch update failed", juce::dontSendNotification);
-                updateMappingEditControls();
-                return;
-            }
-
+            edits.push_back(edit);
             zoneIndices.push_back(row.zoneIndex);
         }
 
+        if (!processor_.updateImportedProgramZoneMappings(edits))
+        {
+            mappingEditStatusLabel_.setText("Batch update failed", juce::dontSendNotification);
+            updateMappingEditControls();
+            return;
+        }
+
+        recordImportedProgramMappingChange(beforeState, "Update Mapping Batch");
         resetMappingBatchEditTracking();
         mappingEditStatusLabel_.setText(
             juce::String(static_cast<int>(zoneIndices.size())) + " zones updated",
@@ -4710,6 +4806,7 @@ void AudiocityAudioProcessorEditor::duplicateSelectedMappingZone()
 
     const auto selectedRow = selectedRows.front();
     const auto zoneIndex = mappingZoneRows_[static_cast<std::size_t>(selectedRow)].zoneIndex;
+    const auto beforeState = captureImportedProgramMappingState();
     const auto newZoneIndex = processor_.duplicateImportedProgramZone(zoneIndex);
     if (newZoneIndex < 0)
     {
@@ -4718,6 +4815,7 @@ void AudiocityAudioProcessorEditor::duplicateSelectedMappingZone()
         return;
     }
 
+    recordImportedProgramMappingChange(beforeState, "Duplicate Mapping Zone");
     mappingEditStatusLabel_.setText("Zone " + juce::String(zoneIndex + 1) + " duplicated", juce::dontSendNotification);
     refreshMappingZoneRows();
     selectMappingZoneByIndex(newZoneIndex);
@@ -4738,6 +4836,7 @@ void AudiocityAudioProcessorEditor::splitSelectedMappingZone()
 
     const auto selectedRow = selectedRows.front();
     const auto zoneIndex = mappingZoneRows_[static_cast<std::size_t>(selectedRow)].zoneIndex;
+    const auto beforeState = captureImportedProgramMappingState();
     const auto newZoneIndex = processor_.splitImportedProgramZone(zoneIndex);
     if (newZoneIndex < 0)
     {
@@ -4746,6 +4845,7 @@ void AudiocityAudioProcessorEditor::splitSelectedMappingZone()
         return;
     }
 
+    recordImportedProgramMappingChange(beforeState, "Split Mapping Zone");
     mappingEditStatusLabel_.setText("Zone " + juce::String(zoneIndex + 1) + " split", juce::dontSendNotification);
     refreshMappingZoneRows();
     selectMappingZoneByIndex(newZoneIndex);
@@ -4767,29 +4867,16 @@ void AudiocityAudioProcessorEditor::deleteSelectedMappingZone()
     for (const auto selectedRow : selectedRows)
         zoneIndices.push_back(mappingZoneRows_[static_cast<std::size_t>(selectedRow)].zoneIndex);
 
-    std::sort(zoneIndices.begin(), zoneIndices.end(), std::greater<int>());
-
-    int deletedCount = 0;
-    for (const auto zoneIndex : zoneIndices)
+    const auto beforeState = captureImportedProgramMappingState();
+    if (!processor_.deleteImportedProgramZones(zoneIndices))
     {
-        if (!processor_.deleteImportedProgramZone(zoneIndex))
-        {
-            if (deletedCount == 0)
-            {
-                mappingEditStatusLabel_.setText("Delete failed", juce::dontSendNotification);
-                updateMappingEditControls();
-                return;
-            }
-
-            break;
-        }
-
-        ++deletedCount;
+        mappingEditStatusLabel_.setText("Delete failed", juce::dontSendNotification);
+        updateMappingEditControls();
+        return;
     }
 
-    if (deletedCount <= 0)
-        return;
-
+    const auto deletedCount = static_cast<int>(zoneIndices.size());
+    recordImportedProgramMappingChange(beforeState, deletedCount == 1 ? "Delete Mapping Zone" : "Delete Mapping Zones");
     mappingEditStatusLabel_.setText(
         deletedCount == 1
             ? "Zone " + juce::String(zoneIndices.front() + 1) + " deleted"
@@ -4810,6 +4897,9 @@ void AudiocityAudioProcessorEditor::clearSelectedMappingVelocityFades()
         return;
     }
 
+    const auto beforeState = captureImportedProgramMappingState();
+    std::vector<audiocity::plugin::ProgramZoneEdit> edits;
+    edits.reserve(selectedRows.size());
     std::vector<int> zoneIndices;
     zoneIndices.reserve(selectedRows.size());
     for (const auto selectedRow : selectedRows)
@@ -4829,16 +4919,19 @@ void AudiocityAudioProcessorEditor::clearSelectedMappingVelocityFades()
         edit.hasVelocityFadeIn = true;
         edit.hasVelocityFadeOut = true;
 
-        if (!processor_.updateImportedProgramZoneMapping(edit))
-        {
-            mappingEditStatusLabel_.setText("Fade clear failed", juce::dontSendNotification);
-            updateMappingEditControls();
-            return;
-        }
-
+        edits.push_back(edit);
         zoneIndices.push_back(row.zoneIndex);
     }
 
+    if (!processor_.updateImportedProgramZoneMappings(edits))
+    {
+        mappingEditStatusLabel_.setText("Fade clear failed", juce::dontSendNotification);
+        updateMappingEditControls();
+        return;
+    }
+
+    recordImportedProgramMappingChange(beforeState,
+        zoneIndices.size() == 1 ? "Clear Mapping Fades" : "Clear Mapping Fades Batch");
     mappingEditStatusLabel_.setText(
         zoneIndices.size() == 1
             ? "Zone " + juce::String(zoneIndices.front() + 1) + " fades cleared"
@@ -4854,6 +4947,7 @@ void AudiocityAudioProcessorEditor::clearSelectedMappingVelocityFades()
 bool AudiocityAudioProcessorEditor::commitMappingZoneEdit(const audiocity::plugin::ProgramZoneEdit& edit,
                                                           const juce::String& statusText)
 {
+    const auto beforeState = captureImportedProgramMappingState();
     if (!processor_.updateImportedProgramZoneMapping(edit))
     {
         mappingEditStatusLabel_.setText("Update failed", juce::dontSendNotification);
@@ -4861,6 +4955,7 @@ bool AudiocityAudioProcessorEditor::commitMappingZoneEdit(const audiocity::plugi
         return false;
     }
 
+    recordImportedProgramMappingChange(beforeState, statusText);
     mappingEditStatusLabel_.setText(statusText, juce::dontSendNotification);
     refreshMappingZoneRows();
 
@@ -4937,6 +5032,9 @@ bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file)
 
     if (loaded)
     {
+        editorUndoHistory_.clear();
+        mappingUndoProgramPath_ = processor_.getImportedProgramPath();
+        lastSettingsSnapshot_ = captureSettingsSnapshot();
         processor_.markLibraryRecent(file.getFullPathName());
         refreshBrowserEntryLibraryFlags();
         rebuildVisibleSampleList();
@@ -5528,7 +5626,7 @@ void AudiocityAudioProcessorEditor::paintAboutPane(juce::Graphics& g, juce::Rect
         { "Ctrl+O", "Open a sample file" },
         { "Ctrl+S", "Save the current state to disk" },
         { "Ctrl+Shift+S", "Save the current preset" },
-        { "Ctrl+Z / Y", "Undo or redo parameter edits" },
+        { "Ctrl+Z / Y", "Undo or redo sample, parameter, or mapping edits" },
         { "Space", "Play or stop generated waveform preview" },
         { "Enter / Esc", "Load selected browser row or panic audio" },
         { "Mapping", "Ctrl+A selects all zones, Ctrl+D duplicates, Ctrl+Shift+D splits, Delete removes selected zones" }
@@ -6476,22 +6574,44 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 
     if (commandDown && (key.getTextCharacter() == 'z' || key.getTextCharacter() == 'Z'))
     {
+        syncImportedProgramMappingUndoContext();
         const auto currentSnapshot = captureSettingsSnapshot();
-        if (const auto previous = settingsUndoHistory_.undo(currentSnapshot); previous.has_value())
+        const auto currentMappingState = captureImportedProgramMappingState();
+        if (const auto previous = editorUndoHistory_.undo(currentSnapshot, currentMappingState); previous.has_value())
         {
-            applySettingsSnapshot(*previous);
-            lastSettingsSnapshot_ = *previous;
+            if (previous->kind == audiocity::plugin::EditorUndoHistory::EntryKind::mapping)
+            {
+                if (applyImportedProgramMappingHistoryState(previous->mappingSnapshot, "Mapping undo"))
+                    return true;
+
+                mappingEditStatusLabel_.setText("Mapping undo failed", juce::dontSendNotification);
+                return true;
+            }
+
+            applySettingsSnapshot(previous->settingsSnapshot);
+            lastSettingsSnapshot_ = previous->settingsSnapshot;
         }
         return true;
     }
 
     if (commandDown && (key.getTextCharacter() == 'y' || key.getTextCharacter() == 'Y'))
     {
+        syncImportedProgramMappingUndoContext();
         const auto currentSnapshot = captureSettingsSnapshot();
-        if (const auto next = settingsUndoHistory_.redo(currentSnapshot); next.has_value())
+        const auto currentMappingState = captureImportedProgramMappingState();
+        if (const auto next = editorUndoHistory_.redo(currentSnapshot, currentMappingState); next.has_value())
         {
-            applySettingsSnapshot(*next);
-            lastSettingsSnapshot_ = *next;
+            if (next->kind == audiocity::plugin::EditorUndoHistory::EntryKind::mapping)
+            {
+                if (applyImportedProgramMappingHistoryState(next->mappingSnapshot, "Mapping redo"))
+                    return true;
+
+                mappingEditStatusLabel_.setText("Mapping redo failed", juce::dontSendNotification);
+                return true;
+            }
+
+            applySettingsSnapshot(next->settingsSnapshot);
+            lastSettingsSnapshot_ = next->settingsSnapshot;
         }
         return true;
     }

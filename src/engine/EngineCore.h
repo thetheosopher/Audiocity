@@ -395,7 +395,13 @@ private:
                                                        int rootMidiNote,
                                                        double sourceSampleRateHz,
                                                        float zoneTuneCents) const noexcept;
+    void setSampleDataInternal(const juce::AudioBuffer<float>& sampleData,
+                               double sampleRate,
+                               int rootNote,
+                               const juce::File& backingFile) noexcept;
     void rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData) noexcept;
+    void rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData,
+                               const juce::File& backingFile) noexcept;
     [[nodiscard]] std::shared_ptr<const SampleSegments> getSampleSegmentsSnapshot() const noexcept;
     [[nodiscard]] static std::shared_ptr<const SampleSegments> buildSampleSegments(const juce::AudioBuffer<float>& monoSampleData,
         int preloadSamples,
