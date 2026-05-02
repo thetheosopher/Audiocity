@@ -903,6 +903,116 @@ bool runImportedProgramStateSubtreeRoundTripTest()
             == audiocity::plugin::createProgramZoneMappingState(restoredProgram).toXmlString();
 }
 
+bool runImportedProgramStateLegacyReplayFallbackTest()
+{
+    using namespace audiocity::engine;
+
+    Program baseProgram;
+    SampleAsset sample;
+    sample.displayName = "legacy.wav";
+    sample.lengthSamples = 512;
+    baseProgram.sampleAssets.push_back(sample);
+
+    Group group;
+    group.roundRobinGroup = 2;
+    group.roundRobinMode = RoundRobinMode::ordered;
+    baseProgram.groups.push_back(group);
+
+    Zone zone;
+    zone.groupIndex = 0;
+    zone.sampleAssetIndex = 0;
+    zone.keyRange = MidiRange::fromUnordered(36, 42);
+    zone.velocityRange = VelocityRange::fromUnordered(16, 96);
+    zone.rootMidiNote = 40;
+    baseProgram.zones.push_back(zone);
+
+    Program editedProgram = baseProgram;
+    audiocity::plugin::ProgramZoneEdit edit;
+    edit.zoneIndex = 0;
+    edit.keyLow = 48;
+    edit.keyHigh = 60;
+    edit.velocityLow = 20;
+    edit.velocityHigh = 110;
+    edit.velocityFadeInLow = 24;
+    edit.velocityFadeInHigh = 64;
+    edit.velocityFadeOutLow = 100;
+    edit.velocityFadeOutHigh = 120;
+    edit.rootMidiNote = 52;
+    edit.sampleStart = 0;
+    edit.sampleEnd = 511;
+    edit.gainDb = -4.0f;
+    edit.pan = -0.35f;
+    edit.roundRobinGroup = 7;
+    edit.roundRobinPosition = 3;
+    edit.roundRobinMode = RoundRobinMode::cycleRandom;
+    edit.chokeGroupId = 5;
+    edit.triggerMode = ZoneTriggerMode::release;
+    edit.loopMode = ZoneLoopMode::continuous;
+    edit.hasVelocityFadeIn = true;
+    edit.hasVelocityFadeOut = true;
+    edit.hasSampleStart = true;
+    edit.hasSampleEnd = true;
+    edit.hasGainDb = true;
+    edit.hasPan = true;
+    edit.hasRoundRobinGroup = true;
+    edit.hasRoundRobinPosition = true;
+    edit.hasRoundRobinMode = true;
+    edit.hasChokeGroupId = true;
+    edit.hasTriggerMode = true;
+    edit.hasLoopMode = true;
+
+    if (!audiocity::plugin::applyProgramZoneEdit(editedProgram, edit))
+        return false;
+
+    auto legacyState = audiocity::plugin::createProgramZoneMappingState(editedProgram);
+    legacyState.setProperty("formatVersion", 1, nullptr);
+
+    Program restoredProgram = baseProgram;
+    if (!audiocity::plugin::restoreImportedProgramMappingState(restoredProgram, legacyState))
+        return false;
+
+    const auto editedState = audiocity::plugin::createProgramZoneMappingState(editedProgram);
+    const auto restoredState = audiocity::plugin::createProgramZoneMappingState(restoredProgram);
+    return editedState.toXmlString() == restoredState.toXmlString();
+}
+
+bool runImportedProgramDerivedStateSummaryTest()
+{
+    using namespace audiocity::engine;
+
+    Program program;
+    program.name = "Imported Summary";
+
+    SampleAsset sample;
+    sample.displayName = "summary.wav";
+    sample.lengthSamples = 1024;
+    program.sampleAssets.push_back(sample);
+
+    Zone zone;
+    zone.sampleAssetIndex = 0;
+    zone.keyRange = MidiRange::fromUnordered(60, 67);
+    zone.velocityRange = VelocityRange::fromUnordered(10, 120);
+    zone.rootMidiNote = 64;
+    zone.roundRobinGroup = 3;
+    zone.roundRobinPosition = 2;
+    zone.triggerMode = ZoneTriggerMode::release;
+    zone.loopMode = ZoneLoopMode::sustain;
+    zone.chokeGroup = 8;
+    program.zones.push_back(zone);
+
+    const auto derivedState = audiocity::plugin::buildImportedProgramDerivedState(program);
+    return derivedState.zoneRows.size() == 1
+        && derivedState.zoneRows.front().sampleName == "summary.wav"
+        && derivedState.mapSummary.contains("Program: Imported Summary")
+        && derivedState.mapSummary.contains("1. summary.wav")
+        && derivedState.mapSummary.contains("key 60-67")
+        && derivedState.mapSummary.contains("vel 10-120")
+        && derivedState.mapSummary.contains("release")
+        && derivedState.mapSummary.contains("loop sustain")
+        && derivedState.mapSummary.contains("rr 3:2")
+        && derivedState.mapSummary.contains("choke 8");
+}
+
 bool runSfzImportIncludeDefineDefaultPathTest()
 {
     using namespace audiocity::engine;
@@ -6542,6 +6652,12 @@ int main()
 
     if (!runImportedProgramStateSubtreeRoundTripTest())
         return 106;
+
+    if (!runImportedProgramStateLegacyReplayFallbackTest())
+        return 107;
+
+    if (!runImportedProgramDerivedStateSummaryTest())
+        return 108;
 
     if (!runSfzImportIncludeDefineDefaultPathTest())
         return 87;

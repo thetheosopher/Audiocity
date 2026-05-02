@@ -280,82 +280,6 @@ juce::String makeSfzImportSummary(const audiocity::engine::SfzImportResult& resu
     return summary;
 }
 
-juce::String formatRange(const int low, const int high)
-{
-    if (low == high)
-        return juce::String(low);
-
-    return juce::String(low) + "-" + juce::String(high);
-}
-
-juce::String formatLoopMode(const audiocity::engine::ZoneLoopMode mode)
-{
-    switch (mode)
-    {
-        case audiocity::engine::ZoneLoopMode::sustain: return "sustain";
-        case audiocity::engine::ZoneLoopMode::continuous: return "continuous";
-        case audiocity::engine::ZoneLoopMode::noLoop:
-        default: return "off";
-    }
-}
-
-juce::String formatTriggerMode(const audiocity::engine::ZoneTriggerMode mode)
-{
-    switch (mode)
-    {
-        case audiocity::engine::ZoneTriggerMode::oneShot:
-            return "one-shot";
-        case audiocity::engine::ZoneTriggerMode::release:
-            return "release";
-        case audiocity::engine::ZoneTriggerMode::gate:
-        default:
-            return "gate";
-    }
-}
-
-juce::String makeProgramMapSummary(const audiocity::engine::Program& program)
-{
-    juce::StringArray lines;
-    lines.add("Program: " + juce::String::fromUTF8(program.name.c_str()));
-    lines.add("Zones: " + juce::String(static_cast<int>(program.zones.size()))
-        + " | Groups: " + juce::String(static_cast<int>(program.groups.size()))
-        + " | Samples: " + juce::String(static_cast<int>(program.sampleAssets.size())));
-
-    constexpr int maxVisibleZones = 12;
-    const auto zoneCount = static_cast<int>(program.zones.size());
-    for (int zoneIndex = 0; zoneIndex < juce::jmin(zoneCount, maxVisibleZones); ++zoneIndex)
-    {
-        const auto& zone = program.zones[static_cast<std::size_t>(zoneIndex)];
-        juce::String sampleName = "sample " + juce::String(zone.sampleAssetIndex);
-        if (zone.sampleAssetIndex >= 0
-            && static_cast<std::size_t>(zone.sampleAssetIndex) < program.sampleAssets.size())
-        {
-            const auto& asset = program.sampleAssets[static_cast<std::size_t>(zone.sampleAssetIndex)];
-            if (!asset.displayName.empty())
-                sampleName = juce::String::fromUTF8(asset.displayName.c_str());
-        }
-
-        auto line = juce::String(zoneIndex + 1) + ". " + sampleName
-            + " | key " + formatRange(zone.keyRange.low, zone.keyRange.high)
-            + " | vel " + formatRange(zone.velocityRange.low, zone.velocityRange.high)
-            + " | root " + juce::String(zone.rootMidiNote)
-            + " | " + formatTriggerMode(zone.triggerMode)
-            + " | loop " + formatLoopMode(zone.loopMode);
-
-        if (zone.roundRobinGroup > 0 || zone.roundRobinPosition > 0)
-            line += " | rr " + juce::String(zone.roundRobinGroup) + ":" + juce::String(zone.roundRobinPosition);
-
-        if (zone.chokeGroup > 0)
-            line += " | choke " + juce::String(zone.chokeGroup);
-
-        lines.add(line);
-    }
-
-    if (zoneCount > maxVisibleZones)
-        lines.add("... " + juce::String(zoneCount - maxVisibleZones) + " more zones");
-
-    return lines.joinIntoString("\n");
-}
 }
 
 AudiocityAudioProcessor::AudiocityAudioProcessor()
@@ -1100,7 +1024,6 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     if (restoredSample && restoredSampleSource == 4)
     {
         const auto mappingEdits = audiocity::plugin::readImportedProgramMappingState(state);
-        auto restoredProgramStructure = false;
         audiocity::engine::Program programToPublish;
         std::vector<juce::AudioBuffer<float>> sampleDataToPublish;
 
@@ -1108,27 +1031,17 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
         {
             {
                 std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
-                if (audiocity::plugin::restoreProgramZoneStructureFromState(importedProgram_, mappingEdits))
+                if (audiocity::plugin::restoreImportedProgramMappingState(importedProgram_, mappingEdits))
                 {
-                    importedProgramMapSummary_ = makeProgramMapSummary(importedProgram_);
-                    importedProgramZoneRows_ = audiocity::plugin::buildProgramZoneListRows(importedProgram_);
-                    importedProgramZoneCount_.store(static_cast<int>(importedProgram_.zones.size()), std::memory_order_relaxed);
-                    lastImportDiagnosticSummary_ = "Mapping restored";
-                    programToPublish = importedProgram_;
-                    sampleDataToPublish = importedProgramSampleDataByAsset_;
-                    restoredProgramStructure = true;
+                    refreshImportedProgramDerivedStateLocked("Mapping restored");
+                    captureImportedProgramSnapshotLocked(programToPublish, sampleDataToPublish);
                 }
             }
 
-            if (restoredProgramStructure)
+            if (!programToPublish.zones.empty())
             {
                 engine_.panic();
                 engine_.setProgram(programToPublish, sampleDataToPublish);
-            }
-            else
-            {
-                for (const auto& edit : audiocity::plugin::parseProgramZoneMappingState(mappingEdits))
-                    updateImportedProgramZoneMapping(edit);
             }
         }
     }
@@ -1542,10 +1455,11 @@ void AudiocityAudioProcessor::setImportedProgramMetadata(const juce::File& file,
         std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
         importedProgramPath_ = file.getFullPathName();
         importedProgramName_ = juce::String::fromUTF8(program.name.c_str());
-        importedProgramMapSummary_ = makeProgramMapSummary(program);
+        const auto derivedState = audiocity::plugin::buildImportedProgramDerivedState(program);
+        importedProgramMapSummary_ = derivedState.mapSummary;
         importedProgram_ = program;
         importedProgramSampleDataByAsset_ = sampleDataByAsset;
-        importedProgramZoneRows_ = audiocity::plugin::buildProgramZoneListRows(program);
+        importedProgramZoneRows_ = derivedState.zoneRows;
         lastImportDiagnosticSummary_ = diagnosticSummary;
     }
 
@@ -1561,8 +1475,9 @@ void AudiocityAudioProcessor::setLastImportDiagnosticSummary(const juce::String&
 
 void AudiocityAudioProcessor::refreshImportedProgramDerivedStateLocked(const juce::String& diagnosticSummary)
 {
-    importedProgramMapSummary_ = makeProgramMapSummary(importedProgram_);
-    importedProgramZoneRows_ = audiocity::plugin::buildProgramZoneListRows(importedProgram_);
+    const auto derivedState = audiocity::plugin::buildImportedProgramDerivedState(importedProgram_);
+    importedProgramMapSummary_ = derivedState.mapSummary;
+    importedProgramZoneRows_ = derivedState.zoneRows;
     importedProgramZoneCount_.store(static_cast<int>(importedProgram_.zones.size()), std::memory_order_relaxed);
     lastImportDiagnosticSummary_ = diagnosticSummary;
 }
