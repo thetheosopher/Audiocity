@@ -179,6 +179,11 @@ public:
     [[nodiscard]] std::vector<std::vector<float>> buildDisplayPeaksByChannel(int maxPeaks) const noexcept;
     [[nodiscard]] std::vector<std::vector<DisplayMinMax>> buildDisplayMinMaxByChannel(int maxPeaks) const noexcept;
     [[nodiscard]] int getSegmentRebuildCount() const noexcept { return segmentRebuildCount_; }
+    void serviceStreamPriming();
+    [[nodiscard]] int getStreamPrimeRequestCount() const noexcept;
+    [[nodiscard]] int getStreamPrimeCacheHitCount() const noexcept;
+    [[nodiscard]] int getStreamPrimeCacheMissCount() const noexcept;
+    [[nodiscard]] int getStreamPrimeServiceCount() const noexcept;
     void setQualityTier(QualityTier tier) noexcept { qualityTier_ = tier; }
     [[nodiscard]] QualityTier getQualityTier() const noexcept { return qualityTier_; }
     void setVelocityCurve(VelocityCurve curve) noexcept { velocityCurve_ = curve; }
@@ -393,7 +398,8 @@ private:
     void rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData) noexcept;
     [[nodiscard]] std::shared_ptr<const SampleSegments> getSampleSegmentsSnapshot() const noexcept;
     [[nodiscard]] static std::shared_ptr<const SampleSegments> buildSampleSegments(const juce::AudioBuffer<float>& monoSampleData,
-        int preloadSamples) noexcept;
+        int preloadSamples,
+        const juce::File& backingFile = {}) noexcept;
     [[nodiscard]] static juce::AudioBuffer<float> materializeSampleData(const SampleSegments& segments) noexcept;
     [[nodiscard]] std::shared_ptr<const ProgramAudioSnapshot> rebuildProgramAudioSnapshot(
         const ProgramAudioSnapshot& snapshot) const noexcept;

@@ -169,6 +169,11 @@ public:
     [[nodiscard]] int getLoadedPreloadSamples() const noexcept { return engine_.getLoadedPreloadSamples(); }
     [[nodiscard]] int getLoadedStreamSamples() const noexcept { return engine_.getLoadedStreamSamples(); }
     [[nodiscard]] int getSegmentRebuildCount() const noexcept { return engine_.getSegmentRebuildCount(); }
+    void serviceStreamPriming() { engine_.serviceStreamPriming(); }
+    [[nodiscard]] int getStreamPrimeRequestCount() const noexcept { return engine_.getStreamPrimeRequestCount(); }
+    [[nodiscard]] int getStreamPrimeCacheHitCount() const noexcept { return engine_.getStreamPrimeCacheHitCount(); }
+    [[nodiscard]] int getStreamPrimeCacheMissCount() const noexcept { return engine_.getStreamPrimeCacheMissCount(); }
+    [[nodiscard]] int getStreamPrimeServiceCount() const noexcept { return engine_.getStreamPrimeServiceCount(); }
     [[nodiscard]] int getActiveVoiceCount() const noexcept { return engine_.activeVoiceCount(); }
 
     void setMonoMode(bool enabled) noexcept;

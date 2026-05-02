@@ -3424,6 +3424,7 @@ void AudiocityAudioProcessorEditor::handleNoteOff(juce::MidiKeyboardState* sourc
 void AudiocityAudioProcessorEditor::timerCallback()
 {
     updateGeneratePreviewButtonText();
+    processor_.serviceStreamPriming();
 
     processor_.setWaveformViewRange(waveformView_.getViewStartSample(), waveformView_.getViewSampleCount());
 
@@ -8139,6 +8140,10 @@ void AudiocityAudioProcessorEditor::updateDiagnosticsStatusText()
     auto text = "Preload: " + juce::String(processor_.getLoadedPreloadSamples())
             + " | Stream: " + juce::String(processor_.getLoadedStreamSamples())
             + " | Rebuilds: " + juce::String(processor_.getSegmentRebuildCount())
+            + " | Prime R/H/M/S: " + juce::String(processor_.getStreamPrimeRequestCount())
+            + "/" + juce::String(processor_.getStreamPrimeCacheHitCount())
+            + "/" + juce::String(processor_.getStreamPrimeCacheMissCount())
+            + "/" + juce::String(processor_.getStreamPrimeServiceCount())
             + " | Voices: " + juce::String(processor_.getActiveVoiceCount())
             + "/" + juce::String(processor_.getPolyphonyLimit())
             + " | Root: " + juce::String(processor_.getRootMidiNote())

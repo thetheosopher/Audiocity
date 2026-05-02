@@ -4325,6 +4325,103 @@ bool runProgramPreloadMetricsAndRebuildTest()
         && engine.getLoadedStreamSamples() == 4608;
 }
 
+bool runProgramStreamPrimingAndCacheMetricsTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_stream_prime_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto sampleFile = tempDirectory.getChildFile("stream.wav");
+    const auto sample = createTestSample(4096);
+
+    auto writeWavFile = [&](const juce::File& fileToWrite) -> bool
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(fileToWrite.createOutputStream());
+        if (output == nullptr)
+            return false;
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+            return false;
+
+        output.release();
+        return writer->writeFromAudioSampleBuffer(sample, 0, sample.getNumSamples());
+    };
+
+    if (!writeWavFile(sampleFile))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setPreloadSamples(256);
+
+    Program program;
+    SampleAsset asset;
+    asset.sourcePath = sampleFile.getFullPathName().toStdString();
+    asset.displayName = "stream.wav";
+    asset.lengthSamples = sample.getNumSamples();
+    asset.numChannels = sample.getNumChannels();
+    asset.sampleRateHz = sampleRate;
+    asset.rootMidiNote = 60;
+    program.sampleAssets.push_back(asset);
+
+    Zone zone;
+    zone.sampleAssetIndex = 0;
+    zone.keyRange = MidiRange::single(60);
+    zone.rootMidiNote = 60;
+    zone.sampleStart = 2048;
+    zone.sampleEndExclusive = sample.getNumSamples();
+    program.zones.push_back(zone);
+
+    std::vector<juce::AudioBuffer<float>> sampleDataByAsset;
+    sampleDataByAsset.push_back(sample);
+    engine.setProgram(program, sampleDataByAsset);
+
+    juce::AudioBuffer<float> firstBlock(channels, blockSize);
+    juce::MidiBuffer firstMidi;
+    firstMidi.addEvent(juce::MidiMessage::noteOn(1, 60, 0.8f), 0);
+    engine.render(firstBlock, firstMidi);
+
+    if (engine.getStreamPrimeRequestCount() != 1
+        || engine.getStreamPrimeCacheHitCount() != 0
+        || engine.getStreamPrimeCacheMissCount() != 1)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    engine.serviceStreamPriming();
+    if (engine.getStreamPrimeServiceCount() != 1)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    juce::AudioBuffer<float> secondBlock(channels, blockSize);
+    juce::MidiBuffer secondMidi;
+    secondMidi.addEvent(juce::MidiMessage::noteOn(1, 60, 0.8f), 0);
+    engine.render(secondBlock, secondMidi);
+
+    const auto passed = engine.getStreamPrimeRequestCount() == 2
+        && engine.getStreamPrimeCacheHitCount() == 1
+        && engine.getStreamPrimeCacheMissCount() == 1
+        && engine.getStreamPrimeServiceCount() == 1;
+
+    tempDirectory.deleteRecursively();
+    return passed;
+}
+
 bool runQualityTierDifferenceTest()
 {
     constexpr int channels = 2;
@@ -6982,6 +7079,9 @@ int main()
 
     if (!runProgramPreloadMetricsAndRebuildTest())
         return 14;
+
+    if (!runProgramStreamPrimingAndCacheMetricsTest())
+        return 171;
 
     if (!runQualityTierDifferenceTest())
         return 15;
