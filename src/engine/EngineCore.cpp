@@ -2,7 +2,6 @@
 
 #include "RexLoader.h"
 
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -366,6 +365,7 @@ void EngineCore::prepare(const double sampleRate, const int maxSamplesPerBlock, 
 
     voicePool_.prepare(maxSamplesPerBlock_);
     pendingEventCount_ = 0;
+    resetRoundRobinCursors();
     globalFilterLfoPhase_ = 0.0f;
     globalAmpLfoPhase_ = 0.0f;
     globalPitchLfoPhase_ = 0.0f;
@@ -379,10 +379,13 @@ void EngineCore::prepare(const double sampleRate, const int maxSamplesPerBlock, 
 
     for (auto& voice : voices_)
     {
-        voice.filterA.prepare(spec);
-        voice.filterB.prepare(spec);
-        voice.filterA.reset();
-        voice.filterB.reset();
+        for (std::size_t filterChannel = 0; filterChannel < voice.filterA.size(); ++filterChannel)
+        {
+            voice.filterA[filterChannel].prepare(spec);
+            voice.filterB[filterChannel].prepare(spec);
+            voice.filterA[filterChannel].reset();
+            voice.filterB[filterChannel].reset();
+        }
     }
 
     applyEnvelopeParamsToVoices();
@@ -413,6 +416,7 @@ void EngineCore::release() noexcept
     stopAllVoicesImmediate();
     voicePool_.reset();
     pendingEventCount_ = 0;
+    resetRoundRobinCursors();
     currentPitchBendSemitones_ = 0.0f;
     delayBuffer_.clear();
     delayWritePos_ = 0;
@@ -497,6 +501,7 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
         loadedMetadataTempoBpm_ = 0.0;
         samplePath_ = file.getFullPathName();
         loadedSampleLoopFormatBadge_ = "REX";
+        clearProgram();
 
         const auto fullEnd = juce::jmax(0, getTotalSampleLength() - 1);
         setSampleWindow(0, fullEnd);
@@ -553,6 +558,7 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
     loadedSampleBitDepth_ = static_cast<int>(reader->bitsPerSample);
     samplePath_ = file.getFullPathName();
     loadedSampleLoopFormatBadge_ = {};
+    clearProgram();
 
     auto embeddedLoopRange = findEmbeddedLoopRange(metadata);
     if (!embeddedLoopRange.has_value() && ext == ".wav")
@@ -625,6 +631,7 @@ void EngineCore::setSampleData(const juce::AudioBuffer<float>& sampleData, const
 
 void EngineCore::setProgram(const Program& program)
 {
+    resetRoundRobinCursors();
     programAudioSnapshot_.store(nullptr, std::memory_order_release);
     programSnapshot_.store(
         std::make_shared<const ProgramSnapshot>(ProgramSnapshot::fromProgram(program)),
@@ -633,6 +640,7 @@ void EngineCore::setProgram(const Program& program)
 
 void EngineCore::setProgram(const Program& program, const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset)
 {
+    resetRoundRobinCursors();
     auto metadata = ProgramSnapshot::fromProgram(program);
     auto audio = std::make_shared<ProgramAudioSnapshot>();
     audio->sampleAssetCount = metadata.sampleAssetCount;
@@ -647,23 +655,13 @@ void EngineCore::setProgram(const Program& program, const std::vector<juce::Audi
         if (source.getNumChannels() <= 0 || source.getNumSamples() <= 0)
             continue;
 
-        juce::AudioBuffer<float> mono(1, source.getNumSamples());
-        for (int sampleIndex = 0; sampleIndex < source.getNumSamples(); ++sampleIndex)
-        {
-            float sum = 0.0f;
-            for (int channel = 0; channel < source.getNumChannels(); ++channel)
-                sum += source.getSample(channel, sampleIndex);
-
-            mono.setSample(0, sampleIndex, sum / static_cast<float>(source.getNumChannels()));
-        }
-
         auto& asset = metadata.sampleAssets[assetIndex];
-        asset.lengthSamples = mono.getNumSamples();
+        asset.lengthSamples = source.getNumSamples();
         asset.numChannels = source.getNumChannels();
         if (asset.sampleRateHz <= 0.0)
             asset.sampleRateHz = sampleDataRate_ > 0.0 ? sampleDataRate_ : sampleRate_;
 
-        audio->sampleSegments[assetIndex] = buildSampleSegments(mono, preloadSamples_);
+        audio->sampleSegments[assetIndex] = buildSampleSegments(source, preloadSamples_);
     }
 
     programAudioSnapshot_.store(audio, std::memory_order_release);
@@ -672,6 +670,7 @@ void EngineCore::setProgram(const Program& program, const std::vector<juce::Audi
 
 void EngineCore::clearProgram() noexcept
 {
+    resetRoundRobinCursors();
     programSnapshot_.store(nullptr, std::memory_order_release);
     programAudioSnapshot_.store(nullptr, std::memory_order_release);
 }
@@ -831,7 +830,8 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
                 globalAmpLfoPhase_ -= std::floor(globalAmpLfoPhase_);
         }
 
-        float mixed = 0.0f;
+        float mixedLeft = 0.0f;
+        float mixedRight = 0.0f;
 
         for (int voiceIndex = 0; voiceIndex < static_cast<int>(VoicePool::maxVoices); ++voiceIndex)
         {
@@ -866,27 +866,38 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
                 continue;
             }
 
-            const auto toPlaybackIndex = [this](const int absoluteSample)
+            auto effectiveLoopStart = 0;
+            auto effectiveLoopEnd = sampleLength - 1;
+            const auto hasProgramZone = voice.zoneIndex >= 0;
+            const auto zoneLoopEnabled = hasProgramZone && voice.loopMode != ZoneLoopMode::noLoop;
+            const auto globalLoopEnabled = !hasProgramZone && playbackMode_ == PlaybackMode::loop;
+            const auto loopEnabled = zoneLoopEnabled || globalLoopEnabled;
+
+            if (loopEnabled)
             {
-                if (reversePlayback_)
-                    return sampleWindowEnd_ - absoluteSample;
+                const auto useZoneLoopRange = zoneLoopEnabled && voice.loopEndExclusive > voice.loopStart;
+                if (useZoneLoopRange || globalLoopEnabled)
+                {
+                    const auto loopStart = useZoneLoopRange ? voice.loopStart : loopStartSample_;
+                    const auto loopEnd = useZoneLoopRange ? (voice.loopEndExclusive - 1) : loopEndSample_;
+                    const auto rawLoopStart = mapSampleIndexToPlaybackIndex(
+                        *voiceSegments, loopStart, voice.sampleStart, voice.sampleEndExclusive);
+                    const auto rawLoopEnd = mapSampleIndexToPlaybackIndex(
+                        *voiceSegments, loopEnd, voice.sampleStart, voice.sampleEndExclusive);
 
-                return absoluteSample - sampleWindowStart_;
-            };
-
-            const auto rawLoopStart = toPlaybackIndex(loopStartSample_);
-            const auto rawLoopEnd = toPlaybackIndex(loopEndSample_);
-
-            auto effectiveLoopStart = juce::jlimit(0, sampleLength - 1, juce::jmin(rawLoopStart, rawLoopEnd));
-            auto effectiveLoopEnd = juce::jlimit(0, sampleLength - 1, juce::jmax(rawLoopStart, rawLoopEnd));
-            if (effectiveLoopEnd <= effectiveLoopStart)
-            {
-                effectiveLoopStart = 0;
-                effectiveLoopEnd = sampleLength - 1;
+                    effectiveLoopStart = juce::jlimit(0, sampleLength - 1, juce::jmin(rawLoopStart, rawLoopEnd));
+                    effectiveLoopEnd = juce::jlimit(0, sampleLength - 1, juce::jmax(rawLoopStart, rawLoopEnd));
+                    if (effectiveLoopEnd <= effectiveLoopStart)
+                    {
+                        effectiveLoopStart = 0;
+                        effectiveLoopEnd = sampleLength - 1;
+                    }
+                }
             }
 
-            const auto loopEnabled = playbackMode_ == PlaybackMode::loop;
-            const auto shouldLoopNow = loopEnabled && voice.noteHeld;
+            const auto shouldLoopNow = globalLoopEnabled
+                ? voice.noteHeld
+                : zoneLoopEnabled && (voice.noteHeld || voice.loopMode == ZoneLoopMode::continuous);
             const auto loopLength = juce::jmax(1, effectiveLoopEnd - effectiveLoopStart + 1);
 
             if (voice.samplePosition >= static_cast<float>(sampleLength - 1))
@@ -982,8 +993,10 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
                 }
             }
 
-            float rawSample = readSampleLinear(
-                *voiceSegments, voice.samplePosition, voice.sampleStart, voice.sampleEndExclusive);
+            auto rawLeft = readSampleLinear(
+                *voiceSegments, voice.samplePosition, voice.sampleStart, voice.sampleEndExclusive, 0);
+            auto rawRight = readSampleLinear(
+                *voiceSegments, voice.samplePosition, voice.sampleStart, voice.sampleEndExclusive, 1);
             if (shouldLoopNow && loopCrossfadeSamples_ > 0)
             {
                 const auto crossfadeSamples = juce::jlimit(0, juce::jmax(0, loopLength / 2), loopCrossfadeSamples_);
@@ -998,21 +1011,35 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
                         const auto headPosition = static_cast<float>(effectiveLoopStart)
                             + progress * static_cast<float>(crossfadeSamples);
 
-                        const auto headSample = readSampleLinear(
-                            *voiceSegments, headPosition, voice.sampleStart, voice.sampleEndExclusive);
-                        rawSample = rawSample + (headSample - rawSample) * progress;
+                        const auto headLeft = readSampleLinear(
+                            *voiceSegments, headPosition, voice.sampleStart, voice.sampleEndExclusive, 0);
+                        const auto headRight = readSampleLinear(
+                            *voiceSegments, headPosition, voice.sampleStart, voice.sampleEndExclusive, 1);
+                        rawLeft = rawLeft + (headLeft - rawLeft) * progress;
+                        rawRight = rawRight + (headRight - rawRight) * progress;
                     }
                 }
             }
             const float filterEnvValue = voice.filterEnvelope.getNextSample();
-            const float filteredSample = computeFilterSample(
-                rawSample,
+            const auto filteredLeft = computeFilterSample(
+                rawLeft,
                 filterEnvValue,
                 lfoValue,
                 voicePool_.noteAt(voiceIndex),
                 voice.velocity,
-                voice);
-            mixed += filteredSample * ampLevel * voice.zoneGain;
+                voice,
+                0);
+            const auto filteredRight = computeFilterSample(
+                rawRight,
+                filterEnvValue,
+                lfoValue,
+                voicePool_.noteAt(voiceIndex),
+                voice.velocity,
+                voice,
+                1);
+            const auto voiceGain = ampLevel * voice.zoneGain;
+            mixedLeft += filteredLeft * voiceGain * voice.zonePanLeftGain;
+            mixedRight += filteredRight * voiceGain * voice.zonePanRightGain;
 
             voice.lastAmpLevel = ampLevel;
             voicePool_.setCurrentLevel(voiceIndex, ampLevel);
@@ -1028,10 +1055,22 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
             voice.samplePosition += voice.sampleIncrement * combinedPitchRatio;
         }
 
-        mixed = processSaturationSample(mixed);
+        mixedLeft = processSaturationSample(mixedLeft);
+        mixedRight = processSaturationSample(mixedRight);
 
-        for (int channel = 0; channel < numChannels; ++channel)
-            outputs[channel][sampleIndex] += mixed;
+        if (numChannels == 1)
+        {
+            outputs[0][sampleIndex] += 0.5f * (mixedLeft + mixedRight);
+        }
+        else
+        {
+            outputs[0][sampleIndex] += mixedLeft;
+            outputs[1][sampleIndex] += mixedRight;
+
+            const auto monoRemainder = 0.5f * (mixedLeft + mixedRight);
+            for (int channel = 2; channel < numChannels; ++channel)
+                outputs[channel][sampleIndex] += monoRemainder;
+        }
     }
 
     if (numChannels >= 2)
@@ -1196,9 +1235,13 @@ void EngineCore::setPolyphonyLimit(const int voices) noexcept
     {
         auto& voice = voices_[static_cast<std::size_t>(i)];
         voice.noteHeld = false;
+        voice.releaseOnNoteOff = true;
         voice.lastAmpLevel = 0.0f;
-        voice.filterA.reset();
-        voice.filterB.reset();
+        for (std::size_t filterChannel = 0; filterChannel < voice.filterA.size(); ++filterChannel)
+        {
+            voice.filterA[filterChannel].reset();
+            voice.filterB[filterChannel].reset();
+        }
         voice.filterLfoPhase = 0.0f;
         voice.filterLfoFadeSamplesTotal = 0;
         voice.filterLfoFadeSamplesRemaining = 0;
@@ -1351,6 +1394,212 @@ void EngineCore::generateFallbackSample() noexcept
     samplePath_.clear();
 }
 
+void EngineCore::resetRoundRobinCursors() noexcept
+{
+    for (auto& cursor : roundRobinCursors_)
+    {
+        cursor.group = 0;
+        cursor.nextStep = 0;
+    }
+}
+
+std::uint32_t EngineCore::consumeRoundRobinStep(const int roundRobinGroup) noexcept
+{
+    if (roundRobinGroup <= 0)
+        return 0;
+
+    for (auto& cursor : roundRobinCursors_)
+    {
+        if (cursor.group == roundRobinGroup)
+        {
+            const auto step = cursor.nextStep;
+            ++cursor.nextStep;
+            return step;
+        }
+    }
+
+    for (auto& cursor : roundRobinCursors_)
+    {
+        if (cursor.group == 0)
+        {
+            cursor.group = roundRobinGroup;
+            cursor.nextStep = 1;
+            return 0;
+        }
+    }
+
+    return 0;
+}
+
+int EngineCore::chooseProgramZoneIndex(const ProgramSnapshot& programSnapshot,
+                                       const int note,
+                                       const int velocity) noexcept
+{
+    const auto firstZoneIndex = programSnapshot.findFirstMatchingZoneIndex(note, velocity);
+    if (firstZoneIndex < 0)
+        return -1;
+
+    const auto& firstZone = programSnapshot.zones[static_cast<std::size_t>(firstZoneIndex)];
+    const auto roundRobinGroup = programSnapshot.getZoneRoundRobinGroup(firstZone);
+    if (roundRobinGroup <= 0)
+        return firstZoneIndex;
+
+    const auto roundRobinMode = programSnapshot.getZoneRoundRobinMode(firstZone);
+    const auto step = consumeRoundRobinStep(roundRobinGroup);
+    const auto selectedZoneIndex = programSnapshot.findRoundRobinMatchingZoneIndex(
+        note,
+        velocity,
+        roundRobinGroup,
+        step,
+        roundRobinMode);
+
+    return selectedZoneIndex >= 0 ? selectedZoneIndex : firstZoneIndex;
+}
+
+int EngineCore::chooseProgramZoneIndices(const ProgramSnapshot& programSnapshot,
+                                         const int note,
+                                         const int velocity,
+                                         const bool releaseTriggerOnly,
+                                         int* const zoneIndices,
+                                         const int maxZoneIndices) noexcept
+{
+    if (zoneIndices == nullptr || maxZoneIndices <= 0)
+        return 0;
+
+    std::array<int, ProgramSnapshot::maxGroups> handledRoundRobinGroups{};
+    auto handledRoundRobinGroupCount = 0;
+    auto selectedCount = 0;
+
+    auto addSelectedZone = [&](const int zoneIndex) noexcept
+    {
+        if (zoneIndex < 0 || selectedCount >= maxZoneIndices)
+            return;
+
+        zoneIndices[selectedCount++] = zoneIndex;
+    };
+
+    auto hasHandledRoundRobinGroup = [&](const int roundRobinGroup) noexcept
+    {
+        for (int index = 0; index < handledRoundRobinGroupCount; ++index)
+        {
+            if (handledRoundRobinGroups[static_cast<std::size_t>(index)] == roundRobinGroup)
+                return true;
+        }
+
+        return false;
+    };
+
+    auto markRoundRobinGroupHandled = [&](const int roundRobinGroup) noexcept
+    {
+        if (handledRoundRobinGroupCount >= static_cast<int>(handledRoundRobinGroups.size()))
+            return;
+
+        handledRoundRobinGroups[static_cast<std::size_t>(handledRoundRobinGroupCount++)] = roundRobinGroup;
+    };
+
+    auto matchesTriggerPhase = [&](const ProgramSnapshot::ZoneRef& zone) noexcept
+    {
+        const auto triggerMode = programSnapshot.getZoneTriggerMode(zone);
+        return releaseTriggerOnly
+            ? triggerMode == ZoneTriggerMode::release
+            : triggerMode != ZoneTriggerMode::release;
+    };
+
+    for (std::size_t zoneIndex = 0; zoneIndex < programSnapshot.zoneCount; ++zoneIndex)
+    {
+        if (!programSnapshot.isZonePlayableMatch(zoneIndex, note, velocity))
+            continue;
+
+        const auto& zone = programSnapshot.zones[zoneIndex];
+        if (!matchesTriggerPhase(zone))
+            continue;
+
+        const auto roundRobinGroup = programSnapshot.getZoneRoundRobinGroup(zone);
+        if (roundRobinGroup <= 0)
+        {
+            addSelectedZone(static_cast<int>(zoneIndex));
+            continue;
+        }
+
+        if (hasHandledRoundRobinGroup(roundRobinGroup))
+            continue;
+
+        markRoundRobinGroupHandled(roundRobinGroup);
+        const auto step = consumeRoundRobinStep(roundRobinGroup);
+        std::array<int, ProgramSnapshot::maxZones> candidateIndices{};
+        auto candidateCount = 0;
+        for (std::size_t candidateZoneIndex = 0; candidateZoneIndex < programSnapshot.zoneCount; ++candidateZoneIndex)
+        {
+            if (!programSnapshot.isZonePlayableMatch(candidateZoneIndex, note, velocity))
+                continue;
+
+            const auto& candidateZone = programSnapshot.zones[candidateZoneIndex];
+            if (!matchesTriggerPhase(candidateZone)
+                || programSnapshot.getZoneRoundRobinGroup(candidateZone) != roundRobinGroup)
+            {
+                continue;
+            }
+
+            candidateIndices[static_cast<std::size_t>(candidateCount++)] = static_cast<int>(candidateZoneIndex);
+        }
+
+        if (candidateCount <= 0)
+            continue;
+
+        if (candidateCount == 1)
+        {
+            addSelectedZone(candidateIndices[0]);
+            continue;
+        }
+
+        const auto roundRobinMode = programSnapshot.getZoneRoundRobinMode(zone);
+        if (roundRobinMode == RoundRobinMode::cycleRandom)
+        {
+            const auto selectedIndex = ProgramSnapshot::cycleRandomCandidateIndex(
+                roundRobinGroup,
+                step,
+                static_cast<std::size_t>(candidateCount));
+            addSelectedZone(candidateIndices[selectedIndex]);
+            continue;
+        }
+
+        auto roundRobinLength = 0;
+        for (int candidateIndex = 0; candidateIndex < candidateCount; ++candidateIndex)
+        {
+            const auto& candidateZone = programSnapshot.zones[static_cast<std::size_t>(candidateIndices[candidateIndex])];
+            const auto candidateLength = programSnapshot.getZoneRoundRobinLength(candidateZone);
+            if (candidateLength > roundRobinLength)
+                roundRobinLength = candidateLength;
+        }
+
+        if (roundRobinLength > 0)
+        {
+            const auto targetPosition = static_cast<int>(step % static_cast<std::uint32_t>(roundRobinLength)) + 1;
+            for (int candidateIndex = 0; candidateIndex < candidateCount; ++candidateIndex)
+            {
+                const auto resolvedZoneIndex = candidateIndices[candidateIndex];
+                if (programSnapshot.zones[static_cast<std::size_t>(resolvedZoneIndex)].roundRobinPosition == targetPosition)
+                {
+                    addSelectedZone(resolvedZoneIndex);
+                    break;
+                }
+            }
+            continue;
+        }
+
+        std::sort(candidateIndices.begin(), candidateIndices.begin() + candidateCount,
+            [&programSnapshot](const int left, const int right)
+            {
+                return programSnapshot.roundRobinSortsBefore(
+                    static_cast<std::size_t>(left),
+                    static_cast<std::size_t>(right));
+            });
+        addSelectedZone(candidateIndices[static_cast<std::size_t>(step % static_cast<std::uint32_t>(candidateCount))]);
+    }
+
+    return selectedCount;
+}
+
 void EngineCore::flushPendingEventsAtOffset(const int offset,
                                            const ProgramSnapshot* const programSnapshot,
                                            const ProgramAudioSnapshot* const programAudioSnapshot) noexcept
@@ -1362,31 +1611,47 @@ void EngineCore::flushPendingEventsAtOffset(const int offset,
         if (event.offset != offset)
             continue;
 
-        if (event.type == EventType::noteOn)
+        auto startResolvedVoice = [&](const int selectedZoneIndex, const int existingVoiceIndex) noexcept
         {
             auto rootNote = rootMidiNote_;
             auto zoneIndex = -1;
             auto sampleAssetIndex = -1;
             auto zoneGain = 1.0f;
+            auto zonePanLeftGain = 1.0f;
+            auto zonePanRightGain = 1.0f;
             auto zoneTuneCents = 0.0f;
+            auto chokeGroup = 0;
             auto sampleStart = 0;
             auto sampleEndExclusive = -1;
+            auto loopStart = -1;
+            auto loopEndExclusive = -1;
+            auto loopMode = ZoneLoopMode::noLoop;
+            auto releaseOnNoteOff = playbackMode_ != PlaybackMode::oneShot;
             auto sourceSampleRateHz = sampleDataRate_;
+            const auto midiVelocity = juce::jlimit(0, 127, static_cast<int>(std::round(event.velocity * 127.0f)));
 
             if (programSnapshot != nullptr)
             {
-                const auto midiVelocity = juce::jlimit(0, 127, static_cast<int>(std::round(event.velocity * 127.0f)));
-                zoneIndex = programSnapshot->findFirstMatchingZoneIndex(event.noteNumber, midiVelocity);
-                if (zoneIndex < 0)
-                    continue;
+                if (selectedZoneIndex < 0 || static_cast<std::size_t>(selectedZoneIndex) >= programSnapshot->zoneCount)
+                    return false;
 
-                const auto& zone = programSnapshot->zones[static_cast<std::size_t>(zoneIndex)];
+                const auto& zone = programSnapshot->zones[static_cast<std::size_t>(selectedZoneIndex)];
                 rootNote = zone.rootMidiNote;
+                zoneIndex = selectedZoneIndex;
                 sampleAssetIndex = zone.sampleAssetIndex;
-                zoneGain = std::pow(10.0f, zone.gainDb / 20.0f);
+                zoneGain = std::pow(10.0f, programSnapshot->getZoneGainDb(zone) / 20.0f)
+                    * programSnapshot->getZoneVelocityGain(zone, midiVelocity);
+                const auto zonePan = programSnapshot->getZonePan(zone);
+                zonePanLeftGain = zonePan > 0.0f ? (1.0f - zonePan) : 1.0f;
+                zonePanRightGain = zonePan < 0.0f ? (1.0f + zonePan) : 1.0f;
                 zoneTuneCents = zone.tuneCents;
+                chokeGroup = programSnapshot->getZoneChokeGroup(zone);
                 sampleStart = zone.sampleStart;
                 sampleEndExclusive = zone.sampleEndExclusive;
+                loopStart = zone.loopStart;
+                loopEndExclusive = zone.loopEndExclusive;
+                loopMode = zone.loopMode;
+                releaseOnNoteOff = programSnapshot->getZoneTriggerMode(zone) == ZoneTriggerMode::gate;
 
                 if (programSnapshot->isZoneSampleIndexValid(zone))
                 {
@@ -1397,33 +1662,31 @@ void EngineCore::flushPendingEventsAtOffset(const int offset,
                 if (programAudioSnapshot != nullptr
                     && programAudioSnapshot->getSampleSegments(sampleAssetIndex) == nullptr)
                 {
-                    continue;
+                    return false;
                 }
             }
 
-            stopVoicesForNoteImmediate(event.noteNumber);
-
-            if (monoMode_)
+            if (existingVoiceIndex >= 0)
             {
-                const auto activeIndex = voicePool_.firstActiveVoiceIndex();
-
-                if (activeIndex >= 0 && legatoMode_)
-                {
-                    retargetVoiceLegato(activeIndex,
-                        event.noteNumber,
-                        event.velocity,
-                        rootNote,
-                        zoneIndex,
-                        sampleAssetIndex,
-                        zoneGain,
-                        zoneTuneCents,
-                        sampleStart,
-                        sampleEndExclusive,
-                        sourceSampleRateHz);
-                    continue;
-                }
-
-                stopAllVoicesImmediate();
+                retargetVoiceLegato(existingVoiceIndex,
+                    event.noteNumber,
+                    event.velocity,
+                    rootNote,
+                    zoneIndex,
+                    sampleAssetIndex,
+                    zoneGain,
+                    zonePanLeftGain,
+                    zonePanRightGain,
+                    zoneTuneCents,
+                    chokeGroup,
+                    releaseOnNoteOff,
+                    sampleStart,
+                    sampleEndExclusive,
+                    loopStart,
+                    loopEndExclusive,
+                    loopMode,
+                    sourceSampleRateHz);
+                return true;
             }
 
             const auto voiceIndex = voicePool_.startVoiceForNote(event.noteNumber);
@@ -1434,14 +1697,107 @@ void EngineCore::flushPendingEventsAtOffset(const int offset,
                 zoneIndex,
                 sampleAssetIndex,
                 zoneGain,
+                zonePanLeftGain,
+                zonePanRightGain,
                 zoneTuneCents,
+                chokeGroup,
+                releaseOnNoteOff,
                 sampleStart,
                 sampleEndExclusive,
+                loopStart,
+                loopEndExclusive,
+                loopMode,
                 sourceSampleRateHz);
+            return voiceIndex >= 0;
+        };
+
+        if (event.type == EventType::noteOn)
+        {
+
+            if (programSnapshot != nullptr)
+            {
+                std::array<int, ProgramSnapshot::maxZones> selectedZoneIndices{};
+                const auto midiVelocity = juce::jlimit(0, 127, static_cast<int>(std::round(event.velocity * 127.0f)));
+                const auto selectedZoneCount = chooseProgramZoneIndices(
+                    *programSnapshot,
+                    event.noteNumber,
+                    midiVelocity,
+                    false,
+                    selectedZoneIndices.data(),
+                    static_cast<int>(selectedZoneIndices.size()));
+
+                if (selectedZoneCount <= 0)
+                    continue;
+
+                for (int selectedIndex = 0; selectedIndex < selectedZoneCount; ++selectedIndex)
+                {
+                    const auto selectedZoneIndex = selectedZoneIndices[static_cast<std::size_t>(selectedIndex)];
+                    const auto& zone = programSnapshot->zones[static_cast<std::size_t>(selectedZoneIndex)];
+                    stopVoicesInChokeGroupImmediate(programSnapshot->getZoneChokeGroup(zone));
+                }
+
+                stopVoicesForNoteImmediate(event.noteNumber);
+
+                if (monoMode_)
+                {
+                    const auto activeIndex = voicePool_.firstActiveVoiceIndex();
+                    if (activeIndex >= 0 && legatoMode_)
+                    {
+                        startResolvedVoice(selectedZoneIndices[0], activeIndex);
+                        continue;
+                    }
+
+                    stopAllVoicesImmediate();
+                    startResolvedVoice(selectedZoneIndices[0], -1);
+                    continue;
+                }
+
+                for (int selectedIndex = 0; selectedIndex < selectedZoneCount; ++selectedIndex)
+                    startResolvedVoice(selectedZoneIndices[static_cast<std::size_t>(selectedIndex)], -1);
+
+                continue;
+            }
+
+            stopVoicesForNoteImmediate(event.noteNumber);
+
+            if (monoMode_)
+            {
+                const auto activeIndex = voicePool_.firstActiveVoiceIndex();
+                if (activeIndex >= 0 && legatoMode_)
+                {
+                    startResolvedVoice(-1, activeIndex);
+                    continue;
+                }
+
+                stopAllVoicesImmediate();
+            }
+
+            startResolvedVoice(-1, -1);
         }
         else if (event.type == EventType::noteOff)
         {
             releaseVoicesForNote(event.noteNumber);
+
+            if (programSnapshot == nullptr)
+                continue;
+
+            std::array<int, ProgramSnapshot::maxZones> selectedZoneIndices{};
+            const auto midiVelocity = juce::jlimit(0, 127, static_cast<int>(std::round(event.velocity * 127.0f)));
+            const auto selectedZoneCount = chooseProgramZoneIndices(
+                *programSnapshot,
+                event.noteNumber,
+                midiVelocity,
+                true,
+                selectedZoneIndices.data(),
+                static_cast<int>(selectedZoneIndices.size()));
+
+            for (int selectedIndex = 0; selectedIndex < selectedZoneCount; ++selectedIndex)
+            {
+                const auto selectedZoneIndex = selectedZoneIndices[static_cast<std::size_t>(selectedIndex)];
+                const auto& zone = programSnapshot->zones[static_cast<std::size_t>(selectedZoneIndex)];
+                stopVoicesInChokeGroupImmediate(programSnapshot->getZoneChokeGroup(zone));
+                startResolvedVoice(selectedZoneIndex, -1);
+            }
         }
         else
         {
@@ -1458,9 +1814,16 @@ void EngineCore::startVoice(const int voiceIndex,
                             const int zoneIndex,
                             const int sampleAssetIndex,
                             const float zoneGain,
+                            const float zonePanLeftGain,
+                            const float zonePanRightGain,
                             const float zoneTuneCents,
+                            const int chokeGroup,
+                            const bool releaseOnNoteOff,
                             const int sampleStart,
                             const int sampleEndExclusive,
+                            const int loopStart,
+                            const int loopEndExclusive,
+                            const ZoneLoopMode loopMode,
                             const double sourceSampleRateHz) noexcept
 {
     if (voiceIndex < 0 || voiceIndex >= static_cast<int>(VoicePool::maxVoices))
@@ -1475,16 +1838,26 @@ void EngineCore::startVoice(const int voiceIndex,
     voice.glideSamplesRemaining = 0;
     voice.velocity = velocity;
     voice.noteHeld = true;
+    voice.releaseOnNoteOff = releaseOnNoteOff;
     voice.lastAmpLevel = 0.0f;
     voice.rootMidiNote = rootMidiNote;
     voice.zoneIndex = zoneIndex;
     voice.sampleAssetIndex = sampleAssetIndex;
     voice.zoneGain = zoneGain;
+    voice.zonePanLeftGain = zonePanLeftGain;
+    voice.zonePanRightGain = zonePanRightGain;
     voice.zoneTuneCents = zoneTuneCents;
+    voice.chokeGroup = chokeGroup;
     voice.sampleStart = sampleStart;
     voice.sampleEndExclusive = sampleEndExclusive;
-    voice.filterA.reset();
-    voice.filterB.reset();
+    voice.loopStart = loopStart;
+    voice.loopEndExclusive = loopEndExclusive;
+    voice.loopMode = loopMode;
+    for (std::size_t filterChannel = 0; filterChannel < voice.filterA.size(); ++filterChannel)
+    {
+        voice.filterA[filterChannel].reset();
+        voice.filterB[filterChannel].reset();
+    }
     if (filterSettings_.lfoRetrigger)
     {
         auto startPhase = filterSettings_.lfoStartPhaseDegrees;
@@ -1521,9 +1894,16 @@ void EngineCore::retargetVoiceLegato(const int voiceIndex,
                                      const int zoneIndex,
                                      const int sampleAssetIndex,
                                      const float zoneGain,
+                                     const float zonePanLeftGain,
+                                     const float zonePanRightGain,
                                      const float zoneTuneCents,
+                                     const int chokeGroup,
+                                     const bool releaseOnNoteOff,
                                      const int sampleStart,
                                      const int sampleEndExclusive,
+                                     const int loopStart,
+                                     const int loopEndExclusive,
+                                     const ZoneLoopMode loopMode,
                                      const double sourceSampleRateHz) noexcept
 {
     if (voiceIndex < 0 || voiceIndex >= static_cast<int>(VoicePool::maxVoices))
@@ -1534,13 +1914,20 @@ void EngineCore::retargetVoiceLegato(const int voiceIndex,
 
     voice.velocity = velocity;
     voice.noteHeld = true;
+    voice.releaseOnNoteOff = releaseOnNoteOff;
     voice.rootMidiNote = rootMidiNote;
     voice.zoneIndex = zoneIndex;
     voice.sampleAssetIndex = sampleAssetIndex;
     voice.zoneGain = zoneGain;
+    voice.zonePanLeftGain = zonePanLeftGain;
+    voice.zonePanRightGain = zonePanRightGain;
     voice.zoneTuneCents = zoneTuneCents;
+    voice.chokeGroup = chokeGroup;
     voice.sampleStart = sampleStart;
     voice.sampleEndExclusive = sampleEndExclusive;
+    voice.loopStart = loopStart;
+    voice.loopEndExclusive = loopEndExclusive;
+    voice.loopMode = loopMode;
     voicePool_.setNoteAtIndex(voiceIndex, noteNumber);
 
     const auto glideSamples = static_cast<int>(std::round(glideSeconds_ * static_cast<float>(sampleRate_)));
@@ -1564,16 +1951,26 @@ void EngineCore::stopAllVoicesImmediate() noexcept
     for (auto& voice : voices_)
     {
         voice.noteHeld = false;
+        voice.releaseOnNoteOff = true;
         voice.lastAmpLevel = 0.0f;
         voice.rootMidiNote = rootMidiNote_;
         voice.zoneIndex = -1;
         voice.sampleAssetIndex = -1;
         voice.zoneGain = 1.0f;
+        voice.zonePanLeftGain = 1.0f;
+        voice.zonePanRightGain = 1.0f;
         voice.zoneTuneCents = 0.0f;
+        voice.chokeGroup = 0;
         voice.sampleStart = 0;
         voice.sampleEndExclusive = -1;
-        voice.filterA.reset();
-        voice.filterB.reset();
+        voice.loopStart = -1;
+        voice.loopEndExclusive = -1;
+        voice.loopMode = ZoneLoopMode::noLoop;
+        for (std::size_t filterChannel = 0; filterChannel < voice.filterA.size(); ++filterChannel)
+        {
+            voice.filterA[filterChannel].reset();
+            voice.filterB[filterChannel].reset();
+        }
         voice.filterLfoPhase = 0.0f;
         voice.filterLfoFadeSamplesTotal = 0;
         voice.filterLfoFadeSamplesRemaining = 0;
@@ -1595,16 +1992,71 @@ void EngineCore::stopVoicesForNoteImmediate(const int noteNumber) noexcept
 
         auto& voice = voices_[static_cast<std::size_t>(voiceIndex)];
         voice.noteHeld = false;
+        voice.releaseOnNoteOff = true;
         voice.lastAmpLevel = 0.0f;
         voice.rootMidiNote = rootMidiNote_;
         voice.zoneIndex = -1;
         voice.sampleAssetIndex = -1;
         voice.zoneGain = 1.0f;
+        voice.zonePanLeftGain = 1.0f;
+        voice.zonePanRightGain = 1.0f;
         voice.zoneTuneCents = 0.0f;
+        voice.chokeGroup = 0;
         voice.sampleStart = 0;
         voice.sampleEndExclusive = -1;
-        voice.filterA.reset();
-        voice.filterB.reset();
+        voice.loopStart = -1;
+        voice.loopEndExclusive = -1;
+        voice.loopMode = ZoneLoopMode::noLoop;
+        for (std::size_t filterChannel = 0; filterChannel < voice.filterA.size(); ++filterChannel)
+        {
+            voice.filterA[filterChannel].reset();
+            voice.filterB[filterChannel].reset();
+        }
+        voice.filterLfoPhase = 0.0f;
+        voice.filterLfoFadeSamplesTotal = 0;
+        voice.filterLfoFadeSamplesRemaining = 0;
+        voice.glideSamplesRemaining = 0;
+        voice.ampEnvelope.reset();
+        voice.filterEnvelope.reset();
+    }
+}
+
+void EngineCore::stopVoicesInChokeGroupImmediate(const int chokeGroup) noexcept
+{
+    if (chokeGroup <= 0)
+        return;
+
+    for (int voiceIndex = 0; voiceIndex < static_cast<int>(VoicePool::maxVoices); ++voiceIndex)
+    {
+        if (!voicePool_.isActive(voiceIndex))
+            continue;
+
+        auto& voice = voices_[static_cast<std::size_t>(voiceIndex)];
+        if (voice.chokeGroup != chokeGroup)
+            continue;
+
+        voicePool_.stopVoiceAtIndex(voiceIndex);
+        voice.noteHeld = false;
+        voice.releaseOnNoteOff = true;
+        voice.lastAmpLevel = 0.0f;
+        voice.rootMidiNote = rootMidiNote_;
+        voice.zoneIndex = -1;
+        voice.sampleAssetIndex = -1;
+        voice.zoneGain = 1.0f;
+        voice.zonePanLeftGain = 1.0f;
+        voice.zonePanRightGain = 1.0f;
+        voice.zoneTuneCents = 0.0f;
+        voice.chokeGroup = 0;
+        voice.sampleStart = 0;
+        voice.sampleEndExclusive = -1;
+        voice.loopStart = -1;
+        voice.loopEndExclusive = -1;
+        voice.loopMode = ZoneLoopMode::noLoop;
+        for (std::size_t filterChannel = 0; filterChannel < voice.filterA.size(); ++filterChannel)
+        {
+            voice.filterA[filterChannel].reset();
+            voice.filterB[filterChannel].reset();
+        }
         voice.filterLfoPhase = 0.0f;
         voice.filterLfoFadeSamplesTotal = 0;
         voice.filterLfoFadeSamplesRemaining = 0;
@@ -1626,7 +2078,7 @@ void EngineCore::releaseVoicesForNote(const int noteNumber) noexcept
     {
         auto& voice = voices_[static_cast<std::size_t>(voiceIndex)];
 
-        if (playbackMode_ == PlaybackMode::oneShot)
+        if (!voice.releaseOnNoteOff)
             return;
 
         voice.noteHeld = false;
@@ -1635,29 +2087,8 @@ void EngineCore::releaseVoicesForNote(const int noteNumber) noexcept
         voice.filterEnvelope.noteOff();
     };
 
-    if (monoMode_)
-    {
-        for (int index = 0; index < count; ++index)
-            releaseVoiceByIndex(indices[static_cast<std::size_t>(index)]);
-        return;
-    }
-
-    int selectedVoice = indices[0];
-    std::uint64_t oldestStartOrder = voicePool_.startOrderAt(selectedVoice);
-
-    for (int index = 1; index < count; ++index)
-    {
-        const auto candidateVoice = indices[static_cast<std::size_t>(index)];
-        const auto candidateStartOrder = voicePool_.startOrderAt(candidateVoice);
-
-        if (candidateStartOrder < oldestStartOrder)
-        {
-            oldestStartOrder = candidateStartOrder;
-            selectedVoice = candidateVoice;
-        }
-    }
-
-    releaseVoiceByIndex(selectedVoice);
+    for (int index = 0; index < count; ++index)
+        releaseVoiceByIndex(indices[static_cast<std::size_t>(index)]);
 }
 
 void EngineCore::applyEnvelopeParamsToVoices() noexcept
@@ -1711,12 +2142,15 @@ void EngineCore::applyFilterParamsToVoices() noexcept
 
     for (auto& voice : voices_)
     {
-        voice.filterA.setType(juceType);
-        voice.filterB.setType(juceType);
-        voice.filterA.setCutoffFrequency(defaultCutoff);
-        voice.filterB.setCutoffFrequency(defaultCutoff);
-        voice.filterA.setResonance(q);
-        voice.filterB.setResonance(q);
+        for (std::size_t filterChannel = 0; filterChannel < voice.filterA.size(); ++filterChannel)
+        {
+            voice.filterA[filterChannel].setType(juceType);
+            voice.filterB[filterChannel].setType(juceType);
+            voice.filterA[filterChannel].setCutoffFrequency(defaultCutoff);
+            voice.filterB[filterChannel].setCutoffFrequency(defaultCutoff);
+            voice.filterA[filterChannel].setResonance(q);
+            voice.filterB[filterChannel].setResonance(q);
+        }
     }
 }
 
@@ -1760,6 +2194,15 @@ float EngineCore::readSampleLinear(const SampleSegments& segments,
                                    const int sampleStart,
                                    const int sampleEndExclusive) const noexcept
 {
+    return readSampleLinear(segments, position, sampleStart, sampleEndExclusive, 0);
+}
+
+float EngineCore::readSampleLinear(const SampleSegments& segments,
+                                   const float position,
+                                   const int sampleStart,
+                                   const int sampleEndExclusive,
+                                   const int channel) const noexcept
+{
     const auto sampleLength = getEffectivePlaybackLength(segments, sampleStart, sampleEndExclusive);
 
     if (sampleLength <= 1)
@@ -1771,16 +2214,19 @@ float EngineCore::readSampleLinear(const SampleSegments& segments,
     const auto editGain = computeEditGain(clampedPosition, sampleLength);
 
     if (qualityTier_ == QualityTier::cpu)
-        return readSampleAt(segments, mappedIndex) * editGain;
+        return readSampleAt(segments, mappedIndex, channel) * editGain;
 
     if (qualityTier_ == QualityTier::ultra)
-        return readSampleCubic(segments, clampedPosition, sampleStart, sampleEndExclusive) * editGain;
+        return readSampleCubic(segments, clampedPosition, sampleStart, sampleEndExclusive, channel) * editGain;
 
     const auto nextIndex = juce::jmin(sampleIndex + 1, sampleLength - 1);
     const auto fraction = clampedPosition - static_cast<float>(sampleIndex);
 
-    const auto sampleA = readSampleAt(segments, mappedIndex);
-    const auto sampleB = readSampleAt(segments, mapPlaybackIndexToSampleIndex(segments, nextIndex, sampleStart, sampleEndExclusive));
+    const auto sampleA = readSampleAt(segments, mappedIndex, channel);
+    const auto sampleB = readSampleAt(
+        segments,
+        mapPlaybackIndexToSampleIndex(segments, nextIndex, sampleStart, sampleEndExclusive),
+        channel);
 
     return (sampleA + (sampleB - sampleA) * fraction) * editGain;
 }
@@ -1795,6 +2241,15 @@ float EngineCore::readSampleCubic(const SampleSegments& segments,
                                   const int sampleStart,
                                   const int sampleEndExclusive) const noexcept
 {
+    return readSampleCubic(segments, position, sampleStart, sampleEndExclusive, 0);
+}
+
+float EngineCore::readSampleCubic(const SampleSegments& segments,
+                                  const float position,
+                                  const int sampleStart,
+                                  const int sampleEndExclusive,
+                                  const int channel) const noexcept
+{
     const auto sampleLength = getEffectivePlaybackLength(segments, sampleStart, sampleEndExclusive);
     if (sampleLength <= 1)
         return 0.0f;
@@ -1806,10 +2261,10 @@ float EngineCore::readSampleCubic(const SampleSegments& segments,
     const auto i3 = juce::jmin(sampleLength - 1, i1 + 2);
     const auto t = clampedPosition - static_cast<float>(i1);
 
-    const auto y0 = readSampleAt(segments, mapPlaybackIndexToSampleIndex(segments, i0, sampleStart, sampleEndExclusive));
-    const auto y1 = readSampleAt(segments, mapPlaybackIndexToSampleIndex(segments, i1, sampleStart, sampleEndExclusive));
-    const auto y2 = readSampleAt(segments, mapPlaybackIndexToSampleIndex(segments, i2, sampleStart, sampleEndExclusive));
-    const auto y3 = readSampleAt(segments, mapPlaybackIndexToSampleIndex(segments, i3, sampleStart, sampleEndExclusive));
+    const auto y0 = readSampleAt(segments, mapPlaybackIndexToSampleIndex(segments, i0, sampleStart, sampleEndExclusive), channel);
+    const auto y1 = readSampleAt(segments, mapPlaybackIndexToSampleIndex(segments, i1, sampleStart, sampleEndExclusive), channel);
+    const auto y2 = readSampleAt(segments, mapPlaybackIndexToSampleIndex(segments, i2, sampleStart, sampleEndExclusive), channel);
+    const auto y3 = readSampleAt(segments, mapPlaybackIndexToSampleIndex(segments, i3, sampleStart, sampleEndExclusive), channel);
 
     const auto a0 = -0.5f * y0 + 1.5f * y1 - 1.5f * y2 + 0.5f * y3;
     const auto a1 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
@@ -1847,17 +2302,29 @@ std::shared_ptr<const EngineCore::SampleSegments> EngineCore::buildSampleSegment
     auto segments = std::make_shared<SampleSegments>();
 
     const auto totalSamples = monoSampleData.getNumSamples();
+    const auto sourceChannels = monoSampleData.getNumChannels();
+    const auto channels = juce::jmax(1, sourceChannels);
     const auto clampedPreload = juce::jlimit(0, totalSamples, preloadSamples);
     const auto streamSamples = juce::jmax(0, totalSamples - clampedPreload);
 
-    segments->preloadData.setSize(1, clampedPreload, false, true, true);
-    segments->streamData.setSize(1, streamSamples, false, true, true);
+    segments->preloadData.setSize(channels, clampedPreload, false, true, true);
+    segments->streamData.setSize(channels, streamSamples, false, true, true);
+    segments->preloadData.clear();
+    segments->streamData.clear();
 
-    if (clampedPreload > 0)
-        segments->preloadData.copyFrom(0, 0, monoSampleData, 0, 0, clampedPreload);
+    for (int channel = 0; channel < channels; ++channel)
+    {
+        if (sourceChannels <= 0)
+            continue;
 
-    if (streamSamples > 0)
-        segments->streamData.copyFrom(0, 0, monoSampleData, 0, clampedPreload, streamSamples);
+        const auto sourceChannel = juce::jmin(channel, sourceChannels - 1);
+
+        if (clampedPreload > 0)
+            segments->preloadData.copyFrom(channel, 0, monoSampleData, sourceChannel, 0, clampedPreload);
+
+        if (streamSamples > 0)
+            segments->streamData.copyFrom(channel, 0, monoSampleData, sourceChannel, clampedPreload, streamSamples);
+    }
 
     return segments;
 }
@@ -1927,6 +2394,28 @@ int EngineCore::mapPlaybackIndexToSampleIndex(const SampleSegments& segments,
     return clampedStart + clampedPlayback;
 }
 
+int EngineCore::mapSampleIndexToPlaybackIndex(const SampleSegments& segments,
+                                              const int sampleIndex,
+                                              const int sampleStart,
+                                              const int sampleEndExclusive) const noexcept
+{
+    const auto totalLength = getTotalSampleLength(segments);
+    if (totalLength <= 0)
+        return 0;
+
+    const auto useZoneWindow = sampleEndExclusive > sampleStart;
+    const auto requestedStart = useZoneWindow ? sampleStart : sampleWindowStart_;
+    const auto requestedEnd = useZoneWindow ? (sampleEndExclusive - 1) : sampleWindowEnd_;
+    const auto clampedStart = juce::jlimit(0, totalLength - 1, requestedStart);
+    const auto clampedEnd = juce::jlimit(clampedStart, totalLength - 1, requestedEnd);
+    const auto clampedSample = juce::jlimit(clampedStart, clampedEnd, sampleIndex);
+
+    if (reversePlayback_)
+        return clampedEnd - clampedSample;
+
+    return clampedSample - clampedStart;
+}
+
 float EngineCore::computeEditGain(const float playbackPosition, const int playbackLength) const noexcept
 {
     if (playbackLength <= 1)
@@ -1952,17 +2441,27 @@ float EngineCore::computeEditGain(const float playbackPosition, const int playba
 
 float EngineCore::readSampleAt(const SampleSegments& segments, const int index) const noexcept
 {
+    return readSampleAt(segments, index, 0);
+}
+
+float EngineCore::readSampleAt(const SampleSegments& segments, const int index, const int channel) const noexcept
+{
     if (index < 0)
         return 0.0f;
 
+    const auto channelCount = segments.preloadData.getNumChannels();
+    if (channelCount <= 0)
+        return 0.0f;
+
+    const auto clampedChannel = juce::jlimit(0, channelCount - 1, channel);
     const auto preloadSamples = segments.preloadData.getNumSamples();
 
     if (index < preloadSamples)
-        return segments.preloadData.getSample(0, index);
+        return segments.preloadData.getSample(clampedChannel, index);
 
     const auto streamIndex = index - preloadSamples;
     if (streamIndex >= 0 && streamIndex < segments.streamData.getNumSamples())
-        return segments.streamData.getSample(0, streamIndex);
+        return segments.streamData.getSample(clampedChannel, streamIndex);
 
     return 0.0f;
 }
@@ -2050,8 +2549,10 @@ float EngineCore::computeFilterSample(const float inputSample,
                                       const float lfoValue,
                                       const int noteNumber,
                                       const float velocity,
-                                      VoiceState& voice) const noexcept
+                                      VoiceState& voice,
+                                      const int filterChannel) const noexcept
 {
+    const auto clampedFilterChannel = juce::jlimit(0, static_cast<int>(voice.filterA.size()) - 1, filterChannel);
     const auto semitoneOffset = static_cast<float>(noteNumber - voice.rootMidiNote);
     const auto lfoAmountKeyTrackRatio = filterSettings_.lfoKeytrackLinear
         ? juce::jmax(0.0f, 1.0f + (semitoneOffset / 12.0f) * filterSettings_.lfoAmountKeyTracking)
@@ -2067,10 +2568,12 @@ float EngineCore::computeFilterSample(const float inputSample,
     cutoff = juce::jlimit(20.0f, static_cast<float>(sampleRate_ * 0.45), cutoff);
 
     const auto q = juce::jlimit(0.5f, 20.0f, 0.5f + filterSettings_.resonance * 19.5f);
-    voice.filterA.setCutoffFrequency(cutoff);
-    voice.filterA.setResonance(q);
+    auto& filterA = voice.filterA[static_cast<std::size_t>(clampedFilterChannel)];
+    auto& filterB = voice.filterB[static_cast<std::size_t>(clampedFilterChannel)];
+    filterA.setCutoffFrequency(cutoff);
+    filterA.setResonance(q);
 
-    auto out = voice.filterA.processSample(0, inputSample);
+    auto out = filterA.processSample(0, inputSample);
 
     if (filterSettings_.mode == FilterSettings::Mode::notch12)
         out = inputSample - out;
@@ -2078,9 +2581,9 @@ float EngineCore::computeFilterSample(const float inputSample,
     if (filterSettings_.mode == FilterSettings::Mode::lowPass24
         || filterSettings_.mode == FilterSettings::Mode::highPass24)
     {
-        voice.filterB.setCutoffFrequency(cutoff);
-        voice.filterB.setResonance(q);
-        out = voice.filterB.processSample(0, out);
+        filterB.setCutoffFrequency(cutoff);
+        filterB.setResonance(q);
+        out = filterB.processSample(0, out);
     }
 
     return out;

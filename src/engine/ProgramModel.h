@@ -94,6 +94,30 @@ struct VelocityRange
     }
 };
 
+struct VelocityFadeRange
+{
+    int low = -1;
+    int high = -1;
+
+    [[nodiscard]] static constexpr VelocityFadeRange disabled() noexcept
+    {
+        return {};
+    }
+
+    [[nodiscard]] static constexpr VelocityFadeRange fromUnordered(const int first, const int second) noexcept
+    {
+        const auto clippedFirst = clampVelocity(first);
+        const auto clippedSecond = clampVelocity(second);
+        return clippedFirst <= clippedSecond ? VelocityFadeRange{ clippedFirst, clippedSecond }
+                                             : VelocityFadeRange{ clippedSecond, clippedFirst };
+    }
+
+    [[nodiscard]] constexpr bool isEnabled() const noexcept
+    {
+        return low >= kVelocityMin && high <= kVelocityMax && low < high;
+    }
+};
+
 struct SampleAsset
 {
     std::string sourcePath;
@@ -118,14 +142,31 @@ enum class ZoneLoopMode
     continuous
 };
 
+enum class RoundRobinMode
+{
+    ordered,
+    cycleRandom
+};
+
+enum class ZoneTriggerMode
+{
+    gate,
+    oneShot,
+    release
+};
+
 struct Group
 {
     std::string name;
     MidiRange keyRange;
     VelocityRange velocityRange;
+    VelocityFadeRange velocityFadeIn;
+    VelocityFadeRange velocityFadeOut;
     float gainDb = 0.0f;
     float pan = 0.0f;
     int roundRobinGroup = 0;
+    RoundRobinMode roundRobinMode = RoundRobinMode::ordered;
+    ZoneTriggerMode triggerMode = ZoneTriggerMode::gate;
     int chokeGroup = 0;
 
     [[nodiscard]] bool matches(const int note, const int velocity) const noexcept
@@ -140,6 +181,8 @@ struct Zone
     int groupIndex = -1;
     MidiRange keyRange;
     VelocityRange velocityRange;
+    VelocityFadeRange velocityFadeIn;
+    VelocityFadeRange velocityFadeOut;
     int rootMidiNote = 60;
     int sampleStart = 0;
     int sampleEndExclusive = -1;
@@ -150,6 +193,9 @@ struct Zone
     float tuneCents = 0.0f;
     int roundRobinGroup = 0;
     int roundRobinPosition = 0;
+    int roundRobinLength = 0;
+    RoundRobinMode roundRobinMode = RoundRobinMode::ordered;
+    ZoneTriggerMode triggerMode = ZoneTriggerMode::gate;
     int chokeGroup = 0;
     ZoneLoopMode loopMode = ZoneLoopMode::noLoop;
 

@@ -103,11 +103,16 @@ target_sources(Audiocity
         src/plugin/PluginProcessor.cpp
         src/plugin/PluginEditor.cpp
         src/plugin/PeakPreviewCache.cpp
+        src/plugin/ImportedProgramState.cpp
         src/plugin/PresetJson.cpp
+        src/plugin/ProgramMappingModel.cpp
         src/plugin/PlayerPadState.cpp
         src/plugin/CcLearnDial.cpp
+        src/plugin/LibraryFileIndex.cpp
+        src/plugin/LibraryMetadata.cpp
         src/engine/EngineCore.cpp
         src/engine/RexLoader.cpp
+        src/engine/SfzImporter.cpp
         src/engine/VoicePool.cpp)
 
 target_include_directories(Audiocity

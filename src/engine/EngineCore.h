@@ -6,6 +6,7 @@
 #include <juce_dsp/juce_dsp.h>
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -277,9 +278,10 @@ private:
         float sampleIncrement = 1.0f;
         float velocity = 0.0f;
         bool noteHeld = false;
+        bool releaseOnNoteOff = true;
         float lastAmpLevel = 0.0f;
-        juce::dsp::StateVariableTPTFilter<float> filterA;
-        juce::dsp::StateVariableTPTFilter<float> filterB;
+        std::array<juce::dsp::StateVariableTPTFilter<float>, 2> filterA;
+        std::array<juce::dsp::StateVariableTPTFilter<float>, 2> filterB;
         float filterLfoPhase = 0.0f;
         int filterLfoFadeSamplesTotal = 0;
         int filterLfoFadeSamplesRemaining = 0;
@@ -289,9 +291,15 @@ private:
         int zoneIndex = -1;
         int sampleAssetIndex = -1;
         float zoneGain = 1.0f;
+        float zonePanLeftGain = 1.0f;
+        float zonePanRightGain = 1.0f;
         float zoneTuneCents = 0.0f;
+        int chokeGroup = 0;
         int sampleStart = 0;
         int sampleEndExclusive = -1;
+        int loopStart = -1;
+        int loopEndExclusive = -1;
+        ZoneLoopMode loopMode = ZoneLoopMode::noLoop;
         juce::ADSR ampEnvelope;
         juce::ADSR filterEnvelope;
     };
@@ -311,9 +319,24 @@ private:
         int offset = 0;
     };
 
+    struct RoundRobinCursor
+    {
+        int group = 0;
+        std::uint32_t nextStep = 0;
+    };
+
     bool enqueuePendingEvent(EventType type, int noteNumber, float velocity, int sampleOffsetInBlock) noexcept;
 
     void generateFallbackSample() noexcept;
+    void resetRoundRobinCursors() noexcept;
+    [[nodiscard]] std::uint32_t consumeRoundRobinStep(int roundRobinGroup) noexcept;
+    [[nodiscard]] int chooseProgramZoneIndex(const ProgramSnapshot& programSnapshot, int note, int velocity) noexcept;
+    [[nodiscard]] int chooseProgramZoneIndices(const ProgramSnapshot& programSnapshot,
+                                               int note,
+                                               int velocity,
+                                               bool releaseTriggerOnly,
+                                               int* zoneIndices,
+                                               int maxZoneIndices) noexcept;
     void sortPendingEventsByOffset() noexcept;
     void flushPendingEventsAtOffset(int offset,
                                     const ProgramSnapshot* programSnapshot,
@@ -325,9 +348,16 @@ private:
                     int zoneIndex,
                     int sampleAssetIndex,
                     float zoneGain,
+                    float zonePanLeftGain,
+                    float zonePanRightGain,
                     float zoneTuneCents,
+                    int chokeGroup,
+                    bool releaseOnNoteOff,
                     int sampleStart,
                     int sampleEndExclusive,
+                    int loopStart,
+                    int loopEndExclusive,
+                    ZoneLoopMode loopMode,
                     double sourceSampleRateHz) noexcept;
     void retargetVoiceLegato(int voiceIndex,
                              int noteNumber,
@@ -336,12 +366,20 @@ private:
                              int zoneIndex,
                              int sampleAssetIndex,
                              float zoneGain,
+                             float zonePanLeftGain,
+                             float zonePanRightGain,
                              float zoneTuneCents,
+                             int chokeGroup,
+                             bool releaseOnNoteOff,
                              int sampleStart,
                              int sampleEndExclusive,
+                             int loopStart,
+                             int loopEndExclusive,
+                             ZoneLoopMode loopMode,
                              double sourceSampleRateHz) noexcept;
     void stopAllVoicesImmediate() noexcept;
     void stopVoicesForNoteImmediate(int noteNumber) noexcept;
+    void stopVoicesInChokeGroupImmediate(int chokeGroup) noexcept;
     void releaseVoicesForNote(int noteNumber) noexcept;
     void applyEnvelopeParamsToVoices() noexcept;
     void applyFilterParamsToVoices() noexcept;
@@ -368,8 +406,13 @@ private:
                                                     int playbackIndex,
                                                     int sampleStart,
                                                     int sampleEndExclusive) const noexcept;
+    [[nodiscard]] int mapSampleIndexToPlaybackIndex(const SampleSegments& segments,
+                                                    int sampleIndex,
+                                                    int sampleStart,
+                                                    int sampleEndExclusive) const noexcept;
     [[nodiscard]] float computeEditGain(float playbackPosition, int playbackLength) const noexcept;
     [[nodiscard]] float readSampleAt(const SampleSegments& segments, int index) const noexcept;
+    [[nodiscard]] float readSampleAt(const SampleSegments& segments, int index, int channel) const noexcept;
     [[nodiscard]] float readSampleAt(int index) const noexcept;
 
     [[nodiscard]] float readSampleLinear(const SampleSegments& segments, float position) const noexcept;
@@ -377,18 +420,29 @@ private:
                                          float position,
                                          int sampleStart,
                                          int sampleEndExclusive) const noexcept;
+    [[nodiscard]] float readSampleLinear(const SampleSegments& segments,
+                                         float position,
+                                         int sampleStart,
+                                         int sampleEndExclusive,
+                                         int channel) const noexcept;
     [[nodiscard]] float readSampleLinear(float position) const noexcept;
     [[nodiscard]] float readSampleCubic(const SampleSegments& segments, float position) const noexcept;
     [[nodiscard]] float readSampleCubic(const SampleSegments& segments,
                                         float position,
                                         int sampleStart,
                                         int sampleEndExclusive) const noexcept;
+    [[nodiscard]] float readSampleCubic(const SampleSegments& segments,
+                                        float position,
+                                        int sampleStart,
+                                        int sampleEndExclusive,
+                                        int channel) const noexcept;
     [[nodiscard]] float computeFilterSample(float inputSample,
                                             float envValue,
                                             float lfoValue,
                                             int noteNumber,
                                             float velocity,
-                                            VoiceState& voice) const noexcept;
+                                            VoiceState& voice,
+                                            int filterChannel) const noexcept;
     void processDelay(float** outputs, int numChannels, int numSamples) noexcept;
     void processDcFilter(float** outputs, int numChannels, int numSamples) noexcept;
     [[nodiscard]] float processSaturationSample(float sample) const noexcept;
@@ -399,6 +453,7 @@ private:
     VoicePool voicePool_;
     std::array<VoiceState, VoicePool::maxVoices> voices_{};
     std::array<PendingEvent, 1024> pendingEvents_{};
+    std::array<RoundRobinCursor, ProgramSnapshot::maxGroups> roundRobinCursors_{};
     int pendingEventCount_ = 0;
 
     std::atomic<std::shared_ptr<const ProgramSnapshot>> programSnapshot_{};

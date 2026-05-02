@@ -1,13 +1,16 @@
 #include "PluginEditor.h"
 
+#include "LibraryFileIndex.h"
 #include "PeakPreviewCache.h"
 #include "PluginProcessor.h"
+#include "ProgramMappingModel.h"
 #include <BinaryData.h>
 #include <JuceHeader.h>
 
 #include <algorithm>
 #include <cmath>
 #include <thread>
+#include <utility>
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -1626,11 +1629,312 @@ void AudiocityAudioProcessorEditor::WaveformView::mouseWheelMove(
     panByPixels(-panAmount);
 }
 
+void MappingOverviewComponent::setRows(std::vector<audiocity::plugin::ProgramZoneListRow> rows)
+{
+    dragState_.reset();
+    rows_ = std::move(rows);
+    repaint();
+}
+
+void MappingOverviewComponent::setSelectedZoneIndex(const int zoneIndex)
+{
+    if (selectedZoneIndex_ == zoneIndex)
+        return;
+
+    selectedZoneIndex_ = zoneIndex;
+    repaint();
+}
+
+MappingOverviewComponent::OverviewLayout MappingOverviewComponent::getOverviewLayout() const
+{
+    OverviewLayout layout;
+    auto bounds = getLocalBounds().reduced(8);
+    if (bounds.isEmpty())
+        return layout;
+
+    layout.title = bounds.removeFromTop(18);
+    bounds.removeFromTop(4);
+    layout.keyboard = bounds.removeFromBottom(18);
+    bounds.removeFromBottom(5);
+    layout.plot = bounds;
+    return layout;
+}
+
+juce::Rectangle<int> MappingOverviewComponent::getZoneBounds(
+    const audiocity::plugin::ProgramZoneListRow& row,
+    const juce::Rectangle<int> plot) const
+{
+    if (plot.isEmpty())
+        return {};
+
+    const auto keyLow = juce::jlimit(0, 127, row.keyLow);
+    const auto keyHigh = juce::jlimit(keyLow, 127, row.keyHigh);
+    const auto velocityLow = juce::jlimit(0, 127, row.velocityLow);
+    const auto velocityHigh = juce::jlimit(velocityLow, 127, row.velocityHigh);
+
+    const auto left = plot.getX() + static_cast<int>(std::floor(static_cast<double>(keyLow) / 128.0 * plot.getWidth()));
+    const auto right = plot.getX() + static_cast<int>(std::ceil(static_cast<double>(keyHigh + 1) / 128.0 * plot.getWidth()));
+    const auto top = plot.getBottom() - static_cast<int>(std::ceil(static_cast<double>(velocityHigh + 1) / 128.0 * plot.getHeight()));
+    const auto bottom = plot.getBottom() - static_cast<int>(std::floor(static_cast<double>(velocityLow) / 128.0 * plot.getHeight()));
+    auto zoneBounds = juce::Rectangle<int>(left, top, juce::jmax(2, right - left), juce::jmax(2, bottom - top));
+    return zoneBounds.getIntersection(plot);
+}
+
+int MappingOverviewComponent::findZoneIndexAt(const juce::Point<int> position) const
+{
+    const auto layout = getOverviewLayout();
+    if (!layout.plot.contains(position))
+        return -1;
+
+    for (auto rowIndex = static_cast<int>(rows_.size()) - 1; rowIndex >= 0; --rowIndex)
+    {
+        const auto& row = rows_[static_cast<std::size_t>(rowIndex)];
+        if (getZoneBounds(row, layout.plot).contains(position))
+            return row.zoneIndex;
+    }
+
+    return -1;
+}
+
+const audiocity::plugin::ProgramZoneListRow* MappingOverviewComponent::findRowByZoneIndex(const int zoneIndex) const
+{
+    for (const auto& row : rows_)
+    {
+        if (row.zoneIndex == zoneIndex)
+            return &row;
+    }
+
+    return nullptr;
+}
+
+audiocity::plugin::ProgramZoneOverviewDragMode MappingOverviewComponent::getDragModeForPosition(
+    const audiocity::plugin::ProgramZoneListRow& row,
+    const juce::Point<int> position,
+    const juce::Rectangle<int> plot) const
+{
+    constexpr int kResizeHandlePx = 6;
+    const auto bounds = getZoneBounds(row, plot);
+    const auto nearLeft = std::abs(position.x - bounds.getX()) <= kResizeHandlePx;
+    const auto nearRight = std::abs(position.x - bounds.getRight()) <= kResizeHandlePx;
+    const auto nearTop = std::abs(position.y - bounds.getY()) <= kResizeHandlePx;
+    const auto nearBottom = std::abs(position.y - bounds.getBottom()) <= kResizeHandlePx;
+
+    if (nearLeft && bounds.getWidth() >= (kResizeHandlePx * 2))
+        return audiocity::plugin::ProgramZoneOverviewDragMode::keyLow;
+
+    if (nearRight && bounds.getWidth() >= (kResizeHandlePx * 2))
+        return audiocity::plugin::ProgramZoneOverviewDragMode::keyHigh;
+
+    if (nearTop && bounds.getHeight() >= (kResizeHandlePx * 2))
+        return audiocity::plugin::ProgramZoneOverviewDragMode::velocityHigh;
+
+    if (nearBottom && bounds.getHeight() >= (kResizeHandlePx * 2))
+        return audiocity::plugin::ProgramZoneOverviewDragMode::velocityLow;
+
+    return audiocity::plugin::ProgramZoneOverviewDragMode::move;
+}
+
+int MappingOverviewComponent::positionToNoteValue(const int x, const juce::Rectangle<int> plot) const
+{
+    if (plot.getWidth() <= 1)
+        return audiocity::engine::kMidiNoteMin;
+
+    const auto clampedX = juce::jlimit(plot.getX(), plot.getRight() - 1, x);
+    const auto normalized = static_cast<double>(clampedX - plot.getX())
+        / static_cast<double>(plot.getWidth() - 1);
+    return juce::jlimit(audiocity::engine::kMidiNoteMin,
+                        audiocity::engine::kMidiNoteMax,
+                        static_cast<int>(std::round(normalized * audiocity::engine::kMidiNoteMax)));
+}
+
+int MappingOverviewComponent::positionToVelocityValue(const int y, const juce::Rectangle<int> plot) const
+{
+    if (plot.getHeight() <= 1)
+        return audiocity::engine::kVelocityMin;
+
+    const auto clampedY = juce::jlimit(plot.getY(), plot.getBottom() - 1, y);
+    const auto normalized = static_cast<double>((plot.getBottom() - 1) - clampedY)
+        / static_cast<double>(plot.getHeight() - 1);
+    return juce::jlimit(audiocity::engine::kVelocityMin,
+                        audiocity::engine::kVelocityMax,
+                        static_cast<int>(std::round(normalized * audiocity::engine::kVelocityMax)));
+}
+
+void MappingOverviewComponent::updateDragPreview(const juce::Point<int> position)
+{
+    if (!dragState_.has_value())
+        return;
+
+    const auto layout = getOverviewLayout();
+    if (layout.plot.isEmpty())
+        return;
+
+    const auto noteValue = positionToNoteValue(position.x, layout.plot);
+    const auto velocityValue = positionToVelocityValue(position.y, layout.plot);
+    const auto nextEdit = audiocity::plugin::makeProgramZoneOverviewEdit(
+        dragState_->originalRow,
+        dragState_->mode,
+        noteValue,
+        velocityValue,
+        noteValue - dragState_->startNoteValue,
+        velocityValue - dragState_->startVelocityValue);
+
+    if (nextEdit.keyLow == dragState_->previewEdit.keyLow
+        && nextEdit.keyHigh == dragState_->previewEdit.keyHigh
+        && nextEdit.velocityLow == dragState_->previewEdit.velocityLow
+        && nextEdit.velocityHigh == dragState_->previewEdit.velocityHigh)
+    {
+        return;
+    }
+
+    dragState_->previewEdit = nextEdit;
+    repaint();
+}
+
+void MappingOverviewComponent::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colour(0xff202034));
+
+    const auto layout = getOverviewLayout();
+    if (layout.plot.isEmpty())
+        return;
+
+    g.setColour(juce::Colour(0xff3a3a52));
+    g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.5f), 5.0f, 1.0f);
+
+    g.setColour(juce::Colour(0xffc7c7d8));
+    g.setFont(juce::Font(juce::FontOptions(11.0f)).boldened());
+    g.drawText("Key / Velocity Overview", layout.title, juce::Justification::centredLeft, true);
+
+    g.setColour(juce::Colour(0xff19192b));
+    g.fillRoundedRectangle(layout.plot.toFloat(), 4.0f);
+
+    g.setColour(juce::Colour(0x363a3a52));
+    for (int key = 12; key < 128; key += 12)
+    {
+        const auto x = layout.plot.getX() + static_cast<int>(std::round(static_cast<double>(key) / 127.0 * layout.plot.getWidth()));
+        g.drawVerticalLine(x, static_cast<float>(layout.plot.getY()), static_cast<float>(layout.plot.getBottom()));
+    }
+
+    for (int velocity = 32; velocity < 128; velocity += 32)
+    {
+        const auto y = layout.plot.getBottom() - static_cast<int>(std::round(static_cast<double>(velocity) / 127.0 * layout.plot.getHeight()));
+        g.drawHorizontalLine(y, static_cast<float>(layout.plot.getX()), static_cast<float>(layout.plot.getRight()));
+    }
+
+    auto colourForZone = [](const int zoneIndex)
+    {
+        const auto hue = std::fmod(0.55f + static_cast<float>(zoneIndex) * 0.137f, 1.0f);
+        return juce::Colour::fromHSV(hue, 0.58f, 0.88f, 0.70f);
+    };
+
+    for (const auto& storedRow : rows_)
+    {
+        auto row = storedRow;
+        if (dragState_.has_value() && row.zoneIndex == dragState_->originalRow.zoneIndex)
+        {
+            row.keyLow = dragState_->previewEdit.keyLow;
+            row.keyHigh = dragState_->previewEdit.keyHigh;
+            row.velocityLow = dragState_->previewEdit.velocityLow;
+            row.velocityHigh = dragState_->previewEdit.velocityHigh;
+        }
+
+        const auto zoneBounds = getZoneBounds(row, layout.plot);
+        const auto colour = colourForZone(row.zoneIndex);
+        const auto selected = row.zoneIndex == selectedZoneIndex_;
+        g.setColour(colour.withAlpha(0.34f));
+        g.fillRoundedRectangle(zoneBounds.toFloat(), 3.0f);
+        g.setColour(selected ? juce::Colour(0xffffffff) : colour.withAlpha(0.95f));
+        g.drawRoundedRectangle(zoneBounds.toFloat().reduced(0.5f), 3.0f, selected ? 2.0f : 1.2f);
+
+        if (zoneBounds.getWidth() >= 28 && zoneBounds.getHeight() >= 14)
+        {
+            g.setColour(juce::Colour(0xfff4f6ff));
+            g.setFont(juce::Font(juce::FontOptions(10.0f)).boldened());
+            g.drawText("Z" + juce::String(row.zoneIndex + 1), zoneBounds.reduced(4, 1), juce::Justification::centredLeft, true);
+        }
+    }
+
+    if (rows_.empty())
+    {
+        g.setColour(juce::Colour(0xff808098));
+        g.setFont(juce::Font(juce::FontOptions(11.0f)));
+        g.drawText("No zones", layout.plot, juce::Justification::centred, true);
+    }
+
+    for (int key = 0; key < 128; ++key)
+    {
+        const auto x = layout.keyboard.getX() + static_cast<int>(std::floor(static_cast<double>(key) / 128.0 * layout.keyboard.getWidth()));
+        const auto nextX = layout.keyboard.getX() + static_cast<int>(std::ceil(static_cast<double>(key + 1) / 128.0 * layout.keyboard.getWidth()));
+        const auto note = key % 12;
+        const auto isBlackKey = note == 1 || note == 3 || note == 6 || note == 8 || note == 10;
+        g.setColour(isBlackKey ? juce::Colour(0xff11111e) : juce::Colour(0xffd7dce8));
+        g.fillRect(x, layout.keyboard.getY(), juce::jmax(1, nextX - x), layout.keyboard.getHeight());
+    }
+    g.setColour(juce::Colour(0xff3a3a52));
+    g.drawRect(layout.keyboard);
+}
+
+void MappingOverviewComponent::mouseDown(const juce::MouseEvent& event)
+{
+    dragState_.reset();
+
+    const auto zoneIndex = findZoneIndexAt(event.getPosition());
+    if (zoneIndex < 0)
+        return;
+
+    setSelectedZoneIndex(zoneIndex);
+    if (onZoneSelected)
+        onZoneSelected(zoneIndex);
+
+    const auto* row = findRowByZoneIndex(zoneIndex);
+    const auto layout = getOverviewLayout();
+    if (row == nullptr || layout.plot.isEmpty())
+        return;
+
+    DragState dragState;
+    dragState.originalRow = *row;
+    dragState.previewEdit.zoneIndex = row->zoneIndex;
+    dragState.previewEdit.keyLow = row->keyLow;
+    dragState.previewEdit.keyHigh = row->keyHigh;
+    dragState.previewEdit.velocityLow = row->velocityLow;
+    dragState.previewEdit.velocityHigh = row->velocityHigh;
+    dragState.previewEdit.rootMidiNote = row->rootMidiNote;
+    dragState.startPosition = event.getPosition();
+    dragState.startNoteValue = positionToNoteValue(event.getPosition().x, layout.plot);
+    dragState.startVelocityValue = positionToVelocityValue(event.getPosition().y, layout.plot);
+    dragState.mode = getDragModeForPosition(*row, event.getPosition(), layout.plot);
+    dragState_ = dragState;
+}
+
+void MappingOverviewComponent::mouseDrag(const juce::MouseEvent& event)
+{
+    updateDragPreview(event.getPosition());
+}
+
+void MappingOverviewComponent::mouseUp(const juce::MouseEvent&)
+{
+    if (!dragState_.has_value())
+        return;
+
+    const auto changed = dragState_->previewEdit.keyLow != dragState_->originalRow.keyLow
+        || dragState_->previewEdit.keyHigh != dragState_->originalRow.keyHigh
+        || dragState_->previewEdit.velocityLow != dragState_->originalRow.velocityLow
+        || dragState_->previewEdit.velocityHigh != dragState_->originalRow.velocityHigh;
+    const auto committedEdit = dragState_->previewEdit;
+    dragState_.reset();
+    repaint();
+
+    if (changed && onZoneEditCommitted)
+        onZoneEditCommitted(committedEdit);
+}
+
 // ─── Editor Constructor ────────────────────────────────────────────────────────
 
 AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProcessor& processor)
     : AudioProcessorEditor(&processor),
-      processor_(processor)
+    processor_(processor),
+    mappingZoneListModel_(*this)
 {
     setName("Audiocity");
     setSize(980, 860);
@@ -1645,6 +1949,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     tabBar_.setTabBarDepth(30);
     tabBar_.addTab("Sample", juce::Colour(0xff252538), &tabSamplePage_, false);
     tabBar_.addTab("Library", juce::Colour(0xff252538), &tabLibraryPage_, false);
+    tabBar_.addTab("Mapping", juce::Colour(0xff252538), &tabMappingPage_, false);
     tabBar_.addTab("Player", juce::Colour(0xff252538), &tabPlayerPage_, false);
     tabBar_.addTab("Generate", juce::Colour(0xff252538), &tabGeneratePage_, false);
     tabBar_.addTab("Capture", juce::Colour(0xff252538), &tabCapturePage_, false);
@@ -2062,6 +2367,16 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         cancelSampleRootScan();
     };
 
+    addAndMakeVisible(sampleBrowserBookmarkCombo_);
+    sampleBrowserBookmarkCombo_.setTextWhenNothingSelected("Bookmarks");
+    sampleBrowserBookmarkCombo_.onChange = [this] { scanSelectedSampleBrowserBookmark(); };
+
+    addAndMakeVisible(sampleBrowserAddBookmarkButton_);
+    sampleBrowserAddBookmarkButton_.onClick = [this] { addCurrentSampleRootBookmark(); };
+
+    addAndMakeVisible(sampleBrowserRemoveBookmarkButton_);
+    sampleBrowserRemoveBookmarkButton_.onClick = [this] { removeSelectedSampleBrowserBookmark(); };
+
     addAndMakeVisible(sampleBrowserFilterEditor_);
     sampleBrowserFilterEditor_.setTextToShowWhenEmpty("Search samples...", juce::Colours::grey);
     sampleBrowserFilterEditor_.onTextChange = [this] { rebuildVisibleSampleList(); };
@@ -2069,8 +2384,29 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(sampleBrowserSortCombo_);
     sampleBrowserSortCombo_.addItem("Name", 1);
     sampleBrowserSortCombo_.addItem("Relative Path", 2);
+    sampleBrowserSortCombo_.addItem("Recent", 3);
     sampleBrowserSortCombo_.setSelectedId(1, juce::dontSendNotification);
     sampleBrowserSortCombo_.onChange = [this] { rebuildVisibleSampleList(); };
+
+    addAndMakeVisible(sampleBrowserFavoriteButton_);
+    sampleBrowserFavoriteButton_.onClick = [this] { toggleSelectedBrowserFavorite(); };
+
+    addAndMakeVisible(sampleBrowserFavoritesOnlyToggle_);
+    sampleBrowserFavoritesOnlyToggle_.onClick = [this] { rebuildVisibleSampleList(); };
+
+    addAndMakeVisible(sampleBrowserRecentOnlyToggle_);
+    sampleBrowserRecentOnlyToggle_.onClick = [this] { rebuildVisibleSampleList(); };
+
+    addAndMakeVisible(sampleBrowserTagFilterCombo_);
+    sampleBrowserTagFilterCombo_.setTextWhenNothingSelected("All Tags");
+    sampleBrowserTagFilterCombo_.onChange = [this] { rebuildVisibleSampleList(); };
+
+    addAndMakeVisible(sampleBrowserTagsEditor_);
+    sampleBrowserTagsEditor_.setTextToShowWhenEmpty("Tags", juce::Colours::grey);
+    sampleBrowserTagsEditor_.onReturnKey = [this] { applySelectedBrowserTags(); };
+
+    addAndMakeVisible(sampleBrowserApplyTagsButton_);
+    sampleBrowserApplyTagsButton_.onClick = [this] { applySelectedBrowserTags(); };
 
     addAndMakeVisible(sampleBrowserListBox_);
     sampleBrowserListBox_.setModel(this);
@@ -2085,6 +2421,182 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     sampleBrowserPreviewLabel_.setJustificationType(juce::Justification::centredRight);
     sampleBrowserPreviewLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff61d9ff));
     sampleBrowserPreviewLabel_.setText({}, juce::dontSendNotification);
+
+    addAndMakeVisible(mappingSummaryLabel_);
+    mappingSummaryLabel_.setJustificationType(juce::Justification::centredLeft);
+    mappingSummaryLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffe5e5ef));
+    mappingSummaryLabel_.setFont(juce::Font(juce::FontOptions(13.0f)).boldened());
+
+    addAndMakeVisible(mappingRefreshButton_);
+    mappingRefreshButton_.onClick = [this] { refreshMappingZoneRows(); };
+
+    addAndMakeVisible(mappingDuplicateZoneButton_);
+    mappingDuplicateZoneButton_.onClick = [this] { duplicateSelectedMappingZone(); };
+
+    addAndMakeVisible(mappingSplitZoneButton_);
+    mappingSplitZoneButton_.onClick = [this] { splitSelectedMappingZone(); };
+
+    addAndMakeVisible(mappingDeleteZoneButton_);
+    mappingDeleteZoneButton_.onClick = [this] { deleteSelectedMappingZone(); };
+
+    addAndMakeVisible(mappingOverview_);
+    mappingOverview_.onZoneSelected = [this](const int zoneIndex)
+    {
+        if (selectMappingZoneByIndex(zoneIndex))
+            updateMappingDetails();
+    };
+    mappingOverview_.onZoneEditCommitted = [this](const audiocity::plugin::ProgramZoneEdit& edit)
+    {
+        commitMappingZoneEdit(edit, "Zone " + juce::String(edit.zoneIndex + 1) + " updated from overview");
+    };
+
+    addAndMakeVisible(mappingZoneListBox_);
+    mappingZoneListBox_.setModel(&mappingZoneListModel_);
+    mappingZoneListBox_.setRowHeight(58);
+    mappingZoneListBox_.setMultipleSelectionEnabled(true);
+
+    addAndMakeVisible(mappingDetailsText_);
+    mappingDetailsText_.setMultiLine(true);
+    mappingDetailsText_.setReadOnly(true);
+    mappingDetailsText_.setScrollbarsShown(true);
+    mappingDetailsText_.setCaretVisible(false);
+    mappingDetailsText_.setPopupMenuEnabled(false);
+    mappingDetailsText_.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff202034));
+    mappingDetailsText_.setColour(juce::TextEditor::outlineColourId, juce::Colour(0xff3a3a52));
+    mappingDetailsText_.setColour(juce::TextEditor::focusedOutlineColourId, juce::Colour(0xff3a3a52));
+    mappingDetailsText_.setColour(juce::TextEditor::textColourId, juce::Colour(0xffe5e5ef));
+    mappingDetailsText_.setFont(juce::Font(juce::FontOptions(12.0f)));
+
+    auto configureMappingEditLabel = [this](juce::Label& label)
+    {
+        addAndMakeVisible(label);
+        label.setJustificationType(juce::Justification::centredLeft);
+        label.setColour(juce::Label::textColourId, juce::Colour(0xffc7c7d8));
+        label.setFont(juce::Font(juce::FontOptions(11.0f)).boldened());
+    };
+
+    auto configureMappingEditSlider = [this](juce::Slider& slider,
+                                             const double minimum = 0.0,
+                                             const double maximum = 127.0,
+                                             const double interval = 1.0,
+                                             const int textBoxWidth = 48)
+    {
+        addAndMakeVisible(slider);
+        slider.setSliderStyle(juce::Slider::LinearHorizontal);
+        slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, textBoxWidth, 20);
+        slider.setRange(minimum, maximum, interval);
+        slider.setColour(juce::Slider::trackColourId, juce::Colour(0xff61d9ff));
+        slider.setColour(juce::Slider::thumbColourId, juce::Colour(0xfff4f6ff));
+        slider.setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xffe5e5ef));
+        slider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff202034));
+        slider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colour(0xff3a3a52));
+    };
+
+    auto configureMappingEditCombo = [this](juce::ComboBox& combo)
+    {
+        addAndMakeVisible(combo);
+        combo.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff202034));
+        combo.setColour(juce::ComboBox::outlineColourId, juce::Colour(0xff3a3a52));
+        combo.setColour(juce::ComboBox::textColourId, juce::Colour(0xffe5e5ef));
+        combo.setColour(juce::ComboBox::arrowColourId, juce::Colour(0xff61d9ff));
+    };
+
+    configureMappingEditLabel(mappingEditKeyLowLabel_);
+    configureMappingEditSlider(mappingEditKeyLowSlider_);
+    configureMappingEditLabel(mappingEditKeyHighLabel_);
+    configureMappingEditSlider(mappingEditKeyHighSlider_);
+    configureMappingEditLabel(mappingEditVelocityLowLabel_);
+    configureMappingEditSlider(mappingEditVelocityLowSlider_);
+    configureMappingEditLabel(mappingEditVelocityHighLabel_);
+    configureMappingEditSlider(mappingEditVelocityHighSlider_);
+    auto configureMappingFadeSlider = [&configureMappingEditSlider](juce::Slider& slider)
+    {
+        configureMappingEditSlider(slider, -1.0, 127.0, 1.0, 44);
+        slider.textFromValueFunction = [](double value)
+        {
+            return value < 0.0 ? juce::String("Off") : juce::String(static_cast<int>(std::round(value)));
+        };
+        slider.valueFromTextFunction = [](const juce::String& text)
+        {
+            const auto trimmed = text.trim();
+            return trimmed.equalsIgnoreCase("off") ? -1.0 : trimmed.getDoubleValue();
+        };
+    };
+    configureMappingEditLabel(mappingEditVelocityFadeInLabel_);
+    configureMappingFadeSlider(mappingEditVelocityFadeInLowSlider_);
+    configureMappingFadeSlider(mappingEditVelocityFadeInHighSlider_);
+    configureMappingEditLabel(mappingEditVelocityFadeOutLabel_);
+    configureMappingFadeSlider(mappingEditVelocityFadeOutLowSlider_);
+    configureMappingFadeSlider(mappingEditVelocityFadeOutHighSlider_);
+    configureMappingEditLabel(mappingEditRootLabel_);
+    configureMappingEditSlider(mappingEditRootSlider_);
+    configureMappingEditLabel(mappingEditSampleStartLabel_);
+    configureMappingEditSlider(mappingEditSampleStartSlider_, 0.0, 1.0, 1.0, 68);
+    configureMappingEditLabel(mappingEditSampleEndLabel_);
+    configureMappingEditSlider(mappingEditSampleEndSlider_, 0.0, 1.0, 1.0, 68);
+    configureMappingEditLabel(mappingEditLoopStartLabel_);
+    configureMappingEditSlider(mappingEditLoopStartSlider_, 0.0, 1.0, 1.0, 68);
+    configureMappingEditLabel(mappingEditLoopEndLabel_);
+    configureMappingEditSlider(mappingEditLoopEndSlider_, 0.0, 1.0, 1.0, 68);
+    configureMappingEditLabel(mappingEditGainLabel_);
+    configureMappingEditSlider(mappingEditGainSlider_, -60.0, 24.0, 0.1, 58);
+    configureMappingEditLabel(mappingEditPanLabel_);
+    configureMappingEditSlider(mappingEditPanSlider_, -100.0, 100.0, 1.0, 54);
+    configureMappingEditLabel(mappingEditRoundRobinGroupLabel_);
+    configureMappingEditSlider(mappingEditRoundRobinGroupSlider_, 0.0, 64.0, 1.0);
+    configureMappingEditLabel(mappingEditRoundRobinPositionLabel_);
+    configureMappingEditSlider(mappingEditRoundRobinPositionSlider_, 0.0, 64.0, 1.0);
+    configureMappingEditLabel(mappingEditRoundRobinModeLabel_);
+    configureMappingEditCombo(mappingEditRoundRobinModeCombo_);
+    mappingEditRoundRobinModeCombo_.addItem("Ordered", 1);
+    mappingEditRoundRobinModeCombo_.addItem("Cycle Random", 2);
+    configureMappingEditLabel(mappingEditChokeLabel_);
+    configureMappingEditSlider(mappingEditChokeSlider_, 0.0, 64.0, 1.0);
+    configureMappingEditLabel(mappingEditTriggerLabel_);
+    configureMappingEditCombo(mappingEditTriggerCombo_);
+    mappingEditTriggerCombo_.addItem("Gate", 1);
+    mappingEditTriggerCombo_.addItem("One-Shot", 2);
+    mappingEditTriggerCombo_.addItem("Release", 3);
+    configureMappingEditLabel(mappingEditLoopLabel_);
+    configureMappingEditCombo(mappingEditLoopCombo_);
+    mappingEditLoopCombo_.addItem("Off", 1);
+    mappingEditLoopCombo_.addItem("Sustain", 2);
+    mappingEditLoopCombo_.addItem("Continuous", 3);
+
+    addAndMakeVisible(mappingEditApplyButton_);
+    mappingEditApplyButton_.onClick = [this] { applySelectedMappingZoneEdit(); };
+
+    auto makeBatchEditCallback = [this](bool* dirtyFlag)
+    {
+        return [this, dirtyFlag]
+        {
+            if (suppressMappingBatchEditTracking_)
+                return;
+
+            if (mappingZoneListBox_.getSelectedRows().size() <= 1)
+                return;
+
+            *dirtyFlag = true;
+            updateMappingEditControls();
+        };
+    };
+
+    mappingEditVelocityFadeInLowSlider_.onValueChange = makeBatchEditCallback(&mappingBatchVelocityFadeEdited_);
+    mappingEditVelocityFadeInHighSlider_.onValueChange = makeBatchEditCallback(&mappingBatchVelocityFadeEdited_);
+    mappingEditVelocityFadeOutLowSlider_.onValueChange = makeBatchEditCallback(&mappingBatchVelocityFadeEdited_);
+    mappingEditVelocityFadeOutHighSlider_.onValueChange = makeBatchEditCallback(&mappingBatchVelocityFadeEdited_);
+    mappingEditGainSlider_.onValueChange = makeBatchEditCallback(&mappingBatchGainEdited_);
+    mappingEditPanSlider_.onValueChange = makeBatchEditCallback(&mappingBatchPanEdited_);
+    mappingEditRoundRobinGroupSlider_.onValueChange = makeBatchEditCallback(&mappingBatchRoundRobinGroupEdited_);
+    mappingEditRoundRobinModeCombo_.onChange = makeBatchEditCallback(&mappingBatchRoundRobinModeEdited_);
+    mappingEditChokeSlider_.onValueChange = makeBatchEditCallback(&mappingBatchChokeEdited_);
+    mappingEditTriggerCombo_.onChange = makeBatchEditCallback(&mappingBatchTriggerEdited_);
+    mappingEditLoopCombo_.onChange = makeBatchEditCallback(&mappingBatchLoopEdited_);
+
+    addAndMakeVisible(mappingEditStatusLabel_);
+    mappingEditStatusLabel_.setJustificationType(juce::Justification::centredLeft);
+    mappingEditStatusLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff9ea6c5));
+    mappingEditStatusLabel_.setFont(juce::Font(juce::FontOptions(11.0f)));
 
     // Sample info row
     addAndMakeVisible(samplePathLabel_);
@@ -2149,7 +2661,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     };
 
     addAndMakeVisible(loadButton_);
-    loadButton_.setTooltip("Load Sample");
+    loadButton_.setTooltip("Load Sample or SFZ");
     loadButton_.onClick = [this] { openSampleChooser(); };
 
     waveformView_.setDisplayMode(processor_.getWaveformDisplayMode() == 2
@@ -2651,6 +3163,17 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     diagnosticsLabel_.setJustificationType(juce::Justification::centredLeft);
     diagnosticsLabel_.setFont(juce::Font(juce::FontOptions(11.0f)));
 
+    programMapText_.setMultiLine(true);
+    programMapText_.setReadOnly(true);
+    programMapText_.setScrollbarsShown(true);
+    programMapText_.setCaretVisible(false);
+    programMapText_.setPopupMenuEnabled(false);
+    programMapText_.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff202034));
+    programMapText_.setColour(juce::TextEditor::outlineColourId, juce::Colour(0xff3a3a52));
+    programMapText_.setColour(juce::TextEditor::focusedOutlineColourId, juce::Colour(0xff3a3a52));
+    programMapText_.setColour(juce::TextEditor::textColourId, juce::Colour(0xffe5e5ef));
+    programMapText_.setFont(juce::Font(juce::FontOptions(12.0f)));
+
     // Register all dials with their parameter IDs for CC mapping
     allDials_ = {
         { &playbackStartDial_,  "playbackStart" },
@@ -2826,6 +3349,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addToSampleControls(autopanDepthDial_);
     addToSampleControls(saturationDriveDial_);
     addToSampleControls(saturationModeCombo_);
+    addToSampleControls(programMapText_);
     addToSampleControls(diagnosticsLabel_);
 
     // About pane
@@ -2843,6 +3367,8 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     };
 
     setupTooltips();
+    refreshSampleBrowserBookmarks();
+    refreshMappingZoneRows();
     rebuildVisibleSampleList();
 
     const auto restoredSampleRoot = processor_.getSampleBrowserRootFolder();
@@ -2854,6 +3380,8 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         else
             sampleBrowserRootLabel_.setText("< Select Folder >", juce::dontSendNotification);
     }
+
+    refreshSampleBrowserBookmarks();
 
     updateTabVisibility();
     refreshUI();
@@ -2904,7 +3432,7 @@ void AudiocityAudioProcessorEditor::timerCallback()
     const auto outputPeaks = processor_.consumeOutputPeakLevels();
     outputLevelMeter_.pushLevels(outputPeaks.left, outputPeaks.right);
 
-    if (currentTabIndex_ == 4 || processor_.isInputCaptureRecording())
+    if (currentTabIndex_ == 5 || processor_.isInputCaptureRecording())
     {
         refreshCaptureWaveform(processor_.isInputCaptureRecording());
         updateCaptureUiState();
@@ -2943,12 +3471,10 @@ void AudiocityAudioProcessorEditor::timerCallback()
 
             const auto ext = dropped.getFileExtension().toLowerCase();
             DBG("[DnD]   ext: \"" + ext + "\"");
-            const auto rexSupported = processor_.isRexRuntimeAvailable();
-            if (ext == ".wav" || ext == ".aiff" || ext == ".aif"
-                || (rexSupported && (ext == ".rex" || ext == ".rx2")))
+            if (isSupportedSampleFile(dropped))
             {
-                DBG("[DnD]   loading sample...");
-                if (processor_.loadSampleFromFile(dropped))
+                DBG("[DnD]   loading instrument...");
+                if (loadFileAsInstrument(dropped))
                 {
                     DBG("[DnD]   load succeeded, refreshing UI");
                     clearSelectedPresetAfterSourceLoad();
@@ -2975,7 +3501,12 @@ void AudiocityAudioProcessorEditor::timerCallback()
 
         if (currentTabIndex_ == 1)
             sampleBrowserListBox_.grabKeyboardFocus();
-        else if (currentTabIndex_ == 4)
+        else if (currentTabIndex_ == 2)
+        {
+            refreshMappingZoneRows();
+            mappingZoneListBox_.grabKeyboardFocus();
+        }
+        else if (currentTabIndex_ == 5)
         {
             refreshCaptureWaveform(true);
             updateCaptureUiState();
@@ -3178,20 +3709,81 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
 {
     const bool showSampleTab = (currentTabIndex_ == 0);
     const bool showLibraryTab = (currentTabIndex_ == 1);
-    const bool showPlayerTab = (currentTabIndex_ == 2);
-    const bool showGenerateTab = (currentTabIndex_ == 3);
-    const bool showCaptureTab = (currentTabIndex_ == 4);
-    const bool showAboutTab = (currentTabIndex_ == 5);
+    const bool showMappingTab = (currentTabIndex_ == 2);
+    const bool showPlayerTab = (currentTabIndex_ == 3);
+    const bool showGenerateTab = (currentTabIndex_ == 4);
+    const bool showCaptureTab = (currentTabIndex_ == 5);
+    const bool showAboutTab = (currentTabIndex_ == 6);
 
     sampleBrowserRootLabel_.setVisible(showLibraryTab);
     sampleBrowserChooseRootButton_.setVisible(showLibraryTab);
     sampleBrowserRefreshButton_.setVisible(showLibraryTab);
     sampleBrowserCancelButton_.setVisible(showLibraryTab);
+    sampleBrowserBookmarkCombo_.setVisible(showLibraryTab);
+    sampleBrowserAddBookmarkButton_.setVisible(showLibraryTab);
+    sampleBrowserRemoveBookmarkButton_.setVisible(showLibraryTab);
     sampleBrowserFilterEditor_.setVisible(showLibraryTab);
     sampleBrowserSortCombo_.setVisible(showLibraryTab);
+    sampleBrowserFavoriteButton_.setVisible(showLibraryTab);
+    sampleBrowserFavoritesOnlyToggle_.setVisible(showLibraryTab);
+    sampleBrowserRecentOnlyToggle_.setVisible(showLibraryTab);
+    sampleBrowserTagFilterCombo_.setVisible(showLibraryTab);
+    sampleBrowserTagsEditor_.setVisible(showLibraryTab);
+    sampleBrowserApplyTagsButton_.setVisible(showLibraryTab);
     sampleBrowserListBox_.setVisible(showLibraryTab);
     sampleBrowserCountLabel_.setVisible(showLibraryTab);
     sampleBrowserPreviewLabel_.setVisible(showLibraryTab);
+
+    mappingSummaryLabel_.setVisible(showMappingTab);
+    mappingRefreshButton_.setVisible(showMappingTab);
+    mappingDuplicateZoneButton_.setVisible(showMappingTab);
+    mappingSplitZoneButton_.setVisible(showMappingTab);
+    mappingDeleteZoneButton_.setVisible(showMappingTab);
+    mappingOverview_.setVisible(showMappingTab);
+    mappingZoneListBox_.setVisible(showMappingTab);
+    mappingDetailsText_.setVisible(showMappingTab);
+    mappingEditKeyLowLabel_.setVisible(showMappingTab);
+    mappingEditKeyLowSlider_.setVisible(showMappingTab);
+    mappingEditKeyHighLabel_.setVisible(showMappingTab);
+    mappingEditKeyHighSlider_.setVisible(showMappingTab);
+    mappingEditVelocityLowLabel_.setVisible(showMappingTab);
+    mappingEditVelocityLowSlider_.setVisible(showMappingTab);
+    mappingEditVelocityHighLabel_.setVisible(showMappingTab);
+    mappingEditVelocityHighSlider_.setVisible(showMappingTab);
+    mappingEditVelocityFadeInLabel_.setVisible(showMappingTab);
+    mappingEditVelocityFadeInLowSlider_.setVisible(showMappingTab);
+    mappingEditVelocityFadeInHighSlider_.setVisible(showMappingTab);
+    mappingEditVelocityFadeOutLabel_.setVisible(showMappingTab);
+    mappingEditVelocityFadeOutLowSlider_.setVisible(showMappingTab);
+    mappingEditVelocityFadeOutHighSlider_.setVisible(showMappingTab);
+    mappingEditRootLabel_.setVisible(showMappingTab);
+    mappingEditRootSlider_.setVisible(showMappingTab);
+    mappingEditSampleStartLabel_.setVisible(showMappingTab);
+    mappingEditSampleStartSlider_.setVisible(showMappingTab);
+    mappingEditSampleEndLabel_.setVisible(showMappingTab);
+    mappingEditSampleEndSlider_.setVisible(showMappingTab);
+    mappingEditLoopStartLabel_.setVisible(showMappingTab);
+    mappingEditLoopStartSlider_.setVisible(showMappingTab);
+    mappingEditLoopEndLabel_.setVisible(showMappingTab);
+    mappingEditLoopEndSlider_.setVisible(showMappingTab);
+    mappingEditGainLabel_.setVisible(showMappingTab);
+    mappingEditGainSlider_.setVisible(showMappingTab);
+    mappingEditPanLabel_.setVisible(showMappingTab);
+    mappingEditPanSlider_.setVisible(showMappingTab);
+    mappingEditRoundRobinGroupLabel_.setVisible(showMappingTab);
+    mappingEditRoundRobinGroupSlider_.setVisible(showMappingTab);
+    mappingEditRoundRobinPositionLabel_.setVisible(showMappingTab);
+    mappingEditRoundRobinPositionSlider_.setVisible(showMappingTab);
+    mappingEditRoundRobinModeLabel_.setVisible(showMappingTab);
+    mappingEditRoundRobinModeCombo_.setVisible(showMappingTab);
+    mappingEditChokeLabel_.setVisible(showMappingTab);
+    mappingEditChokeSlider_.setVisible(showMappingTab);
+    mappingEditTriggerLabel_.setVisible(showMappingTab);
+    mappingEditTriggerCombo_.setVisible(showMappingTab);
+    mappingEditLoopLabel_.setVisible(showMappingTab);
+    mappingEditLoopCombo_.setVisible(showMappingTab);
+    mappingEditApplyButton_.setVisible(showMappingTab);
+    mappingEditStatusLabel_.setVisible(showMappingTab);
 
     samplePathLabel_.setVisible(false);
     presetCombo_.setVisible(showSampleTab);
@@ -3282,6 +3874,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     autopanDepthDial_.setVisible(showSampleTab);
     saturationDriveDial_.setVisible(showSampleTab);
     saturationModeCombo_.setVisible(showSampleTab);
+    programMapText_.setVisible(showSampleTab && processor_.hasImportedProgram());
     diagnosticsLabel_.setVisible(showSampleTab);
 
     playerKeyboardLabel_.setVisible(showPlayerTab);
@@ -3448,18 +4041,31 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
 
     auto firstLine = content.removeFromTop(17);
     auto pathArea = firstLine;
-    if (entry.loopFormatBadge.isNotEmpty())
+    auto drawRowBadge = [&g, &pathArea](const juce::String& text, const juce::Colour colour, const int badgeWidth)
     {
-        const auto badgeWidth = entry.loopFormatBadge == "Apple Loop" ? 84 : 66;
-        auto badgeArea = pathArea.removeFromRight(badgeWidth);
+        if (pathArea.getWidth() < badgeWidth + 80)
+            return;
 
-        g.setColour(entry.loopFormatBadge == "Apple Loop" ? juce::Colour(0xff5b4b8a) : juce::Colour(0xff4b6b2a));
+        auto badgeArea = pathArea.removeFromRight(badgeWidth);
+        g.setColour(colour);
         g.fillRoundedRectangle(badgeArea.toFloat(), 4.0f);
         g.setColour(juce::Colour(0xffdfe6ff));
         g.setFont(juce::Font(juce::FontOptions(10.0f)));
-        g.drawText(entry.loopFormatBadge, badgeArea, juce::Justification::centred, false);
-
+        g.drawText(text, badgeArea, juce::Justification::centred, false);
         pathArea.removeFromRight(6);
+    };
+
+    if (entry.isFavorite)
+        drawRowBadge("FAV", juce::Colour(0xff9a6a22), 38);
+    if (entry.isRecent)
+        drawRowBadge("REC", juce::Colour(0xff23636e), 38);
+    if (entry.loopFormatBadge.isNotEmpty())
+    {
+        const auto badgeWidth = entry.loopFormatBadge == "Apple Loop" ? 84 : 66;
+        const auto badgeColour = entry.loopFormatBadge == "Apple Loop"
+            ? juce::Colour(0xff5b4b8a)
+            : (entry.loopFormatBadge == "SFZ" ? juce::Colour(0xff6c5ce7) : juce::Colour(0xff4b6b2a));
+        drawRowBadge(entry.loopFormatBadge, badgeColour, badgeWidth);
     }
 
     const auto pathWidth = juce::jmax(140, pathArea.getWidth() / 2);
@@ -3476,11 +4082,793 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
     auto detailsLine = entry.metadataLine;
     if (entry.loopMetadataLine.isNotEmpty())
         detailsLine += "  |  " + entry.loopMetadataLine;
+    if (!entry.tags.isEmpty())
+        detailsLine += "  |  Tags: " + entry.tags.joinIntoString(", ");
 
     g.setColour(juce::Colour(0xffc7c7d8));
     g.setFont(juce::Font(juce::FontOptions(11.0f)));
     g.drawText(detailsLine, content.removeFromTop(15), juce::Justification::centredLeft, true);
 
+}
+
+void AudiocityAudioProcessorEditor::paintMappingListRow(
+    const int rowNumber, juce::Graphics& g, const int width, const int height, const bool rowIsSelected)
+{
+    if (rowNumber < 0 || rowNumber >= static_cast<int>(mappingZoneRows_.size()))
+        return;
+
+    const auto& row = mappingZoneRows_[static_cast<std::size_t>(rowNumber)];
+    const auto rowBounds = juce::Rectangle<int>(0, 0, width, height).reduced(2, 1);
+
+    g.setColour(rowIsSelected ? juce::Colour(0xff2d3f66)
+                              : ((rowNumber % 2 == 0) ? juce::Colour(0x22252538) : juce::Colour(0x16252538)));
+    g.fillRoundedRectangle(rowBounds.toFloat(), 4.0f);
+
+    auto content = rowBounds.reduced(8, 5);
+    auto firstLine = content.removeFromTop(18);
+    auto badgeArea = firstLine.removeFromLeft(44);
+    g.setColour(juce::Colour(0xff3a5a8a));
+    g.fillRoundedRectangle(badgeArea.toFloat(), 4.0f);
+    g.setColour(juce::Colour(0xffdfe6ff));
+    g.setFont(juce::Font(juce::FontOptions(10.0f)).boldened());
+    g.drawText("Z" + juce::String(row.zoneIndex + 1), badgeArea, juce::Justification::centred, false);
+
+    firstLine.removeFromLeft(8);
+    g.setColour(juce::Colour(0xffe5e5ef));
+    g.setFont(juce::Font(juce::FontOptions(13.0f)).boldened());
+    g.drawText(row.sampleName, firstLine, juce::Justification::centredLeft, true);
+
+    auto secondLine = content.removeFromTop(17);
+    g.setColour(juce::Colour(0xffc7c7d8));
+    g.setFont(juce::Font(juce::FontOptions(11.0f)));
+    g.drawText("Key " + row.keyRange + "  Vel " + row.velocityRange + "  Root " + row.rootNote,
+               secondLine,
+               juce::Justification::centredLeft,
+               true);
+
+    auto thirdLine = content.removeFromTop(15);
+    g.setColour(juce::Colour(0xff9ea6c5));
+    g.setFont(juce::Font(juce::FontOptions(10.5f)));
+    g.drawText("Trig " + row.triggerMode + "  Loop " + row.loopMode + "  RR " + row.roundRobin + " " + row.roundRobinMode + "  Choke " + row.chokeGroup,
+               thirdLine,
+               juce::Justification::centredLeft,
+               true);
+}
+
+int AudiocityAudioProcessorEditor::MappingZoneListModel::getNumRows()
+{
+    return static_cast<int>(owner_.mappingZoneRows_.size());
+}
+
+void AudiocityAudioProcessorEditor::MappingZoneListModel::paintListBoxItem(
+    const int rowNumber, juce::Graphics& g, const int width, const int height, const bool rowIsSelected)
+{
+    owner_.paintMappingListRow(rowNumber, g, width, height, rowIsSelected);
+}
+
+void AudiocityAudioProcessorEditor::MappingZoneListModel::listBoxItemClicked(const int row, const juce::MouseEvent& event)
+{
+    if (event.mods.isPopupMenu() && !owner_.mappingZoneListBox_.isRowSelected(row))
+        owner_.mappingZoneListBox_.selectRow(row, false, true);
+
+    owner_.updateMappingDetails();
+
+    if (event.mods.isPopupMenu())
+        owner_.showMappingZoneContextMenu(row, event.getScreenPosition());
+}
+
+void AudiocityAudioProcessorEditor::MappingZoneListModel::listBoxItemDoubleClicked(const int row, const juce::MouseEvent&)
+{
+    owner_.mappingZoneListBox_.selectRow(row, juce::dontSendNotification);
+    owner_.updateMappingDetails();
+}
+
+void AudiocityAudioProcessorEditor::MappingZoneListModel::selectedRowsChanged(const int)
+{
+    owner_.updateMappingDetails();
+}
+
+void AudiocityAudioProcessorEditor::MappingZoneListModel::returnKeyPressed(const int lastRowSelected)
+{
+    owner_.mappingZoneListBox_.selectRow(lastRowSelected, juce::dontSendNotification);
+    owner_.updateMappingDetails();
+}
+
+void AudiocityAudioProcessorEditor::refreshMappingZoneRows()
+{
+    mappingZoneRows_ = processor_.getImportedProgramZoneRows();
+    mappingOverview_.setRows(mappingZoneRows_);
+
+    const auto programName = processor_.getImportedProgramName();
+    const auto zoneCount = static_cast<int>(mappingZoneRows_.size());
+    mappingSummaryLabel_.setText(
+        programName.isNotEmpty()
+            ? programName + " - " + juce::String(zoneCount) + " mapped zone" + (zoneCount == 1 ? "" : "s")
+            : juce::String("No imported program"),
+        juce::dontSendNotification);
+
+    mappingZoneListBox_.updateContent();
+    if (zoneCount > 0 && mappingZoneListBox_.getSelectedRow() < 0)
+        mappingZoneListBox_.selectRow(0, juce::dontSendNotification);
+    else if (zoneCount == 0)
+        mappingZoneListBox_.deselectAllRows();
+
+    updateMappingDetails();
+    mappingZoneListBox_.repaint();
+}
+
+std::vector<int> AudiocityAudioProcessorEditor::getSelectedMappingRowIndices() const
+{
+    std::vector<int> selectedRows;
+    const auto rows = mappingZoneListBox_.getSelectedRows();
+    selectedRows.reserve(static_cast<std::size_t>(rows.size()));
+    for (int index = 0; index < rows.size(); ++index)
+        selectedRows.push_back(rows[index]);
+
+    return selectedRows;
+}
+
+void AudiocityAudioProcessorEditor::resetMappingBatchEditTracking(const std::vector<int>& selectedRows)
+{
+    mappingBatchTrackedSelectionRows_ = selectedRows;
+    mappingBatchVelocityFadeEdited_ = false;
+    mappingBatchGainEdited_ = false;
+    mappingBatchPanEdited_ = false;
+    mappingBatchRoundRobinGroupEdited_ = false;
+    mappingBatchRoundRobinModeEdited_ = false;
+    mappingBatchChokeEdited_ = false;
+    mappingBatchTriggerEdited_ = false;
+    mappingBatchLoopEdited_ = false;
+}
+
+bool AudiocityAudioProcessorEditor::hasPendingMappingBatchEdit() const noexcept
+{
+    return mappingBatchVelocityFadeEdited_
+        || mappingBatchGainEdited_
+        || mappingBatchPanEdited_
+        || mappingBatchRoundRobinGroupEdited_
+        || mappingBatchRoundRobinModeEdited_
+        || mappingBatchChokeEdited_
+        || mappingBatchTriggerEdited_
+        || mappingBatchLoopEdited_;
+}
+
+void AudiocityAudioProcessorEditor::selectMappingZoneIndices(const std::vector<int>& zoneIndices)
+{
+    mappingZoneListBox_.deselectAllRows();
+
+    int lastSelectedRow = -1;
+    for (const auto zoneIndex : zoneIndices)
+    {
+        for (int row = 0; row < static_cast<int>(mappingZoneRows_.size()); ++row)
+        {
+            if (mappingZoneRows_[static_cast<std::size_t>(row)].zoneIndex != zoneIndex)
+                continue;
+
+            mappingZoneListBox_.selectRow(row, false, false);
+            lastSelectedRow = row;
+            break;
+        }
+    }
+
+    if (lastSelectedRow >= 0)
+        mappingZoneListBox_.scrollToEnsureRowIsOnscreen(lastSelectedRow);
+}
+
+void AudiocityAudioProcessorEditor::selectAllMappingZones()
+{
+    mappingZoneListBox_.deselectAllRows();
+
+    const auto rowCount = static_cast<int>(mappingZoneRows_.size());
+    for (int row = 0; row < rowCount; ++row)
+        mappingZoneListBox_.selectRow(row, false, false);
+
+    if (rowCount > 0)
+        mappingZoneListBox_.scrollToEnsureRowIsOnscreen(rowCount - 1);
+
+    updateMappingDetails();
+}
+
+bool AudiocityAudioProcessorEditor::selectMappingZoneByIndex(const int zoneIndex)
+{
+    for (int row = 0; row < static_cast<int>(mappingZoneRows_.size()); ++row)
+    {
+        if (mappingZoneRows_[static_cast<std::size_t>(row)].zoneIndex != zoneIndex)
+            continue;
+
+        mappingZoneListBox_.selectRow(row, juce::dontSendNotification);
+        mappingZoneListBox_.scrollToEnsureRowIsOnscreen(row);
+        return true;
+    }
+
+    return false;
+}
+
+void AudiocityAudioProcessorEditor::selectClosestMappingRow(const int preferredRow)
+{
+    const auto rowCount = static_cast<int>(mappingZoneRows_.size());
+    if (rowCount <= 0)
+    {
+        mappingZoneListBox_.deselectAllRows();
+        return;
+    }
+
+    const auto rowToSelect = juce::jlimit(0, rowCount - 1, preferredRow);
+    mappingZoneListBox_.selectRow(rowToSelect, juce::dontSendNotification);
+    mappingZoneListBox_.scrollToEnsureRowIsOnscreen(rowToSelect);
+}
+
+void AudiocityAudioProcessorEditor::showMappingZoneContextMenu(const int row, const juce::Point<int> screenPosition)
+{
+    if (row < 0 || row >= static_cast<int>(mappingZoneRows_.size()))
+        return;
+
+    if (!mappingZoneListBox_.isRowSelected(row))
+        mappingZoneListBox_.selectRow(row, false, true);
+
+    updateMappingDetails();
+
+    const auto selectedRows = getSelectedMappingRowIndices();
+    if (selectedRows.empty())
+        return;
+
+    const auto singleSelection = selectedRows.size() == 1;
+    const auto& selectedRow = mappingZoneRows_[static_cast<std::size_t>(selectedRows.front())];
+    juce::PopupMenu menu;
+    menu.addItem(1, "Duplicate Zone\tCtrl+D", singleSelection);
+    menu.addItem(2, "Split Zone\tCtrl+Shift+D", singleSelection && selectedRow.keyHigh > selectedRow.keyLow);
+    menu.addItem(3,
+                 singleSelection ? "Delete Zone\tDelete" : "Delete Selected Zones\tDelete",
+                 true);
+    menu.addSeparator();
+    menu.addItem(4,
+                 singleSelection ? "Clear Velocity Fades" : "Clear Velocity Fades for Selected Zones",
+                 true);
+    menu.addSeparator();
+    menu.addItem(5,
+                 "Select All Zones\tCtrl+A",
+                 static_cast<int>(selectedRows.size()) < static_cast<int>(mappingZoneRows_.size()));
+
+    const juce::Rectangle<int> targetArea(screenPosition.x, screenPosition.y, 1, 1);
+    juce::Component::SafePointer<AudiocityAudioProcessorEditor> safeThis(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(targetArea),
+        [safeThis](const int selectedId)
+        {
+            if (safeThis == nullptr)
+                return;
+
+            switch (selectedId)
+            {
+                case 1:
+                    safeThis->duplicateSelectedMappingZone();
+                    break;
+                case 2:
+                    safeThis->splitSelectedMappingZone();
+                    break;
+                case 3:
+                    safeThis->deleteSelectedMappingZone();
+                    break;
+                case 4:
+                    safeThis->clearSelectedMappingVelocityFades();
+                    break;
+                case 5:
+                    safeThis->selectAllMappingZones();
+                    break;
+                default:
+                    break;
+            }
+        });
+}
+
+void AudiocityAudioProcessorEditor::updateMappingDetails()
+{
+    const auto selectedRows = getSelectedMappingRowIndices();
+    if (selectedRows.size() == 1)
+    {
+        const auto selectedRow = selectedRows.front();
+        const auto& row = mappingZoneRows_[static_cast<std::size_t>(selectedRow)];
+        mappingOverview_.setSelectedZoneIndex(row.zoneIndex);
+        mappingDetailsText_.setText(row.detailText, juce::dontSendNotification);
+        updateMappingEditControls();
+        return;
+    }
+
+    if (!selectedRows.empty())
+    {
+        mappingOverview_.setSelectedZoneIndex(-1);
+
+        juce::String zoneList;
+        const auto maxZonesToList = juce::jmin(6, static_cast<int>(selectedRows.size()));
+        for (int index = 0; index < maxZonesToList; ++index)
+        {
+            if (zoneList.isNotEmpty())
+                zoneList += ", ";
+
+            const auto rowIndex = selectedRows[static_cast<std::size_t>(index)];
+            zoneList += "Z" + juce::String(mappingZoneRows_[static_cast<std::size_t>(rowIndex)].zoneIndex + 1);
+        }
+
+        if (static_cast<int>(selectedRows.size()) > maxZonesToList)
+            zoneList += " ...";
+
+        mappingDetailsText_.setText(
+            juce::String(static_cast<int>(selectedRows.size())) + " zones selected"
+                + "\nZones: " + zoneList
+                + "\nBatch edit: Vel Fades, Gain, Pan, RR Group, RR Mode, Choke, Trigger, and Loop."
+                + "\nChange a batch control, then Apply to fan it across the selection."
+                + "\nBatch actions: Delete, Clear Velocity Fades, or right-click for the Mapping menu.",
+            juce::dontSendNotification);
+        updateMappingEditControls();
+        return;
+    }
+
+    mappingOverview_.setSelectedZoneIndex(-1);
+    mappingDetailsText_.setText(processor_.getImportedProgramMapSummary(), juce::dontSendNotification);
+    updateMappingEditControls();
+}
+
+void AudiocityAudioProcessorEditor::updateMappingEditControls()
+{
+    const auto selectedRows = getSelectedMappingRowIndices();
+    const auto selectionChanged = selectedRows != mappingBatchTrackedSelectionRows_;
+    if (selectionChanged)
+        resetMappingBatchEditTracking(selectedRows);
+
+    const auto hasSelection = !selectedRows.empty();
+    const auto hasSingleSelection = selectedRows.size() == 1;
+    const auto hasBatchSelection = selectedRows.size() > 1;
+    const auto hasPendingBatchEdit = hasBatchSelection && hasPendingMappingBatchEdit();
+
+    mappingEditKeyLowSlider_.setEnabled(hasSingleSelection);
+    mappingEditKeyHighSlider_.setEnabled(hasSingleSelection);
+    mappingEditVelocityLowSlider_.setEnabled(hasSingleSelection);
+    mappingEditVelocityHighSlider_.setEnabled(hasSingleSelection);
+    mappingEditVelocityFadeInLowSlider_.setEnabled(hasSelection);
+    mappingEditVelocityFadeInHighSlider_.setEnabled(hasSelection);
+    mappingEditVelocityFadeOutLowSlider_.setEnabled(hasSelection);
+    mappingEditVelocityFadeOutHighSlider_.setEnabled(hasSelection);
+    mappingEditRootSlider_.setEnabled(hasSingleSelection);
+    mappingEditSampleStartSlider_.setEnabled(hasSingleSelection);
+    mappingEditSampleEndSlider_.setEnabled(hasSingleSelection);
+    mappingEditLoopStartSlider_.setEnabled(hasSingleSelection);
+    mappingEditLoopEndSlider_.setEnabled(hasSingleSelection);
+    mappingEditGainSlider_.setEnabled(hasSelection);
+    mappingEditPanSlider_.setEnabled(hasSelection);
+    mappingEditRoundRobinGroupSlider_.setEnabled(hasSelection);
+    mappingEditRoundRobinPositionSlider_.setEnabled(hasSingleSelection);
+    mappingEditRoundRobinModeCombo_.setEnabled(hasSelection);
+    mappingEditChokeSlider_.setEnabled(hasSelection);
+    mappingEditTriggerCombo_.setEnabled(hasSelection);
+    mappingEditLoopCombo_.setEnabled(hasSelection);
+    mappingEditApplyButton_.setEnabled(hasSingleSelection || hasPendingBatchEdit);
+    mappingEditApplyButton_.setButtonText(hasBatchSelection ? "Apply Batch" : "Apply Zone");
+    mappingDuplicateZoneButton_.setEnabled(hasSingleSelection);
+    mappingDeleteZoneButton_.setEnabled(hasSelection);
+    mappingSplitZoneButton_.setEnabled(hasSingleSelection);
+
+    if (!hasSelection)
+    {
+        mappingEditStatusLabel_.setText({}, juce::dontSendNotification);
+        return;
+    }
+
+    if (!hasSingleSelection)
+        return;
+
+    const auto selectedRow = selectedRows.front();
+    const auto& row = mappingZoneRows_[static_cast<std::size_t>(selectedRow)];
+    if (selectionChanged || hasSingleSelection || !hasPendingBatchEdit)
+    {
+        const juce::ScopedValueSetter<bool> batchTrackingGuard(suppressMappingBatchEditTracking_, true);
+        mappingEditVelocityFadeInLowSlider_.setValue(row.velocityFadeInLow, juce::dontSendNotification);
+        mappingEditVelocityFadeInHighSlider_.setValue(row.velocityFadeInHigh, juce::dontSendNotification);
+        mappingEditVelocityFadeOutLowSlider_.setValue(row.velocityFadeOutLow, juce::dontSendNotification);
+        mappingEditVelocityFadeOutHighSlider_.setValue(row.velocityFadeOutHigh, juce::dontSendNotification);
+        mappingEditGainSlider_.setValue(row.gainDbValue, juce::dontSendNotification);
+        mappingEditPanSlider_.setValue(row.panValue * 100.0f, juce::dontSendNotification);
+        mappingEditRoundRobinGroupSlider_.setValue(row.roundRobinGroup, juce::dontSendNotification);
+        mappingEditRoundRobinModeCombo_.setSelectedId(
+            row.roundRobinModeValue == audiocity::engine::RoundRobinMode::cycleRandom ? 2 : 1,
+            juce::dontSendNotification);
+        mappingEditChokeSlider_.setValue(row.chokeGroupId, juce::dontSendNotification);
+        mappingEditTriggerCombo_.setSelectedId(
+            row.triggerModeValue == audiocity::engine::ZoneTriggerMode::release
+                ? 3
+                : (row.triggerModeValue == audiocity::engine::ZoneTriggerMode::oneShot ? 2 : 1),
+            juce::dontSendNotification);
+        switch (row.loopModeValue)
+        {
+            case audiocity::engine::ZoneLoopMode::sustain:
+                mappingEditLoopCombo_.setSelectedId(2, juce::dontSendNotification);
+                break;
+            case audiocity::engine::ZoneLoopMode::continuous:
+                mappingEditLoopCombo_.setSelectedId(3, juce::dontSendNotification);
+                break;
+            case audiocity::engine::ZoneLoopMode::noLoop:
+            default:
+                mappingEditLoopCombo_.setSelectedId(1, juce::dontSendNotification);
+                break;
+        }
+    }
+
+    if (!hasSingleSelection)
+        return;
+
+    mappingSplitZoneButton_.setEnabled(row.keyHigh > row.keyLow);
+    const auto sampleMax = juce::jmax(0, row.sampleLength - 1);
+    mappingEditSampleStartSlider_.setRange(0.0, static_cast<double>(sampleMax), 1.0);
+    mappingEditSampleEndSlider_.setRange(0.0, static_cast<double>(sampleMax), 1.0);
+    mappingEditLoopStartSlider_.setRange(0.0, static_cast<double>(sampleMax), 1.0);
+    mappingEditLoopEndSlider_.setRange(0.0, static_cast<double>(sampleMax), 1.0);
+
+    const juce::ScopedValueSetter<bool> batchTrackingGuard(suppressMappingBatchEditTracking_, true);
+    mappingEditKeyLowSlider_.setValue(row.keyLow, juce::dontSendNotification);
+    mappingEditKeyHighSlider_.setValue(row.keyHigh, juce::dontSendNotification);
+    mappingEditVelocityLowSlider_.setValue(row.velocityLow, juce::dontSendNotification);
+    mappingEditVelocityHighSlider_.setValue(row.velocityHigh, juce::dontSendNotification);
+    mappingEditRootSlider_.setValue(row.rootMidiNote, juce::dontSendNotification);
+    mappingEditSampleStartSlider_.setValue(row.sampleStart, juce::dontSendNotification);
+    mappingEditSampleEndSlider_.setValue(row.sampleEnd, juce::dontSendNotification);
+    mappingEditLoopStartSlider_.setValue(row.loopStart >= 0 ? row.loopStart : row.sampleStart, juce::dontSendNotification);
+    mappingEditLoopEndSlider_.setValue(row.loopEnd >= 0 ? row.loopEnd : row.sampleEnd, juce::dontSendNotification);
+    mappingEditRoundRobinPositionSlider_.setValue(row.roundRobinPosition, juce::dontSendNotification);
+}
+
+void AudiocityAudioProcessorEditor::applySelectedMappingZoneEdit()
+{
+    const auto selectedRows = getSelectedMappingRowIndices();
+    if (selectedRows.empty())
+    {
+        updateMappingEditControls();
+        return;
+    }
+
+    if (selectedRows.size() > 1)
+    {
+        if (!hasPendingMappingBatchEdit())
+        {
+            mappingEditStatusLabel_.setText("Change a batch control before applying", juce::dontSendNotification);
+            updateMappingEditControls();
+            return;
+        }
+
+        std::vector<int> zoneIndices;
+        zoneIndices.reserve(selectedRows.size());
+        for (const auto selectedRowValue : selectedRows)
+        {
+            const auto& row = mappingZoneRows_[static_cast<std::size_t>(selectedRowValue)];
+            audiocity::plugin::ProgramZoneEdit edit;
+            edit.zoneIndex = row.zoneIndex;
+            edit.keyLow = row.keyLow;
+            edit.keyHigh = row.keyHigh;
+            edit.velocityLow = row.velocityLow;
+            edit.velocityHigh = row.velocityHigh;
+            edit.rootMidiNote = row.rootMidiNote;
+
+            if (mappingBatchVelocityFadeEdited_)
+            {
+                edit.velocityFadeInLow = static_cast<int>(std::round(mappingEditVelocityFadeInLowSlider_.getValue()));
+                edit.velocityFadeInHigh = static_cast<int>(std::round(mappingEditVelocityFadeInHighSlider_.getValue()));
+                edit.velocityFadeOutLow = static_cast<int>(std::round(mappingEditVelocityFadeOutLowSlider_.getValue()));
+                edit.velocityFadeOutHigh = static_cast<int>(std::round(mappingEditVelocityFadeOutHighSlider_.getValue()));
+                edit.hasVelocityFadeIn = true;
+                edit.hasVelocityFadeOut = true;
+            }
+
+            if (mappingBatchGainEdited_)
+            {
+                edit.gainDb = static_cast<float>(mappingEditGainSlider_.getValue());
+                edit.hasGainDb = true;
+            }
+
+            if (mappingBatchPanEdited_)
+            {
+                edit.pan = static_cast<float>(mappingEditPanSlider_.getValue() / 100.0);
+                edit.hasPan = true;
+            }
+
+            if (mappingBatchRoundRobinGroupEdited_)
+            {
+                edit.roundRobinGroup = static_cast<int>(std::round(mappingEditRoundRobinGroupSlider_.getValue()));
+                edit.hasRoundRobinGroup = true;
+            }
+
+            if (mappingBatchRoundRobinModeEdited_)
+            {
+                edit.roundRobinMode = mappingEditRoundRobinModeCombo_.getSelectedId() == 2
+                    ? audiocity::engine::RoundRobinMode::cycleRandom
+                    : audiocity::engine::RoundRobinMode::ordered;
+                edit.hasRoundRobinMode = true;
+            }
+
+            if (mappingBatchChokeEdited_)
+            {
+                edit.chokeGroupId = static_cast<int>(std::round(mappingEditChokeSlider_.getValue()));
+                edit.hasChokeGroupId = true;
+            }
+
+            if (mappingBatchTriggerEdited_)
+            {
+                edit.triggerMode = mappingEditTriggerCombo_.getSelectedId() == 3
+                    ? audiocity::engine::ZoneTriggerMode::release
+                    : (mappingEditTriggerCombo_.getSelectedId() == 2
+                        ? audiocity::engine::ZoneTriggerMode::oneShot
+                        : audiocity::engine::ZoneTriggerMode::gate);
+                edit.hasTriggerMode = true;
+            }
+
+            if (mappingBatchLoopEdited_)
+            {
+                switch (mappingEditLoopCombo_.getSelectedId())
+                {
+                    case 2:
+                        edit.loopMode = audiocity::engine::ZoneLoopMode::sustain;
+                        break;
+                    case 3:
+                        edit.loopMode = audiocity::engine::ZoneLoopMode::continuous;
+                        break;
+                    case 1:
+                    default:
+                        edit.loopMode = audiocity::engine::ZoneLoopMode::noLoop;
+                        break;
+                }
+                edit.hasLoopMode = true;
+            }
+
+            if (!processor_.updateImportedProgramZoneMapping(edit))
+            {
+                mappingEditStatusLabel_.setText("Batch update failed", juce::dontSendNotification);
+                updateMappingEditControls();
+                return;
+            }
+
+            zoneIndices.push_back(row.zoneIndex);
+        }
+
+        resetMappingBatchEditTracking();
+        mappingEditStatusLabel_.setText(
+            juce::String(static_cast<int>(zoneIndices.size())) + " zones updated",
+            juce::dontSendNotification);
+        refreshMappingZoneRows();
+        selectMappingZoneIndices(zoneIndices);
+        updateMappingDetails();
+        updateDiagnosticsStatusText();
+        return;
+    }
+
+    const auto selectedRow = selectedRows.front();
+    const auto zoneIndex = mappingZoneRows_[static_cast<std::size_t>(selectedRow)].zoneIndex;
+    audiocity::plugin::ProgramZoneEdit edit;
+    edit.zoneIndex = zoneIndex;
+    edit.keyLow = static_cast<int>(std::round(mappingEditKeyLowSlider_.getValue()));
+    edit.keyHigh = static_cast<int>(std::round(mappingEditKeyHighSlider_.getValue()));
+    edit.velocityLow = static_cast<int>(std::round(mappingEditVelocityLowSlider_.getValue()));
+    edit.velocityHigh = static_cast<int>(std::round(mappingEditVelocityHighSlider_.getValue()));
+    edit.velocityFadeInLow = static_cast<int>(std::round(mappingEditVelocityFadeInLowSlider_.getValue()));
+    edit.velocityFadeInHigh = static_cast<int>(std::round(mappingEditVelocityFadeInHighSlider_.getValue()));
+    edit.velocityFadeOutLow = static_cast<int>(std::round(mappingEditVelocityFadeOutLowSlider_.getValue()));
+    edit.velocityFadeOutHigh = static_cast<int>(std::round(mappingEditVelocityFadeOutHighSlider_.getValue()));
+    edit.rootMidiNote = static_cast<int>(std::round(mappingEditRootSlider_.getValue()));
+    edit.sampleStart = static_cast<int>(std::round(mappingEditSampleStartSlider_.getValue()));
+    edit.sampleEnd = static_cast<int>(std::round(mappingEditSampleEndSlider_.getValue()));
+    edit.loopStart = static_cast<int>(std::round(mappingEditLoopStartSlider_.getValue()));
+    edit.loopEnd = static_cast<int>(std::round(mappingEditLoopEndSlider_.getValue()));
+    edit.gainDb = static_cast<float>(mappingEditGainSlider_.getValue());
+    edit.pan = static_cast<float>(mappingEditPanSlider_.getValue() / 100.0);
+    edit.roundRobinGroup = static_cast<int>(std::round(mappingEditRoundRobinGroupSlider_.getValue()));
+    edit.roundRobinPosition = static_cast<int>(std::round(mappingEditRoundRobinPositionSlider_.getValue()));
+    edit.roundRobinMode = mappingEditRoundRobinModeCombo_.getSelectedId() == 2
+        ? audiocity::engine::RoundRobinMode::cycleRandom
+        : audiocity::engine::RoundRobinMode::ordered;
+    edit.chokeGroupId = static_cast<int>(std::round(mappingEditChokeSlider_.getValue()));
+    edit.triggerMode = mappingEditTriggerCombo_.getSelectedId() == 3
+        ? audiocity::engine::ZoneTriggerMode::release
+        : (mappingEditTriggerCombo_.getSelectedId() == 2
+            ? audiocity::engine::ZoneTriggerMode::oneShot
+            : audiocity::engine::ZoneTriggerMode::gate);
+    switch (mappingEditLoopCombo_.getSelectedId())
+    {
+        case 2:
+            edit.loopMode = audiocity::engine::ZoneLoopMode::sustain;
+            break;
+        case 3:
+            edit.loopMode = audiocity::engine::ZoneLoopMode::continuous;
+            break;
+        case 1:
+        default:
+            edit.loopMode = audiocity::engine::ZoneLoopMode::noLoop;
+            break;
+    }
+    edit.hasSampleStart = true;
+    edit.hasSampleEnd = true;
+    edit.hasLoopStart = true;
+    edit.hasLoopEnd = true;
+    edit.hasVelocityFadeIn = true;
+    edit.hasVelocityFadeOut = true;
+    edit.hasGainDb = true;
+    edit.hasPan = true;
+    edit.hasRoundRobinGroup = true;
+    edit.hasRoundRobinPosition = true;
+    edit.hasRoundRobinMode = true;
+    edit.hasChokeGroupId = true;
+    edit.hasTriggerMode = true;
+    edit.hasLoopMode = true;
+
+    commitMappingZoneEdit(edit, "Zone " + juce::String(zoneIndex + 1) + " updated");
+}
+
+void AudiocityAudioProcessorEditor::duplicateSelectedMappingZone()
+{
+    const auto selectedRows = getSelectedMappingRowIndices();
+    if (selectedRows.size() != 1)
+    {
+        if (!selectedRows.empty())
+            mappingEditStatusLabel_.setText("Select one zone to duplicate", juce::dontSendNotification);
+        updateMappingEditControls();
+        return;
+    }
+
+    const auto selectedRow = selectedRows.front();
+    const auto zoneIndex = mappingZoneRows_[static_cast<std::size_t>(selectedRow)].zoneIndex;
+    const auto newZoneIndex = processor_.duplicateImportedProgramZone(zoneIndex);
+    if (newZoneIndex < 0)
+    {
+        mappingEditStatusLabel_.setText("Duplicate failed", juce::dontSendNotification);
+        updateMappingEditControls();
+        return;
+    }
+
+    mappingEditStatusLabel_.setText("Zone " + juce::String(zoneIndex + 1) + " duplicated", juce::dontSendNotification);
+    refreshMappingZoneRows();
+    selectMappingZoneByIndex(newZoneIndex);
+    updateMappingDetails();
+    updateDiagnosticsStatusText();
+}
+
+void AudiocityAudioProcessorEditor::splitSelectedMappingZone()
+{
+    const auto selectedRows = getSelectedMappingRowIndices();
+    if (selectedRows.size() != 1)
+    {
+        if (!selectedRows.empty())
+            mappingEditStatusLabel_.setText("Select one zone to split", juce::dontSendNotification);
+        updateMappingEditControls();
+        return;
+    }
+
+    const auto selectedRow = selectedRows.front();
+    const auto zoneIndex = mappingZoneRows_[static_cast<std::size_t>(selectedRow)].zoneIndex;
+    const auto newZoneIndex = processor_.splitImportedProgramZone(zoneIndex);
+    if (newZoneIndex < 0)
+    {
+        mappingEditStatusLabel_.setText("Split failed", juce::dontSendNotification);
+        updateMappingEditControls();
+        return;
+    }
+
+    mappingEditStatusLabel_.setText("Zone " + juce::String(zoneIndex + 1) + " split", juce::dontSendNotification);
+    refreshMappingZoneRows();
+    selectMappingZoneByIndex(newZoneIndex);
+    updateMappingDetails();
+    updateDiagnosticsStatusText();
+}
+
+void AudiocityAudioProcessorEditor::deleteSelectedMappingZone()
+{
+    const auto selectedRows = getSelectedMappingRowIndices();
+    if (selectedRows.empty())
+    {
+        updateMappingEditControls();
+        return;
+    }
+
+    std::vector<int> zoneIndices;
+    zoneIndices.reserve(selectedRows.size());
+    for (const auto selectedRow : selectedRows)
+        zoneIndices.push_back(mappingZoneRows_[static_cast<std::size_t>(selectedRow)].zoneIndex);
+
+    std::sort(zoneIndices.begin(), zoneIndices.end(), std::greater<int>());
+
+    int deletedCount = 0;
+    for (const auto zoneIndex : zoneIndices)
+    {
+        if (!processor_.deleteImportedProgramZone(zoneIndex))
+        {
+            if (deletedCount == 0)
+            {
+                mappingEditStatusLabel_.setText("Delete failed", juce::dontSendNotification);
+                updateMappingEditControls();
+                return;
+            }
+
+            break;
+        }
+
+        ++deletedCount;
+    }
+
+    if (deletedCount <= 0)
+        return;
+
+    mappingEditStatusLabel_.setText(
+        deletedCount == 1
+            ? "Zone " + juce::String(zoneIndices.front() + 1) + " deleted"
+            : juce::String(deletedCount) + " zones deleted",
+        juce::dontSendNotification);
+    refreshMappingZoneRows();
+    selectClosestMappingRow(*std::min_element(selectedRows.begin(), selectedRows.end()));
+    updateMappingDetails();
+    updateDiagnosticsStatusText();
+}
+
+void AudiocityAudioProcessorEditor::clearSelectedMappingVelocityFades()
+{
+    const auto selectedRows = getSelectedMappingRowIndices();
+    if (selectedRows.empty())
+    {
+        updateMappingEditControls();
+        return;
+    }
+
+    std::vector<int> zoneIndices;
+    zoneIndices.reserve(selectedRows.size());
+    for (const auto selectedRow : selectedRows)
+    {
+        const auto& row = mappingZoneRows_[static_cast<std::size_t>(selectedRow)];
+        audiocity::plugin::ProgramZoneEdit edit;
+        edit.zoneIndex = row.zoneIndex;
+        edit.keyLow = row.keyLow;
+        edit.keyHigh = row.keyHigh;
+        edit.velocityLow = row.velocityLow;
+        edit.velocityHigh = row.velocityHigh;
+        edit.rootMidiNote = row.rootMidiNote;
+        edit.velocityFadeInLow = -1;
+        edit.velocityFadeInHigh = -1;
+        edit.velocityFadeOutLow = -1;
+        edit.velocityFadeOutHigh = -1;
+        edit.hasVelocityFadeIn = true;
+        edit.hasVelocityFadeOut = true;
+
+        if (!processor_.updateImportedProgramZoneMapping(edit))
+        {
+            mappingEditStatusLabel_.setText("Fade clear failed", juce::dontSendNotification);
+            updateMappingEditControls();
+            return;
+        }
+
+        zoneIndices.push_back(row.zoneIndex);
+    }
+
+    mappingEditStatusLabel_.setText(
+        zoneIndices.size() == 1
+            ? "Zone " + juce::String(zoneIndices.front() + 1) + " fades cleared"
+            : juce::String(static_cast<int>(zoneIndices.size())) + " zones fades cleared",
+        juce::dontSendNotification);
+    resetMappingBatchEditTracking();
+    refreshMappingZoneRows();
+    selectMappingZoneIndices(zoneIndices);
+    updateMappingDetails();
+    updateDiagnosticsStatusText();
+}
+
+bool AudiocityAudioProcessorEditor::commitMappingZoneEdit(const audiocity::plugin::ProgramZoneEdit& edit,
+                                                          const juce::String& statusText)
+{
+    if (!processor_.updateImportedProgramZoneMapping(edit))
+    {
+        mappingEditStatusLabel_.setText("Update failed", juce::dontSendNotification);
+        updateMappingEditControls();
+        return false;
+    }
+
+    mappingEditStatusLabel_.setText(statusText, juce::dontSendNotification);
+    refreshMappingZoneRows();
+
+    selectMappingZoneByIndex(edit.zoneIndex);
+
+    updateMappingDetails();
+    updateDiagnosticsStatusText();
+    return true;
 }
 
 void AudiocityAudioProcessorEditor::listBoxItemClicked(const int row, const juce::MouseEvent& event)
@@ -3501,6 +4889,8 @@ void AudiocityAudioProcessorEditor::listBoxItemDoubleClicked(const int row, cons
 
 void AudiocityAudioProcessorEditor::selectedRowsChanged(const int lastRowSelected)
 {
+    updateBrowserLibraryControls();
+
     if (currentTabIndex_ != 1)
         return;
 
@@ -3533,14 +4923,26 @@ void AudiocityAudioProcessorEditor::mouseUp(const juce::MouseEvent&)
 
 bool AudiocityAudioProcessorEditor::isSupportedSampleFile(const juce::File& file) const
 {
-    const auto ext = file.getFileExtension().toLowerCase();
-    if (ext == ".wav" || ext == ".aif" || ext == ".aiff")
-        return true;
+    return audiocity::plugin::LibraryFileIndex::isSupportedFile(file, processor_.isRexRuntimeAvailable());
+}
 
-    if (processor_.isRexRuntimeAvailable() && (ext == ".rex" || ext == ".rx2"))
-        return true;
+bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file)
+{
+    processor_.panicAllAudio();
+    updateGeneratePreviewButtonText();
 
-    return false;
+    const auto loaded = file.getFileExtension().equalsIgnoreCase(".sfz")
+        ? processor_.importSfzProgram(file)
+        : processor_.loadSampleFromFile(file);
+
+    if (loaded)
+    {
+        processor_.markLibraryRecent(file.getFullPathName());
+        refreshBrowserEntryLibraryFlags();
+        rebuildVisibleSampleList();
+    }
+
+    return loaded;
 }
 
 void AudiocityAudioProcessorEditor::chooseSampleRootFolder()
@@ -3586,6 +4988,7 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
     sampleRootFolderPath_ = newRootPath;
     processor_.setSampleBrowserRootFolder(sampleRootFolderPath_);
     sampleBrowserRootLabel_.setText(sampleRootFolderPath_, juce::dontSendNotification);
+    refreshSampleBrowserBookmarks();
 
     allSampleEntries_.clear();
     visibleSampleEntryIndices_.clear();
@@ -3593,9 +4996,10 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
 
     sampleScanInProgress_.store(true, std::memory_order_relaxed);
     const auto scanGeneration = ++sampleScanGeneration_;
+    const auto includeRexFiles = processor_.isRexRuntimeAvailable();
     auto safeThis = juce::Component::SafePointer<AudiocityAudioProcessorEditor>(this);
 
-    std::thread([safeThis, rootFolder, scanGeneration, peakCacheStore, cacheEntries = std::move(peakCacheData.entries)]() mutable
+    std::thread([safeThis, rootFolder, scanGeneration, includeRexFiles, peakCacheStore, cacheEntries = std::move(peakCacheData.entries)]() mutable
     {
         std::vector<SampleListEntry> batch;
         batch.reserve(24);
@@ -3634,22 +5038,31 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
             if (scanGeneration != self->sampleScanGeneration_.load())
                 return;
 
-            const auto file = entry.getFile();
-            if (!self->isSupportedSampleFile(file))
+            const auto indexedEntry = audiocity::plugin::LibraryFileIndex::createEntryForFile(
+                rootFolder,
+                entry.getFile(),
+                includeRexFiles);
+            if (!indexedEntry.has_value())
                 continue;
 
+            const auto& indexedFile = *indexedEntry;
             SampleListEntry item;
-            item.file = file;
-            item.relativePath = file.getRelativePathFrom(rootFolder).replaceCharacter('\\', '/');
-            item.fileName = file.getFileName();
+            item.file = indexedFile.file;
+            item.relativePath = indexedFile.relativePath;
+            item.fileName = indexedFile.fileName;
             item.fileNameLower = item.fileName.toLowerCase();
             item.relativePathLower = item.relativePath.toLowerCase();
 
-            const auto cacheKey = audiocity::plugin::makePeakPreviewCacheKey(file);
-            const auto fileSizeBytes = file.getSize();
+            const auto cacheKey = audiocity::plugin::makePeakPreviewCacheKey(indexedFile.file);
+            const auto fileSizeBytes = indexedFile.sizeBytes;
 
             SamplePreviewData previewData;
-            if (const auto cacheIt = cacheEntries.find(cacheKey);
+            if (indexedFile.isInstrument)
+            {
+                previewData.metadataLine = "SFZ instrument";
+                previewData.loopFormatBadge = "SFZ";
+            }
+            else if (const auto cacheIt = cacheEntries.find(cacheKey);
                 cacheIt != cacheEntries.end() && cacheIt->second.fileSizeBytes == fileSizeBytes)
             {
                 previewData.peaks = cacheIt->second.peaks;
@@ -3659,7 +5072,7 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
             }
             else
             {
-                previewData = buildPreviewAndMetadata(file);
+                previewData = buildPreviewAndMetadata(indexedFile.file);
             }
 
             updatedCacheEntries[cacheKey] = {
@@ -3708,19 +5121,247 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
     }).detach();
 }
 
+void AudiocityAudioProcessorEditor::refreshSampleBrowserBookmarks()
+{
+    const auto metadata = processor_.getLibraryMetadataSnapshot();
+    const auto bookmarks = metadata.getBookmarkPaths();
+
+    sampleBrowserBookmarkCombo_.clear(juce::dontSendNotification);
+
+    auto selectedId = 0;
+    for (int index = 0; index < bookmarks.size(); ++index)
+    {
+        const auto id = index + 1;
+        sampleBrowserBookmarkCombo_.addItem(bookmarks[index], id);
+        if (sampleRootFolderPath_.isNotEmpty() && bookmarks[index].equalsIgnoreCase(sampleRootFolderPath_))
+            selectedId = id;
+    }
+
+    sampleBrowserBookmarkCombo_.setSelectedId(selectedId, juce::dontSendNotification);
+    sampleBrowserBookmarkCombo_.setEnabled(bookmarks.size() > 0);
+    sampleBrowserAddBookmarkButton_.setEnabled(sampleRootFolderPath_.isNotEmpty());
+    sampleBrowserRemoveBookmarkButton_.setEnabled(selectedId > 0);
+}
+
+void AudiocityAudioProcessorEditor::refreshSampleBrowserTagFilter()
+{
+    const auto previousSelection = sampleBrowserTagFilterCombo_.getSelectedId() > 1
+        ? sampleBrowserTagFilterCombo_.getText().trim()
+        : juce::String();
+
+    const auto metadata = processor_.getLibraryMetadataSnapshot();
+    const auto tags = metadata.getAllTags();
+
+    sampleBrowserTagFilterCombo_.clear(juce::dontSendNotification);
+    sampleBrowserTagFilterCombo_.addItem("All Tags", 1);
+
+    auto selectedId = 1;
+    for (int index = 0; index < tags.size(); ++index)
+    {
+        const auto id = index + 2;
+        sampleBrowserTagFilterCombo_.addItem(tags[index], id);
+        if (previousSelection.isNotEmpty() && tags[index].equalsIgnoreCase(previousSelection))
+            selectedId = id;
+    }
+
+    sampleBrowserTagFilterCombo_.setSelectedId(selectedId, juce::dontSendNotification);
+    sampleBrowserTagFilterCombo_.setEnabled(tags.size() > 0);
+}
+
+void AudiocityAudioProcessorEditor::scanSelectedSampleBrowserBookmark()
+{
+    const auto selectedPath = sampleBrowserBookmarkCombo_.getText().trim();
+    if (selectedPath.isEmpty())
+    {
+        refreshSampleBrowserBookmarks();
+        return;
+    }
+
+    const juce::File selectedFolder(selectedPath);
+    if (!selectedFolder.isDirectory())
+    {
+        sampleBrowserRootLabel_.setText(selectedPath + " (missing)", juce::dontSendNotification);
+        sampleBrowserCountLabel_.setText("Bookmarked folder not found", juce::dontSendNotification);
+        sampleBrowserRemoveBookmarkButton_.setEnabled(true);
+        return;
+    }
+
+    if (sampleScanInProgress_.load(std::memory_order_relaxed))
+        cancelSampleRootScan();
+
+    scanSampleRootFolder(selectedFolder);
+}
+
+void AudiocityAudioProcessorEditor::addCurrentSampleRootBookmark()
+{
+    if (sampleRootFolderPath_.isEmpty())
+        return;
+
+    const juce::File rootFolder(sampleRootFolderPath_);
+    if (!rootFolder.isDirectory())
+        return;
+
+    processor_.addLibraryBookmark(sampleRootFolderPath_);
+    refreshSampleBrowserBookmarks();
+}
+
+void AudiocityAudioProcessorEditor::removeSelectedSampleBrowserBookmark()
+{
+    const auto selectedPath = sampleBrowserBookmarkCombo_.getText().trim();
+    if (selectedPath.isEmpty())
+        return;
+
+    processor_.removeLibraryBookmark(selectedPath);
+    refreshSampleBrowserBookmarks();
+}
+
+void AudiocityAudioProcessorEditor::refreshBrowserEntryLibraryFlags()
+{
+    const auto metadata = processor_.getLibraryMetadataSnapshot();
+    for (auto& item : allSampleEntries_)
+    {
+        const auto path = item.file.getFullPathName();
+        item.isFavorite = metadata.isFavorite(path);
+        item.recentRank = metadata.recentRank(path);
+        item.isRecent = item.recentRank >= 0;
+        item.tags = metadata.getTags(path);
+        item.tagsLower = item.tags.joinIntoString(" ").toLowerCase();
+    }
+}
+
+void AudiocityAudioProcessorEditor::updateBrowserLibraryControls()
+{
+    const auto row = sampleBrowserListBox_.getSelectedRow();
+    const auto hasSelection = row >= 0 && row < static_cast<int>(visibleSampleEntryIndices_.size());
+    sampleBrowserFavoriteButton_.setEnabled(hasSelection);
+    sampleBrowserTagsEditor_.setEnabled(hasSelection);
+    sampleBrowserApplyTagsButton_.setEnabled(hasSelection);
+
+    if (!hasSelection)
+    {
+        sampleBrowserFavoriteButton_.setToggleState(false, juce::dontSendNotification);
+        sampleBrowserTagsEditor_.setText({}, juce::dontSendNotification);
+        return;
+    }
+
+    const auto sourceIndex = visibleSampleEntryIndices_[static_cast<std::size_t>(row)];
+    const auto& item = allSampleEntries_[static_cast<std::size_t>(sourceIndex)];
+    sampleBrowserFavoriteButton_.setToggleState(item.isFavorite, juce::dontSendNotification);
+    sampleBrowserTagsEditor_.setText(item.tags.joinIntoString(", "), juce::dontSendNotification);
+}
+
+void AudiocityAudioProcessorEditor::toggleSelectedBrowserFavorite()
+{
+    const auto row = sampleBrowserListBox_.getSelectedRow();
+    if (row < 0 || row >= static_cast<int>(visibleSampleEntryIndices_.size()))
+    {
+        updateBrowserLibraryControls();
+        return;
+    }
+
+    const auto sourceIndex = visibleSampleEntryIndices_[static_cast<std::size_t>(row)];
+    if (sourceIndex < 0 || sourceIndex >= static_cast<int>(allSampleEntries_.size()))
+    {
+        updateBrowserLibraryControls();
+        return;
+    }
+
+    const auto file = allSampleEntries_[static_cast<std::size_t>(sourceIndex)].file;
+    processor_.setLibraryFavorite(file.getFullPathName(), sampleBrowserFavoriteButton_.getToggleState());
+    refreshBrowserEntryLibraryFlags();
+    rebuildVisibleSampleList();
+
+    for (int visibleIndex = 0; visibleIndex < static_cast<int>(visibleSampleEntryIndices_.size()); ++visibleIndex)
+    {
+        if (visibleSampleEntryIndices_[static_cast<std::size_t>(visibleIndex)] == sourceIndex)
+        {
+            sampleBrowserListBox_.selectRow(visibleIndex);
+            break;
+        }
+    }
+
+    updateBrowserLibraryControls();
+}
+
+void AudiocityAudioProcessorEditor::applySelectedBrowserTags()
+{
+    const auto row = sampleBrowserListBox_.getSelectedRow();
+    if (row < 0 || row >= static_cast<int>(visibleSampleEntryIndices_.size()))
+    {
+        updateBrowserLibraryControls();
+        return;
+    }
+
+    const auto sourceIndex = visibleSampleEntryIndices_[static_cast<std::size_t>(row)];
+    if (sourceIndex < 0 || sourceIndex >= static_cast<int>(allSampleEntries_.size()))
+    {
+        updateBrowserLibraryControls();
+        return;
+    }
+
+    juce::StringArray tags;
+    tags.addTokens(sampleBrowserTagsEditor_.getText(), ",", "\"");
+    tags.trim();
+    tags.removeEmptyStrings();
+
+    const auto file = allSampleEntries_[static_cast<std::size_t>(sourceIndex)].file;
+    processor_.setLibraryTags(file.getFullPathName(), tags);
+    refreshBrowserEntryLibraryFlags();
+    rebuildVisibleSampleList();
+
+    for (int visibleIndex = 0; visibleIndex < static_cast<int>(visibleSampleEntryIndices_.size()); ++visibleIndex)
+    {
+        if (visibleSampleEntryIndices_[static_cast<std::size_t>(visibleIndex)] == sourceIndex)
+        {
+            sampleBrowserListBox_.selectRow(visibleIndex);
+            break;
+        }
+    }
+
+    updateBrowserLibraryControls();
+}
+
 void AudiocityAudioProcessorEditor::rebuildVisibleSampleList()
 {
     visibleSampleEntryIndices_.clear();
+    refreshBrowserEntryLibraryFlags();
+    refreshSampleBrowserTagFilter();
 
     const auto needle = sampleBrowserFilterEditor_.getText().trim().toLowerCase();
+    const auto tagNeedle = needle.startsWithChar('#') ? needle.substring(1) : needle;
+    const auto selectedTagFilter = sampleBrowserTagFilterCombo_.getSelectedId() > 1
+        ? sampleBrowserTagFilterCombo_.getText().trim()
+        : juce::String();
+    const auto favoritesOnly = sampleBrowserFavoritesOnlyToggle_.getToggleState();
+    const auto recentOnly = sampleBrowserRecentOnlyToggle_.getToggleState();
+    int favoriteCount = 0;
+    int recentCount = 0;
     for (int i = 0; i < static_cast<int>(allSampleEntries_.size()); ++i)
     {
         const auto& item = allSampleEntries_[static_cast<std::size_t>(i)];
+        if (item.isFavorite)
+            ++favoriteCount;
+        if (item.isRecent)
+            ++recentCount;
+
         const auto matches = needle.isEmpty()
             || item.fileNameLower.contains(needle)
-            || item.relativePathLower.contains(needle);
+            || item.relativePathLower.contains(needle)
+            || (!tagNeedle.isEmpty() && item.tagsLower.contains(tagNeedle));
 
-        if (matches)
+        const auto matchesLibraryFilters = (!favoritesOnly || item.isFavorite)
+            && (!recentOnly || item.isRecent);
+        auto matchesTagFilter = selectedTagFilter.isEmpty();
+        for (const auto& tag : item.tags)
+        {
+            if (tag.equalsIgnoreCase(selectedTagFilter))
+            {
+                matchesTagFilter = true;
+                break;
+            }
+        }
+
+        if (matches && matchesLibraryFilters && matchesTagFilter)
             visibleSampleEntryIndices_.push_back(i);
     }
 
@@ -3730,6 +5371,22 @@ void AudiocityAudioProcessorEditor::rebuildVisibleSampleList()
         {
             const auto& a = allSampleEntries_[static_cast<std::size_t>(lhs)];
             const auto& b = allSampleEntries_[static_cast<std::size_t>(rhs)];
+
+            if (sortMode == 3)
+            {
+                if (a.recentRank != b.recentRank)
+                {
+                    if (a.recentRank < 0)
+                        return false;
+                    if (b.recentRank < 0)
+                        return true;
+                    return a.recentRank < b.recentRank;
+                }
+
+                if (a.fileNameLower == b.fileNameLower)
+                    return a.relativePathLower < b.relativePathLower;
+                return a.fileNameLower < b.fileNameLower;
+            }
 
             if (sortMode == 2)
             {
@@ -3749,9 +5406,16 @@ void AudiocityAudioProcessorEditor::rebuildVisibleSampleList()
     if (sampleRootFolderPath_.isEmpty())
         sampleBrowserCountLabel_.setText("No folder selected", juce::dontSendNotification);
     else
-        sampleBrowserCountLabel_.setText(
-            juce::String(visibleSampleEntryIndices_.size()) + " / " + juce::String(allSampleEntries_.size()) + " samples",
-            juce::dontSendNotification);
+    {
+        auto countText = juce::String(visibleSampleEntryIndices_.size())
+            + " / " + juce::String(allSampleEntries_.size()) + " items";
+        if (favoriteCount > 0 || recentCount > 0)
+            countText += " | " + juce::String(favoriteCount) + " fav | " + juce::String(recentCount) + " recent";
+
+        sampleBrowserCountLabel_.setText(countText, juce::dontSendNotification);
+    }
+
+    updateBrowserLibraryControls();
 }
 
 void AudiocityAudioProcessorEditor::loadSampleFromBrowserRow(const int row)
@@ -3766,9 +5430,7 @@ void AudiocityAudioProcessorEditor::loadSampleFromBrowserRow(const int row)
     lastPreviewedBrowserSourceIndex_ = sourceIndex;
 
     const auto& file = allSampleEntries_[static_cast<std::size_t>(sourceIndex)].file;
-    processor_.panicAllAudio();
-    updateGeneratePreviewButtonText();
-    if (processor_.loadSampleFromFile(file))
+    if (loadFileAsInstrument(file))
     {
         clearSelectedPresetAfterSourceLoad();
         tabBar_.setCurrentTabIndex(0);
@@ -3796,6 +5458,9 @@ void AudiocityAudioProcessorEditor::previewSampleFromBrowserRow(const int row, c
     lastPreviewedBrowserSourceIndex_ = sourceIndex;
 
     const auto& file = allSampleEntries_[static_cast<std::size_t>(sourceIndex)].file;
+    if (file.getFileExtension().equalsIgnoreCase(".sfz"))
+        return;
+
     processor_.previewSampleFromFile(file);
     updateGeneratePreviewButtonText();
 }
@@ -3858,14 +5523,15 @@ void AudiocityAudioProcessorEditor::paintAboutPane(juce::Graphics& g, juce::Rect
         { "MIDI", "Map hardware controls with MIDI CC learn" }
     }};
 
-    constexpr std::array<AboutRow, 7> shortcutRows{{
-        { "1-6", "Switch between the six top-level tabs" },
+    constexpr std::array<AboutRow, 8> shortcutRows{{
+        { "1-7", "Switch between the seven top-level tabs" },
         { "Ctrl+O", "Open a sample file" },
         { "Ctrl+S", "Save the current state to disk" },
         { "Ctrl+Shift+S", "Save the current preset" },
         { "Ctrl+Z / Y", "Undo or redo parameter edits" },
         { "Space", "Play or stop generated waveform preview" },
-        { "Enter / Esc", "Load selected browser row or panic audio" }
+        { "Enter / Esc", "Load selected browser row or panic audio" },
+        { "Mapping", "Ctrl+A selects all zones, Ctrl+D duplicates, Ctrl+Shift+D splits, Delete removes selected zones" }
     }};
 
     const int iconY = area.getY() + 20;
@@ -4026,11 +5692,39 @@ void AudiocityAudioProcessorEditor::resized()
         sampleBrowserRootLabel_.setBounds(header);
 
         browserArea.removeFromTop(6);
+        auto bookmarkRow = browserArea.removeFromTop(28);
+        sampleBrowserRemoveBookmarkButton_.setBounds(bookmarkRow.removeFromRight(78));
+        bookmarkRow.removeFromRight(6);
+        sampleBrowserAddBookmarkButton_.setBounds(bookmarkRow.removeFromRight(98));
+        bookmarkRow.removeFromRight(6);
+        sampleBrowserBookmarkCombo_.setBounds(bookmarkRow);
+
+        browserArea.removeFromTop(6);
         auto filterRow = browserArea.removeFromTop(28);
-        auto filterWidth = juce::jmax(100, filterRow.getWidth() - 110);
+        constexpr int sortWidth = 104;
+        constexpr int favoriteWidth = 86;
+        constexpr int favoritesOnlyWidth = 96;
+        constexpr int recentOnlyWidth = 78;
+        constexpr int filterControlGap = 6;
+        const auto controlWidth = sortWidth + favoriteWidth + favoritesOnlyWidth + recentOnlyWidth + (4 * filterControlGap);
+        auto filterWidth = juce::jmax(120, filterRow.getWidth() - controlWidth);
         sampleBrowserFilterEditor_.setBounds(filterRow.removeFromLeft(filterWidth));
-        filterRow.removeFromLeft(6);
-        sampleBrowserSortCombo_.setBounds(filterRow.removeFromLeft(104));
+        filterRow.removeFromLeft(filterControlGap);
+        sampleBrowserSortCombo_.setBounds(filterRow.removeFromLeft(sortWidth));
+        filterRow.removeFromLeft(filterControlGap);
+        sampleBrowserFavoriteButton_.setBounds(filterRow.removeFromLeft(favoriteWidth));
+        filterRow.removeFromLeft(filterControlGap);
+        sampleBrowserFavoritesOnlyToggle_.setBounds(filterRow.removeFromLeft(favoritesOnlyWidth));
+        filterRow.removeFromLeft(filterControlGap);
+        sampleBrowserRecentOnlyToggle_.setBounds(filterRow.removeFromLeft(recentOnlyWidth));
+
+        browserArea.removeFromTop(6);
+        auto tagRow = browserArea.removeFromTop(28);
+        sampleBrowserApplyTagsButton_.setBounds(tagRow.removeFromRight(96));
+        tagRow.removeFromRight(6);
+        sampleBrowserTagFilterCombo_.setBounds(tagRow.removeFromRight(132));
+        tagRow.removeFromRight(6);
+        sampleBrowserTagsEditor_.setBounds(tagRow);
 
         browserArea.removeFromTop(6);
         auto listArea = browserArea;
@@ -4043,6 +5737,91 @@ void AudiocityAudioProcessorEditor::resized()
     }
 
     if (currentTabIndex_ == 2)
+    {
+        auto mappingArea = area.reduced(8, 6);
+
+        auto header = mappingArea.removeFromTop(30);
+        mappingRefreshButton_.setBounds(header.removeFromRight(86));
+        header.removeFromRight(6);
+        mappingDeleteZoneButton_.setBounds(header.removeFromRight(72));
+        header.removeFromRight(6);
+        mappingSplitZoneButton_.setBounds(header.removeFromRight(68));
+        header.removeFromRight(6);
+        mappingDuplicateZoneButton_.setBounds(header.removeFromRight(90));
+        header.removeFromRight(8);
+        mappingSummaryLabel_.setBounds(header);
+
+        mappingArea.removeFromTop(8);
+        mappingOverview_.setBounds(mappingArea.removeFromTop(150));
+        mappingArea.removeFromTop(8);
+
+        const auto detailWidth = juce::jlimit(220, 360, mappingArea.getWidth() / 3);
+        auto details = mappingArea.removeFromRight(detailWidth);
+        mappingArea.removeFromRight(10);
+        mappingZoneListBox_.setBounds(mappingArea);
+
+        auto editPanel = details.removeFromTop(580);
+        auto layoutEditRow = [](juce::Rectangle<int>& panel, juce::Label& label, juce::Slider& slider)
+        {
+            auto row = panel.removeFromTop(26);
+            label.setBounds(row.removeFromLeft(72));
+            row.removeFromLeft(6);
+            slider.setBounds(row);
+            panel.removeFromTop(3);
+        };
+        auto layoutPairedEditRow = [](juce::Rectangle<int>& panel,
+                                      juce::Label& label,
+                                      juce::Slider& leftSlider,
+                                      juce::Slider& rightSlider)
+        {
+            auto row = panel.removeFromTop(26);
+            label.setBounds(row.removeFromLeft(72));
+            row.removeFromLeft(6);
+            auto left = row.removeFromLeft(row.getWidth() / 2);
+            rightSlider.setBounds(row.withTrimmedLeft(4));
+            leftSlider.setBounds(left.withTrimmedRight(4));
+            panel.removeFromTop(3);
+        };
+        auto layoutEditComboRow = [](juce::Rectangle<int>& panel, juce::Label& label, juce::ComboBox& combo)
+        {
+            auto row = panel.removeFromTop(26);
+            label.setBounds(row.removeFromLeft(72));
+            row.removeFromLeft(6);
+            combo.setBounds(row);
+            panel.removeFromTop(3);
+        };
+
+        layoutEditRow(editPanel, mappingEditKeyLowLabel_, mappingEditKeyLowSlider_);
+        layoutEditRow(editPanel, mappingEditKeyHighLabel_, mappingEditKeyHighSlider_);
+        layoutEditRow(editPanel, mappingEditVelocityLowLabel_, mappingEditVelocityLowSlider_);
+        layoutEditRow(editPanel, mappingEditVelocityHighLabel_, mappingEditVelocityHighSlider_);
+        layoutPairedEditRow(editPanel, mappingEditVelocityFadeInLabel_, mappingEditVelocityFadeInLowSlider_, mappingEditVelocityFadeInHighSlider_);
+        layoutPairedEditRow(editPanel, mappingEditVelocityFadeOutLabel_, mappingEditVelocityFadeOutLowSlider_, mappingEditVelocityFadeOutHighSlider_);
+        layoutEditRow(editPanel, mappingEditRootLabel_, mappingEditRootSlider_);
+        layoutEditRow(editPanel, mappingEditSampleStartLabel_, mappingEditSampleStartSlider_);
+        layoutEditRow(editPanel, mappingEditSampleEndLabel_, mappingEditSampleEndSlider_);
+        layoutEditRow(editPanel, mappingEditLoopStartLabel_, mappingEditLoopStartSlider_);
+        layoutEditRow(editPanel, mappingEditLoopEndLabel_, mappingEditLoopEndSlider_);
+        layoutEditRow(editPanel, mappingEditGainLabel_, mappingEditGainSlider_);
+        layoutEditRow(editPanel, mappingEditPanLabel_, mappingEditPanSlider_);
+        layoutEditRow(editPanel, mappingEditRoundRobinGroupLabel_, mappingEditRoundRobinGroupSlider_);
+        layoutEditRow(editPanel, mappingEditRoundRobinPositionLabel_, mappingEditRoundRobinPositionSlider_);
+        layoutEditComboRow(editPanel, mappingEditRoundRobinModeLabel_, mappingEditRoundRobinModeCombo_);
+        layoutEditRow(editPanel, mappingEditChokeLabel_, mappingEditChokeSlider_);
+        layoutEditComboRow(editPanel, mappingEditTriggerLabel_, mappingEditTriggerCombo_);
+        layoutEditComboRow(editPanel, mappingEditLoopLabel_, mappingEditLoopCombo_);
+
+        auto applyRow = editPanel.removeFromTop(28);
+        mappingEditApplyButton_.setBounds(applyRow.removeFromLeft(110));
+        applyRow.removeFromLeft(8);
+        mappingEditStatusLabel_.setBounds(applyRow);
+
+        details.removeFromTop(8);
+        mappingDetailsText_.setBounds(details);
+        return;
+    }
+
+    if (currentTabIndex_ == 3)
     {
         auto playerArea = area.reduced(8, 6);
 
@@ -4094,7 +5873,7 @@ void AudiocityAudioProcessorEditor::resized()
         return;
     }
 
-    if (currentTabIndex_ == 3)
+    if (currentTabIndex_ == 4)
     {
         auto genArea = area.reduced(8, 6);
 
@@ -4145,7 +5924,7 @@ void AudiocityAudioProcessorEditor::resized()
         return;
     }
 
-    if (currentTabIndex_ == 4)
+    if (currentTabIndex_ == 5)
     {
         auto captureArea = area.reduced(8, 6);
         auto waveformArea = captureArea.removeFromTop(juce::jmax(220, captureArea.getHeight() / 2));
@@ -4195,7 +5974,7 @@ void AudiocityAudioProcessorEditor::resized()
         return;
     }
 
-    if (currentTabIndex_ == 5)
+    if (currentTabIndex_ == 6)
     {
         auto aboutArea = area.reduced(8, 6);
         constexpr int kButtonW = 200;
@@ -4340,6 +6119,16 @@ void AudiocityAudioProcessorEditor::resized()
             layoutInlinePair(row3, sampleInfoTempoLabel_, sampleInfoTempoValue_, 52, 72);
         if (sampleInfoMetaRootLabel_.isVisible())
             layoutInlinePair(row3, sampleInfoMetaRootLabel_, sampleInfoMetaRootValue_, 68, 110);
+    }
+
+    if (programMapText_.isVisible())
+    {
+        auto programInner = makeGroup("Program Map", 164);
+        programMapText_.setBounds(programInner);
+    }
+    else
+    {
+        programMapText_.setBounds({});
     }
 
     // ── Panel 2: Performance ──
@@ -4590,13 +6379,18 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
     if (currentTabIndex_ == 1)
         paintSampleBrowserPane(g, content);
     else if (currentTabIndex_ == 2)
-        paintPlayerPane(g, content);
-    else if (currentTabIndex_ == 3 || currentTabIndex_ == 4)
     {
         g.setColour(juce::Colour(0xff252538));
         g.fillRoundedRectangle(content.reduced(6).toFloat(), 8.0f);
     }
-    else if (currentTabIndex_ == 5)
+    else if (currentTabIndex_ == 3)
+        paintPlayerPane(g, content);
+    else if (currentTabIndex_ == 4 || currentTabIndex_ == 5)
+    {
+        g.setColour(juce::Colour(0xff252538));
+        g.fillRoundedRectangle(content.reduced(6).toFloat(), 8.0f);
+    }
+    else if (currentTabIndex_ == 6)
     {
         g.setColour(juce::Colour(0xff252538));
         g.fillRoundedRectangle(content.reduced(6).toFloat(), 8.0f);
@@ -4615,8 +6409,8 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colours::white.withAlpha(0.95f));
     g.setFont(14.0f);
     const auto dropText = processor_.isRexRuntimeAvailable()
-        ? juce::String("Drop .wav, .aiff, .rex, or .rx2 to load")
-        : juce::String("Drop .wav or .aiff to load");
+        ? juce::String("Drop .wav, .aiff, .sfz, .rex, or .rx2 to load")
+        : juce::String("Drop .wav, .aiff, or .sfz to load");
     g.drawText(dropText, overlay, juce::Justification::centred);
 }
 
@@ -4624,6 +6418,42 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 {
     const auto modifiers = key.getModifiers();
     const bool commandDown = modifiers.isCommandDown() || modifiers.isCtrlDown();
+    const auto* focusedComponent = juce::Component::getCurrentlyFocusedComponent();
+    const bool mappingShortcutContext = currentTabIndex_ == 2
+        && focusedComponent != nullptr
+        && (focusedComponent == &mappingZoneListBox_
+            || mappingZoneListBox_.isParentOf(focusedComponent)
+            || focusedComponent == &mappingOverview_
+            || mappingOverview_.isParentOf(focusedComponent)
+            || focusedComponent == &mappingDuplicateZoneButton_
+            || focusedComponent == &mappingSplitZoneButton_
+            || focusedComponent == &mappingDeleteZoneButton_);
+
+    if (mappingShortcutContext && commandDown && modifiers.isShiftDown()
+        && (key.getTextCharacter() == 'd' || key.getTextCharacter() == 'D'))
+    {
+        splitSelectedMappingZone();
+        return true;
+    }
+
+    if (mappingShortcutContext && commandDown && (key.getTextCharacter() == 'd' || key.getTextCharacter() == 'D'))
+    {
+        duplicateSelectedMappingZone();
+        return true;
+    }
+
+    if (mappingShortcutContext && commandDown && (key.getTextCharacter() == 'a' || key.getTextCharacter() == 'A'))
+    {
+        selectAllMappingZones();
+        return true;
+    }
+
+    if (mappingShortcutContext
+        && (key.getKeyCode() == juce::KeyPress::deleteKey || key.getKeyCode() == juce::KeyPress::backspaceKey))
+    {
+        deleteSelectedMappingZone();
+        return true;
+    }
 
     if (commandDown && (key.getTextCharacter() == 'o' || key.getTextCharacter() == 'O'))
     {
@@ -4669,7 +6499,7 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
     if (!commandDown && !modifiers.isAltDown())
     {
         const auto character = key.getTextCharacter();
-        if (character >= '1' && character <= '6')
+        if (character >= '1' && character <= '7')
         {
             const auto tabIndex = static_cast<int>(character - '1');
             tabBar_.setCurrentTabIndex(tabIndex);
@@ -4684,7 +6514,7 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 
     if (!commandDown && !modifiers.isAltDown()
         && key.getKeyCode() == juce::KeyPress::spaceKey
-        && currentTabIndex_ == 3)
+        && currentTabIndex_ == 4)
     {
         if (processor_.isGeneratedWaveformPreviewPlaying())
             processor_.stopGeneratedWaveformPreview();
@@ -5517,7 +7347,7 @@ void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const
 void AudiocityAudioProcessorEditor::setupTooltips()
 {
     samplePathLabel_.setTooltip(
-        "Shortcuts: Ctrl+O Load  |  Ctrl+Z Undo  |  Ctrl+Y Redo  |  Ctrl+S Save State  |  Ctrl+Shift+S Save Preset  |  Space Play/Stop (Generate)  |  1-5 Switch Tabs");
+        "Shortcuts: Ctrl+O Load  |  Ctrl+Z Undo  |  Ctrl+Y Redo  |  Ctrl+S Save State  |  Ctrl+Shift+S Save Preset  |  Ctrl+D Duplicate Zone  |  Ctrl+Shift+D Split Zone  |  Delete Remove Zone  |  Space Play/Stop (Generate)  |  1-7 Switch Tabs");
     presetCombo_.setTooltip(
         "Preset Browser - Select a saved sample playback preset");
     presetSaveButton_.setTooltip(
@@ -5533,10 +7363,86 @@ void AudiocityAudioProcessorEditor::setupTooltips()
 
     sampleBrowserChooseRootButton_.setTooltip(
         "Select Sample Folder...");
+    sampleBrowserBookmarkCombo_.setTooltip(
+        "Bookmarked Sample Folders - Select a saved library root to scan");
+    sampleBrowserAddBookmarkButton_.setTooltip(
+        "Bookmark Current Sample Folder");
+    sampleBrowserRemoveBookmarkButton_.setTooltip(
+        "Remove Selected Bookmarked Folder");
     sampleBrowserFilterEditor_.setTooltip(
         "Search Samples - Filter by sample name or relative path");
     sampleBrowserSortCombo_.setTooltip(
-        "Sort Samples - Sort by sample name or by relative source path");
+        "Sort Samples - Sort by name, path, or recent use");
+    sampleBrowserFavoriteButton_.setTooltip(
+        "Favorite Selected Item");
+    sampleBrowserFavoritesOnlyToggle_.setTooltip(
+        "Show Favorite Items Only");
+    sampleBrowserRecentOnlyToggle_.setTooltip(
+        "Show Recent Items Only");
+    sampleBrowserTagFilterCombo_.setTooltip(
+        "Tag Filter - Show items with a known tag");
+    sampleBrowserTagsEditor_.setTooltip(
+        "Tags for Selected Item");
+    sampleBrowserApplyTagsButton_.setTooltip(
+        "Apply Tags to Selected Item");
+    mappingRefreshButton_.setTooltip(
+        "Refresh Mapping View");
+    mappingDuplicateZoneButton_.setTooltip(
+        "Duplicate Selected Zone");
+    mappingSplitZoneButton_.setTooltip(
+        "Split Selected Zone Across the Key Range Midpoint");
+    mappingDeleteZoneButton_.setTooltip(
+        "Delete Selected Zone");
+    mappingZoneListBox_.setTooltip(
+        "Imported Program Zones");
+    mappingDetailsText_.setTooltip(
+        "Selected Zone Details");
+    mappingEditKeyLowSlider_.setTooltip(
+        "Selected Zone Key Low");
+    mappingEditKeyHighSlider_.setTooltip(
+        "Selected Zone Key High");
+    mappingEditVelocityLowSlider_.setTooltip(
+        "Selected Zone Velocity Low");
+    mappingEditVelocityHighSlider_.setTooltip(
+        "Selected Zone Velocity High");
+    mappingEditVelocityFadeInLowSlider_.setTooltip(
+        "Selected Zone Velocity Fade In Low Endpoint; set Off to disable");
+    mappingEditVelocityFadeInHighSlider_.setTooltip(
+        "Selected Zone Velocity Fade In High Endpoint; set Off to disable");
+    mappingEditVelocityFadeOutLowSlider_.setTooltip(
+        "Selected Zone Velocity Fade Out Low Endpoint; set Off to disable");
+    mappingEditVelocityFadeOutHighSlider_.setTooltip(
+        "Selected Zone Velocity Fade Out High Endpoint; set Off to disable");
+    mappingEditRootSlider_.setTooltip(
+        "Selected Zone Root Note");
+    mappingEditSampleStartSlider_.setTooltip(
+        "Selected Zone Sample Start");
+    mappingEditSampleEndSlider_.setTooltip(
+        "Selected Zone Sample End");
+    mappingEditLoopStartSlider_.setTooltip(
+        "Selected Zone Loop Start");
+    mappingEditLoopEndSlider_.setTooltip(
+        "Selected Zone Loop End");
+    mappingEditGainSlider_.setTooltip(
+        "Selected Zone Gain in dB");
+    mappingEditPanSlider_.setTooltip(
+        "Selected Zone Pan - Left to Right");
+    mappingEditRoundRobinGroupSlider_.setTooltip(
+        "Selected Zone Round Robin Group");
+    mappingEditRoundRobinPositionSlider_.setTooltip(
+        "Selected Zone Round Robin Position");
+    mappingEditRoundRobinModeCombo_.setTooltip(
+        "Selected Zone Round Robin Selection Mode");
+    mappingEditChokeSlider_.setTooltip(
+        "Selected Zone Choke Group");
+    mappingEditTriggerCombo_.setTooltip(
+        "Selected Zone Trigger Mode");
+    mappingEditLoopCombo_.setTooltip(
+        "Selected Zone Loop Mode; batch-enabled for multi-selection");
+    mappingEditApplyButton_.setTooltip(
+        "Apply zone mapping; with multiple selected rows, Apply uses edited batch controls for every selected zone");
+    mappingZoneListBox_.setTooltip(
+        "Imported Program Zones - Ctrl+A selects all rows; Ctrl or Shift multi-select enables batch edit for velocity fades, gain, pan, RR group/mode, choke, trigger, and loop, or right-click for Duplicate, Split, Delete, and Clear Velocity Fades");
     captureRecordButton_.setTooltip(
         "Start/Stop Capture from Plugin Input");
     captureClearButton_.setTooltip(
@@ -5746,9 +7652,8 @@ bool AudiocityAudioProcessorEditor::isInterestedInFileDrag(const juce::StringArr
 
         const auto ext = juce::File(path).getFileExtension().toLowerCase();
         DBG("[DnD]   normalized=\"" + path + "\"  ext=\"" + ext + "\"");
-        const auto rexSupported = processor_.isRexRuntimeAvailable();
-        if (ext == ".wav" || ext == ".aiff" || ext == ".aif"
-            || (rexSupported && (ext == ".rex" || ext == ".rx2")))
+        if (ext == ".sfz" || ext == ".wav" || ext == ".aiff" || ext == ".aif"
+            || (processor_.isRexRuntimeAvailable() && (ext == ".rex" || ext == ".rx2")))
         {
             DBG("[DnD]   -> INTERESTED");
             return true;
@@ -5797,9 +7702,9 @@ void AudiocityAudioProcessorEditor::filesDropped(const juce::StringArray& files,
 void AudiocityAudioProcessorEditor::openSampleChooser()
 {
     const auto wildcard = processor_.isRexRuntimeAvailable()
-        ? juce::String("*.wav;*.aiff;*.aif;*.rex;*.rx2")
-        : juce::String("*.wav;*.aiff;*.aif");
-    fileChooser_ = std::make_unique<juce::FileChooser>("Load sample", juce::File{}, wildcard);
+        ? juce::String("*.wav;*.aiff;*.aif;*.sfz;*.rex;*.rx2")
+        : juce::String("*.wav;*.aiff;*.aif;*.sfz");
+    fileChooser_ = std::make_unique<juce::FileChooser>("Load sample or SFZ", juce::File{}, wildcard);
 
     const auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
     fileChooser_->launchAsync(chooserFlags, [this](const juce::FileChooser& chooser)
@@ -5808,10 +7713,10 @@ void AudiocityAudioProcessorEditor::openSampleChooser()
         if (selected == juce::File{})
             return;
 
-        if (processor_.loadSampleFromFile(selected))
+        if (loadFileAsInstrument(selected))
         {
             clearSelectedPresetAfterSourceLoad();
-            refreshUI();
+            refreshUI(true);
         }
     });
 }
@@ -5887,21 +7792,39 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
         ? WaveformView::DisplayMode::symmetricEnvelope
         : WaveformView::DisplayMode::signedWaveform);
 
+    const auto hasImportedProgram = processor_.hasImportedProgram();
+    const auto importedProgramPath = processor_.getImportedProgramPath();
+    const auto importedProgramName = processor_.getImportedProgramName();
     const auto path = processor_.getLoadedSamplePath();
-    const auto sampleIdentity = path.isNotEmpty()
+    const auto sampleIdentity = hasImportedProgram
+        ? (juce::String("sfz:") + importedProgramPath)
+        : path.isNotEmpty()
         ? (juce::String("file:") + path)
         : (processor_.isGeneratedWaveformLoaded()
             ? juce::String("generated")
             : (processor_.isCapturedAudioLoaded() ? juce::String("captured") : juce::String("none")));
-    const auto sampleLabel = path.isNotEmpty()
+    const auto sampleLabel = hasImportedProgram
+        ? (importedProgramPath.isNotEmpty()
+            ? (juce::String("SFZ: ") + importedProgramPath)
+            : (juce::String("SFZ: ") + (importedProgramName.isNotEmpty() ? importedProgramName : juce::String("Imported Program"))))
+        : path.isNotEmpty()
         ? path
         : (processor_.isGeneratedWaveformLoaded()
             ? juce::String("Generated Waveform")
             : (processor_.isCapturedAudioLoaded() ? juce::String("Captured Audio") : juce::String("No sample loaded")));
     samplePathLabel_.setText(sampleLabel, juce::dontSendNotification);
+    programMapText_.setText(processor_.getImportedProgramMapSummary(), juce::dontSendNotification);
+    const auto programMapShouldBeVisible = currentTabIndex_ == 0 && hasImportedProgram;
+    if (programMapText_.isVisible() != programMapShouldBeVisible)
+    {
+        programMapText_.setVisible(programMapShouldBeVisible);
+        resized();
+    }
     updateSampleInformationDisplay();
     presetSaveButton_.setEnabled(processor_.getLoadedSampleLength() > 0);
     const auto isNewLoadedSample = sampleIdentity != lastWaveformSamplePath_;
+    if (isNewLoadedSample || currentTabIndex_ == 2)
+        refreshMappingZoneRows();
 
     const bool isEditingRootNote = rootNoteCombo_.hasKeyboardFocus(true) || rootNoteCombo_.isPopupActive();
     if (!isEditingRootNote)
@@ -6089,14 +8012,18 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
 
 void AudiocityAudioProcessorEditor::updateSampleInformationDisplay()
 {
+    const auto hasImportedProgram = processor_.hasImportedProgram();
+    const auto importedProgramPath = processor_.getImportedProgramPath();
     const auto samplePath = processor_.getLoadedSamplePath();
     const auto sampleLength = processor_.getLoadedSampleLength();
     const auto channels = juce::jmax(0, processor_.getLoadedSampleChannels());
     const auto sampleRate = processor_.getLoadedSampleRateHz();
-    const auto loopBadge = processor_.getLoadedSampleLoopFormatBadge();
+    const auto loopBadge = hasImportedProgram ? juce::String("SFZ") : processor_.getLoadedSampleLoopFormatBadge();
 
     juce::String sourceText;
-    if (samplePath.isNotEmpty())
+    if (hasImportedProgram)
+        sourceText = importedProgramPath.isNotEmpty() ? importedProgramPath : processor_.getImportedProgramName();
+    else if (samplePath.isNotEmpty())
         sourceText = samplePath;
     else if (processor_.isGeneratedWaveformLoaded())
         sourceText = "Generated";
@@ -6128,7 +8055,13 @@ void AudiocityAudioProcessorEditor::updateSampleInformationDisplay()
     sampleInfoDurationValue_.setText(formatDurationFromSamples(sampleLength, sampleRate), juce::dontSendNotification);
 
     juce::String fileSizeText = "-";
-    if (samplePath.isNotEmpty())
+    if (hasImportedProgram && importedProgramPath.isNotEmpty())
+    {
+        const juce::File sourceFile(importedProgramPath);
+        if (sourceFile.existsAsFile())
+            fileSizeText = formatFileSizeString(sourceFile.getSize());
+    }
+    else if (samplePath.isNotEmpty())
     {
         const juce::File sourceFile(samplePath);
         if (sourceFile.existsAsFile())
@@ -6191,6 +8124,8 @@ void AudiocityAudioProcessorEditor::updateSampleInformationDisplay()
             badgeColour = juce::Colour(0xff4b6b2a);
         else if (loopBadge == "REX")
             badgeColour = juce::Colour(0xff2b5f93);
+        else if (loopBadge == "SFZ")
+            badgeColour = juce::Colour(0xff6c5ce7);
         sampleInfoBadge_.setBadge(loopBadge, badgeColour);
     }
     else
@@ -6201,15 +8136,22 @@ void AudiocityAudioProcessorEditor::updateSampleInformationDisplay()
 
 void AudiocityAudioProcessorEditor::updateDiagnosticsStatusText()
 {
-    diagnosticsLabel_.setText(
-        "Preload: " + juce::String(processor_.getLoadedPreloadSamples())
+    auto text = "Preload: " + juce::String(processor_.getLoadedPreloadSamples())
             + " | Stream: " + juce::String(processor_.getLoadedStreamSamples())
             + " | Rebuilds: " + juce::String(processor_.getSegmentRebuildCount())
             + " | Voices: " + juce::String(processor_.getActiveVoiceCount())
             + "/" + juce::String(processor_.getPolyphonyLimit())
             + " | Root: " + juce::String(processor_.getRootMidiNote())
-            + " | Length: " + juce::String(processor_.getLoadedSampleLength()),
-        juce::dontSendNotification);
+            + " | Length: " + juce::String(processor_.getLoadedSampleLength());
+
+    if (processor_.hasImportedProgram())
+        text += " | Program zones: " + juce::String(processor_.getImportedProgramZoneCount());
+
+    const auto importSummary = processor_.getLastImportDiagnosticSummary();
+    if (importSummary.isNotEmpty())
+        text += " | " + importSummary;
+
+    diagnosticsLabel_.setText(text, juce::dontSendNotification);
 }
 
 // ─── CC sync ───────────────────────────────────────────────────────────────────

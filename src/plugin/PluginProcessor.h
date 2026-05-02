@@ -5,6 +5,8 @@
 
 #include "../engine/EngineCore.h"
 #include "PlayerPadState.h"
+#include "LibraryMetadata.h"
+#include "ProgramMappingModel.h"
 
 #include <array>
 #include <atomic>
@@ -54,6 +56,24 @@ public:
     bool loadPlaybackPresetXml(const juce::String& xmlText, juce::String& errorMessage);
 
     bool loadSampleFromFile(const juce::File& file);
+    bool importSfzProgram(const juce::File& file);
+    [[nodiscard]] bool hasImportedProgram() const noexcept
+    {
+        return importedProgramLoaded_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] int getImportedProgramZoneCount() const noexcept
+    {
+        return importedProgramZoneCount_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] juce::String getImportedProgramPath() const;
+    [[nodiscard]] juce::String getImportedProgramName() const;
+    [[nodiscard]] juce::String getImportedProgramMapSummary() const;
+    [[nodiscard]] std::vector<audiocity::plugin::ProgramZoneListRow> getImportedProgramZoneRows() const;
+    bool updateImportedProgramZoneMapping(const audiocity::plugin::ProgramZoneEdit& edit);
+    [[nodiscard]] int duplicateImportedProgramZone(int zoneIndex);
+    bool deleteImportedProgramZone(int zoneIndex);
+    [[nodiscard]] int splitImportedProgramZone(int zoneIndex);
+    [[nodiscard]] juce::String getLastImportDiagnosticSummary() const;
     [[nodiscard]] bool isRexRuntimeAvailable() const noexcept { return engine_.isRexRuntimeAvailable(); }
     void loadGeneratedWaveformAsSample(const std::vector<float>& waveform, int rootMidiNote = 60);
     [[nodiscard]] juce::String getLoadedSamplePath() const;
@@ -68,6 +88,13 @@ public:
     }
     void setSampleBrowserRootFolder(const juce::String& folderPath) { sampleBrowserRootFolderPath_ = folderPath; }
     [[nodiscard]] juce::String getSampleBrowserRootFolder() const { return sampleBrowserRootFolderPath_; }
+    void setLibraryFavorite(const juce::String& filePath, bool shouldBeFavorite);
+    [[nodiscard]] bool isLibraryFavorite(const juce::String& filePath) const;
+    void markLibraryRecent(const juce::String& filePath);
+    void setLibraryTags(const juce::String& filePath, const juce::StringArray& tags);
+    void addLibraryBookmark(const juce::String& folderPath);
+    void removeLibraryBookmark(const juce::String& folderPath);
+    [[nodiscard]] audiocity::plugin::LibraryMetadata getLibraryMetadataSnapshot() const;
 
     using PlayerPadAssignment = audiocity::plugin::PlayerPadAssignment;
     static constexpr int kPlayerPadCount = audiocity::plugin::kPlayerPadCount;
@@ -312,6 +339,16 @@ private:
     void updateCaptureInputMonitorLevels(const juce::AudioBuffer<float>& buffer, int sourceChannels) noexcept;
     [[nodiscard]] bool captureInputAudio(const juce::AudioBuffer<float>& buffer, int sourceChannels) noexcept;
     static float quantizeCaptureSample(float sample, int bitDepth) noexcept;
+    void clearImportedProgramMetadata();
+    void setImportedProgramMetadata(const juce::File& file,
+                                    const audiocity::engine::Program& program,
+                                    const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset,
+                                    const juce::String& diagnosticSummary,
+                                    int zoneCount);
+    void setLastImportDiagnosticSummary(const juce::String& diagnosticSummary);
+    void refreshImportedProgramDerivedStateLocked(const juce::String& diagnosticSummary);
+    void captureImportedProgramSnapshotLocked(audiocity::engine::Program& programToPublish,
+                                             std::vector<juce::AudioBuffer<float>>& sampleDataToPublish) const;
 
     struct UiMidiEvent
     {
@@ -335,6 +372,8 @@ private:
     mutable std::mutex ccMappingMutex_;
     std::map<int, juce::String> ccToParam_;
     juce::String sampleBrowserRootFolderPath_;
+    mutable std::mutex libraryMetadataMutex_;
+    audiocity::plugin::LibraryMetadata libraryMetadata_;
     std::array<PlayerPadAssignment, kPlayerPadCount> playerPadAssignments_{};
 
     std::array<UiMidiEvent, kUiMidiFifoSize> uiMidiFifo_{};
@@ -344,10 +383,20 @@ private:
     std::atomic<float> hostBpm_{ 120.0f };
     std::atomic<bool> generatedWaveformLoaded_{ false };
     std::atomic<bool> capturedAudioLoaded_{ false };
-    std::atomic<int> lastStateRestoreSource_{ 0 }; // 0=none, 1=file, 2=generated, 3=captured
+    std::atomic<bool> importedProgramLoaded_{ false };
+    std::atomic<int> importedProgramZoneCount_{ 0 };
+    std::atomic<int> lastStateRestoreSource_{ 0 }; // 0=none, 1=file, 2=generated, 3=captured, 4=sfz
     mutable std::mutex generatedWaveformStateMutex_;
+    mutable std::mutex importedProgramStateMutex_;
     std::vector<float> generatedWaveformState_;
     std::vector<float> capturedSampleState_;
+    juce::String importedProgramPath_;
+    juce::String importedProgramName_;
+    juce::String importedProgramMapSummary_;
+    audiocity::engine::Program importedProgram_;
+    std::vector<juce::AudioBuffer<float>> importedProgramSampleDataByAsset_;
+    std::vector<audiocity::plugin::ProgramZoneListRow> importedProgramZoneRows_;
+    juce::String lastImportDiagnosticSummary_;
     double capturedSampleRateState_ = 44100.0;
     std::atomic<int> waveformViewStartSample_{ 0 };
     std::atomic<int> waveformViewSampleCount_{ 0 };

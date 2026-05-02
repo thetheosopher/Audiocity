@@ -17,9 +17,59 @@
 #include "CcLearnDial.h"
 #include "DialLookAndFeel.h"
 #include "PlayerPadState.h"
+#include "ProgramMappingModel.h"
 #include "../engine/VoicePool.h"
 
 class AudiocityAudioProcessor;
+
+class MappingOverviewComponent final : public juce::Component
+{
+public:
+    void setRows(std::vector<audiocity::plugin::ProgramZoneListRow> rows);
+    void setSelectedZoneIndex(int zoneIndex);
+    void paint(juce::Graphics& g) override;
+    void mouseDown(const juce::MouseEvent& event) override;
+    void mouseDrag(const juce::MouseEvent& event) override;
+    void mouseUp(const juce::MouseEvent& event) override;
+
+    std::function<void(int)> onZoneSelected;
+    std::function<void(const audiocity::plugin::ProgramZoneEdit&)> onZoneEditCommitted;
+
+private:
+    struct OverviewLayout
+    {
+        juce::Rectangle<int> title;
+        juce::Rectangle<int> plot;
+        juce::Rectangle<int> keyboard;
+    };
+
+    struct DragState
+    {
+        audiocity::plugin::ProgramZoneListRow originalRow;
+        audiocity::plugin::ProgramZoneEdit previewEdit;
+        juce::Point<int> startPosition;
+        int startNoteValue = 0;
+        int startVelocityValue = 0;
+        audiocity::plugin::ProgramZoneOverviewDragMode mode = audiocity::plugin::ProgramZoneOverviewDragMode::none;
+    };
+
+    [[nodiscard]] OverviewLayout getOverviewLayout() const;
+    [[nodiscard]] juce::Rectangle<int> getZoneBounds(const audiocity::plugin::ProgramZoneListRow& row,
+                                                     juce::Rectangle<int> plot) const;
+    [[nodiscard]] int findZoneIndexAt(juce::Point<int> position) const;
+    [[nodiscard]] const audiocity::plugin::ProgramZoneListRow* findRowByZoneIndex(int zoneIndex) const;
+    [[nodiscard]] audiocity::plugin::ProgramZoneOverviewDragMode getDragModeForPosition(
+        const audiocity::plugin::ProgramZoneListRow& row,
+        juce::Point<int> position,
+        juce::Rectangle<int> plot) const;
+    [[nodiscard]] int positionToNoteValue(int x, juce::Rectangle<int> plot) const;
+    [[nodiscard]] int positionToVelocityValue(int y, juce::Rectangle<int> plot) const;
+    void updateDragPreview(juce::Point<int> position);
+
+    std::vector<audiocity::plugin::ProgramZoneListRow> rows_;
+    int selectedZoneIndex_ = -1;
+    std::optional<DragState> dragState_;
+};
 
 class AudiocityAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                             public juce::FileDragAndDropTarget,
@@ -252,6 +302,7 @@ private:
     juce::TabbedComponent tabBar_{ juce::TabbedButtonBar::TabsAtTop };
     juce::Component tabSamplePage_;
     juce::Component tabLibraryPage_;
+    juce::Component tabMappingPage_;
     juce::Component tabPlayerPage_;
     juce::Component tabGeneratePage_;
     juce::Component tabCapturePage_;
@@ -268,8 +319,29 @@ private:
         juce::String loopFormatBadge;
         juce::String metadataLine;
         juce::String loopMetadataLine;
+        juce::StringArray tags;
+        juce::String tagsLower;
         std::vector<float> previewPeaks;
+        bool isFavorite = false;
+        bool isRecent = false;
+        int recentRank = -1;
     };
+
+    class MappingZoneListModel final : public juce::ListBoxModel
+    {
+    public:
+        explicit MappingZoneListModel(AudiocityAudioProcessorEditor& owner) : owner_(owner) {}
+        int getNumRows() override;
+        void paintListBoxItem(int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected) override;
+        void listBoxItemClicked(int row, const juce::MouseEvent& event) override;
+        void listBoxItemDoubleClicked(int row, const juce::MouseEvent& event) override;
+        void selectedRowsChanged(int lastRowSelected) override;
+        void returnKeyPressed(int lastRowSelected) override;
+
+    private:
+        AudiocityAudioProcessorEditor& owner_;
+    };
+
     std::vector<SampleListEntry> allSampleEntries_;
     std::vector<int> visibleSampleEntryIndices_;
     juce::String sampleRootFolderPath_;
@@ -283,11 +355,74 @@ private:
     juce::TextButton sampleBrowserChooseRootButton_{ "..." };
     juce::TextButton sampleBrowserRefreshButton_{ "Refresh" };
     juce::TextButton sampleBrowserCancelButton_{ "Cancel" };
+    juce::ComboBox sampleBrowserBookmarkCombo_;
+    juce::TextButton sampleBrowserAddBookmarkButton_{ "Bookmark" };
+    juce::TextButton sampleBrowserRemoveBookmarkButton_{ "Remove" };
     juce::TextEditor sampleBrowserFilterEditor_;
     juce::ComboBox sampleBrowserSortCombo_;
+    juce::ToggleButton sampleBrowserFavoriteButton_{ "Favorite" };
+    juce::ToggleButton sampleBrowserFavoritesOnlyToggle_{ "Favorites" };
+    juce::ToggleButton sampleBrowserRecentOnlyToggle_{ "Recent" };
+    juce::ComboBox sampleBrowserTagFilterCombo_;
+    juce::TextEditor sampleBrowserTagsEditor_;
+    juce::TextButton sampleBrowserApplyTagsButton_{ "Apply Tags" };
     juce::ListBox sampleBrowserListBox_;
     juce::Label sampleBrowserCountLabel_;
     juce::Label sampleBrowserPreviewLabel_{ {}, "" };
+
+    // ── Mapping ──
+    std::vector<audiocity::plugin::ProgramZoneListRow> mappingZoneRows_;
+    MappingZoneListModel mappingZoneListModel_;
+    juce::Label mappingSummaryLabel_{ {}, "No imported program" };
+    juce::TextButton mappingRefreshButton_{ "Refresh" };
+    juce::TextButton mappingDuplicateZoneButton_{ "Duplicate" };
+    juce::TextButton mappingSplitZoneButton_{ "Split" };
+    juce::TextButton mappingDeleteZoneButton_{ "Delete" };
+    MappingOverviewComponent mappingOverview_;
+    juce::ListBox mappingZoneListBox_;
+    juce::TextEditor mappingDetailsText_;
+    juce::Label mappingEditKeyLowLabel_{ {}, "Key Low" };
+    juce::Slider mappingEditKeyLowSlider_;
+    juce::Label mappingEditKeyHighLabel_{ {}, "Key High" };
+    juce::Slider mappingEditKeyHighSlider_;
+    juce::Label mappingEditVelocityLowLabel_{ {}, "Vel Low" };
+    juce::Slider mappingEditVelocityLowSlider_;
+    juce::Label mappingEditVelocityHighLabel_{ {}, "Vel High" };
+    juce::Slider mappingEditVelocityHighSlider_;
+    juce::Label mappingEditVelocityFadeInLabel_{ {}, "Vel In" };
+    juce::Slider mappingEditVelocityFadeInLowSlider_;
+    juce::Slider mappingEditVelocityFadeInHighSlider_;
+    juce::Label mappingEditVelocityFadeOutLabel_{ {}, "Vel Out" };
+    juce::Slider mappingEditVelocityFadeOutLowSlider_;
+    juce::Slider mappingEditVelocityFadeOutHighSlider_;
+    juce::Label mappingEditRootLabel_{ {}, "Root" };
+    juce::Slider mappingEditRootSlider_;
+    juce::Label mappingEditSampleStartLabel_{ {}, "Start" };
+    juce::Slider mappingEditSampleStartSlider_;
+    juce::Label mappingEditSampleEndLabel_{ {}, "End" };
+    juce::Slider mappingEditSampleEndSlider_;
+    juce::Label mappingEditLoopStartLabel_{ {}, "Loop In" };
+    juce::Slider mappingEditLoopStartSlider_;
+    juce::Label mappingEditLoopEndLabel_{ {}, "Loop Out" };
+    juce::Slider mappingEditLoopEndSlider_;
+    juce::Label mappingEditGainLabel_{ {}, "Gain" };
+    juce::Slider mappingEditGainSlider_;
+    juce::Label mappingEditPanLabel_{ {}, "Pan" };
+    juce::Slider mappingEditPanSlider_;
+    juce::Label mappingEditRoundRobinGroupLabel_{ {}, "RR Group" };
+    juce::Slider mappingEditRoundRobinGroupSlider_;
+    juce::Label mappingEditRoundRobinPositionLabel_{ {}, "RR Pos" };
+    juce::Slider mappingEditRoundRobinPositionSlider_;
+    juce::Label mappingEditRoundRobinModeLabel_{ {}, "RR Mode" };
+    juce::ComboBox mappingEditRoundRobinModeCombo_;
+    juce::Label mappingEditChokeLabel_{ {}, "Choke" };
+    juce::Slider mappingEditChokeSlider_;
+    juce::Label mappingEditTriggerLabel_{ {}, "Trigger" };
+    juce::ComboBox mappingEditTriggerCombo_;
+    juce::Label mappingEditLoopLabel_{ {}, "Loop" };
+    juce::ComboBox mappingEditLoopCombo_;
+    juce::TextButton mappingEditApplyButton_{ "Apply Zone" };
+    juce::Label mappingEditStatusLabel_{ {}, "" };
 
     // ── Player ──
     juce::Label playerKeyboardLabel_{ {}, "Piano" };
@@ -335,6 +470,7 @@ private:
     juce::Label sampleInfoMetaRootLabel_{ {}, "Root Note" };
     juce::Label sampleInfoMetaRootValue_{ {}, "-" };
     InfoBadge sampleInfoBadge_;
+    juce::TextEditor programMapText_;
     juce::Label rootNoteLabel_{ {}, "Root Note" };
     juce::ComboBox rootNoteCombo_;
     CcLearnDial tuneCoarseDial_{ "Coarse", -24, 24, 1, "st", 0 };
@@ -681,6 +817,8 @@ private:
     void pushAmpEnvelope();
     void pushAmpLfoSettings();
     void pushPitchLfoSettings();
+    void resetMappingBatchEditTracking(const std::vector<int>& selectedRows = {});
+    [[nodiscard]] bool hasPendingMappingBatchEdit() const noexcept;
     void pushFilterEnvelope();
     void pushFilterSettings();
     void pushDelaySettings();
@@ -705,11 +843,47 @@ private:
     void chooseSampleRootFolder();
     void cancelSampleRootScan();
     void scanSampleRootFolder(const juce::File& rootFolder);
+    void refreshSampleBrowserBookmarks();
+    void refreshSampleBrowserTagFilter();
+    void scanSelectedSampleBrowserBookmark();
+    void addCurrentSampleRootBookmark();
+    void removeSelectedSampleBrowserBookmark();
+    void refreshMappingZoneRows();
+    std::vector<int> getSelectedMappingRowIndices() const;
+    void selectMappingZoneIndices(const std::vector<int>& zoneIndices);
+    void selectAllMappingZones();
+    bool selectMappingZoneByIndex(int zoneIndex);
+    void selectClosestMappingRow(int preferredRow);
+    void showMappingZoneContextMenu(int row, juce::Point<int> screenPosition);
+    void updateMappingDetails();
+    void updateMappingEditControls();
+    void applySelectedMappingZoneEdit();
+    void duplicateSelectedMappingZone();
+    void splitSelectedMappingZone();
+    void deleteSelectedMappingZone();
+    void clearSelectedMappingVelocityFades();
+    bool commitMappingZoneEdit(const audiocity::plugin::ProgramZoneEdit& edit, const juce::String& statusText);
+    void paintMappingListRow(int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected);
+    void refreshBrowserEntryLibraryFlags();
+    void updateBrowserLibraryControls();
+    void toggleSelectedBrowserFavorite();
+    void applySelectedBrowserTags();
     void rebuildVisibleSampleList();
+    bool loadFileAsInstrument(const juce::File& file);
     void loadSampleFromBrowserRow(int row);
     void previewSampleFromBrowserRow(int row, bool forceRestart = true);
     void updatePlayerKeyboardSizing();
     void refreshPlayerPadButtons();
+    std::vector<int> mappingBatchTrackedSelectionRows_;
+    bool suppressMappingBatchEditTracking_ = false;
+    bool mappingBatchVelocityFadeEdited_ = false;
+    bool mappingBatchGainEdited_ = false;
+    bool mappingBatchPanEdited_ = false;
+    bool mappingBatchRoundRobinGroupEdited_ = false;
+    bool mappingBatchRoundRobinModeEdited_ = false;
+    bool mappingBatchChokeEdited_ = false;
+    bool mappingBatchTriggerEdited_ = false;
+    bool mappingBatchLoopEdited_ = false;
     void showPadAssignmentDialog(int padIndex);
     void syncAutomatedControlsFromProcessor();
     void paintPlayerPane(juce::Graphics& g, juce::Rectangle<int> area) const;

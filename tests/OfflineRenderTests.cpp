@@ -5,12 +5,18 @@
 #include "../src/engine/ProgramModel.h"
 #include "../src/engine/ProgramSnapshot.h"
 #include "../src/engine/SettingsUndoHistory.h"
+#include "../src/engine/SfzImporter.h"
 #include "../src/plugin/CcLearnDial.h"
+#include "../src/plugin/LibraryFileIndex.h"
+#include "../src/plugin/LibraryMetadata.h"
 #include "../src/plugin/PeakPreviewCache.h"
 #include "../src/plugin/PresetJson.h"
+#include "../src/plugin/ImportedProgramState.h"
 #include "../src/plugin/PlayerPadState.h"
+#include "../src/plugin/ProgramMappingModel.h"
 
 #include <cmath>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -213,6 +219,1170 @@ bool runProgramSnapshotBuildAndMatchTest()
     return snapshot.zones[0].rootMidiNote == 40;
 }
 
+bool runProgramMappingRowsTest()
+{
+    using namespace audiocity::engine;
+
+    Program program;
+    program.name = "Mapping Test";
+
+    SampleAsset sample;
+    sample.displayName = "snare_rr1.wav";
+    program.sampleAssets.push_back(sample);
+
+    Group group;
+    group.roundRobinGroup = 4;
+    group.roundRobinMode = RoundRobinMode::cycleRandom;
+    group.chokeGroup = 2;
+    group.triggerMode = ZoneTriggerMode::oneShot;
+    group.gainDb = -3.0f;
+    group.pan = 0.25f;
+    program.groups.push_back(group);
+
+    Zone zone;
+    zone.groupIndex = 0;
+    zone.sampleAssetIndex = 0;
+    zone.keyRange = { 38, 40 };
+    zone.velocityRange = { 32, 96 };
+    zone.velocityFadeIn = VelocityFadeRange::fromUnordered(40, 64);
+    zone.velocityFadeOut = VelocityFadeRange::fromUnordered(92, 120);
+    zone.rootMidiNote = 39;
+    zone.roundRobinPosition = 2;
+    zone.loopMode = ZoneLoopMode::sustain;
+    zone.gainDb = 1.5f;
+    zone.pan = -0.5f;
+    zone.triggerMode = ZoneTriggerMode::release;
+    program.zones.push_back(zone);
+
+    const auto rows = audiocity::plugin::buildProgramZoneListRows(program);
+    if (rows.size() != 1)
+        return false;
+
+    const auto& row = rows.front();
+    return row.zoneIndex == 0
+        && row.keyLow == 38
+        && row.keyHigh == 40
+        && row.velocityLow == 32
+        && row.velocityHigh == 96
+        && row.velocityFadeInLow == 40
+        && row.velocityFadeInHigh == 64
+        && row.velocityFadeOutLow == 92
+        && row.velocityFadeOutHigh == 120
+        && row.rootMidiNote == 39
+        && row.roundRobinGroup == 4
+        && row.roundRobinPosition == 2
+        && row.chokeGroupId == 2
+        && std::abs(row.gainDbValue - (-1.5f)) <= 1.0e-6f
+        && std::abs(row.panValue - (-0.25f)) <= 1.0e-6f
+        && row.roundRobinModeValue == RoundRobinMode::cycleRandom
+        && row.triggerModeValue == ZoneTriggerMode::release
+        && row.loopModeValue == ZoneLoopMode::sustain
+        && row.sampleName == "snare_rr1.wav"
+        && row.keyRange == "38-40"
+        && row.velocityRange == "32-96"
+        && row.velocityFadeIn == "40-64"
+        && row.velocityFadeOut == "92-120"
+        && row.rootNote == "39"
+        && row.triggerMode == "release"
+        && row.loopMode == "sustain"
+        && row.roundRobin == "4:2"
+        && row.roundRobinMode == "cycle-random"
+        && row.chokeGroup == "2"
+        && row.gainDb == "-1.5 dB"
+        && row.pan == "-25"
+        && row.detailText.contains("Vel Fade In: 40-64")
+        && row.detailText.contains("Vel Fade Out: 92-120")
+        && row.detailText.contains("RR mode: cycle-random")
+        && row.detailText.contains("Sample: snare_rr1.wav");
+}
+
+bool runProgramMappingEditTest()
+{
+    using namespace audiocity::engine;
+
+    Program program;
+
+    SampleAsset sample;
+    sample.displayName = "tone.wav";
+    program.sampleAssets.push_back(sample);
+
+    Group group;
+    group.keyRange = MidiRange::single(60);
+    group.velocityRange = VelocityRange::fromUnordered(20, 80);
+    group.gainDb = -3.0f;
+    group.pan = 0.25f;
+    program.groups.push_back(group);
+
+    Zone first;
+    first.groupIndex = 0;
+    first.sampleAssetIndex = 0;
+    first.keyRange = MidiRange::single(60);
+    first.velocityRange = VelocityRange::fromUnordered(20, 80);
+    first.rootMidiNote = 60;
+    first.velocityFadeIn = VelocityFadeRange::disabled();
+    first.velocityFadeOut = VelocityFadeRange::disabled();
+    first.gainDb = 1.0f;
+    first.pan = -0.25f;
+    program.zones.push_back(first);
+
+    Zone second = first;
+    second.keyRange = MidiRange::single(62);
+    second.velocityRange = VelocityRange::fromUnordered(30, 90);
+    second.rootMidiNote = 62;
+    second.gainDb = 2.0f;
+    second.pan = 0.10f;
+    second.roundRobinGroup = 3;
+    second.roundRobinPosition = 1;
+    second.chokeGroup = 5;
+    second.triggerMode = ZoneTriggerMode::oneShot;
+    second.loopMode = ZoneLoopMode::sustain;
+    second.velocityFadeIn = VelocityFadeRange::fromUnordered(16, 48);
+    second.velocityFadeOut = VelocityFadeRange::fromUnordered(96, 120);
+    program.zones.push_back(second);
+
+    audiocity::plugin::ProgramZoneEdit edit;
+    edit.zoneIndex = 0;
+    edit.keyLow = 75;
+    edit.keyHigh = 72;
+    edit.velocityLow = 127;
+    edit.velocityHigh = 96;
+    edit.velocityFadeInLow = 12;
+    edit.velocityFadeInHigh = 72;
+    edit.velocityFadeOutLow = 100;
+    edit.velocityFadeOutHigh = 118;
+    edit.rootMidiNote = 200;
+    edit.gainDb = -6.0f;
+    edit.pan = 0.5f;
+    edit.roundRobinGroup = 9;
+    edit.roundRobinPosition = 2;
+    edit.roundRobinMode = RoundRobinMode::cycleRandom;
+    edit.chokeGroupId = 7;
+    edit.triggerMode = ZoneTriggerMode::release;
+    edit.loopMode = ZoneLoopMode::continuous;
+    edit.hasGainDb = true;
+    edit.hasPan = true;
+    edit.hasVelocityFadeIn = true;
+    edit.hasVelocityFadeOut = true;
+    edit.hasRoundRobinGroup = true;
+    edit.hasRoundRobinPosition = true;
+    edit.hasRoundRobinMode = true;
+    edit.hasChokeGroupId = true;
+    edit.hasTriggerMode = true;
+    edit.hasLoopMode = true;
+
+    if (!audiocity::plugin::applyProgramZoneEdit(program, edit))
+        return false;
+
+    audiocity::plugin::ProgramZoneEdit rangeOnlyEdit;
+    rangeOnlyEdit.zoneIndex = 1;
+    rangeOnlyEdit.keyLow = 64;
+    rangeOnlyEdit.keyHigh = 64;
+    rangeOnlyEdit.velocityLow = 10;
+    rangeOnlyEdit.velocityHigh = 11;
+    rangeOnlyEdit.velocityFadeInLow = -1;
+    rangeOnlyEdit.velocityFadeInHigh = -1;
+    rangeOnlyEdit.velocityFadeOutLow = -1;
+    rangeOnlyEdit.velocityFadeOutHigh = -1;
+    rangeOnlyEdit.rootMidiNote = 65;
+    rangeOnlyEdit.hasVelocityFadeIn = true;
+    rangeOnlyEdit.hasVelocityFadeOut = true;
+    if (!audiocity::plugin::applyProgramZoneEdit(program, rangeOnlyEdit))
+        return false;
+
+    if (audiocity::plugin::applyProgramZoneEdit(program, { 99, 0, 127, 0, 127, 60 }))
+        return false;
+
+    const auto& editedZone = program.zones[0];
+    const auto& untouchedZone = program.zones[1];
+    const auto& updatedGroup = program.groups[0];
+
+    return editedZone.keyRange.low == 72
+        && editedZone.keyRange.high == 75
+        && editedZone.velocityRange.low == 96
+        && editedZone.velocityRange.high == 127
+        && editedZone.velocityFadeIn.low == 12
+        && editedZone.velocityFadeIn.high == 72
+        && editedZone.velocityFadeOut.low == 100
+        && editedZone.velocityFadeOut.high == 118
+        && editedZone.rootMidiNote == 127
+        && std::abs(editedZone.gainDb - (-3.0f)) <= 1.0e-6f
+        && std::abs(editedZone.pan - 0.25f) <= 1.0e-6f
+        && editedZone.roundRobinGroup == 9
+        && editedZone.roundRobinPosition == 2
+        && editedZone.roundRobinMode == RoundRobinMode::cycleRandom
+        && editedZone.chokeGroup == 7
+        && editedZone.triggerMode == ZoneTriggerMode::release
+        && editedZone.loopMode == ZoneLoopMode::continuous
+        && untouchedZone.keyRange.low == 64
+        && untouchedZone.keyRange.high == 64
+        && untouchedZone.velocityRange.low == 10
+        && untouchedZone.velocityRange.high == 11
+        && !untouchedZone.velocityFadeIn.isEnabled()
+        && !untouchedZone.velocityFadeOut.isEnabled()
+        && untouchedZone.rootMidiNote == 65
+        && std::abs(untouchedZone.gainDb - 2.0f) <= 1.0e-6f
+        && std::abs(untouchedZone.pan - 0.10f) <= 1.0e-6f
+        && untouchedZone.roundRobinGroup == 3
+        && untouchedZone.roundRobinPosition == 1
+        && untouchedZone.roundRobinMode == RoundRobinMode::ordered
+        && untouchedZone.chokeGroup == 5
+        && untouchedZone.triggerMode == ZoneTriggerMode::oneShot
+        && untouchedZone.loopMode == ZoneLoopMode::sustain
+        && updatedGroup.keyRange.low == 64
+        && updatedGroup.keyRange.high == 75
+        && updatedGroup.velocityRange.low == 10
+        && updatedGroup.velocityRange.high == 127;
+}
+
+bool runProgramMappingOverviewEditTest()
+{
+    audiocity::plugin::ProgramZoneListRow row;
+    row.zoneIndex = 3;
+    row.keyLow = 40;
+    row.keyHigh = 44;
+    row.velocityLow = 20;
+    row.velocityHigh = 40;
+    row.rootMidiNote = 42;
+
+    const auto moved = audiocity::plugin::makeProgramZoneOverviewEdit(
+        row,
+        audiocity::plugin::ProgramZoneOverviewDragMode::move,
+        52,
+        32,
+        10,
+        12);
+    if (!(moved.zoneIndex == 3
+        && moved.keyLow == 50
+        && moved.keyHigh == 54
+        && moved.velocityLow == 32
+        && moved.velocityHigh == 52
+        && moved.rootMidiNote == 42))
+    {
+        return false;
+    }
+
+    const auto clippedMove = audiocity::plugin::makeProgramZoneOverviewEdit(
+        row,
+        audiocity::plugin::ProgramZoneOverviewDragMode::move,
+        127,
+        127,
+        100,
+        120);
+    if (!(clippedMove.keyLow == 123
+        && clippedMove.keyHigh == 127
+        && clippedMove.velocityLow == 107
+        && clippedMove.velocityHigh == 127))
+    {
+        return false;
+    }
+
+    const auto resizedKeyLow = audiocity::plugin::makeProgramZoneOverviewEdit(
+        row,
+        audiocity::plugin::ProgramZoneOverviewDragMode::keyLow,
+        60,
+        20);
+    if (!(resizedKeyLow.keyLow == 44 && resizedKeyLow.keyHigh == 44))
+        return false;
+
+    const auto resizedKeyHigh = audiocity::plugin::makeProgramZoneOverviewEdit(
+        row,
+        audiocity::plugin::ProgramZoneOverviewDragMode::keyHigh,
+        12,
+        20);
+    if (!(resizedKeyHigh.keyLow == 40 && resizedKeyHigh.keyHigh == 40))
+        return false;
+
+    const auto resizedVelocityLow = audiocity::plugin::makeProgramZoneOverviewEdit(
+        row,
+        audiocity::plugin::ProgramZoneOverviewDragMode::velocityLow,
+        40,
+        100);
+    if (!(resizedVelocityLow.velocityLow == 40 && resizedVelocityLow.velocityHigh == 40))
+        return false;
+
+    const auto resizedVelocityHigh = audiocity::plugin::makeProgramZoneOverviewEdit(
+        row,
+        audiocity::plugin::ProgramZoneOverviewDragMode::velocityHigh,
+        40,
+        2);
+    return resizedVelocityHigh.velocityLow == 20
+        && resizedVelocityHigh.velocityHigh == 20;
+}
+
+bool runProgramMappingSampleWindowEditTest()
+{
+    using namespace audiocity::engine;
+
+    Program program;
+    SampleAsset sample;
+    sample.displayName = "window.wav";
+    sample.lengthSamples = 240;
+    program.sampleAssets.push_back(sample);
+
+    Zone zone;
+    zone.sampleAssetIndex = 0;
+    zone.keyRange = MidiRange::single(60);
+    zone.velocityRange = VelocityRange::full();
+    zone.rootMidiNote = 60;
+    zone.sampleStart = 12;
+    zone.sampleEndExclusive = 181;
+    zone.loopStart = 40;
+    zone.loopEndExclusive = 97;
+    program.zones.push_back(zone);
+
+    const auto rows = audiocity::plugin::buildProgramZoneListRows(program);
+    if (rows.size() != 1)
+        return false;
+
+    const auto& row = rows.front();
+    if (!(row.sampleLength == 240
+        && row.sampleStart == 12
+        && row.sampleEnd == 180
+        && row.loopStart == 40
+        && row.loopEnd == 96
+        && row.sampleWindow == "12-180"
+        && row.loopPoints == "40-96"
+        && row.detailText.contains("Window: 12-180")
+        && row.detailText.contains("Loop Points: 40-96")))
+    {
+        return false;
+    }
+
+    audiocity::plugin::ProgramZoneEdit edit;
+    edit.zoneIndex = 0;
+    edit.keyLow = zone.keyRange.low;
+    edit.keyHigh = zone.keyRange.high;
+    edit.velocityLow = zone.velocityRange.low;
+    edit.velocityHigh = zone.velocityRange.high;
+    edit.rootMidiNote = zone.rootMidiNote;
+    edit.sampleStart = 200;
+    edit.sampleEnd = 500;
+    edit.loopStart = 5;
+    edit.loopEnd = 400;
+    edit.hasSampleStart = true;
+    edit.hasSampleEnd = true;
+    edit.hasLoopStart = true;
+    edit.hasLoopEnd = true;
+
+    if (!audiocity::plugin::applyProgramZoneEdit(program, edit))
+        return false;
+
+    return program.zones[0].sampleStart == 200
+        && program.zones[0].sampleEndExclusive == 240
+        && program.zones[0].loopStart == 200
+        && program.zones[0].loopEndExclusive == 240;
+}
+
+bool runProgramMappingZoneOperationsTest()
+{
+    using namespace audiocity::engine;
+
+    Program program;
+    SampleAsset sample;
+    sample.displayName = "ops.wav";
+    sample.lengthSamples = 512;
+    program.sampleAssets.push_back(sample);
+
+    Group group;
+    group.keyRange = MidiRange::fromUnordered(36, 44);
+    group.velocityRange = VelocityRange::full();
+    program.groups.push_back(group);
+
+    Zone first;
+    first.groupIndex = 0;
+    first.sampleAssetIndex = 0;
+    first.keyRange = MidiRange::fromUnordered(36, 40);
+    first.velocityRange = VelocityRange::fromUnordered(20, 100);
+    first.rootMidiNote = 38;
+    program.zones.push_back(first);
+
+    Zone second = first;
+    second.keyRange = MidiRange::fromUnordered(42, 44);
+    second.rootMidiNote = 43;
+    program.zones.push_back(second);
+
+    const auto duplicatedIndex = audiocity::plugin::duplicateProgramZone(program, 0);
+    if (!(duplicatedIndex == 2
+        && program.zones.size() == 3
+        && program.zones[2].keyRange.low == 36
+        && program.zones[2].keyRange.high == 40))
+    {
+        return false;
+    }
+
+    const auto splitIndex = audiocity::plugin::splitProgramZoneByKey(program, 2);
+    if (!(splitIndex == 3
+        && program.zones.size() == 4
+        && program.zones[2].keyRange.low == 36
+        && program.zones[2].keyRange.high == 38
+        && program.zones[3].keyRange.low == 39
+        && program.zones[3].keyRange.high == 40))
+    {
+        return false;
+    }
+
+    if (!audiocity::plugin::deleteProgramZone(program, 1))
+        return false;
+
+    if (audiocity::plugin::deleteProgramZone(program, 99))
+        return false;
+
+    if (audiocity::plugin::splitProgramZoneByKey(program, 99) >= 0)
+        return false;
+
+    Program singleKeyProgram;
+    singleKeyProgram.sampleAssets.push_back(sample);
+    singleKeyProgram.groups.push_back(group);
+    Zone singleKeyZone = first;
+    singleKeyZone.keyRange = MidiRange::single(60);
+    singleKeyProgram.zones.push_back(singleKeyZone);
+
+    if (audiocity::plugin::splitProgramZoneByKey(singleKeyProgram, 0) >= 0)
+        return false;
+
+    return program.zones.size() == 3
+        && program.groups[0].keyRange.low == 36
+        && program.groups[0].keyRange.high == 40;
+}
+
+bool runProgramMappingStateRoundTripTest()
+{
+    using namespace audiocity::engine;
+
+    Program baseProgram;
+    SampleAsset sample;
+    sample.displayName = "roundtrip.wav";
+    sample.lengthSamples = 240;
+    baseProgram.sampleAssets.push_back(sample);
+
+    Group group;
+    group.gainDb = -3.0f;
+    group.pan = 0.25f;
+    group.roundRobinGroup = 4;
+    group.chokeGroup = 2;
+    group.triggerMode = ZoneTriggerMode::gate;
+    baseProgram.groups.push_back(group);
+
+    Zone zone;
+    zone.groupIndex = 0;
+    zone.sampleAssetIndex = 0;
+    zone.keyRange = MidiRange::fromUnordered(36, 40);
+    zone.velocityRange = VelocityRange::fromUnordered(24, 100);
+    zone.velocityFadeIn = VelocityFadeRange::fromUnordered(20, 60);
+    zone.velocityFadeOut = VelocityFadeRange::fromUnordered(90, 120);
+    zone.rootMidiNote = 38;
+    zone.sampleStart = 8;
+    zone.sampleEndExclusive = 160;
+    zone.loopStart = 20;
+    zone.loopEndExclusive = 80;
+    zone.gainDb = 1.5f;
+    zone.pan = -0.5f;
+    zone.tuneCents = 7.0f;
+    zone.roundRobinGroup = 9;
+    zone.roundRobinPosition = 2;
+    zone.roundRobinMode = RoundRobinMode::cycleRandom;
+    zone.triggerMode = ZoneTriggerMode::oneShot;
+    zone.chokeGroup = 11;
+    zone.loopMode = ZoneLoopMode::sustain;
+    baseProgram.zones.push_back(zone);
+
+    Program editedProgram = baseProgram;
+    audiocity::plugin::ProgramZoneEdit edit;
+    edit.zoneIndex = 0;
+    edit.keyLow = 41;
+    edit.keyHigh = 45;
+    edit.velocityLow = 32;
+    edit.velocityHigh = 96;
+    edit.velocityFadeInLow = 40;
+    edit.velocityFadeInHigh = 72;
+    edit.velocityFadeOutLow = -1;
+    edit.velocityFadeOutHigh = -1;
+    edit.rootMidiNote = 43;
+    edit.sampleStart = 24;
+    edit.sampleEnd = 180;
+    edit.loopStart = 48;
+    edit.loopEnd = 120;
+    edit.gainDb = -1.0f;
+    edit.pan = -0.25f;
+    edit.roundRobinGroup = 7;
+    edit.roundRobinPosition = 3;
+    edit.roundRobinMode = RoundRobinMode::ordered;
+    edit.chokeGroupId = 6;
+    edit.triggerMode = ZoneTriggerMode::release;
+    edit.loopMode = ZoneLoopMode::continuous;
+    edit.hasSampleStart = true;
+    edit.hasSampleEnd = true;
+    edit.hasLoopStart = true;
+    edit.hasLoopEnd = true;
+    edit.hasVelocityFadeIn = true;
+    edit.hasVelocityFadeOut = true;
+    edit.hasGainDb = true;
+    edit.hasPan = true;
+    edit.hasRoundRobinGroup = true;
+    edit.hasRoundRobinPosition = true;
+    edit.hasRoundRobinMode = true;
+    edit.hasChokeGroupId = true;
+    edit.hasTriggerMode = true;
+    edit.hasLoopMode = true;
+
+    if (!audiocity::plugin::applyProgramZoneEdit(editedProgram, edit))
+        return false;
+
+    const auto state = audiocity::plugin::createProgramZoneMappingState(editedProgram);
+    if (!state.isValid() || !state.hasType(audiocity::plugin::programZoneMappingStateType()))
+        return false;
+
+    Program restoredProgram = baseProgram;
+    if (!audiocity::plugin::restoreProgramZoneStructureFromState(restoredProgram, state))
+        return false;
+
+    const auto editedRows = audiocity::plugin::buildProgramZoneListRows(editedProgram);
+    const auto restoredRows = audiocity::plugin::buildProgramZoneListRows(restoredProgram);
+    if (editedRows.size() != 1 || restoredRows.size() != 1)
+        return false;
+
+    const auto& editedZone = editedProgram.zones.front();
+    const auto& restoredZone = restoredProgram.zones.front();
+    const auto& editedRow = editedRows.front();
+    const auto& restoredRow = restoredRows.front();
+    return editedZone.sampleAssetIndex == restoredZone.sampleAssetIndex
+        && editedZone.groupIndex == restoredZone.groupIndex
+        && editedZone.velocityFadeIn.low == restoredZone.velocityFadeIn.low
+        && editedZone.velocityFadeIn.high == restoredZone.velocityFadeIn.high
+        && editedZone.velocityFadeOut.low == restoredZone.velocityFadeOut.low
+        && editedZone.velocityFadeOut.high == restoredZone.velocityFadeOut.high
+        && std::abs(editedZone.gainDb - restoredZone.gainDb) <= 1.0e-6f
+        && std::abs(editedZone.pan - restoredZone.pan) <= 1.0e-6f
+        && std::abs(editedZone.tuneCents - restoredZone.tuneCents) <= 1.0e-6f
+        && editedZone.roundRobinGroup == restoredZone.roundRobinGroup
+        && editedZone.roundRobinPosition == restoredZone.roundRobinPosition
+        && editedZone.roundRobinMode == restoredZone.roundRobinMode
+        && editedZone.triggerMode == restoredZone.triggerMode
+        && editedZone.chokeGroup == restoredZone.chokeGroup
+        && editedZone.loopMode == restoredZone.loopMode
+        && editedRow.keyLow == restoredRow.keyLow
+        && editedRow.keyHigh == restoredRow.keyHigh
+        && editedRow.velocityLow == restoredRow.velocityLow
+        && editedRow.velocityHigh == restoredRow.velocityHigh
+        && editedRow.velocityFadeInLow == restoredRow.velocityFadeInLow
+        && editedRow.velocityFadeInHigh == restoredRow.velocityFadeInHigh
+        && editedRow.velocityFadeOutLow == restoredRow.velocityFadeOutLow
+        && editedRow.velocityFadeOutHigh == restoredRow.velocityFadeOutHigh
+        && editedRow.rootMidiNote == restoredRow.rootMidiNote
+        && editedRow.sampleStart == restoredRow.sampleStart
+        && editedRow.sampleEnd == restoredRow.sampleEnd
+        && editedRow.loopStart == restoredRow.loopStart
+        && editedRow.loopEnd == restoredRow.loopEnd
+        && std::abs(editedRow.gainDbValue - restoredRow.gainDbValue) <= 1.0e-6f
+        && std::abs(editedRow.panValue - restoredRow.panValue) <= 1.0e-6f
+        && editedRow.roundRobinGroup == restoredRow.roundRobinGroup
+        && editedRow.roundRobinPosition == restoredRow.roundRobinPosition
+        && editedRow.roundRobinModeValue == restoredRow.roundRobinModeValue
+        && editedRow.chokeGroupId == restoredRow.chokeGroupId
+        && editedRow.triggerModeValue == restoredRow.triggerModeValue
+        && editedRow.loopModeValue == restoredRow.loopModeValue;
+}
+
+bool runProgramMappingStructuralStateRoundTripTest()
+{
+    using namespace audiocity::engine;
+
+    Program baseProgram;
+    SampleAsset sample;
+    sample.displayName = "structural.wav";
+    sample.lengthSamples = 512;
+    baseProgram.sampleAssets.push_back(sample);
+
+    Group group;
+    group.roundRobinGroup = 3;
+    group.roundRobinMode = RoundRobinMode::ordered;
+    group.velocityRange = VelocityRange::full();
+    baseProgram.groups.push_back(group);
+
+    Zone first;
+    first.groupIndex = 0;
+    first.sampleAssetIndex = 0;
+    first.keyRange = MidiRange::fromUnordered(36, 40);
+    first.velocityRange = VelocityRange::fromUnordered(10, 90);
+    first.rootMidiNote = 38;
+    first.roundRobinGroup = 3;
+    first.roundRobinPosition = 1;
+    baseProgram.zones.push_back(first);
+
+    Zone second = first;
+    second.keyRange = MidiRange::fromUnordered(41, 48);
+    second.rootMidiNote = 45;
+    second.roundRobinPosition = 2;
+    second.roundRobinMode = RoundRobinMode::cycleRandom;
+    second.loopMode = ZoneLoopMode::sustain;
+    baseProgram.zones.push_back(second);
+
+    Program editedProgram = baseProgram;
+    if (audiocity::plugin::duplicateProgramZone(editedProgram, 0) != 2)
+        return false;
+
+    if (audiocity::plugin::splitProgramZoneByKey(editedProgram, 2) != 3)
+        return false;
+
+    if (!audiocity::plugin::deleteProgramZone(editedProgram, 1))
+        return false;
+
+    editedProgram.zones[1].roundRobinMode = RoundRobinMode::cycleRandom;
+    editedProgram.zones[1].roundRobinPosition = 4;
+    editedProgram.zones[2].velocityFadeIn = VelocityFadeRange::fromUnordered(18, 64);
+    editedProgram.zones[2].velocityFadeOut = VelocityFadeRange::fromUnordered(88, 118);
+
+    const auto state = audiocity::plugin::createProgramZoneMappingState(editedProgram);
+    if (!state.isValid())
+        return false;
+
+    Program restoredProgram = baseProgram;
+    if (!audiocity::plugin::restoreProgramZoneStructureFromState(restoredProgram, state))
+        return false;
+
+    const auto restoredState = audiocity::plugin::createProgramZoneMappingState(restoredProgram);
+    const auto editedRows = audiocity::plugin::buildProgramZoneListRows(editedProgram);
+    const auto restoredRows = audiocity::plugin::buildProgramZoneListRows(restoredProgram);
+    return editedRows.size() == 3
+        && restoredRows.size() == editedRows.size()
+        && state.toXmlString() == restoredState.toXmlString();
+}
+
+bool runImportedProgramStateSubtreeRoundTripTest()
+{
+    using namespace audiocity::engine;
+
+    Program baseProgram;
+    SampleAsset sample;
+    sample.displayName = "imported.wav";
+    sample.lengthSamples = 256;
+    baseProgram.sampleAssets.push_back(sample);
+
+    Group group;
+    group.roundRobinGroup = 5;
+    group.roundRobinMode = RoundRobinMode::ordered;
+    group.triggerMode = ZoneTriggerMode::gate;
+    baseProgram.groups.push_back(group);
+
+    Zone zone;
+    zone.groupIndex = 0;
+    zone.sampleAssetIndex = 0;
+    zone.keyRange = MidiRange::fromUnordered(48, 52);
+    zone.velocityRange = VelocityRange::fromUnordered(20, 110);
+    zone.rootMidiNote = 50;
+    zone.roundRobinGroup = 5;
+    zone.roundRobinPosition = 3;
+    zone.roundRobinLength = 4;
+    zone.triggerMode = ZoneTriggerMode::release;
+    baseProgram.zones.push_back(zone);
+
+    const auto mappingState = audiocity::plugin::createProgramZoneMappingState(baseProgram);
+    juce::ValueTree patchState("patch");
+    const juce::String sfzPath = "C:/Library/Kits/ImportedKit.sfz";
+    audiocity::plugin::appendImportedProgramState(patchState, sfzPath, mappingState);
+
+    if (audiocity::plugin::readImportedProgramStatePath(patchState) != sfzPath)
+        return false;
+
+    const auto extractedMappingState = audiocity::plugin::readImportedProgramMappingState(patchState);
+    if (!extractedMappingState.isValid()
+        || !extractedMappingState.hasType(audiocity::plugin::programZoneMappingStateType()))
+    {
+        return false;
+    }
+
+    Program restoredProgram = baseProgram;
+    restoredProgram.zones.front().roundRobinLength = 0;
+    restoredProgram.zones.front().triggerMode = ZoneTriggerMode::gate;
+    if (!audiocity::plugin::restoreProgramZoneStructureFromState(restoredProgram, extractedMappingState))
+        return false;
+
+    return restoredProgram.zones.front().roundRobinLength == 4
+        && restoredProgram.zones.front().triggerMode == ZoneTriggerMode::release
+        && extractedMappingState.toXmlString()
+            == audiocity::plugin::createProgramZoneMappingState(restoredProgram).toXmlString();
+}
+
+bool runSfzImportIncludeDefineDefaultPathTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 512;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_sfz_import_test", "");
+
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto samplesDirectory = tempDirectory.getChildFile("Samples");
+    if (!samplesDirectory.createDirectory())
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto sampleFile = samplesDirectory.getChildFile("Tone.wav");
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(sampleFile.createOutputStream());
+        if (output == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        output.release();
+        const auto sample = createTestSample(sampleLength);
+        if (!writer->writeFromAudioSampleBuffer(sample, 0, sampleLength))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    const auto includeFile = tempDirectory.getChildFile("regions.sfz");
+    const auto rootFile = tempDirectory.getChildFile("root.sfz");
+
+    if (!includeFile.replaceWithText(
+            "<group> key=60 lovel=10 hivel=120 pan=-50\n"
+            "<region> sample=Tone.wav pitch_keycenter=60 tune=7 transpose=1 offset=4 end=120 loop_start=16 loop_end=31 loop_mode=loop_sustain\n"))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    if (!rootFile.replaceWithText(
+            "#define $SAMPLE_DIR Samples\n"
+            "<control> default_path=$SAMPLE_DIR/\n"
+            "#include \"regions.sfz\"\n"))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    SfzImporter importer;
+    const auto result = importer.importFile(rootFile);
+    tempDirectory.deleteRecursively();
+
+    if (result.hasErrors())
+        return false;
+
+    const auto& program = result.program;
+    if (program.sampleAssets.size() != 1
+        || result.sampleDataByAsset.size() != 1
+        || program.groups.size() != 1
+        || program.zones.size() != 1)
+    {
+        return false;
+    }
+
+    const auto& asset = program.sampleAssets[0];
+    if (asset.lengthSamples != sampleLength
+        || asset.numChannels != 1
+        || std::abs(asset.sampleRateHz - sampleRate) > 0.01
+        || asset.rootMidiNote != 60)
+    {
+        return false;
+    }
+
+    if (result.sampleDataByAsset[0].getNumChannels() != 1
+        || result.sampleDataByAsset[0].getNumSamples() != sampleLength)
+    {
+        return false;
+    }
+
+    const auto& group = program.groups[0];
+    if (group.keyRange.low != 60
+        || group.keyRange.high != 60
+        || group.velocityRange.low != 10
+        || group.velocityRange.high != 120
+        || std::abs(group.pan - (-0.5f)) > 1.0e-6f)
+    {
+        return false;
+    }
+
+    const auto& zone = program.zones[0];
+    if (!(zone.sampleAssetIndex == 0
+        && zone.groupIndex == 0
+        && zone.keyRange.low == 60
+        && zone.keyRange.high == 60
+        && zone.velocityRange.low == 10
+        && zone.velocityRange.high == 120
+        && zone.rootMidiNote == 60
+        && zone.sampleStart == 4
+        && zone.sampleEndExclusive == 121
+        && zone.loopStart == 16
+        && zone.loopEndExclusive == 32
+        && std::abs(zone.tuneCents - 107.0f) <= 1.0e-6f
+        && zone.loopMode == ZoneLoopMode::sustain))
+    {
+        return false;
+    }
+
+    EngineCore engine;
+    engine.prepare(sampleRate, 128, 2);
+    engine.setSampleData(createTestSample(sampleLength), sampleRate, 60);
+    engine.setProgram(program, result.sampleDataByAsset);
+
+    juce::AudioBuffer<float> block(2, 128);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 60, 0.8f), 0);
+    engine.render(block, midi);
+
+    auto energy = 0.0f;
+    for (int channel = 0; channel < block.getNumChannels(); ++channel)
+    {
+        const auto* data = block.getReadPointer(channel);
+        for (int sampleIndex = 0; sampleIndex < block.getNumSamples(); ++sampleIndex)
+            energy += std::abs(data[sampleIndex]);
+    }
+
+    return engine.activeVoiceCount() == 1 && energy > 0.01f;
+}
+
+bool runSfzImportRoundRobinPlaybackTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 512;
+    constexpr int blockSize = 64;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_sfz_rr_import_test", "");
+
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto sampleFile = tempDirectory.getChildFile("Tone.wav");
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(sampleFile.createOutputStream());
+        if (output == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        output.release();
+        const auto sample = createTestSample(sampleLength);
+        if (!writer->writeFromAudioSampleBuffer(sample, 0, sampleLength))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    const auto sfzFile = tempDirectory.getChildFile("rr.sfz");
+    if (!sfzFile.replaceWithText(
+            "<group> key=60\n"
+            "<region> sample=Tone.wav seq_position=2\n"
+            "<region> sample=Tone.wav seq_position=1\n"))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    SfzImporter importer;
+    const auto result = importer.importFile(sfzFile);
+    tempDirectory.deleteRecursively();
+
+    if (result.hasErrors()
+        || result.program.zones.size() != 2
+        || result.sampleDataByAsset.size() != 1
+        || result.program.zones[0].roundRobinPosition != 2
+        || result.program.zones[1].roundRobinPosition != 1
+        || result.program.zones[0].roundRobinGroup <= 0
+        || result.program.zones[0].roundRobinGroup != result.program.zones[1].roundRobinGroup)
+    {
+        return false;
+    }
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, 2);
+    engine.setSampleData(createTestSample(sampleLength), sampleRate, 60);
+    engine.setProgram(result.program, result.sampleDataByAsset);
+
+    auto triggerAndReadZone = [&]()
+    {
+        juce::AudioBuffer<float> block(2, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+
+        auto selectedZone = -1;
+        const auto states = engine.getVoicePlaybackStates();
+        for (const auto& state : states)
+        {
+            if (state.active)
+            {
+                selectedZone = state.zoneIndex;
+                break;
+            }
+        }
+
+        engine.panic();
+        return selectedZone;
+    };
+
+    return triggerAndReadZone() == 1
+        && triggerAndReadZone() == 0
+        && triggerAndReadZone() == 1;
+}
+
+bool runSfzImportSeqLengthPlaybackTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr double sampleRate = 44100.0;
+    constexpr int sampleLength = 512;
+    constexpr int blockSize = 64;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_sfz_seq_length_test", "");
+
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto sampleFile = tempDirectory.getChildFile("Tone.wav");
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(sampleFile.createOutputStream());
+        if (output == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        output.release();
+        const auto sample = createTestSample(sampleLength);
+        if (!writer->writeFromAudioSampleBuffer(sample, 0, sampleLength))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    const auto sfzFile = tempDirectory.getChildFile("seq_length.sfz");
+    if (!sfzFile.replaceWithText(
+            "<group> key=60 seq_length=4\n"
+            "<region> sample=Tone.wav seq_position=1\n"
+            "<region> sample=Tone.wav seq_position=3\n"))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    SfzImporter importer;
+    const auto result = importer.importFile(sfzFile);
+    tempDirectory.deleteRecursively();
+
+    if (result.hasErrors()
+        || result.program.zones.size() != 2
+        || result.program.zones[0].roundRobinLength != 4
+        || result.program.zones[1].roundRobinLength != 4)
+    {
+        return false;
+    }
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, 2);
+    engine.setSampleData(createTestSample(sampleLength), sampleRate, 60);
+    engine.setProgram(result.program, result.sampleDataByAsset);
+
+    auto triggerAndReadZone = [&]()
+    {
+        juce::AudioBuffer<float> block(2, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+
+        auto selectedZone = -1;
+        const auto states = engine.getVoicePlaybackStates();
+        for (const auto& state : states)
+        {
+            if (state.active)
+            {
+                selectedZone = state.zoneIndex;
+                break;
+            }
+        }
+
+        engine.panic();
+        return selectedZone;
+    };
+
+    return triggerAndReadZone() == 0
+        && triggerAndReadZone() == -1
+        && triggerAndReadZone() == 1
+        && triggerAndReadZone() == -1
+        && triggerAndReadZone() == 0;
+}
+
+bool runSfzImportReleaseTriggerPlaybackTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr double sampleRate = 44100.0;
+    constexpr int sampleLength = 512;
+    constexpr int blockSize = 64;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_sfz_release_trigger_test", "");
+
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto sampleFile = tempDirectory.getChildFile("Tone.wav");
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(sampleFile.createOutputStream());
+        if (output == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        output.release();
+        const auto sample = createTestSample(sampleLength);
+        if (!writer->writeFromAudioSampleBuffer(sample, 0, sampleLength))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    const auto sfzFile = tempDirectory.getChildFile("release.sfz");
+    if (!sfzFile.replaceWithText(
+            "<group> key=60\n"
+            "<region> sample=Tone.wav trigger=release\n"))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    SfzImporter importer;
+    const auto result = importer.importFile(sfzFile);
+    tempDirectory.deleteRecursively();
+
+    if (result.hasErrors()
+        || result.program.zones.size() != 1
+        || result.program.zones.front().triggerMode != ZoneTriggerMode::release)
+    {
+        return false;
+    }
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, 2);
+    engine.setSampleData(createTestSample(sampleLength), sampleRate, 60);
+    engine.setProgram(result.program, result.sampleDataByAsset);
+
+    juce::AudioBuffer<float> block(2, blockSize);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+    engine.render(block, midi);
+    if (engine.activeVoiceCount() != 0)
+        return false;
+
+    midi.clear();
+    midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+    engine.render(block, midi);
+    return engine.activeVoiceCount() == 1 && engine.isNoteActive(60);
+}
+
+bool runSfzImporterDiagnosticsTest()
+{
+    using namespace audiocity::engine;
+
+    auto hasDiagnostic = [](const std::vector<SfzDiagnostic>& diagnostics,
+                            const SfzDiagnostic::Severity severity,
+                            const std::string& text)
+    {
+        for (const auto& diagnostic : diagnostics)
+        {
+            if (diagnostic.severity == severity
+                && diagnostic.message.find(text) != std::string::npos)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    };
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_sfz_diagnostics_test", "");
+
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto cycleA = tempDirectory.getChildFile("cycle_a.sfz");
+    const auto cycleB = tempDirectory.getChildFile("cycle_b.sfz");
+    const auto missingSample = tempDirectory.getChildFile("missing_sample.sfz");
+
+    if (!cycleA.replaceWithText("#include \"cycle_b.sfz\"\n")
+        || !cycleB.replaceWithText("#include \"cycle_a.sfz\"\n")
+        || !missingSample.replaceWithText(
+            "<region> sample=DoesNotExist.wav trigger=legato loop_mode=spin_cycle seq_length=4 unsupported_opcode=12\n"))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    SfzImporter importer;
+    const auto cycleResult = importer.importFile(cycleA);
+    const auto missingResult = importer.importFile(missingSample);
+    tempDirectory.deleteRecursively();
+
+    if (!cycleResult.hasErrors()
+        || !hasDiagnostic(cycleResult.diagnostics, SfzDiagnostic::Severity::error, "cycle"))
+    {
+        return false;
+    }
+
+    if (!missingResult.hasErrors()
+        || !missingResult.program.zones.empty()
+        || !hasDiagnostic(missingResult.diagnostics, SfzDiagnostic::Severity::warning, "Unknown SFZ opcode")
+        || !hasDiagnostic(missingResult.diagnostics, SfzDiagnostic::Severity::warning, "Unsupported SFZ trigger value")
+        || !hasDiagnostic(missingResult.diagnostics, SfzDiagnostic::Severity::warning, "Unsupported SFZ loop_mode value")
+        || !hasDiagnostic(missingResult.diagnostics, SfzDiagnostic::Severity::error, "Missing SFZ sample"))
+    {
+        return false;
+    }
+
+    return true;
+}
+
 bool runVoiceStealingEdgeCaseTest()
 {
     constexpr int channels = 2;
@@ -298,6 +1468,19 @@ float blockEnergy(const juce::AudioBuffer<float>& block)
         for (int i = 0; i < block.getNumSamples(); ++i)
             energy += std::abs(data[i]);
     }
+
+    return energy;
+}
+
+float channelEnergy(const juce::AudioBuffer<float>& block, const int channel)
+{
+    if (channel < 0 || channel >= block.getNumChannels())
+        return 0.0f;
+
+    float energy = 0.0f;
+    const auto* data = block.getReadPointer(channel);
+    for (int sampleIndex = 0; sampleIndex < block.getNumSamples(); ++sampleIndex)
+        energy += std::abs(data[sampleIndex]);
 
     return energy;
 }
@@ -526,6 +1709,705 @@ bool runEngineProgramSampleAssetBindingTest()
     return true;
 }
 
+bool runEngineProgramStereoAssetPlaybackTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 4096;
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setSampleData(createTestSample(sampleLength), sampleRate, 60);
+
+    EngineCore::AdsrSettings amp;
+    amp.attackSeconds = 0.0001f;
+    amp.decaySeconds = 0.001f;
+    amp.sustainLevel = 1.0f;
+    amp.releaseSeconds = 0.001f;
+    engine.setAmpEnvelope(amp);
+
+    EngineCore::FilterSettings openFilter;
+    openFilter.baseCutoffHz = 20000.0f;
+    openFilter.envAmountHz = 0.0f;
+    openFilter.resonance = 0.0f;
+    engine.setFilterSettings(openFilter);
+
+    EngineCore::DcFilterSettings dc;
+    dc.enabled = false;
+    engine.setDcFilterSettings(dc);
+
+    Program program;
+    SampleAsset asset;
+    asset.lengthSamples = sampleLength;
+    asset.numChannels = 2;
+    asset.sampleRateHz = sampleRate;
+    asset.rootMidiNote = 60;
+    program.sampleAssets.push_back(asset);
+
+    Zone zone;
+    zone.sampleAssetIndex = 0;
+    zone.keyRange = MidiRange::single(60);
+    zone.velocityRange = VelocityRange::full();
+    zone.rootMidiNote = 60;
+    program.zones.push_back(zone);
+
+    juce::AudioBuffer<float> stereoSample(2, sampleLength);
+    stereoSample.clear();
+    const auto leftTone = createTestSample(sampleLength);
+    stereoSample.copyFrom(0, 0, leftTone, 0, 0, sampleLength);
+
+    std::vector<juce::AudioBuffer<float>> samples;
+    samples.push_back(stereoSample);
+    engine.setProgram(program, samples);
+
+    juce::AudioBuffer<float> block(channels, blockSize);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+    engine.render(block, midi);
+
+    const auto leftEnergy = channelEnergy(block, 0);
+    const auto rightEnergy = channelEnergy(block, 1);
+
+    return leftEnergy > 0.01f && rightEnergy < leftEnergy * 0.05f;
+}
+
+bool runEngineProgramRoundRobinZoneSelectionTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 64;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 4096;
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setSampleData(createTestSample(sampleLength), sampleRate, 60);
+
+    EngineCore::AdsrSettings amp;
+    amp.attackSeconds = 0.0001f;
+    amp.decaySeconds = 0.001f;
+    amp.sustainLevel = 1.0f;
+    amp.releaseSeconds = 0.001f;
+    engine.setAmpEnvelope(amp);
+
+    Program program;
+
+    for (int index = 0; index < 3; ++index)
+    {
+        SampleAsset asset;
+        asset.lengthSamples = sampleLength;
+        asset.numChannels = 1;
+        asset.sampleRateHz = sampleRate;
+        asset.rootMidiNote = 60;
+        program.sampleAssets.push_back(asset);
+    }
+
+    Group group;
+    group.keyRange = MidiRange::single(60);
+    group.velocityRange = VelocityRange::full();
+    group.roundRobinGroup = 11;
+    program.groups.push_back(group);
+
+    Zone secondPosition;
+    secondPosition.sampleAssetIndex = 0;
+    secondPosition.groupIndex = 0;
+    secondPosition.keyRange = MidiRange::single(60);
+    secondPosition.velocityRange = VelocityRange::full();
+    secondPosition.rootMidiNote = 60;
+    secondPosition.roundRobinPosition = 2;
+    program.zones.push_back(secondPosition);
+
+    Zone firstPosition = secondPosition;
+    firstPosition.sampleAssetIndex = 1;
+    firstPosition.roundRobinPosition = 1;
+    program.zones.push_back(firstPosition);
+
+    Zone thirdPosition = secondPosition;
+    thirdPosition.sampleAssetIndex = 2;
+    thirdPosition.roundRobinPosition = 3;
+    program.zones.push_back(thirdPosition);
+
+    std::vector<juce::AudioBuffer<float>> samples;
+    samples.push_back(createTestSample(sampleLength));
+    samples.push_back(createTestSample(sampleLength));
+    samples.push_back(createTestSample(sampleLength));
+    engine.setProgram(program, samples);
+
+    auto triggerAndReadZone = [&]()
+    {
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+
+        const auto states = engine.getVoicePlaybackStates();
+        auto zoneIndex = -1;
+        for (const auto& state : states)
+        {
+            if (state.active)
+            {
+                zoneIndex = state.zoneIndex;
+                break;
+            }
+        }
+
+        engine.panic();
+        return zoneIndex;
+    };
+
+    if (triggerAndReadZone() != 1)
+        return false;
+
+    if (triggerAndReadZone() != 0)
+        return false;
+
+    if (triggerAndReadZone() != 2)
+        return false;
+
+    if (triggerAndReadZone() != 1)
+        return false;
+
+    engine.setProgram(program, samples);
+    return triggerAndReadZone() == 1;
+}
+
+bool runEngineProgramLayeredZonePlaybackTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 64;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 4096;
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setSampleData(createTestSample(sampleLength), sampleRate, 60);
+
+    EngineCore::AdsrSettings amp;
+    amp.attackSeconds = 0.0001f;
+    amp.decaySeconds = 0.001f;
+    amp.sustainLevel = 1.0f;
+    amp.releaseSeconds = 0.001f;
+    engine.setAmpEnvelope(amp);
+
+    Program program;
+    for (int index = 0; index < 2; ++index)
+    {
+        SampleAsset asset;
+        asset.lengthSamples = sampleLength;
+        asset.numChannels = 1;
+        asset.sampleRateHz = sampleRate;
+        asset.rootMidiNote = 60;
+        program.sampleAssets.push_back(asset);
+    }
+
+    for (int zoneIndex = 0; zoneIndex < 2; ++zoneIndex)
+    {
+        Zone zone;
+        zone.sampleAssetIndex = zoneIndex;
+        zone.keyRange = MidiRange::single(60);
+        zone.velocityRange = VelocityRange::full();
+        zone.rootMidiNote = 60;
+        program.zones.push_back(zone);
+    }
+
+    std::vector<juce::AudioBuffer<float>> samples;
+    samples.push_back(createTestSample(sampleLength));
+    samples.push_back(createTestSample(sampleLength));
+    engine.setProgram(program, samples);
+
+    juce::AudioBuffer<float> block(channels, blockSize);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+    engine.render(block, midi);
+
+    if (engine.activeVoiceCount() != 2)
+        return false;
+
+    std::array<bool, 2> activeZones{};
+    const auto states = engine.getVoicePlaybackStates();
+    for (const auto& state : states)
+    {
+        if (state.active && state.zoneIndex >= 0 && state.zoneIndex < 2)
+            activeZones[static_cast<std::size_t>(state.zoneIndex)] = true;
+    }
+
+    if (!activeZones[0] || !activeZones[1])
+        return false;
+
+    midi.clear();
+    midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+    engine.render(block, midi);
+
+    midi.clear();
+    for (int blockIndex = 0; blockIndex < 12; ++blockIndex)
+        engine.render(block, midi);
+
+    return engine.activeVoiceCount() == 0;
+}
+
+bool runEngineProgramVelocityFadeInTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 4096;
+
+    auto renderVelocity = [](const float velocity)
+    {
+        EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(createTestSample(sampleLength), sampleRate, 60);
+
+        EngineCore::AdsrSettings amp;
+        amp.attackSeconds = 0.0001f;
+        amp.decaySeconds = 0.001f;
+        amp.sustainLevel = 1.0f;
+        amp.releaseSeconds = 0.001f;
+        engine.setAmpEnvelope(amp);
+
+        Program program;
+        SampleAsset asset;
+        asset.lengthSamples = sampleLength;
+        asset.numChannels = 1;
+        asset.sampleRateHz = sampleRate;
+        asset.rootMidiNote = 60;
+        program.sampleAssets.push_back(asset);
+
+        Zone zone;
+        zone.sampleAssetIndex = 0;
+        zone.keyRange = MidiRange::single(60);
+        zone.velocityRange = VelocityRange::full();
+        zone.velocityFadeIn = VelocityFadeRange::fromUnordered(32, 96);
+        zone.rootMidiNote = 60;
+        program.zones.push_back(zone);
+
+        std::vector<juce::AudioBuffer<float>> samples;
+        samples.push_back(createTestSample(sampleLength));
+        engine.setProgram(program, samples);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, velocity), 0);
+        engine.render(block, midi);
+        return blockEnergy(block);
+    };
+
+    const auto lowVelocityEnergy = renderVelocity(0.25f);
+    const auto midVelocityEnergy = renderVelocity(0.50f);
+    const auto highVelocityEnergy = renderVelocity(1.0f);
+
+    return lowVelocityEnergy < highVelocityEnergy * 0.05f
+        && midVelocityEnergy > highVelocityEnergy * 0.25f
+        && midVelocityEnergy < highVelocityEnergy * 0.75f;
+}
+
+bool runEngineProgramCycleRandomRoundRobinZoneSelectionTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 64;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 4096;
+
+    auto renderSequence = []()
+    {
+        EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(createTestSample(sampleLength), sampleRate, 60);
+
+        EngineCore::AdsrSettings amp;
+        amp.attackSeconds = 0.0001f;
+        amp.decaySeconds = 0.001f;
+        amp.sustainLevel = 1.0f;
+        amp.releaseSeconds = 0.001f;
+        engine.setAmpEnvelope(amp);
+
+        Program program;
+        for (int index = 0; index < 3; ++index)
+        {
+            SampleAsset asset;
+            asset.lengthSamples = sampleLength;
+            asset.numChannels = 1;
+            asset.sampleRateHz = sampleRate;
+            asset.rootMidiNote = 60;
+            program.sampleAssets.push_back(asset);
+        }
+
+        Group group;
+        group.keyRange = MidiRange::single(60);
+        group.velocityRange = VelocityRange::full();
+        group.roundRobinGroup = 17;
+        group.roundRobinMode = RoundRobinMode::cycleRandom;
+        program.groups.push_back(group);
+
+        for (int zoneIndex = 0; zoneIndex < 3; ++zoneIndex)
+        {
+            Zone zone;
+            zone.sampleAssetIndex = zoneIndex;
+            zone.groupIndex = 0;
+            zone.keyRange = MidiRange::single(60);
+            zone.velocityRange = VelocityRange::full();
+            zone.rootMidiNote = 60;
+            zone.roundRobinPosition = zoneIndex + 1;
+            program.zones.push_back(zone);
+        }
+
+        std::vector<juce::AudioBuffer<float>> samples;
+        samples.push_back(createTestSample(sampleLength));
+        samples.push_back(createTestSample(sampleLength));
+        samples.push_back(createTestSample(sampleLength));
+        engine.setProgram(program, samples);
+
+        std::array<int, 6> sequence{};
+        for (auto& selectedZone : sequence)
+        {
+            juce::AudioBuffer<float> block(channels, blockSize);
+            juce::MidiBuffer midi;
+            midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+            engine.render(block, midi);
+
+            selectedZone = -1;
+            const auto states = engine.getVoicePlaybackStates();
+            for (const auto& state : states)
+            {
+                if (state.active)
+                {
+                    selectedZone = state.zoneIndex;
+                    break;
+                }
+            }
+
+            engine.panic();
+        }
+
+        return sequence;
+    };
+
+    const auto first = renderSequence();
+    const auto second = renderSequence();
+    if (first != second)
+        return false;
+
+    for (std::size_t index = 1; index < first.size(); ++index)
+    {
+        if (first[index] == first[index - 1])
+            return false;
+    }
+
+    for (std::size_t cycleStart = 0; cycleStart < first.size(); cycleStart += 3)
+    {
+        std::array<bool, 3> seen{};
+        for (std::size_t offset = 0; offset < 3; ++offset)
+        {
+            const auto zoneIndex = first[cycleStart + offset];
+            if (zoneIndex < 0 || zoneIndex >= 3)
+                return false;
+
+            seen[static_cast<std::size_t>(zoneIndex)] = true;
+        }
+
+        if (!seen[0] || !seen[1] || !seen[2])
+            return false;
+    }
+
+    return true;
+}
+
+bool runEngineProgramChokeGroupTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 64;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 4096;
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setSampleData(createTestSample(sampleLength), sampleRate, 60);
+
+    EngineCore::AdsrSettings amp;
+    amp.attackSeconds = 0.0001f;
+    amp.decaySeconds = 0.001f;
+    amp.sustainLevel = 1.0f;
+    amp.releaseSeconds = 0.5f;
+    engine.setAmpEnvelope(amp);
+
+    Program program;
+
+    for (int index = 0; index < 2; ++index)
+    {
+        SampleAsset asset;
+        asset.lengthSamples = sampleLength;
+        asset.numChannels = 1;
+        asset.sampleRateHz = sampleRate;
+        asset.rootMidiNote = 60 + (index * 2);
+        program.sampleAssets.push_back(asset);
+    }
+
+    Group chokeGroup;
+    chokeGroup.keyRange = MidiRange::fromUnordered(60, 62);
+    chokeGroup.velocityRange = VelocityRange::full();
+    chokeGroup.chokeGroup = 9;
+    program.groups.push_back(chokeGroup);
+
+    Zone firstZone;
+    firstZone.sampleAssetIndex = 0;
+    firstZone.groupIndex = 0;
+    firstZone.keyRange = MidiRange::single(60);
+    firstZone.velocityRange = VelocityRange::full();
+    firstZone.rootMidiNote = 60;
+    program.zones.push_back(firstZone);
+
+    Zone secondZone = firstZone;
+    secondZone.sampleAssetIndex = 1;
+    secondZone.keyRange = MidiRange::single(62);
+    secondZone.rootMidiNote = 62;
+    program.zones.push_back(secondZone);
+
+    std::vector<juce::AudioBuffer<float>> samples;
+    samples.push_back(createTestSample(sampleLength));
+    samples.push_back(createTestSample(sampleLength));
+    engine.setProgram(program, samples);
+
+    {
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+    }
+
+    if (engine.activeVoiceCount() != 1 || !engine.isNoteActive(60))
+        return false;
+
+    {
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 62, 1.0f), 0);
+        engine.render(block, midi);
+    }
+
+    return engine.activeVoiceCount() == 1
+        && !engine.isNoteActive(60)
+        && engine.isNoteActive(62);
+}
+
+bool runEngineProgramZoneAndGroupPanTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 4096;
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setSampleData(createTestSample(sampleLength), sampleRate, 60);
+
+    EngineCore::AdsrSettings amp;
+    amp.attackSeconds = 0.0001f;
+    amp.decaySeconds = 0.001f;
+    amp.sustainLevel = 1.0f;
+    amp.releaseSeconds = 0.001f;
+    engine.setAmpEnvelope(amp);
+
+    EngineCore::FilterSettings openFilter;
+    openFilter.baseCutoffHz = 20000.0f;
+    openFilter.envAmountHz = 0.0f;
+    openFilter.resonance = 0.0f;
+    engine.setFilterSettings(openFilter);
+
+    EngineCore::DcFilterSettings dc;
+    dc.enabled = false;
+    engine.setDcFilterSettings(dc);
+
+    Program program;
+    SampleAsset asset;
+    asset.lengthSamples = sampleLength;
+    asset.numChannels = 1;
+    asset.sampleRateHz = sampleRate;
+    asset.rootMidiNote = 60;
+    program.sampleAssets.push_back(asset);
+
+    Group leftGroup;
+    leftGroup.keyRange = MidiRange::single(60);
+    leftGroup.velocityRange = VelocityRange::full();
+    leftGroup.pan = -1.0f;
+    program.groups.push_back(leftGroup);
+
+    Group partialRightGroup;
+    partialRightGroup.keyRange = MidiRange::single(62);
+    partialRightGroup.velocityRange = VelocityRange::full();
+    partialRightGroup.pan = 0.25f;
+    program.groups.push_back(partialRightGroup);
+
+    Zone leftZone;
+    leftZone.sampleAssetIndex = 0;
+    leftZone.groupIndex = 0;
+    leftZone.keyRange = MidiRange::single(60);
+    leftZone.velocityRange = VelocityRange::full();
+    leftZone.rootMidiNote = 60;
+    program.zones.push_back(leftZone);
+
+    Zone rightZone = leftZone;
+    rightZone.groupIndex = 1;
+    rightZone.keyRange = MidiRange::single(62);
+    rightZone.rootMidiNote = 62;
+    rightZone.pan = 0.75f;
+    program.zones.push_back(rightZone);
+
+    std::vector<juce::AudioBuffer<float>> samples;
+    samples.push_back(createTestSample(sampleLength));
+    engine.setProgram(program, samples);
+
+    auto renderNote = [&](const int note)
+    {
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, note, 1.0f), 0);
+        engine.render(block, midi);
+        engine.panic();
+        return std::pair<float, float>{ channelEnergy(block, 0), channelEnergy(block, 1) };
+    };
+
+    const auto [leftNoteLeftEnergy, leftNoteRightEnergy] = renderNote(60);
+    if (leftNoteLeftEnergy <= 0.01f || leftNoteRightEnergy >= leftNoteLeftEnergy * 0.05f)
+        return false;
+
+    const auto [rightNoteLeftEnergy, rightNoteRightEnergy] = renderNote(62);
+    return rightNoteRightEnergy > 0.01f && rightNoteLeftEnergy < rightNoteRightEnergy * 0.05f;
+}
+
+bool runEngineProgramZoneTriggerModeTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 64;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 4096;
+
+    auto configureEngine = [](EngineCore& engine,
+                              const ZoneTriggerMode groupTriggerMode,
+                              const ZoneTriggerMode zoneTriggerMode)
+    {
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(createTestSample(sampleLength), sampleRate, 60);
+
+        EngineCore::AdsrSettings amp;
+        amp.attackSeconds = 0.0001f;
+        amp.decaySeconds = 0.001f;
+        amp.sustainLevel = 1.0f;
+        amp.releaseSeconds = 0.005f;
+        engine.setAmpEnvelope(amp);
+
+        Program program;
+        SampleAsset asset;
+        asset.lengthSamples = sampleLength;
+        asset.numChannels = 1;
+        asset.sampleRateHz = sampleRate;
+        asset.rootMidiNote = 60;
+        program.sampleAssets.push_back(asset);
+
+        Group group;
+        group.keyRange = MidiRange::single(60);
+        group.velocityRange = VelocityRange::full();
+        group.triggerMode = groupTriggerMode;
+        program.groups.push_back(group);
+
+        Zone zone;
+        zone.sampleAssetIndex = 0;
+        zone.groupIndex = 0;
+        zone.keyRange = MidiRange::single(60);
+        zone.velocityRange = VelocityRange::full();
+        zone.rootMidiNote = 60;
+        zone.triggerMode = zoneTriggerMode;
+        program.zones.push_back(zone);
+
+        std::vector<juce::AudioBuffer<float>> samples;
+        samples.push_back(createTestSample(sampleLength));
+        engine.setProgram(program, samples);
+    };
+
+    auto renderNoteOnAndOff = [](EngineCore& engine, const int releaseBlocks)
+    {
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        for (int blockIndex = 0; blockIndex < releaseBlocks; ++blockIndex)
+            engine.render(block, midi);
+    };
+
+    auto renderNoteOnOnly = [](EngineCore& engine)
+    {
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+    };
+
+    auto renderNoteOffOnly = [](EngineCore& engine)
+    {
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+        engine.render(block, midi);
+    };
+
+    EngineCore zoneOneShot;
+    configureEngine(zoneOneShot, ZoneTriggerMode::gate, ZoneTriggerMode::oneShot);
+    renderNoteOnAndOff(zoneOneShot, 1);
+    if (zoneOneShot.activeVoiceCount() != 1 || !zoneOneShot.isNoteActive(60))
+        return false;
+
+    EngineCore groupOneShot;
+    configureEngine(groupOneShot, ZoneTriggerMode::oneShot, ZoneTriggerMode::gate);
+    renderNoteOnAndOff(groupOneShot, 1);
+    if (groupOneShot.activeVoiceCount() != 1 || !groupOneShot.isNoteActive(60))
+        return false;
+
+    EngineCore gate;
+    configureEngine(gate, ZoneTriggerMode::gate, ZoneTriggerMode::gate);
+    renderNoteOnAndOff(gate, 32);
+
+    if (gate.activeVoiceCount() != 0)
+        return false;
+
+    EngineCore zoneRelease;
+    configureEngine(zoneRelease, ZoneTriggerMode::gate, ZoneTriggerMode::release);
+    renderNoteOnOnly(zoneRelease);
+    if (zoneRelease.activeVoiceCount() != 0)
+        return false;
+    renderNoteOffOnly(zoneRelease);
+    if (zoneRelease.activeVoiceCount() != 1 || !zoneRelease.isNoteActive(60))
+        return false;
+
+    EngineCore groupRelease;
+    configureEngine(groupRelease, ZoneTriggerMode::release, ZoneTriggerMode::gate);
+    renderNoteOnOnly(groupRelease);
+    if (groupRelease.activeVoiceCount() != 0)
+        return false;
+    renderNoteOffOnly(groupRelease);
+    return groupRelease.activeVoiceCount() == 1 && groupRelease.isNoteActive(60);
+}
+
 bool runEngineProgramZoneGainAndTuneTest()
 {
     using namespace audiocity::engine;
@@ -670,6 +2552,104 @@ bool runEngineProgramZoneSampleWindowTest()
     }
 
     return false;
+}
+
+bool runEngineProgramZoneLoopModeTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 64;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 128;
+    constexpr int zoneStart = 32;
+    constexpr int zoneEnd = 96;
+    constexpr int loopStart = 48;
+    constexpr int loopEnd = 64;
+
+    auto renderTailEnergy = [](const ZoneLoopMode loopMode, const bool releaseBeforeTail)
+    {
+        EngineCore engine;
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(createTestSample(sampleLength), sampleRate, 60);
+
+        EngineCore::AdsrSettings amp;
+        amp.attackSeconds = 0.0001f;
+        amp.decaySeconds = 0.001f;
+        amp.sustainLevel = 1.0f;
+        amp.releaseSeconds = 0.5f;
+        engine.setAmpEnvelope(amp);
+
+        EngineCore::FilterSettings openFilter;
+        openFilter.baseCutoffHz = 20000.0f;
+        openFilter.envAmountHz = 0.0f;
+        openFilter.resonance = 0.0f;
+        engine.setFilterSettings(openFilter);
+
+        EngineCore::DcFilterSettings dc;
+        dc.enabled = false;
+        engine.setDcFilterSettings(dc);
+
+        Program program;
+        SampleAsset asset;
+        asset.lengthSamples = sampleLength;
+        asset.numChannels = 1;
+        asset.sampleRateHz = sampleRate;
+        asset.rootMidiNote = 60;
+        program.sampleAssets.push_back(asset);
+
+        Zone zone;
+        zone.sampleAssetIndex = 0;
+        zone.keyRange = MidiRange::single(60);
+        zone.velocityRange = VelocityRange::full();
+        zone.rootMidiNote = 60;
+        zone.sampleStart = zoneStart;
+        zone.sampleEndExclusive = zoneEnd;
+        zone.loopStart = loopStart;
+        zone.loopEndExclusive = loopEnd;
+        zone.loopMode = loopMode;
+        program.zones.push_back(zone);
+
+        juce::AudioBuffer<float> sample(1, sampleLength);
+        sample.clear();
+        for (int index = loopStart; index < loopEnd; ++index)
+            sample.setSample(0, index, 0.8f);
+
+        std::vector<juce::AudioBuffer<float>> samples;
+        samples.push_back(sample);
+        engine.setProgram(program, samples);
+
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+
+        midi.clear();
+        engine.render(block, midi);
+
+        if (releaseBeforeTail)
+        {
+            midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+            engine.render(block, midi);
+            midi.clear();
+        }
+
+        engine.render(block, midi);
+        return blockEnergy(block);
+    };
+
+    const auto noLoopHeld = renderTailEnergy(ZoneLoopMode::noLoop, false);
+    const auto sustainHeld = renderTailEnergy(ZoneLoopMode::sustain, false);
+    const auto sustainReleased = renderTailEnergy(ZoneLoopMode::sustain, true);
+    const auto continuousReleased = renderTailEnergy(ZoneLoopMode::continuous, true);
+
+    if (noLoopHeld > 0.1f)
+        return false;
+
+    if (sustainHeld < 50.0f)
+        return false;
+
+    return continuousReleased > 50.0f && sustainReleased < continuousReleased * 0.5f;
 }
 
 juce::AudioBuffer<float> createOneCycleSine(const int sampleCount)
@@ -1170,6 +3150,85 @@ bool runLoadSampleResetsPlaybackAndLoopRangesTest()
         && engine.getSampleWindowEnd() == sampleLength - 1
         && engine.getLoopStart() == 0
         && engine.getLoopEnd() == sampleLength - 1;
+}
+
+bool runLoadSampleClearsProgramSnapshotTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 512;
+
+    const auto tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_load_clears_program_test", ".wav");
+
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(tempFile.createOutputStream());
+        if (output == nullptr)
+            return false;
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+            return false;
+
+        output.release();
+
+        juce::AudioBuffer<float> buffer(1, sampleLength);
+        for (int i = 0; i < sampleLength; ++i)
+        {
+            const float phase = static_cast<float>(2.0 * juce::MathConstants<double>::pi * i * 220.0 / sampleRate);
+            buffer.setSample(0, i, 0.4f * std::sin(phase));
+        }
+
+        if (!writer->writeFromAudioSampleBuffer(buffer, 0, sampleLength))
+            return false;
+    }
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+
+    Program program;
+    SampleAsset asset;
+    asset.lengthSamples = sampleLength;
+    asset.numChannels = 1;
+    asset.sampleRateHz = sampleRate;
+    asset.rootMidiNote = 72;
+    program.sampleAssets.push_back(asset);
+
+    Zone zone;
+    zone.sampleAssetIndex = 0;
+    zone.keyRange = MidiRange::single(72);
+    zone.velocityRange = VelocityRange::full();
+    zone.rootMidiNote = 72;
+    program.zones.push_back(zone);
+
+    std::vector<juce::AudioBuffer<float>> samples;
+    samples.push_back(createTestSample(sampleLength));
+    engine.setProgram(program, samples);
+    if (!engine.hasProgram())
+        return false;
+
+    const auto loaded = engine.loadSampleFromFile(tempFile);
+    tempFile.deleteFile();
+    if (!loaded || engine.hasProgram())
+        return false;
+
+    EngineCore::AdsrSettings amp;
+    amp.attackSeconds = 0.0001f;
+    amp.decaySeconds = 0.001f;
+    amp.sustainLevel = 1.0f;
+    amp.releaseSeconds = 0.001f;
+    engine.setAmpEnvelope(amp);
+
+    juce::AudioBuffer<float> block(channels, blockSize);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+    engine.render(block, midi);
+
+    return blockEnergy(block) > 0.001f;
 }
 
 bool runLoadSampleResetsEnvelopeAndFilterDefaultsTest()
@@ -4167,6 +6226,207 @@ bool runPresetXmlRejectsInvalidPayloadTest()
     return !ok && error.isNotEmpty();
 }
 
+bool runLibraryMetadataFavoritesAndRecentsTest()
+{
+    audiocity::plugin::LibraryMetadata metadata;
+    const juce::String kick = "C:/Library/Drums/Kick.wav";
+    const juce::String kickWindows = "C:\\Library\\Drums\\Kick.wav";
+    const juce::String snare = "C:/Library/Drums/Snare.wav";
+
+    metadata.setFavorite(kick, true);
+    metadata.setFavorite(kickWindows, true);
+    if (!metadata.isFavorite(kickWindows) || metadata.getFavoritePaths().size() != 1)
+        return false;
+
+    metadata.setFavorite(kickWindows, false);
+    if (metadata.isFavorite(kick) || !metadata.getFavoritePaths().isEmpty())
+        return false;
+
+    metadata.markRecent(kick);
+    metadata.markRecent(snare);
+    metadata.markRecent(kickWindows);
+    if (metadata.getRecentPaths().size() != 2
+        || metadata.recentRank(kick) != 0
+        || metadata.recentRank(snare) != 1)
+    {
+        return false;
+    }
+
+    juce::StringArray tags;
+    tags.add("Drums");
+    tags.add("#OneShot");
+    tags.add("drums");
+    metadata.setTags(kick, tags);
+    if (!metadata.hasTag(kickWindows, "oneshot")
+        || metadata.getTags(kick).size() != 2)
+    {
+        return false;
+    }
+
+    const auto allTags = metadata.getAllTags();
+    if (allTags.size() != 2
+        || !allTags[0].equalsIgnoreCase("Drums")
+        || !allTags[1].equalsIgnoreCase("OneShot"))
+    {
+        return false;
+    }
+
+    juce::StringArray emptyTags;
+    metadata.setTags(kick, emptyTags);
+    if (!metadata.getTags(kick).isEmpty())
+        return false;
+
+    for (int i = 0; i < audiocity::plugin::LibraryMetadata::maxRecentItems + 4; ++i)
+        metadata.markRecent("C:/Library/Generated/Item" + juce::String(i) + ".wav");
+
+    return metadata.getRecentPaths().size() == audiocity::plugin::LibraryMetadata::maxRecentItems
+        && !metadata.isRecent(snare);
+}
+
+bool runLibraryMetadataValueTreeRoundTripTest()
+{
+    audiocity::plugin::LibraryMetadata metadata;
+    const juce::String favorite = "C:/Library/Bass/Sub.wav";
+    const juce::String newest = "C:/Library/Keys/EPiano.wav";
+    const juce::String older = "C:/Library/Keys/Clav.wav";
+
+    metadata.setFavorite(favorite, true);
+    metadata.markRecent(older);
+    metadata.markRecent(newest);
+    juce::StringArray tags;
+    tags.add("Keys");
+    tags.add("Warm");
+    metadata.setTags(newest, tags);
+
+    const auto restored = audiocity::plugin::LibraryMetadata::fromValueTree(metadata.toValueTree());
+    if (!restored.isFavorite(favorite)
+        || restored.recentRank(newest) != 0
+        || restored.recentRank(older) != 1
+        || !restored.hasTag(newest, "warm"))
+    {
+        return false;
+    }
+
+    const auto empty = audiocity::plugin::LibraryMetadata::fromValueTree(juce::ValueTree("notLibraryMetadata"));
+    return empty.getFavoritePaths().isEmpty() && empty.getRecentPaths().isEmpty();
+}
+
+bool runLibraryMetadataBookmarksTest()
+{
+    audiocity::plugin::LibraryMetadata metadata;
+    const juce::String drums = "C:\\Library\\Drums";
+    const juce::String drumsNormalized = "C:/Library/Drums";
+    const juce::String synths = "C:/Library/Synths";
+
+    metadata.addBookmark(drums);
+    metadata.addBookmark(synths);
+    metadata.addBookmark(drumsNormalized);
+
+    auto bookmarks = metadata.getBookmarkPaths();
+    if (bookmarks.size() != 2
+        || !metadata.isBookmark(drumsNormalized)
+        || !bookmarks[0].equalsIgnoreCase(drumsNormalized)
+        || !bookmarks[1].equalsIgnoreCase(synths))
+    {
+        return false;
+    }
+
+    metadata.removeBookmark("c:/library/drums");
+    if (metadata.isBookmark(drums) || metadata.getBookmarkPaths().size() != 1)
+        return false;
+
+    metadata.addBookmark(drums);
+    for (int i = 0; i < audiocity::plugin::LibraryMetadata::maxBookmarkItems + 4; ++i)
+        metadata.addBookmark("C:/Library/Generated/Root" + juce::String(i));
+
+    bookmarks = metadata.getBookmarkPaths();
+    if (bookmarks.size() != audiocity::plugin::LibraryMetadata::maxBookmarkItems
+        || metadata.isBookmark(synths)
+        || metadata.isBookmark(drums))
+    {
+        return false;
+    }
+
+    const auto restored = audiocity::plugin::LibraryMetadata::fromValueTree(metadata.toValueTree());
+    const auto restoredBookmarks = restored.getBookmarkPaths();
+    if (restoredBookmarks.size() != bookmarks.size())
+        return false;
+
+    for (int index = 0; index < bookmarks.size(); ++index)
+    {
+        if (!restoredBookmarks[index].equalsIgnoreCase(bookmarks[index]))
+            return false;
+    }
+
+    return true;
+}
+
+bool runLibraryFileIndexScanTest()
+{
+    using audiocity::plugin::LibraryFileIndex;
+
+    const auto tempRoot = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_library_index_test", "");
+    if (!tempRoot.createDirectory())
+        return false;
+
+    const auto nested = tempRoot.getChildFile("Nested");
+    if (!nested.createDirectory()
+        || !tempRoot.getChildFile("Kick.WAV").replaceWithText("")
+        || !tempRoot.getChildFile("Patch.sfz").replaceWithText("<region> sample=Kick.WAV\n")
+        || !tempRoot.getChildFile("Loop.rx2").replaceWithText("")
+        || !tempRoot.getChildFile("Ignore.txt").replaceWithText("")
+        || !nested.getChildFile("Snare.aif").replaceWithText(""))
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+
+    if (!LibraryFileIndex::isSupportedExtension(".RX2", true)
+        || LibraryFileIndex::isSupportedExtension(".RX2", false)
+        || LibraryFileIndex::isSupportedExtension(".txt", true))
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+
+    const auto withoutRex = LibraryFileIndex::scanRoot(tempRoot, false);
+    const auto withRex = LibraryFileIndex::scanRoot(tempRoot, true);
+
+    auto hasRelativePath = [](const std::vector<audiocity::plugin::LibraryFileIndexEntry>& entries,
+                              const juce::String& relativePath)
+    {
+        for (const auto& entry : entries)
+        {
+            if (entry.relativePath == relativePath)
+                return true;
+        }
+
+        return false;
+    };
+
+    auto hasInstrument = [](const std::vector<audiocity::plugin::LibraryFileIndexEntry>& entries)
+    {
+        for (const auto& entry : entries)
+        {
+            if (entry.isInstrument && entry.extensionLower == ".sfz")
+                return true;
+        }
+
+        return false;
+    };
+
+    const auto ok = withoutRex.size() == 3
+        && withRex.size() == 4
+        && hasRelativePath(withoutRex, "Nested/Snare.aif")
+        && !hasRelativePath(withoutRex, "Loop.rx2")
+        && hasRelativePath(withRex, "Loop.rx2")
+        && hasInstrument(withoutRex);
+
+    tempRoot.deleteRecursively();
+    return ok;
+}
+
 bool runPeakPreviewCacheRoundTripTest()
 {
     const auto tempRoot = juce::File::getSpecialLocation(juce::File::tempDirectory)
@@ -4259,6 +6519,45 @@ int main()
     if (!runProgramSnapshotBuildAndMatchTest())
         return 75;
 
+    if (!runProgramMappingRowsTest())
+        return 97;
+
+    if (!runProgramMappingEditTest())
+        return 98;
+
+    if (!runProgramMappingOverviewEditTest())
+        return 99;
+
+    if (!runProgramMappingSampleWindowEditTest())
+        return 100;
+
+    if (!runProgramMappingZoneOperationsTest())
+        return 102;
+
+    if (!runProgramMappingStateRoundTripTest())
+        return 101;
+
+    if (!runProgramMappingStructuralStateRoundTripTest())
+        return 103;
+
+    if (!runImportedProgramStateSubtreeRoundTripTest())
+        return 106;
+
+    if (!runSfzImportIncludeDefineDefaultPathTest())
+        return 87;
+
+    if (!runSfzImportRoundRobinPlaybackTest())
+        return 88;
+
+    if (!runSfzImportSeqLengthPlaybackTest())
+        return 104;
+
+    if (!runSfzImportReleaseTriggerPlaybackTest())
+        return 105;
+
+    if (!runSfzImporterDiagnosticsTest())
+        return 89;
+
     if (!runSameOffsetMidiEventOrderTest())
         return 74;
 
@@ -4268,11 +6567,38 @@ int main()
     if (!runEngineProgramSampleAssetBindingTest())
         return 77;
 
+    if (!runEngineProgramStereoAssetPlaybackTest())
+        return 81;
+
+    if (!runEngineProgramRoundRobinZoneSelectionTest())
+        return 82;
+
+    if (!runEngineProgramLayeredZonePlaybackTest())
+        return 90;
+
+    if (!runEngineProgramVelocityFadeInTest())
+        return 91;
+
+    if (!runEngineProgramCycleRandomRoundRobinZoneSelectionTest())
+        return 85;
+
+    if (!runEngineProgramChokeGroupTest())
+        return 83;
+
+    if (!runEngineProgramZoneAndGroupPanTest())
+        return 84;
+
+    if (!runEngineProgramZoneTriggerModeTest())
+        return 86;
+
     if (!runEngineProgramZoneGainAndTuneTest())
         return 78;
 
     if (!runEngineProgramZoneSampleWindowTest())
         return 79;
+
+    if (!runEngineProgramZoneLoopModeTest())
+        return 80;
 
     if (!runVoiceStealingEdgeCaseTest())
         return 2;
@@ -4288,6 +6614,9 @@ int main()
 
     if (!runLoadSampleResetsPlaybackAndLoopRangesTest())
         return 44;
+
+    if (!runLoadSampleClearsProgramSnapshotTest())
+        return 92;
 
     if (!runLoadSampleResetsEnvelopeAndFilterDefaultsTest())
         return 45;
@@ -4390,6 +6719,18 @@ int main()
 
     if (!runPresetXmlRejectsInvalidPayloadTest())
         return 68;
+
+    if (!runLibraryMetadataFavoritesAndRecentsTest())
+        return 93;
+
+    if (!runLibraryMetadataValueTreeRoundTripTest())
+        return 94;
+
+    if (!runLibraryMetadataBookmarksTest())
+        return 95;
+
+    if (!runLibraryFileIndexScanTest())
+        return 96;
 
     if (!runPeakPreviewCacheRoundTripTest())
         return 70;
