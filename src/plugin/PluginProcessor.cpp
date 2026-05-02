@@ -1026,19 +1026,26 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
         const auto mappingEdits = audiocity::plugin::readImportedProgramMappingState(state);
         audiocity::engine::Program programToPublish;
         std::vector<juce::AudioBuffer<float>> sampleDataToPublish;
+        auto shouldPublishProgram = false;
 
         if (mappingEdits.isValid())
         {
             {
                 std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
-                if (audiocity::plugin::restoreImportedProgramMappingState(importedProgram_, mappingEdits))
+                if (const auto restoredProgramState = audiocity::plugin::buildImportedProgramRestoreResult(importedProgram_, mappingEdits))
                 {
-                    refreshImportedProgramDerivedStateLocked("Mapping restored");
-                    captureImportedProgramSnapshotLocked(programToPublish, sampleDataToPublish);
+                    importedProgram_ = restoredProgramState->program;
+                    importedProgramMapSummary_ = restoredProgramState->derivedState.mapSummary;
+                    importedProgramZoneRows_ = restoredProgramState->derivedState.zoneRows;
+                    importedProgramZoneCount_.store(static_cast<int>(importedProgram_.zones.size()), std::memory_order_relaxed);
+                    lastImportDiagnosticSummary_ = "Mapping restored";
+                    shouldPublishProgram = restoredProgramState->hasPublishableZones;
+                    if (shouldPublishProgram)
+                        captureImportedProgramSnapshotLocked(programToPublish, sampleDataToPublish);
                 }
             }
 
-            if (!programToPublish.zones.empty())
+            if (shouldPublishProgram)
             {
                 engine_.panic();
                 engine_.setProgram(programToPublish, sampleDataToPublish);

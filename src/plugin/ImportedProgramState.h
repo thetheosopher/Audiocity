@@ -5,12 +5,21 @@
 
 #include <juce_data_structures/juce_data_structures.h>
 
+#include <optional>
+
 namespace audiocity::plugin
 {
 struct ImportedProgramDerivedState
 {
     juce::String mapSummary;
     std::vector<ProgramZoneListRow> zoneRows;
+};
+
+struct ImportedProgramRestoreResult
+{
+    audiocity::engine::Program program;
+    ImportedProgramDerivedState derivedState;
+    bool hasPublishableZones = false;
 };
 
 [[nodiscard]] juce::Identifier importedProgramPathStateProperty();
@@ -20,6 +29,9 @@ void appendImportedProgramState(juce::ValueTree& state,
 [[nodiscard]] juce::String readImportedProgramStatePath(const juce::ValueTree& state);
 [[nodiscard]] juce::ValueTree readImportedProgramMappingState(const juce::ValueTree& state);
 [[nodiscard]] ImportedProgramDerivedState buildImportedProgramDerivedState(const audiocity::engine::Program& program);
+[[nodiscard]] std::optional<ImportedProgramRestoreResult> buildImportedProgramRestoreResult(
+    const audiocity::engine::Program& baseProgram,
+    const juce::ValueTree& mappingState);
 [[nodiscard]] bool restoreImportedProgramMappingState(audiocity::engine::Program& program,
                                                      const juce::ValueTree& mappingState);
 }

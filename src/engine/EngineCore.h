@@ -394,6 +394,10 @@ private:
     [[nodiscard]] std::shared_ptr<const SampleSegments> getSampleSegmentsSnapshot() const noexcept;
     [[nodiscard]] static std::shared_ptr<const SampleSegments> buildSampleSegments(const juce::AudioBuffer<float>& monoSampleData,
         int preloadSamples) noexcept;
+    [[nodiscard]] static juce::AudioBuffer<float> materializeSampleData(const SampleSegments& segments) noexcept;
+    [[nodiscard]] std::shared_ptr<const ProgramAudioSnapshot> rebuildProgramAudioSnapshot(
+        const ProgramAudioSnapshot& snapshot) const noexcept;
+    [[nodiscard]] static int countProgramSegmentSamples(const ProgramAudioSnapshot& snapshot, bool usePreloadData) noexcept;
     [[nodiscard]] int getTotalSampleLength(const SampleSegments& segments) const noexcept;
     [[nodiscard]] int getTotalSampleLength() const noexcept;
     [[nodiscard]] int getEffectivePlaybackLength(const SampleSegments& segments) const noexcept;

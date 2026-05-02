@@ -976,6 +976,126 @@ bool runImportedProgramStateLegacyReplayFallbackTest()
     return editedState.toXmlString() == restoredState.toXmlString();
 }
 
+bool runImportedProgramRestoreResultSuccessTest()
+{
+    using namespace audiocity::engine;
+
+    Program baseProgram;
+    baseProgram.name = "Restore Result";
+
+    SampleAsset sample;
+    sample.displayName = "restore.wav";
+    sample.lengthSamples = 512;
+    baseProgram.sampleAssets.push_back(sample);
+
+    Group group;
+    group.roundRobinGroup = 4;
+    group.roundRobinMode = RoundRobinMode::ordered;
+    baseProgram.groups.push_back(group);
+
+    Zone zone;
+    zone.groupIndex = 0;
+    zone.sampleAssetIndex = 0;
+    zone.keyRange = MidiRange::fromUnordered(36, 48);
+    zone.velocityRange = VelocityRange::fromUnordered(20, 80);
+    zone.rootMidiNote = 40;
+    baseProgram.zones.push_back(zone);
+
+    Program editedProgram = baseProgram;
+    audiocity::plugin::ProgramZoneEdit edit;
+    edit.zoneIndex = 0;
+    edit.keyLow = 48;
+    edit.keyHigh = 60;
+    edit.velocityLow = 30;
+    edit.velocityHigh = 110;
+    edit.rootMidiNote = 52;
+    edit.roundRobinGroup = 6;
+    edit.roundRobinPosition = 2;
+    edit.triggerMode = ZoneTriggerMode::release;
+    edit.hasRoundRobinGroup = true;
+    edit.hasRoundRobinPosition = true;
+    edit.hasTriggerMode = true;
+
+    if (!audiocity::plugin::applyProgramZoneEdit(editedProgram, edit))
+        return false;
+
+    const auto mappingState = audiocity::plugin::createProgramZoneMappingState(editedProgram);
+    const auto restoredResult = audiocity::plugin::buildImportedProgramRestoreResult(baseProgram, mappingState);
+    if (!restoredResult.has_value())
+        return false;
+
+    return restoredResult->hasPublishableZones
+        && restoredResult->program.zones.size() == 1
+        && restoredResult->program.zones.front().keyRange.low == 48
+        && restoredResult->program.zones.front().keyRange.high == 60
+        && restoredResult->program.zones.front().triggerMode == ZoneTriggerMode::release
+        && restoredResult->derivedState.zoneRows.size() == 1
+        && restoredResult->derivedState.zoneRows.front().keyRange == "48-60"
+        && restoredResult->derivedState.mapSummary.contains("Program: Restore Result");
+}
+
+bool runImportedProgramRestoreResultAtomicFailureTest()
+{
+    using namespace audiocity::engine;
+
+    Program baseProgram;
+    SampleAsset sample;
+    sample.displayName = "atomic.wav";
+    sample.lengthSamples = 512;
+    baseProgram.sampleAssets.push_back(sample);
+
+    Group group;
+    baseProgram.groups.push_back(group);
+
+    Zone firstZone;
+    firstZone.groupIndex = 0;
+    firstZone.sampleAssetIndex = 0;
+    firstZone.keyRange = MidiRange::fromUnordered(24, 36);
+    firstZone.velocityRange = VelocityRange::fromUnordered(1, 64);
+    baseProgram.zones.push_back(firstZone);
+
+    Zone secondZone = firstZone;
+    secondZone.keyRange = MidiRange::fromUnordered(37, 48);
+    secondZone.velocityRange = VelocityRange::fromUnordered(65, 127);
+    baseProgram.zones.push_back(secondZone);
+
+    Program editedProgram = baseProgram;
+    audiocity::plugin::ProgramZoneEdit firstEdit;
+    firstEdit.zoneIndex = 0;
+    firstEdit.keyLow = 30;
+    firstEdit.keyHigh = 40;
+    firstEdit.velocityLow = 10;
+    firstEdit.velocityHigh = 70;
+    firstEdit.rootMidiNote = 34;
+
+    audiocity::plugin::ProgramZoneEdit secondEdit;
+    secondEdit.zoneIndex = 1;
+    secondEdit.keyLow = 50;
+    secondEdit.keyHigh = 72;
+    secondEdit.velocityLow = 71;
+    secondEdit.velocityHigh = 120;
+    secondEdit.rootMidiNote = 60;
+
+    if (!audiocity::plugin::applyProgramZoneEdit(editedProgram, firstEdit)
+        || !audiocity::plugin::applyProgramZoneEdit(editedProgram, secondEdit))
+    {
+        return false;
+    }
+
+    auto legacyState = audiocity::plugin::createProgramZoneMappingState(editedProgram);
+    legacyState.setProperty("formatVersion", 1, nullptr);
+    if (legacyState.getNumChildren() < 2)
+        return false;
+
+    legacyState.getChild(1).setProperty("zoneIndex", 99, nullptr);
+    const auto baseStateXml = audiocity::plugin::createProgramZoneMappingState(baseProgram).toXmlString();
+    const auto restoredResult = audiocity::plugin::buildImportedProgramRestoreResult(baseProgram, legacyState);
+    const auto afterAttemptXml = audiocity::plugin::createProgramZoneMappingState(baseProgram).toXmlString();
+
+    return !restoredResult.has_value()
+        && baseStateXml == afterAttemptXml;
+}
+
 bool runImportedProgramDerivedStateSummaryTest()
 {
     using namespace audiocity::engine;
@@ -4148,6 +4268,63 @@ bool runSegmentRebuildCounterTest()
     return afterPreloadChangeCount > afterLoadCount;
 }
 
+bool runProgramPreloadMetricsAndRebuildTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setPreloadSamples(2048);
+
+    Program program;
+
+    SampleAsset firstAsset;
+    firstAsset.displayName = "layer_a.wav";
+    firstAsset.sampleRateHz = sampleRate;
+    firstAsset.rootMidiNote = 60;
+    program.sampleAssets.push_back(firstAsset);
+
+    SampleAsset secondAsset = firstAsset;
+    secondAsset.displayName = "layer_b.wav";
+    program.sampleAssets.push_back(secondAsset);
+
+    Zone firstZone;
+    firstZone.sampleAssetIndex = 0;
+    firstZone.keyRange = MidiRange::single(60);
+    firstZone.rootMidiNote = 60;
+    program.zones.push_back(firstZone);
+
+    Zone secondZone = firstZone;
+    secondZone.sampleAssetIndex = 1;
+    secondZone.keyRange = MidiRange::single(61);
+    secondZone.rootMidiNote = 61;
+    program.zones.push_back(secondZone);
+
+    std::vector<juce::AudioBuffer<float>> sampleDataByAsset;
+    sampleDataByAsset.push_back(createTestSample(4096));
+    sampleDataByAsset.push_back(createTestSample(1536));
+
+    engine.setProgram(program, sampleDataByAsset);
+    const auto afterLoadCount = engine.getSegmentRebuildCount();
+
+    if (engine.getLoadedPreloadSamples() != 3584)
+        return false;
+
+    if (engine.getLoadedStreamSamples() != 2048)
+        return false;
+
+    engine.setPreloadSamples(512);
+    const auto afterPreloadChangeCount = engine.getSegmentRebuildCount();
+
+    return afterPreloadChangeCount > afterLoadCount
+        && engine.getLoadedPreloadSamples() == 1024
+        && engine.getLoadedStreamSamples() == 4608;
+}
+
 bool runQualityTierDifferenceTest()
 {
     constexpr int channels = 2;
@@ -6656,8 +6833,14 @@ int main()
     if (!runImportedProgramStateLegacyReplayFallbackTest())
         return 107;
 
-    if (!runImportedProgramDerivedStateSummaryTest())
+    if (!runImportedProgramRestoreResultSuccessTest())
         return 108;
+
+    if (!runImportedProgramRestoreResultAtomicFailureTest())
+        return 109;
+
+    if (!runImportedProgramDerivedStateSummaryTest())
+        return 110;
 
     if (!runSfzImportIncludeDefineDefaultPathTest())
         return 87;
@@ -6797,17 +6980,20 @@ int main()
     if (!runSegmentRebuildCounterTest())
         return 13;
 
-    if (!runQualityTierDifferenceTest())
+    if (!runProgramPreloadMetricsAndRebuildTest())
         return 14;
 
-    if (!runQualityTierDeterminismTest())
+    if (!runQualityTierDifferenceTest())
         return 15;
 
-    if (!runCpuQualityEnergyDriftSmokeTest())
+    if (!runQualityTierDeterminismTest())
         return 16;
 
-    if (!runRuntimeQualitySwitchSmokeTest())
+    if (!runCpuQualityEnergyDriftSmokeTest())
         return 17;
+
+    if (!runRuntimeQualitySwitchSmokeTest())
+        return 18;
 
     if (!runSettingsUndoHistoryTest())
         return 18;

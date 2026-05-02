@@ -463,12 +463,22 @@ void EngineCore::setSaturationSettings(const SaturationSettings& settings) noexc
 
 int EngineCore::getLoadedPreloadSamples() const noexcept
 {
+    const auto programSnapshot = programSnapshot_.load(std::memory_order_acquire);
+    const auto programAudioSnapshot = programAudioSnapshot_.load(std::memory_order_acquire);
+    if (programSnapshot != nullptr)
+        return programAudioSnapshot != nullptr ? countProgramSegmentSamples(*programAudioSnapshot, true) : 0;
+
     const auto segments = getSampleSegmentsSnapshot();
     return segments != nullptr ? segments->preloadData.getNumSamples() : 0;
 }
 
 int EngineCore::getLoadedStreamSamples() const noexcept
 {
+    const auto programSnapshot = programSnapshot_.load(std::memory_order_acquire);
+    const auto programAudioSnapshot = programAudioSnapshot_.load(std::memory_order_acquire);
+    if (programSnapshot != nullptr)
+        return programAudioSnapshot != nullptr ? countProgramSegmentSamples(*programAudioSnapshot, false) : 0;
+
     const auto segments = getSampleSegmentsSnapshot();
     return segments != nullptr ? segments->streamData.getNumSamples() : 0;
 }
@@ -689,23 +699,28 @@ int EngineCore::getProgramZoneCount() const noexcept
 void EngineCore::setPreloadSamples(const int preloadSamples) noexcept
 {
     preloadSamples_ = juce::jmax(256, preloadSamples);
+    auto rebuiltSingleSampleSegments = false;
 
     const auto segments = getSampleSegmentsSnapshot();
-    if (segments == nullptr)
-        return;
+    if (segments != nullptr && getTotalSampleLength(*segments) > 0)
+    {
+        rebuildSampleSegments(materializeSampleData(*segments));
+        rebuiltSingleSampleSegments = true;
+    }
 
-    const auto totalSamples = getTotalSampleLength(*segments);
-    if (totalSamples <= 0)
-        return;
+    const auto programAudioSnapshot = programAudioSnapshot_.load(std::memory_order_acquire);
+    if (programAudioSnapshot != nullptr)
+    {
+        ++segmentRebuildCount_;
+        programAudioSnapshot_.store(rebuildProgramAudioSnapshot(*programAudioSnapshot), std::memory_order_release);
+    }
 
-    juce::AudioBuffer<float> mono(1, totalSamples);
-    for (int i = 0; i < totalSamples; ++i)
-        mono.setSample(0, i, readSampleAt(*segments, i));
-
-    rebuildSampleSegments(mono);
-    setSampleWindow(sampleWindowStart_, sampleWindowEnd_);
-    setFadeSamples(fadeInSamples_, fadeOutSamples_);
-    setLoopPoints(loopStartSample_, loopEndSample_);
+    if (rebuiltSingleSampleSegments)
+    {
+        setSampleWindow(sampleWindowStart_, sampleWindowEnd_);
+        setFadeSamples(fadeInSamples_, fadeOutSamples_);
+        setLoopPoints(loopStartSample_, loopEndSample_);
+    }
 }
 
 int EngineCore::getLoadedSampleLength() const noexcept
@@ -2327,6 +2342,75 @@ std::shared_ptr<const EngineCore::SampleSegments> EngineCore::buildSampleSegment
     }
 
     return segments;
+}
+
+juce::AudioBuffer<float> EngineCore::materializeSampleData(const SampleSegments& segments) noexcept
+{
+    const auto preloadSamples = segments.preloadData.getNumSamples();
+    const auto streamSamples = segments.streamData.getNumSamples();
+    const auto totalSamples = preloadSamples + streamSamples;
+    const auto channels = juce::jmax(1,
+        segments.preloadData.getNumChannels(),
+        segments.streamData.getNumChannels());
+
+    juce::AudioBuffer<float> materialized(channels, totalSamples);
+    materialized.clear();
+
+    for (int channel = 0; channel < channels; ++channel)
+    {
+        if (preloadSamples > 0 && segments.preloadData.getNumChannels() > 0)
+        {
+            const auto sourceChannel = juce::jmin(channel, segments.preloadData.getNumChannels() - 1);
+            materialized.copyFrom(channel, 0, segments.preloadData, sourceChannel, 0, preloadSamples);
+        }
+
+        if (streamSamples > 0 && segments.streamData.getNumChannels() > 0)
+        {
+            const auto sourceChannel = juce::jmin(channel, segments.streamData.getNumChannels() - 1);
+            materialized.copyFrom(channel, preloadSamples, segments.streamData, sourceChannel, 0, streamSamples);
+        }
+    }
+
+    return materialized;
+}
+
+std::shared_ptr<const EngineCore::ProgramAudioSnapshot> EngineCore::rebuildProgramAudioSnapshot(
+    const ProgramAudioSnapshot& snapshot) const noexcept
+{
+    auto rebuilt = std::make_shared<ProgramAudioSnapshot>();
+    rebuilt->sampleAssetCount = snapshot.sampleAssetCount;
+
+    for (std::size_t assetIndex = 0; assetIndex < snapshot.sampleAssetCount; ++assetIndex)
+    {
+        const auto* segments = snapshot.getSampleSegments(static_cast<int>(assetIndex));
+        if (segments == nullptr)
+            continue;
+
+        const auto source = materializeSampleData(*segments);
+        if (source.getNumSamples() <= 0)
+            continue;
+
+        rebuilt->sampleSegments[assetIndex] = buildSampleSegments(source, preloadSamples_);
+    }
+
+    return rebuilt;
+}
+
+int EngineCore::countProgramSegmentSamples(const ProgramAudioSnapshot& snapshot, const bool usePreloadData) noexcept
+{
+    auto totalSamples = 0;
+    for (std::size_t assetIndex = 0; assetIndex < snapshot.sampleAssetCount; ++assetIndex)
+    {
+        const auto* segments = snapshot.getSampleSegments(static_cast<int>(assetIndex));
+        if (segments == nullptr)
+            continue;
+
+        totalSamples += usePreloadData
+            ? segments->preloadData.getNumSamples()
+            : segments->streamData.getNumSamples();
+    }
+
+    return totalSamples;
 }
 
 int EngineCore::getTotalSampleLength(const SampleSegments& segments) const noexcept

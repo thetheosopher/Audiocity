@@ -130,6 +130,21 @@ ImportedProgramDerivedState buildImportedProgramDerivedState(const audiocity::en
     return derivedState;
 }
 
+std::optional<ImportedProgramRestoreResult> buildImportedProgramRestoreResult(
+    const audiocity::engine::Program& baseProgram,
+    const juce::ValueTree& mappingState)
+{
+    auto restoredProgram = baseProgram;
+    if (!restoreImportedProgramMappingState(restoredProgram, mappingState))
+        return std::nullopt;
+
+    ImportedProgramRestoreResult result;
+    result.derivedState = buildImportedProgramDerivedState(restoredProgram);
+    result.hasPublishableZones = !restoredProgram.zones.empty();
+    result.program = std::move(restoredProgram);
+    return result;
+}
+
 bool restoreImportedProgramMappingState(audiocity::engine::Program& program,
                                         const juce::ValueTree& mappingState)
 {
