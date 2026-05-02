@@ -2764,7 +2764,7 @@ float EngineCore::readSampleLinear(const SampleSegments& segments,
         return readSampleAt(segments, mappedIndex, channel) * editGain;
 
     if (qualityTier_ == QualityTier::ultra)
-        return readSampleCubic(segments, clampedPosition, sampleStart, sampleEndExclusive, channel) * editGain;
+        return readSampleWindowedSinc(segments, clampedPosition, sampleStart, sampleEndExclusive, channel) * editGain;
 
     const auto nextIndex = juce::jmin(sampleIndex + 1, sampleLength - 1);
     const auto fraction = clampedPosition - static_cast<float>(sampleIndex);
@@ -2819,6 +2819,76 @@ float EngineCore::readSampleCubic(const SampleSegments& segments,
     const auto a3 = y1;
 
     return ((a0 * t + a1) * t + a2) * t + a3;
+}
+
+float EngineCore::readSampleWindowedSinc(const SampleSegments& segments, const float position) const noexcept
+{
+    return readSampleWindowedSinc(segments, position, sampleWindowStart_, sampleWindowEnd_ + 1);
+}
+
+float EngineCore::readSampleWindowedSinc(const SampleSegments& segments,
+                                         const float position,
+                                         const int sampleStart,
+                                         const int sampleEndExclusive) const noexcept
+{
+    return readSampleWindowedSinc(segments, position, sampleStart, sampleEndExclusive, 0);
+}
+
+float EngineCore::readSampleWindowedSinc(const SampleSegments& segments,
+                                         const float position,
+                                         const int sampleStart,
+                                         const int sampleEndExclusive,
+                                         const int channel) const noexcept
+{
+    constexpr int radius = 4;
+    constexpr double pi = juce::MathConstants<double>::pi;
+
+    const auto sampleLength = getEffectivePlaybackLength(segments, sampleStart, sampleEndExclusive);
+    if (sampleLength <= 1)
+        return 0.0f;
+
+    const auto clampedPosition = juce::jlimit(0.0f, static_cast<float>(sampleLength - 1), position);
+    const auto centerIndex = static_cast<int>(std::floor(clampedPosition));
+
+    auto sincWeight = [](const double distance) noexcept
+    {
+        if (std::abs(distance) < 1.0e-9)
+            return 1.0;
+
+        return std::sin(pi * distance) / (pi * distance);
+    };
+
+    auto lanczosWeight = [&](const double distance) noexcept
+    {
+        const auto absoluteDistance = std::abs(distance);
+        if (absoluteDistance >= static_cast<double>(radius))
+            return 0.0;
+
+        return sincWeight(distance) * sincWeight(distance / static_cast<double>(radius));
+    };
+
+    double weightedSum = 0.0;
+    double weightSum = 0.0;
+    for (int tap = -radius + 1; tap <= radius; ++tap)
+    {
+        const auto sampleIndex = juce::jlimit(0, sampleLength - 1, centerIndex + tap);
+        const auto distance = static_cast<double>(clampedPosition) - static_cast<double>(centerIndex + tap);
+        const auto weight = lanczosWeight(distance);
+        if (std::abs(weight) <= 1.0e-9)
+            continue;
+
+        const auto mappedIndex = mapPlaybackIndexToSampleIndex(segments, sampleIndex, sampleStart, sampleEndExclusive);
+        weightedSum += static_cast<double>(readSampleAt(segments, mappedIndex, channel)) * weight;
+        weightSum += weight;
+    }
+
+    if (std::abs(weightSum) <= 1.0e-9)
+    {
+        const auto mappedIndex = mapPlaybackIndexToSampleIndex(segments, centerIndex, sampleStart, sampleEndExclusive);
+        return readSampleAt(segments, mappedIndex, channel);
+    }
+
+    return static_cast<float>(weightedSum / weightSum);
 }
 
 float EngineCore::readSampleLinear(const float position) const noexcept

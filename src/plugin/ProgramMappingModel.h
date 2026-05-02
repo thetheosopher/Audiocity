@@ -107,6 +107,7 @@ struct ProgramZoneEdit
 [[nodiscard]] bool applyProgramZoneEdit(audiocity::engine::Program& program, const ProgramZoneEdit& edit);
 [[nodiscard]] bool applyProgramZoneEditsAtomic(audiocity::engine::Program& program,
                                                const std::vector<ProgramZoneEdit>& edits);
+[[nodiscard]] int createProgramZone(audiocity::engine::Program& program, int seedZoneIndex = -1);
 [[nodiscard]] int duplicateProgramZone(audiocity::engine::Program& program, int zoneIndex);
 [[nodiscard]] bool deleteProgramZone(audiocity::engine::Program& program, int zoneIndex);
 [[nodiscard]] bool deleteProgramZonesAtomic(audiocity::engine::Program& program,

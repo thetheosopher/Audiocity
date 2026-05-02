@@ -110,6 +110,20 @@ bool isValidSampleAssetIndex(const audiocity::engine::Program& program, const in
     return sampleAssetIndex >= 0 && static_cast<std::size_t>(sampleAssetIndex) < program.sampleAssets.size();
 }
 
+int findDefaultSampleAssetIndex(const audiocity::engine::Program& program, const int preferredSampleAssetIndex)
+{
+    if (isValidSampleAssetIndex(program, preferredSampleAssetIndex))
+        return preferredSampleAssetIndex;
+
+    for (std::size_t index = 0; index < program.sampleAssets.size(); ++index)
+    {
+        if (program.sampleAssets[index].hasAudio())
+            return static_cast<int>(index);
+    }
+
+    return program.sampleAssets.empty() ? -1 : 0;
+}
+
 int clampOverviewNote(const int value)
 {
     return juce::jlimit(audiocity::engine::kMidiNoteMin, audiocity::engine::kMidiNoteMax, value);
@@ -478,6 +492,46 @@ bool applyProgramZoneEditsAtomic(audiocity::engine::Program& program,
 
     program = std::move(updatedProgram);
     return true;
+}
+
+int createProgramZone(audiocity::engine::Program& program, const int seedZoneIndex)
+{
+    const auto hasSeedZone = seedZoneIndex >= 0 && static_cast<std::size_t>(seedZoneIndex) < program.zones.size();
+    const auto* seedZone = hasSeedZone ? &program.zones[static_cast<std::size_t>(seedZoneIndex)] : nullptr;
+    const auto sampleAssetIndex = findDefaultSampleAssetIndex(program, seedZone != nullptr ? seedZone->sampleAssetIndex : -1);
+    if (!isValidSampleAssetIndex(program, sampleAssetIndex))
+        return -1;
+
+    const auto& sampleAsset = program.sampleAssets[static_cast<std::size_t>(sampleAssetIndex)];
+
+    audiocity::engine::Zone newZone;
+    newZone.sampleAssetIndex = sampleAssetIndex;
+    newZone.groupIndex = seedZone != nullptr && isValidGroupIndex(program, seedZone->groupIndex)
+        ? seedZone->groupIndex
+        : (program.groups.size() == 1 ? 0 : -1);
+    newZone.rootMidiNote = audiocity::engine::clampMidiNote(seedZone != nullptr ? seedZone->rootMidiNote : sampleAsset.rootMidiNote);
+    newZone.keyRange = audiocity::engine::MidiRange::single(newZone.rootMidiNote);
+    newZone.velocityRange = audiocity::engine::VelocityRange::full();
+    newZone.velocityFadeIn = audiocity::engine::VelocityFadeRange::disabled();
+    newZone.velocityFadeOut = audiocity::engine::VelocityFadeRange::disabled();
+    newZone.sampleStart = 0;
+    newZone.sampleEndExclusive = sampleAsset.lengthSamples > 0 ? sampleAsset.lengthSamples : -1;
+    newZone.loopStart = -1;
+    newZone.loopEndExclusive = -1;
+    newZone.gainDb = 0.0f;
+    newZone.pan = 0.0f;
+    newZone.tuneCents = seedZone != nullptr ? seedZone->tuneCents : 0.0f;
+    newZone.roundRobinGroup = 0;
+    newZone.roundRobinPosition = 0;
+    newZone.roundRobinLength = 0;
+    newZone.roundRobinMode = audiocity::engine::RoundRobinMode::ordered;
+    newZone.triggerMode = audiocity::engine::ZoneTriggerMode::gate;
+    newZone.chokeGroup = 0;
+    newZone.loopMode = audiocity::engine::ZoneLoopMode::noLoop;
+
+    program.zones.push_back(newZone);
+    recomputeGroupRangeFromZones(program, newZone.groupIndex);
+    return static_cast<int>(program.zones.size() - 1);
 }
 
 int duplicateProgramZone(audiocity::engine::Program& program, const int zoneIndex)

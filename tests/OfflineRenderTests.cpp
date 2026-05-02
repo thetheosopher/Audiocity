@@ -646,6 +646,77 @@ bool runProgramMappingZoneOperationsTest()
         && program.groups[0].keyRange.high == 40;
 }
 
+bool runProgramMappingCreateZoneTest()
+{
+    using namespace audiocity::engine;
+
+    Program program;
+
+    SampleAsset firstSample;
+    firstSample.displayName = "first.wav";
+    firstSample.lengthSamples = 512;
+    firstSample.rootMidiNote = 60;
+    program.sampleAssets.push_back(firstSample);
+
+    SampleAsset secondSample;
+    secondSample.displayName = "second.wav";
+    secondSample.lengthSamples = 256;
+    secondSample.rootMidiNote = 67;
+    program.sampleAssets.push_back(secondSample);
+
+    Group group;
+    group.keyRange = MidiRange::fromUnordered(24, 96);
+    group.velocityRange = VelocityRange::full();
+    program.groups.push_back(group);
+
+    const auto createdIndex = audiocity::plugin::createProgramZone(program);
+    if (!(createdIndex == 0
+        && program.zones.size() == 1
+        && program.zones[0].sampleAssetIndex == 0
+        && program.zones[0].groupIndex == 0
+        && program.zones[0].keyRange.low == 60
+        && program.zones[0].keyRange.high == 60
+        && program.zones[0].velocityRange.low == 0
+        && program.zones[0].velocityRange.high == 127
+        && program.zones[0].sampleStart == 0
+        && program.zones[0].sampleEndExclusive == 512))
+    {
+        return false;
+    }
+
+    program.zones[0].sampleAssetIndex = 1;
+    program.zones[0].rootMidiNote = 69;
+    program.zones[0].keyRange = MidiRange::fromUnordered(60, 72);
+    program.zones[0].velocityRange = VelocityRange::fromUnordered(8, 110);
+    program.zones[0].sampleStart = 12;
+    program.zones[0].sampleEndExclusive = 200;
+    program.zones[0].loopStart = 24;
+    program.zones[0].loopEndExclusive = 144;
+    program.zones[0].tuneCents = 12.5f;
+
+    const auto seededIndex = audiocity::plugin::createProgramZone(program, 0);
+    if (!(seededIndex == 1
+        && program.zones.size() == 2
+        && program.zones[1].sampleAssetIndex == 1
+        && program.zones[1].groupIndex == 0
+        && program.zones[1].rootMidiNote == 69
+        && program.zones[1].keyRange.low == 69
+        && program.zones[1].keyRange.high == 69
+        && program.zones[1].velocityRange.low == 0
+        && program.zones[1].velocityRange.high == 127
+        && program.zones[1].sampleStart == 0
+        && program.zones[1].sampleEndExclusive == 256
+        && program.zones[1].loopStart == -1
+        && program.zones[1].loopEndExclusive == -1
+        && std::abs(program.zones[1].tuneCents - 12.5f) <= 1.0e-6f))
+    {
+        return false;
+    }
+
+    Program emptyProgram;
+    return audiocity::plugin::createProgramZone(emptyProgram) < 0;
+}
+
 bool runProgramMappingAtomicBatchEditRollbackTest()
 {
     using namespace audiocity::engine;
@@ -5138,6 +5209,75 @@ bool runEditorUndoHistoryCoalesceAndLabelsTest()
     return history.canRedo();
 }
 
+bool runEditorUndoHistoryCreateZoneTest()
+{
+    using namespace audiocity::engine;
+
+    Program initialProgram;
+    SampleAsset sample;
+    sample.displayName = "create.wav";
+    sample.lengthSamples = 512;
+    sample.rootMidiNote = 60;
+    initialProgram.sampleAssets.push_back(sample);
+
+    audiocity::plugin::ProgramMappingStateSnapshot initialMapping;
+    initialMapping.hasImportedProgram = true;
+    initialMapping.programPath = "C:/Library/create.sfz";
+    initialMapping.mappingState = audiocity::plugin::createProgramZoneMappingState(initialProgram);
+
+    auto createdProgram = initialProgram;
+    if (audiocity::plugin::createProgramZone(createdProgram) != 0)
+        return false;
+
+    auto createdMapping = initialMapping;
+    createdMapping.mappingState = audiocity::plugin::createProgramZoneMappingState(createdProgram);
+
+    audiocity::engine::SettingsSnapshot initialSettings;
+    initialSettings.preloadSamples = 32768;
+
+    auto changedSettings = initialSettings;
+    changedSettings.preloadSamples = 8192;
+
+    audiocity::plugin::EditorUndoHistory history;
+    history.recordSettingsChange(initialSettings, changedSettings, 1, "Edit Settings");
+    history.recordMappingChange(initialMapping, createdMapping, "Create Mapping Zone");
+
+    if (!history.canUndo() || history.undoLabel() != "Create Mapping Zone")
+        return false;
+
+    auto currentSettings = changedSettings;
+    auto currentMapping = createdMapping;
+    const auto undo1 = history.undo(currentSettings, currentMapping);
+    if (!undo1.has_value() || undo1->kind != audiocity::plugin::EditorUndoHistory::EntryKind::mapping)
+        return false;
+
+    if (undo1->mappingSnapshot != initialMapping || history.undoLabel() != "Edit Settings")
+        return false;
+
+    currentMapping = undo1->mappingSnapshot;
+    const auto undo2 = history.undo(currentSettings, currentMapping);
+    if (!undo2.has_value() || undo2->kind != audiocity::plugin::EditorUndoHistory::EntryKind::settings)
+        return false;
+
+    if (!(undo2->settingsSnapshot == initialSettings))
+        return false;
+
+    currentSettings = undo2->settingsSnapshot;
+    const auto redo1 = history.redo(currentSettings, currentMapping);
+    if (!redo1.has_value() || redo1->kind != audiocity::plugin::EditorUndoHistory::EntryKind::settings)
+        return false;
+
+    if (!(redo1->settingsSnapshot == changedSettings))
+        return false;
+
+    currentSettings = redo1->settingsSnapshot;
+    const auto redo2 = history.redo(currentSettings, currentMapping);
+    if (!redo2.has_value() || redo2->kind != audiocity::plugin::EditorUndoHistory::EntryKind::mapping)
+        return false;
+
+    return redo2->mappingSnapshot == createdMapping && !history.canRedo() && history.canUndo();
+}
+
 bool runEditorUndoHistoryDuplicateAndSplitTest()
 {
     using namespace audiocity::engine;
@@ -7657,6 +7797,9 @@ int main()
     if (!runProgramStreamLookaheadPrimingTest())
         return 172;
 
+    if (!runProgramMappingCreateZoneTest())
+        return 176;
+
     if (!runQualityTierDifferenceTest())
         return 15;
 
@@ -7677,6 +7820,9 @@ int main()
 
     if (!runEditorUndoHistoryDuplicateAndSplitTest())
         return 175;
+
+    if (!runEditorUndoHistoryCreateZoneTest())
+        return 177;
 
     if (!runSettingsUndoHistoryTest())
         return 18;

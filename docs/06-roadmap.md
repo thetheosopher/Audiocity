@@ -108,6 +108,7 @@
 
 **Current validated slice**
 - CPU, Fidelity, and Ultra playback tiers are wired end-to-end through processor state and UI controls.
+- Ultra now uses a higher-quality windowed-sinc resampler path while CPU and Fidelity remain the lighter playback modes.
 - Offline tests cover audible tier differences, deterministic output per tier, and runtime switching across all three tiers.
 
 ### Epic I — Undo/Redo across mapping and sample edits
@@ -116,6 +117,7 @@
 - Imported-program structural mapping undo/redo uses serialized mapping snapshots.
 - Editor undo/redo is now chronological across mapping changes and sample/settings edits rather than split by tab or edit domain.
 - Multi-zone imported-program mapping apply/delete commits atomically at the processor publish boundary so failed batch edits roll back cleanly.
+- The Mapping tab now has a true create-zone workflow that appends a new playable zone, seeded from the current selection when available.
 - Duplicate and split structural zone operations are covered by the same unified mapping history path.
 
 ---

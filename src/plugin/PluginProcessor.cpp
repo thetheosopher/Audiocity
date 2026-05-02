@@ -1626,6 +1626,35 @@ bool AudiocityAudioProcessor::updateImportedProgramZoneMappings(
     return true;
 }
 
+int AudiocityAudioProcessor::createImportedProgramZone(const int seedZoneIndex)
+{
+    audiocity::engine::Program programToPublish;
+    std::vector<juce::AudioBuffer<float>> sampleDataToPublish;
+    int newZoneIndex = -1;
+
+    {
+        std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+        if (!importedProgramLoaded_.load(std::memory_order_relaxed)
+            || importedProgramSampleDataByAsset_.empty())
+        {
+            return -1;
+        }
+
+        auto updatedProgram = importedProgram_;
+        newZoneIndex = audiocity::plugin::createProgramZone(updatedProgram, seedZoneIndex);
+        if (newZoneIndex < 0)
+            return -1;
+
+        importedProgram_ = std::move(updatedProgram);
+        refreshImportedProgramDerivedStateLocked("Mapping created: zone " + juce::String(newZoneIndex + 1));
+        captureImportedProgramSnapshotLocked(programToPublish, sampleDataToPublish);
+    }
+
+    engine_.panic();
+    engine_.setProgram(programToPublish, sampleDataToPublish);
+    return newZoneIndex;
+}
+
 int AudiocityAudioProcessor::duplicateImportedProgramZone(const int zoneIndex)
 {
     audiocity::engine::Program programToPublish;

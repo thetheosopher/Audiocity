@@ -74,6 +74,7 @@ public:
     bool applyImportedProgramMappingState(const juce::ValueTree& mappingState);
     bool updateImportedProgramZoneMapping(const audiocity::plugin::ProgramZoneEdit& edit);
     bool updateImportedProgramZoneMappings(const std::vector<audiocity::plugin::ProgramZoneEdit>& edits);
+    [[nodiscard]] int createImportedProgramZone(int seedZoneIndex = -1);
     [[nodiscard]] int duplicateImportedProgramZone(int zoneIndex);
     bool deleteImportedProgramZone(int zoneIndex);
     bool deleteImportedProgramZones(const std::vector<int>& zoneIndices);

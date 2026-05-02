@@ -452,6 +452,16 @@ private:
                                         int sampleStart,
                                         int sampleEndExclusive,
                                         int channel) const noexcept;
+    [[nodiscard]] float readSampleWindowedSinc(const SampleSegments& segments, float position) const noexcept;
+    [[nodiscard]] float readSampleWindowedSinc(const SampleSegments& segments,
+                                               float position,
+                                               int sampleStart,
+                                               int sampleEndExclusive) const noexcept;
+    [[nodiscard]] float readSampleWindowedSinc(const SampleSegments& segments,
+                                               float position,
+                                               int sampleStart,
+                                               int sampleEndExclusive,
+                                               int channel) const noexcept;
     [[nodiscard]] float computeFilterSample(float inputSample,
                                             float envValue,
                                             float lfoValue,

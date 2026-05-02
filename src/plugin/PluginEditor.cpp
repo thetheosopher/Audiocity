@@ -2430,6 +2430,9 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(mappingRefreshButton_);
     mappingRefreshButton_.onClick = [this] { refreshMappingZoneRows(); };
 
+    addAndMakeVisible(mappingCreateZoneButton_);
+    mappingCreateZoneButton_.onClick = [this] { createMappingZone(); };
+
     addAndMakeVisible(mappingDuplicateZoneButton_);
     mappingDuplicateZoneButton_.onClick = [this] { duplicateSelectedMappingZone(); };
 
@@ -3737,6 +3740,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
 
     mappingSummaryLabel_.setVisible(showMappingTab);
     mappingRefreshButton_.setVisible(showMappingTab);
+    mappingCreateZoneButton_.setVisible(showMappingTab);
     mappingDuplicateZoneButton_.setVisible(showMappingTab);
     mappingSplitZoneButton_.setVisible(showMappingTab);
     mappingDeleteZoneButton_.setVisible(showMappingTab);
@@ -4406,17 +4410,18 @@ void AudiocityAudioProcessorEditor::showMappingZoneContextMenu(const int row, co
     const auto singleSelection = selectedRows.size() == 1;
     const auto& selectedRow = mappingZoneRows_[static_cast<std::size_t>(selectedRows.front())];
     juce::PopupMenu menu;
-    menu.addItem(1, "Duplicate Zone\tCtrl+D", singleSelection);
-    menu.addItem(2, "Split Zone\tCtrl+Shift+D", singleSelection && selectedRow.keyHigh > selectedRow.keyLow);
-    menu.addItem(3,
+    menu.addItem(1, "New Zone\tCtrl+N", processor_.hasImportedProgram());
+    menu.addItem(2, "Duplicate Zone\tCtrl+D", singleSelection);
+    menu.addItem(3, "Split Zone\tCtrl+Shift+D", singleSelection && selectedRow.keyHigh > selectedRow.keyLow);
+    menu.addItem(4,
                  singleSelection ? "Delete Zone\tDelete" : "Delete Selected Zones\tDelete",
                  true);
     menu.addSeparator();
-    menu.addItem(4,
+    menu.addItem(5,
                  singleSelection ? "Clear Velocity Fades" : "Clear Velocity Fades for Selected Zones",
                  true);
     menu.addSeparator();
-    menu.addItem(5,
+    menu.addItem(6,
                  "Select All Zones\tCtrl+A",
                  static_cast<int>(selectedRows.size()) < static_cast<int>(mappingZoneRows_.size()));
 
@@ -4431,18 +4436,21 @@ void AudiocityAudioProcessorEditor::showMappingZoneContextMenu(const int row, co
             switch (selectedId)
             {
                 case 1:
-                    safeThis->duplicateSelectedMappingZone();
+                    safeThis->createMappingZone();
                     break;
                 case 2:
-                    safeThis->splitSelectedMappingZone();
+                    safeThis->duplicateSelectedMappingZone();
                     break;
                 case 3:
-                    safeThis->deleteSelectedMappingZone();
+                    safeThis->splitSelectedMappingZone();
                     break;
                 case 4:
-                    safeThis->clearSelectedMappingVelocityFades();
+                    safeThis->deleteSelectedMappingZone();
                     break;
                 case 5:
+                    safeThis->clearSelectedMappingVelocityFades();
+                    break;
+                case 6:
                     safeThis->selectAllMappingZones();
                     break;
                 default:
@@ -4509,6 +4517,7 @@ void AudiocityAudioProcessorEditor::updateMappingEditControls()
     const auto hasSingleSelection = selectedRows.size() == 1;
     const auto hasBatchSelection = selectedRows.size() > 1;
     const auto hasPendingBatchEdit = hasBatchSelection && hasPendingMappingBatchEdit();
+    const auto hasImportedProgram = processor_.hasImportedProgram();
 
     mappingEditKeyLowSlider_.setEnabled(hasSingleSelection);
     mappingEditKeyHighSlider_.setEnabled(hasSingleSelection);
@@ -4533,6 +4542,7 @@ void AudiocityAudioProcessorEditor::updateMappingEditControls()
     mappingEditLoopCombo_.setEnabled(hasSelection);
     mappingEditApplyButton_.setEnabled(hasSingleSelection || hasPendingBatchEdit);
     mappingEditApplyButton_.setButtonText(hasBatchSelection ? "Apply Batch" : "Apply Zone");
+    mappingCreateZoneButton_.setEnabled(hasImportedProgram);
     mappingDuplicateZoneButton_.setEnabled(hasSingleSelection);
     mappingDeleteZoneButton_.setEnabled(hasSelection);
     mappingSplitZoneButton_.setEnabled(hasSingleSelection);
@@ -4791,6 +4801,40 @@ void AudiocityAudioProcessorEditor::applySelectedMappingZoneEdit()
     edit.hasLoopMode = true;
 
     commitMappingZoneEdit(edit, "Zone " + juce::String(zoneIndex + 1) + " updated");
+}
+
+void AudiocityAudioProcessorEditor::createMappingZone()
+{
+    if (!processor_.hasImportedProgram())
+    {
+        updateMappingEditControls();
+        return;
+    }
+
+    const auto selectedRows = getSelectedMappingRowIndices();
+    const auto seedZoneIndex = selectedRows.size() == 1
+        ? mappingZoneRows_[static_cast<std::size_t>(selectedRows.front())].zoneIndex
+        : -1;
+
+    const auto beforeState = captureImportedProgramMappingState();
+    const auto newZoneIndex = processor_.createImportedProgramZone(seedZoneIndex);
+    if (newZoneIndex < 0)
+    {
+        mappingEditStatusLabel_.setText("Create failed", juce::dontSendNotification);
+        updateMappingEditControls();
+        return;
+    }
+
+    recordImportedProgramMappingChange(beforeState, "Create Mapping Zone");
+    mappingEditStatusLabel_.setText(
+        seedZoneIndex >= 0
+            ? "Zone " + juce::String(newZoneIndex + 1) + " created from zone " + juce::String(seedZoneIndex + 1)
+            : "Zone " + juce::String(newZoneIndex + 1) + " created",
+        juce::dontSendNotification);
+    refreshMappingZoneRows();
+    selectMappingZoneByIndex(newZoneIndex);
+    updateMappingDetails();
+    updateDiagnosticsStatusText();
 }
 
 void AudiocityAudioProcessorEditor::duplicateSelectedMappingZone()
@@ -5629,7 +5673,7 @@ void AudiocityAudioProcessorEditor::paintAboutPane(juce::Graphics& g, juce::Rect
         { "Ctrl+Z / Y", "Undo or redo sample, parameter, or mapping edits" },
         { "Space", "Play or stop generated waveform preview" },
         { "Enter / Esc", "Load selected browser row or panic audio" },
-        { "Mapping", "Ctrl+A selects all zones, Ctrl+D duplicates, Ctrl+Shift+D splits, Delete removes selected zones" }
+        { "Mapping", "Ctrl+N creates a zone, Ctrl+A selects all zones, Ctrl+D duplicates, Ctrl+Shift+D splits, Delete removes selected zones" }
     }};
 
     const int iconY = area.getY() + 20;
@@ -5846,6 +5890,8 @@ void AudiocityAudioProcessorEditor::resized()
         mappingSplitZoneButton_.setBounds(header.removeFromRight(68));
         header.removeFromRight(6);
         mappingDuplicateZoneButton_.setBounds(header.removeFromRight(90));
+        header.removeFromRight(6);
+        mappingCreateZoneButton_.setBounds(header.removeFromRight(82));
         header.removeFromRight(8);
         mappingSummaryLabel_.setBounds(header);
 
@@ -6523,9 +6569,16 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
             || mappingZoneListBox_.isParentOf(focusedComponent)
             || focusedComponent == &mappingOverview_
             || mappingOverview_.isParentOf(focusedComponent)
+            || focusedComponent == &mappingCreateZoneButton_
             || focusedComponent == &mappingDuplicateZoneButton_
             || focusedComponent == &mappingSplitZoneButton_
             || focusedComponent == &mappingDeleteZoneButton_);
+
+    if (mappingShortcutContext && commandDown && (key.getTextCharacter() == 'n' || key.getTextCharacter() == 'N'))
+    {
+        createMappingZone();
+        return true;
+    }
 
     if (mappingShortcutContext && commandDown && modifiers.isShiftDown()
         && (key.getTextCharacter() == 'd' || key.getTextCharacter() == 'D'))
@@ -7507,6 +7560,8 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Apply Tags to Selected Item");
     mappingRefreshButton_.setTooltip(
         "Refresh Mapping View");
+    mappingCreateZoneButton_.setTooltip(
+        "Create a New Mapping Zone");
     mappingDuplicateZoneButton_.setTooltip(
         "Duplicate Selected Zone");
     mappingSplitZoneButton_.setTooltip(
@@ -7562,7 +7617,7 @@ void AudiocityAudioProcessorEditor::setupTooltips()
     mappingEditApplyButton_.setTooltip(
         "Apply zone mapping; with multiple selected rows, Apply uses edited batch controls for every selected zone");
     mappingZoneListBox_.setTooltip(
-        "Imported Program Zones - Ctrl+A selects all rows; Ctrl or Shift multi-select enables batch edit for velocity fades, gain, pan, RR group/mode, choke, trigger, and loop, or right-click for Duplicate, Split, Delete, and Clear Velocity Fades");
+        "Imported Program Zones - Ctrl+N creates a zone; Ctrl+A selects all rows; Ctrl or Shift multi-select enables batch edit for velocity fades, gain, pan, RR group/mode, choke, trigger, and loop, or right-click for New, Duplicate, Split, Delete, and Clear Velocity Fades");
     captureRecordButton_.setTooltip(
         "Start/Stop Capture from Plugin Input");
     captureClearButton_.setTooltip(
@@ -7701,7 +7756,7 @@ void AudiocityAudioProcessorEditor::setupTooltips()
     qualityFidelityButton_.setTooltip(
         "Quality - Prioritize highest playback fidelity");
     qualityUltraButton_.setTooltip(
-        "Quality - High quality cubic interpolation");
+        "Quality - High quality windowed-sinc interpolation");
     reverbMixDial_.setLabelTooltip(
         "Reverb Mix - Global wet amount");
     delayTimeDial_.setLabelTooltip(

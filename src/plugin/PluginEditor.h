@@ -376,6 +376,7 @@ private:
     MappingZoneListModel mappingZoneListModel_;
     juce::Label mappingSummaryLabel_{ {}, "No imported program" };
     juce::TextButton mappingRefreshButton_{ "Refresh" };
+    juce::TextButton mappingCreateZoneButton_{ "New Zone" };
     juce::TextButton mappingDuplicateZoneButton_{ "Duplicate" };
     juce::TextButton mappingSplitZoneButton_{ "Split" };
     juce::TextButton mappingDeleteZoneButton_{ "Delete" };
@@ -866,6 +867,7 @@ private:
     void updateMappingDetails();
     void updateMappingEditControls();
     void applySelectedMappingZoneEdit();
+    void createMappingZone();
     void duplicateSelectedMappingZone();
     void splitSelectedMappingZone();
     void deleteSelectedMappingZone();
