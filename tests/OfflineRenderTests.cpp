@@ -4376,33 +4376,42 @@ bool runProgramStreamPrimingAndCacheMetricsTest()
     asset.rootMidiNote = 60;
     program.sampleAssets.push_back(asset);
 
-    Zone zone;
-    zone.sampleAssetIndex = 0;
-    zone.keyRange = MidiRange::single(60);
-    zone.rootMidiNote = 60;
-    zone.sampleStart = 2048;
-    zone.sampleEndExclusive = sample.getNumSamples();
-    program.zones.push_back(zone);
+    const std::array<int, 5> zoneStarts{ 256, 768, 1280, 1792, 2304 };
+    for (int zoneIndex = 0; zoneIndex < static_cast<int>(zoneStarts.size()); ++zoneIndex)
+    {
+        Zone zone;
+        zone.sampleAssetIndex = 0;
+        zone.keyRange = MidiRange::single(60 + zoneIndex);
+        zone.rootMidiNote = 60 + zoneIndex;
+        zone.sampleStart = zoneStarts[static_cast<std::size_t>(zoneIndex)];
+        zone.sampleEndExclusive = sample.getNumSamples();
+        program.zones.push_back(zone);
+    }
 
     std::vector<juce::AudioBuffer<float>> sampleDataByAsset;
     sampleDataByAsset.push_back(sample);
     engine.setProgram(program, sampleDataByAsset);
+
+    const auto baseRequests = engine.getStreamPrimeRequestCount();
+    const auto baseHits = engine.getStreamPrimeCacheHitCount();
+    const auto baseMisses = engine.getStreamPrimeCacheMissCount();
+    const auto baseServices = engine.getStreamPrimeServiceCount();
 
     juce::AudioBuffer<float> firstBlock(channels, blockSize);
     juce::MidiBuffer firstMidi;
     firstMidi.addEvent(juce::MidiMessage::noteOn(1, 60, 0.8f), 0);
     engine.render(firstBlock, firstMidi);
 
-    if (engine.getStreamPrimeRequestCount() != 1
-        || engine.getStreamPrimeCacheHitCount() != 0
-        || engine.getStreamPrimeCacheMissCount() != 1)
+    if ((engine.getStreamPrimeRequestCount() - baseRequests) != 2
+        || (engine.getStreamPrimeCacheHitCount() - baseHits) != 1
+        || (engine.getStreamPrimeCacheMissCount() - baseMisses) != 1)
     {
         tempDirectory.deleteRecursively();
         return false;
     }
 
     engine.serviceStreamPriming();
-    if (engine.getStreamPrimeServiceCount() != 1)
+    if ((engine.getStreamPrimeServiceCount() - baseServices) != 1)
     {
         tempDirectory.deleteRecursively();
         return false;
@@ -4413,10 +4422,101 @@ bool runProgramStreamPrimingAndCacheMetricsTest()
     secondMidi.addEvent(juce::MidiMessage::noteOn(1, 60, 0.8f), 0);
     engine.render(secondBlock, secondMidi);
 
-    const auto passed = engine.getStreamPrimeRequestCount() == 2
-        && engine.getStreamPrimeCacheHitCount() == 1
-        && engine.getStreamPrimeCacheMissCount() == 1
-        && engine.getStreamPrimeServiceCount() == 1;
+    const auto passed = (engine.getStreamPrimeRequestCount() - baseRequests) == 4
+        && (engine.getStreamPrimeCacheHitCount() - baseHits) == 2
+        && (engine.getStreamPrimeCacheMissCount() - baseMisses) == 2
+        && (engine.getStreamPrimeServiceCount() - baseServices) == 1;
+
+    tempDirectory.deleteRecursively();
+    return passed;
+}
+
+bool runProgramStreamLookaheadPrimingTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_stream_lookahead_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto sampleFile = tempDirectory.getChildFile("lookahead.wav");
+    const auto sample = createTestSample(4096);
+
+    auto writeWavFile = [&](const juce::File& fileToWrite) -> bool
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(fileToWrite.createOutputStream());
+        if (output == nullptr)
+            return false;
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+            return false;
+
+        output.release();
+        return writer->writeFromAudioSampleBuffer(sample, 0, sample.getNumSamples());
+    };
+
+    if (!writeWavFile(sampleFile))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setPreloadSamples(256);
+
+    Program program;
+    SampleAsset asset;
+    asset.sourcePath = sampleFile.getFullPathName().toStdString();
+    asset.displayName = "lookahead.wav";
+    asset.lengthSamples = sample.getNumSamples();
+    asset.numChannels = sample.getNumChannels();
+    asset.sampleRateHz = sampleRate;
+    asset.rootMidiNote = 60;
+    program.sampleAssets.push_back(asset);
+
+    Zone zone;
+    zone.sampleAssetIndex = 0;
+    zone.keyRange = MidiRange::single(60);
+    zone.rootMidiNote = 60;
+    zone.sampleStart = 256;
+    zone.sampleEndExclusive = sample.getNumSamples();
+    program.zones.push_back(zone);
+
+    std::vector<juce::AudioBuffer<float>> sampleDataByAsset;
+    sampleDataByAsset.push_back(sample);
+    engine.setProgram(program, sampleDataByAsset);
+
+    const auto baseRequests = engine.getStreamPrimeRequestCount();
+    const auto baseHits = engine.getStreamPrimeCacheHitCount();
+    const auto baseMisses = engine.getStreamPrimeCacheMissCount();
+    const auto baseServices = engine.getStreamPrimeServiceCount();
+
+    for (int blockIndex = 0; blockIndex < 5; ++blockIndex)
+    {
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+        if (blockIndex == 0)
+            midi.addEvent(juce::MidiMessage::noteOn(1, 60, 0.8f), 0);
+
+        if (blockIndex == 4)
+            midi.addEvent(juce::MidiMessage::noteOff(1, 60), 32);
+
+        engine.render(block, midi);
+        engine.serviceStreamPriming();
+    }
+
+    const auto passed = (engine.getStreamPrimeRequestCount() - baseRequests) >= 6
+        && (engine.getStreamPrimeCacheHitCount() - baseHits) >= 4
+        && (engine.getStreamPrimeCacheMissCount() - baseMisses) >= 2
+        && (engine.getStreamPrimeServiceCount() - baseServices) >= 2;
 
     tempDirectory.deleteRecursively();
     return passed;
@@ -7082,6 +7182,9 @@ int main()
 
     if (!runProgramStreamPrimingAndCacheMetricsTest())
         return 171;
+
+    if (!runProgramStreamLookaheadPrimingTest())
+        return 172;
 
     if (!runQualityTierDifferenceTest())
         return 15;

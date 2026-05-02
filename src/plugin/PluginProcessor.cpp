@@ -6,8 +6,10 @@
 #include "../engine/SfzImporter.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <thread>
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -321,6 +323,11 @@ AudiocityAudioProcessor::AudiocityAudioProcessor()
     setMasterVolume(engine_.getMasterVolume());
 }
 
+AudiocityAudioProcessor::~AudiocityAudioProcessor()
+{
+    stopStreamPrimeWorker();
+}
+
 juce::AudioProcessorValueTreeState::ParameterLayout AudiocityAudioProcessor::createParameterLayout()
 {
     using Mode = AudiocityAudioProcessor::FilterSettings::Mode;
@@ -586,6 +593,7 @@ void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
 void AudiocityAudioProcessor::prepareToPlay(const double sampleRate, const int samplesPerBlock)
 {
     engine_.prepare(sampleRate, samplesPerBlock, getTotalNumOutputChannels());
+    startStreamPrimeWorker();
     captureInputSampleRate_.store(juce::jmax(1.0, sampleRate), std::memory_order_relaxed);
     outputBoundaryLastSample_.fill(0.0f);
     outputBoundaryHasLastSample_ = false;
@@ -593,9 +601,33 @@ void AudiocityAudioProcessor::prepareToPlay(const double sampleRate, const int s
 
 void AudiocityAudioProcessor::releaseResources()
 {
+    stopStreamPrimeWorker();
     engine_.release();
     outputBoundaryLastSample_.fill(0.0f);
     outputBoundaryHasLastSample_ = false;
+}
+
+void AudiocityAudioProcessor::startStreamPrimeWorker()
+{
+    stopStreamPrimeWorker();
+    stopStreamPrimeWorkerRequested_.store(false, std::memory_order_release);
+    streamPrimeWorker_ = std::thread([this]
+    {
+        using namespace std::chrono_literals;
+
+        while (!stopStreamPrimeWorkerRequested_.load(std::memory_order_acquire))
+        {
+            engine_.serviceStreamPriming();
+            std::this_thread::sleep_for(2ms);
+        }
+    });
+}
+
+void AudiocityAudioProcessor::stopStreamPrimeWorker()
+{
+    stopStreamPrimeWorkerRequested_.store(true, std::memory_order_release);
+    if (streamPrimeWorker_.joinable())
+        streamPrimeWorker_.join();
 }
 
 bool AudiocityAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const

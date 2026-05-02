@@ -3424,7 +3424,6 @@ void AudiocityAudioProcessorEditor::handleNoteOff(juce::MidiKeyboardState* sourc
 void AudiocityAudioProcessorEditor::timerCallback()
 {
     updateGeneratePreviewButtonText();
-    processor_.serviceStreamPriming();
 
     processor_.setWaveformViewRange(waveformView_.getViewStartSample(), waveformView_.getViewSampleCount());
 

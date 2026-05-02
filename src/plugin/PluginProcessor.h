@@ -12,6 +12,7 @@
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -19,7 +20,7 @@ class AudiocityAudioProcessor final : public juce::AudioProcessor
 {
 public:
     AudiocityAudioProcessor();
-    ~AudiocityAudioProcessor() override = default;
+    ~AudiocityAudioProcessor() override;
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
@@ -344,6 +345,8 @@ private:
     void updateCaptureInputMonitorLevels(const juce::AudioBuffer<float>& buffer, int sourceChannels) noexcept;
     [[nodiscard]] bool captureInputAudio(const juce::AudioBuffer<float>& buffer, int sourceChannels) noexcept;
     static float quantizeCaptureSample(float sample, int bitDepth) noexcept;
+    void startStreamPrimeWorker();
+    void stopStreamPrimeWorker();
     void clearImportedProgramMetadata();
     void setImportedProgramMetadata(const juce::File& file,
                                     const audiocity::engine::Program& program,
@@ -366,6 +369,8 @@ private:
 
     audiocity::engine::EngineCore engine_;
     juce::AudioProcessorValueTreeState apvts_;
+    std::thread streamPrimeWorker_;
+    std::atomic<bool> stopStreamPrimeWorkerRequested_{ false };
 
     // Ring buffer for CC events
     std::array<CcEvent, kCcFifoSize> ccFifo_{};

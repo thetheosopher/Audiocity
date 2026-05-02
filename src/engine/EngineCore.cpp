@@ -379,6 +379,8 @@ struct MemorySampleStreamSource final : SampleStreamSource
     juce::AudioBuffer<float> data;
 };
 
+constexpr int kDiskStreamCachePageCount = 4;
+
 struct StreamCacheWindow
 {
     juce::AudioBuffer<float> data;
@@ -390,24 +392,46 @@ struct StreamCacheWindow
     }
 };
 
+struct StreamCacheState
+{
+    std::array<StreamCacheWindow, kDiskStreamCachePageCount> pages{};
+    int pageCount = 0;
+
+    [[nodiscard]] const StreamCacheWindow* findPageContainingSample(const int sampleIndex) const noexcept
+    {
+        for (int pageIndex = 0; pageIndex < pageCount; ++pageIndex)
+        {
+            const auto& page = pages[pageIndex];
+            if (page.contains(sampleIndex))
+                return &page;
+        }
+
+        return nullptr;
+    }
+
+    [[nodiscard]] bool contains(const int sampleIndex) const noexcept
+    {
+        return findPageContainingSample(sampleIndex) != nullptr;
+    }
+};
+
 struct DiskSampleStreamSource final : SampleStreamSource
 {
     DiskSampleStreamSource(const juce::File& backingFile,
-                           juce::AudioBuffer<float> fallbackTail,
+                           juce::AudioBuffer<float> seedTail,
                            const int absoluteStreamStartSample)
         : file(backingFile),
-          fallbackData(std::move(fallbackTail)),
-          totalChannels(juce::jmax(1, fallbackData.getNumChannels())),
-          totalSamples(fallbackData.getNumSamples()),
+          totalChannels(juce::jmax(1, seedTail.getNumChannels())),
+          totalSamples(seedTail.getNumSamples()),
           streamStartSample(juce::jmax(0, absoluteStreamStartSample)),
           primeWindowSamples(totalSamples > 0
                             ? juce::jmin(totalSamples,
-                                                     juce::jmax(512,
-                                                                            juce::jmin(4096, juce::jmax(512, juce::jmax(0, absoluteStreamStartSample)))))
+                                         juce::jmax(512,
+                                                    juce::jmin(4096, juce::jmax(0, absoluteStreamStartSample))))
               : 0)
     {
-        if (totalSamples > 0)
-            cacheWindow.store(loadCacheWindow(0), std::memory_order_release);
+        if (const auto initialState = seedInitialCacheState(seedTail))
+            cacheState.store(initialState, std::memory_order_release);
     }
 
     [[nodiscard]] int getNumChannels() const noexcept override
@@ -426,15 +450,13 @@ struct DiskSampleStreamSource final : SampleStreamSource
             return 0.0f;
 
         const auto clampedChannel = juce::jlimit(0, totalChannels - 1, channel);
-        const auto currentCache = cacheWindow.load(std::memory_order_acquire);
-        if (currentCache != nullptr && currentCache->contains(index))
-            return currentCache->data.getSample(juce::jmin(clampedChannel, currentCache->data.getNumChannels() - 1),
-                                                index - currentCache->startSample);
+        const auto currentCache = cacheState.load(std::memory_order_acquire);
+        if (currentCache != nullptr)
+            if (const auto* page = currentCache->findPageContainingSample(index); page != nullptr)
+                return page->data.getSample(juce::jmin(clampedChannel, page->data.getNumChannels() - 1),
+                                            index - page->startSample);
 
-        if (fallbackData.getNumChannels() <= 0 || fallbackData.getNumSamples() <= 0)
-            return 0.0f;
-
-        return fallbackData.getSample(juce::jmin(clampedChannel, fallbackData.getNumChannels() - 1), index);
+        return 0.0f;
     }
 
     void requestPrime(const int streamIndex) const noexcept override
@@ -445,7 +467,7 @@ struct DiskSampleStreamSource final : SampleStreamSource
         ++primeRequestCount;
 
         const auto clampedIndex = juce::jlimit(0, totalSamples - 1, streamIndex);
-        const auto currentCache = cacheWindow.load(std::memory_order_acquire);
+        const auto currentCache = cacheState.load(std::memory_order_acquire);
         if (currentCache != nullptr && currentCache->contains(clampedIndex))
         {
             ++primeCacheHitCount;
@@ -462,15 +484,15 @@ struct DiskSampleStreamSource final : SampleStreamSource
         if (requestedWindowStart < 0)
             return false;
 
-        const auto currentCache = cacheWindow.load(std::memory_order_acquire);
-        if (currentCache != nullptr && currentCache->startSample == requestedWindowStart)
+        const auto currentCache = cacheState.load(std::memory_order_acquire);
+        if (currentCache != nullptr && currentCache->contains(requestedWindowStart))
             return false;
 
         const auto nextCache = loadCacheWindow(requestedWindowStart);
         if (nextCache == nullptr)
             return false;
 
-        cacheWindow.store(nextCache, std::memory_order_release);
+        cacheState.store(mergeCacheWindow(currentCache, *nextCache), std::memory_order_release);
         ++primeServiceCount;
         return true;
     }
@@ -504,6 +526,27 @@ private:
         const auto clampedIndex = juce::jlimit(0, totalSamples - 1, streamIndex);
         const auto alignedStart = (clampedIndex / primeWindowSamples) * primeWindowSamples;
         return juce::jlimit(0, juce::jmax(0, totalSamples - primeWindowSamples), alignedStart);
+    }
+
+    [[nodiscard]] std::shared_ptr<const StreamCacheState> seedInitialCacheState(const juce::AudioBuffer<float>& seedTail) const
+    {
+        if (totalSamples <= 0 || primeWindowSamples <= 0 || seedTail.getNumChannels() <= 0)
+            return {};
+
+        auto state = std::make_shared<StreamCacheState>();
+        auto& page = state->pages[state->pageCount++];
+        const auto windowSamples = juce::jmin(primeWindowSamples, seedTail.getNumSamples());
+        page.startSample = 0;
+        page.data.setSize(totalChannels, windowSamples, false, true, true);
+        page.data.clear();
+
+        for (int channel = 0; channel < totalChannels; ++channel)
+        {
+            const auto sourceChannel = juce::jmin(channel, seedTail.getNumChannels() - 1);
+            page.data.copyFrom(channel, 0, seedTail, sourceChannel, 0, windowSamples);
+        }
+
+        return state;
     }
 
     [[nodiscard]] std::shared_ptr<const StreamCacheWindow> loadCacheWindow(const int requestedWindowStart) const
@@ -562,8 +605,32 @@ private:
         return cache;
     }
 
+    [[nodiscard]] std::shared_ptr<const StreamCacheState> mergeCacheWindow(
+        const std::shared_ptr<const StreamCacheState>& currentState,
+        const StreamCacheWindow& nextWindow) const
+    {
+        auto merged = std::make_shared<StreamCacheState>();
+        merged->pages[merged->pageCount++] = nextWindow;
+
+        if (currentState == nullptr)
+            return merged;
+
+        for (int pageIndex = 0; pageIndex < currentState->pageCount; ++pageIndex)
+        {
+            const auto& existingPage = currentState->pages[pageIndex];
+            if (existingPage.startSample == nextWindow.startSample)
+                continue;
+
+            if (merged->pageCount >= kDiskStreamCachePageCount)
+                break;
+
+            merged->pages[merged->pageCount++] = existingPage;
+        }
+
+        return merged;
+    }
+
     juce::File file;
-    juce::AudioBuffer<float> fallbackData;
     int totalChannels = 0;
     int totalSamples = 0;
     int streamStartSample = 0;
@@ -573,7 +640,7 @@ private:
     mutable std::atomic<int> primeCacheHitCount{ 0 };
     mutable std::atomic<int> primeCacheMissCount{ 0 };
     mutable std::atomic<int> primeServiceCount{ 0 };
-    mutable std::atomic<std::shared_ptr<const StreamCacheWindow>> cacheWindow{};
+    mutable std::atomic<std::shared_ptr<const StreamCacheState>> cacheState{};
 };
 
 struct EngineCore::SampleSegments
@@ -957,6 +1024,21 @@ void EngineCore::setProgram(const Program& program, const std::vector<juce::Audi
 
         const auto backingFilePath = juce::String::fromUTF8(program.sampleAssets[assetIndex].sourcePath.c_str());
         audio->sampleSegments[assetIndex] = buildSampleSegments(source, preloadSamples_, juce::File(backingFilePath));
+    }
+
+    for (std::size_t zoneIndex = 0; zoneIndex < metadata.zoneCount; ++zoneIndex)
+    {
+        const auto& zone = metadata.zones[zoneIndex];
+        if (!metadata.isZoneSampleIndexValid(zone))
+            continue;
+
+        const auto* segments = audio->getSampleSegments(zone.sampleAssetIndex);
+        if (segments == nullptr)
+            continue;
+
+        segments->requestPrimeForAbsoluteSample(zone.sampleStart);
+        const auto primed = segments->servicePendingPrime();
+        juce::ignoreUnused(primed);
     }
 
     programAudioSnapshot_.store(audio, std::memory_order_release);
@@ -1355,6 +1437,20 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
 
                 while (voice.samplePosition < static_cast<float>(effectiveLoopStart))
                     voice.samplePosition += static_cast<float>(loopLength);
+            }
+
+            if (sampleIndex == 0 && voiceSegments->getStreamNumSamples() > 0)
+            {
+                const auto lookaheadSamples = juce::jmax(512,
+                    juce::jmin(4096, juce::jmax(0, voiceSegments->preloadData.getNumSamples())));
+                const auto lookaheadPlaybackIndex = juce::jmin(sampleLength - 1,
+                    static_cast<int>(voice.samplePosition) + lookaheadSamples);
+                const auto lookaheadSampleIndex = mapPlaybackIndexToSampleIndex(
+                    *voiceSegments,
+                    lookaheadPlaybackIndex,
+                    voice.sampleStart,
+                    voice.sampleEndExclusive);
+                voiceSegments->requestPrimeForAbsoluteSample(lookaheadSampleIndex);
             }
 
             const float mappedVelocity = mapVelocity(voice.velocity);
@@ -2792,12 +2888,58 @@ juce::AudioBuffer<float> EngineCore::materializeSampleData(const SampleSegments&
             materialized.copyFrom(channel, 0, segments.preloadData, sourceChannel, 0, preloadSamples);
         }
 
+        if (streamSamples > 0 && segments.backingFilePath.isNotEmpty())
+            continue;
+
         if (streamSamples > 0 && segments.streamSource != nullptr)
         {
             for (int sampleIndex = 0; sampleIndex < streamSamples; ++sampleIndex)
                 materialized.setSample(channel,
                                        preloadSamples + sampleIndex,
                                        segments.streamSource->readSample(channel, sampleIndex));
+        }
+    }
+
+    if (streamSamples > 0 && segments.backingFilePath.isNotEmpty())
+    {
+        juce::AudioFormatManager formatManager;
+        formatManager.registerBasicFormats();
+
+        if (std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(juce::File(segments.backingFilePath)));
+            reader != nullptr && reader->numChannels > 0)
+        {
+            juce::AudioBuffer<float> streamData(static_cast<int>(reader->numChannels), streamSamples);
+            streamData.clear();
+
+            if (reader->read(&streamData,
+                             0,
+                             streamSamples,
+                             static_cast<juce::int64>(preloadSamples),
+                             true,
+                             true))
+            {
+                for (int channel = 0; channel < channels; ++channel)
+                {
+                    if (channels == 1 && streamData.getNumChannels() > 1)
+                    {
+                        for (int sampleIndex = 0; sampleIndex < streamSamples; ++sampleIndex)
+                        {
+                            float sum = 0.0f;
+                            for (int sourceChannel = 0; sourceChannel < streamData.getNumChannels(); ++sourceChannel)
+                                sum += streamData.getSample(sourceChannel, sampleIndex);
+
+                            materialized.setSample(channel,
+                                                   preloadSamples + sampleIndex,
+                                                   sum / static_cast<float>(streamData.getNumChannels()));
+                        }
+
+                        continue;
+                    }
+
+                    const auto sourceChannel = juce::jmin(channel, streamData.getNumChannels() - 1);
+                    materialized.copyFrom(channel, preloadSamples, streamData, sourceChannel, 0, streamSamples);
+                }
+            }
         }
     }
 
