@@ -1390,8 +1390,9 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
         if (!sliceMarkers_.empty())
         {
             g.setColour(uiAccentColour().withAlpha(0.58f));
-            for (const auto markerSample : sliceMarkers_)
+            for (int markerIndex = 0; markerIndex < static_cast<int>(sliceMarkers_.size()); ++markerIndex)
             {
+                const auto markerSample = sliceMarkers_[static_cast<std::size_t>(markerIndex)];
                 if (markerSample <= 0 || markerSample >= totalSamples_)
                     continue;
 
@@ -1403,6 +1404,20 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
 
                 const auto markerX = juce::jlimit(bounds.getX(), bounds.getRight(), xFromSample(markerSample));
                 g.drawLine(markerX, lane.getY(), markerX, lane.getBottom(), 1.0f);
+
+                g.drawLine(markerX - 3.0f, lane.getY() + 2.0f, markerX + 3.0f, lane.getY() + 2.0f, 1.25f);
+
+                if (channel == 0 && loopFormatBadge_ == "SLICE" && static_cast<int>(sliceMarkers_.size()) <= 16)
+                {
+                    auto labelBounds = juce::Rectangle<float>(markerX - 9.0f, bounds.getY() + 4.0f, 18.0f, 11.0f);
+                    g.setColour(uiPanelRaisedColour().withAlpha(0.94f));
+                    g.fillRoundedRectangle(labelBounds, 3.0f);
+                    g.setColour(uiBorderColour().withAlpha(0.95f));
+                    g.drawRoundedRectangle(labelBounds, 3.0f, 1.0f);
+                    g.setColour(uiTextStrongColour().withAlpha(0.96f));
+                    g.setFont(juce::Font(juce::FontOptions(8.5f)).boldened());
+                    g.drawText(juce::String(markerIndex + 1), labelBounds.toNearestInt(), juce::Justification::centred, false);
+                }
             }
         }
 
@@ -2267,6 +2282,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     sampleControlsViewport_.setScrollBarsShown(true, false);
     sampleControlsViewport_.setViewedComponent(&sampleControlsContent_, false);
     sampleControlsContent_.onPaint = [this](juce::Graphics& g) { paintGroupBoxes(g); };
+    sampleControlsContent_.onMouseDown = [this](const juce::MouseEvent& event) { handleSampleControlsMouseDown(event); };
 
     // Player pane
     addAndMakeVisible(playerKeyboardLabel_);
@@ -2981,6 +2997,18 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         resized();
         repaint();
     };
+
+    addAndMakeVisible(waveformResetRangesButton_);
+    waveformResetRangesButton_.onClick = [this]
+    {
+        if (waveformView_.onResetRangesRequested)
+            waveformView_.onResetRangesRequested();
+    };
+
+    addAndMakeVisible(waveformInteractionSummaryLabel_);
+    waveformInteractionSummaryLabel_.setJustificationType(juce::Justification::centredLeft);
+    waveformInteractionSummaryLabel_.setColour(juce::Label::textColourId, uiTextMutedColour());
+    waveformInteractionSummaryLabel_.setFont(juce::Font(juce::FontOptions(12.0f)));
 
     waveformView_.setDisplayMode(processor_.getWaveformDisplayMode() == 2
         ? WaveformView::DisplayMode::symmetricEnvelope
@@ -4133,6 +4161,8 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     presetDeleteButton_.setVisible(showSampleTab);
     loadButton_.setVisible(showSampleTab);
     diagnosticsToggleButton_.setVisible(showSampleTab);
+    waveformResetRangesButton_.setVisible(showSampleTab);
+    waveformInteractionSummaryLabel_.setVisible(showSampleTab);
     sampleControlsViewport_.setVisible(showSampleTab);
     rootNoteLabel_.setVisible(showSampleTab);
     rootNoteCombo_.setVisible(showSampleTab);
@@ -4158,6 +4188,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     velocityCurveCombo_.setVisible(showSampleTab);
     glideDial_.setVisible(showSampleTab);
     polyphonyDial_.setVisible(showSampleTab);
+    modulationPanel_.setVisible(showSampleTab);
     ampAttackDial_.setVisible(showSampleTab);
     ampDecayDial_.setVisible(showSampleTab);
     ampSustainDial_.setVisible(showSampleTab);
@@ -4171,30 +4202,32 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     filterEnvAmtDial_.setVisible(showSampleTab);
     filterTypeLabel_.setVisible(showSampleTab);
     filterTypeCombo_.setVisible(showSampleTab);
-    filterAttackDial_.setVisible(showSampleTab);
-    filterDecayDial_.setVisible(showSampleTab);
-    filterSustainDial_.setVisible(showSampleTab);
-    filterReleaseDial_.setVisible(showSampleTab);
-    filterKeytrackDial_.setVisible(showSampleTab);
-    filterVelDial_.setVisible(showSampleTab);
-    filterLfoRateDial_.setVisible(showSampleTab);
-    filterLfoRateKeyDial_.setVisible(showSampleTab);
-    filterLfoAmtDial_.setVisible(showSampleTab);
-    filterLfoAmtKeyDial_.setVisible(showSampleTab);
-    filterLfoStartPhaseDial_.setVisible(showSampleTab);
-    filterLfoStartRandDial_.setVisible(showSampleTab);
-    filterLfoFadeInDial_.setVisible(showSampleTab);
-    filterLfoShapeLabel_.setVisible(showSampleTab);
-    filterLfoShapeCombo_.setVisible(showSampleTab);
-    filterLfoRetriggerToggle_.setVisible(showSampleTab);
-    filterLfoTempoSyncToggle_.setVisible(showSampleTab);
-    filterLfoRateKeySyncToggle_.setVisible(showSampleTab);
-    filterLfoKeytrackLinearToggle_.setVisible(showSampleTab);
-    filterLfoUnipolarToggle_.setVisible(showSampleTab);
-    filterLfoDivisionLabel_.setVisible(showSampleTab);
-    filterLfoDivisionCombo_.setVisible(showSampleTab);
-    filterKeytrackSnapLabel_.setVisible(showSampleTab);
-    filterKeytrackSnapCombo_.setVisible(showSampleTab);
+    filterResponseGraph_.setVisible(showSampleTab);
+    filterAttackDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterDecayDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterSustainDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterReleaseDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterEnvelopeGraph_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterKeytrackDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterVelDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoRateDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoRateKeyDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoAmtDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoAmtKeyDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoStartPhaseDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoStartRandDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoFadeInDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoShapeLabel_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoShapeCombo_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoRetriggerToggle_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoTempoSyncToggle_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoRateKeySyncToggle_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoKeytrackLinearToggle_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoUnipolarToggle_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoDivisionLabel_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoDivisionCombo_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterKeytrackSnapLabel_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterKeytrackSnapCombo_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
     fadeInDial_.setVisible(showSampleTab);
     fadeOutDial_.setVisible(showSampleTab);
     qualityLabel_.setVisible(showSampleTab);
@@ -4205,18 +4238,18 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     masterVolumeDial_.setVisible(showSampleTab);
     panDial_.setVisible(showSampleTab);
     outputLevelMeter_.setVisible(showSampleTab);
-    reverbMixDial_.setVisible(showSampleTab);
-    delayTimeDial_.setVisible(showSampleTab);
-    delayFeedbackDial_.setVisible(showSampleTab);
-    delayMixDial_.setVisible(showSampleTab);
-    delayTempoSyncToggle_.setVisible(showSampleTab);
-    dcFilterEnabledToggle_.setVisible(showSampleTab);
-    dcFilterCutoffDial_.setVisible(showSampleTab);
-    autopanRateDial_.setVisible(showSampleTab);
-    autopanDepthDial_.setVisible(showSampleTab);
-    saturationDriveDial_.setVisible(showSampleTab);
-    saturationModeCombo_.setVisible(showSampleTab);
-    programMapText_.setVisible(showSampleTab && processor_.hasImportedProgram());
+    reverbMixDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
+    delayTimeDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
+    delayFeedbackDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
+    delayMixDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
+    delayTempoSyncToggle_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
+    dcFilterEnabledToggle_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
+    dcFilterCutoffDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
+    autopanRateDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
+    autopanDepthDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
+    saturationDriveDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
+    saturationModeCombo_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
+    programMapText_.setVisible(showSampleTab && processor_.hasImportedProgram() && isSampleGroupExpanded("programMap"));
     diagnosticsLabel_.setVisible(showSampleTab && showDiagnosticsPanel_);
 
     playerKeyboardLabel_.setVisible(showPlayerTab);
@@ -5605,6 +5638,65 @@ void AudiocityAudioProcessorEditor::mouseUp(const juce::MouseEvent&)
     isResizingSampleList_ = false;
 }
 
+void AudiocityAudioProcessorEditor::handleSampleControlsMouseDown(const juce::MouseEvent& event)
+{
+    if (currentTabIndex_ != 0 || event.mods.isPopupMenu() || !event.mods.isLeftButtonDown())
+        return;
+
+    for (const auto& group : groupBoxes_)
+    {
+        if (!group.collapsible)
+            continue;
+
+        auto headerBounds = group.bounds;
+        headerBounds.setHeight(24);
+        if (headerBounds.contains(event.getPosition()))
+        {
+            toggleSampleGroupExpanded(group.key);
+            return;
+        }
+    }
+}
+
+bool AudiocityAudioProcessorEditor::isSampleGroupExpanded(const juce::String& key) const
+{
+    if (key == "programMap")
+        return sampleProgramMapExpanded_;
+    if (key == "modulation")
+        return sampleModulationExpanded_;
+    if (key == "filterMod")
+        return sampleFilterModExpanded_;
+    if (key == "effects")
+        return sampleEffectsExpanded_;
+
+    return true;
+}
+
+bool AudiocityAudioProcessorEditor::isSampleGroupCollapsible(const juce::String& key) const
+{
+    return key == "programMap"
+        || key == "filterMod"
+        || key == "effects";
+}
+
+void AudiocityAudioProcessorEditor::toggleSampleGroupExpanded(const juce::String& key)
+{
+    if (key == "programMap")
+        sampleProgramMapExpanded_ = !sampleProgramMapExpanded_;
+    else if (key == "modulation")
+        sampleModulationExpanded_ = !sampleModulationExpanded_;
+    else if (key == "filterMod")
+        sampleFilterModExpanded_ = !sampleFilterModExpanded_;
+    else if (key == "effects")
+        sampleEffectsExpanded_ = !sampleEffectsExpanded_;
+    else
+        return;
+
+    updateTabVisibility();
+    resized();
+    repaint();
+}
+
 bool AudiocityAudioProcessorEditor::isSupportedSampleFile(const juce::File& file) const
 {
     return audiocity::plugin::LibraryFileIndex::isSupportedFile(file, processor_.isRexRuntimeAvailable());
@@ -6810,6 +6902,13 @@ void AudiocityAudioProcessorEditor::resized()
 
     const auto waveformHeight = juce::jlimit(180, 320, area.getHeight() / 3);
     waveformView_.setBounds(area.removeFromTop(waveformHeight));
+    area.removeFromTop(8);
+
+    auto waveformInfoRow = area.removeFromTop(26);
+    waveformResetRangesButton_.setBounds(waveformInfoRow.removeFromRight(62));
+    waveformInfoRow.removeFromRight(8);
+    waveformInteractionSummaryLabel_.setBounds(waveformInfoRow);
+
     area.removeFromTop(kGrpGap);
     sampleControlsViewport_.setBounds(area);
 
@@ -6817,12 +6916,19 @@ void AudiocityAudioProcessorEditor::resized()
     int scrollY = 0;
     groupBoxes_.clear();
 
-    auto makeGroup = [&](const juce::String& title,
-                         const int height) -> juce::Rectangle<int>
+    auto makeGroup = [&](const juce::String& key,
+                         const juce::String& title,
+                         const int expandedHeight) -> juce::Rectangle<int>
     {
+        const auto collapsible = isSampleGroupCollapsible(key);
+        const auto expanded = !collapsible || isSampleGroupExpanded(key);
+        const auto height = expanded ? expandedHeight : (kGrpHdr + 8);
         auto bounds = juce::Rectangle<int>(0, scrollY, viewportWidth, height);
-        groupBoxes_.push_back({ title, bounds });
+        groupBoxes_.push_back({ key, title, bounds, expanded, collapsible });
         scrollY += height + kGrpGap;
+        if (!expanded)
+            return juce::Rectangle<int>();
+
         return bounds.withTrimmedTop(kGrpHdr).reduced(kGrpPadH, kGrpPadV);
     };
 
@@ -6856,7 +6962,7 @@ void AudiocityAudioProcessorEditor::resized()
     // ── Panel 1: Sample Information ──
     {
         constexpr int kSampleInfoPanelH = 108;
-        auto infoInner = makeGroup("Sample Information", kSampleInfoPanelH);
+        auto infoInner = makeGroup("sampleInfo", "Sample Information", kSampleInfoPanelH);
 
         auto row1 = infoInner.removeFromTop(24);
         const auto badgeVisible = sampleInfoBadge_.isVisible() && sampleInfoBadge_.getText().isNotEmpty();
@@ -6920,10 +7026,13 @@ void AudiocityAudioProcessorEditor::resized()
             layoutInlinePair(row3, sampleInfoMetaRootLabel_, sampleInfoMetaRootValue_, 68, 110);
     }
 
-    if (programMapText_.isVisible())
+    if (processor_.hasImportedProgram())
     {
-        auto programInner = makeGroup("Program Map", 164);
-        programMapText_.setBounds(programInner);
+        auto programInner = makeGroup("programMap", "Program Map", 164);
+        if (!programInner.isEmpty())
+            programMapText_.setBounds(programInner);
+        else
+            programMapText_.setBounds({});
     }
     else
     {
@@ -6932,7 +7041,7 @@ void AudiocityAudioProcessorEditor::resized()
 
     // ── Panel 2: Performance ──
     {
-        auto perfInner = makeGroup("Performance", kRowH);
+        auto perfInner = makeGroup("performance", "Performance", kRowH);
         auto modeArea = perfInner.removeFromRight(kModeStackW);
         layoutThreeButtonStack(modeArea,
                        playbackModeLabel_,
@@ -6979,7 +7088,7 @@ void AudiocityAudioProcessorEditor::resized()
 
     // ── Panel 5: Trim and Loop ──
     {
-        auto trimLoopInner = makeGroup("Trim and Loop", kRowH);
+        auto trimLoopInner = makeGroup("trimLoop", "Trim and Loop", kRowH);
 
         playbackStartDial_.setBounds(trimLoopInner.removeFromLeft(kDial));
         trimLoopInner.removeFromLeft(kDialGap);
@@ -6994,7 +7103,7 @@ void AudiocityAudioProcessorEditor::resized()
 
     // ── Panel 6: Amplitude Envelope ──
     {
-        auto ampInner = makeGroup("Amplitude Envelope", kRowH);
+        auto ampInner = makeGroup("ampEnv", "Amplitude Envelope", kRowH);
         ampAttackDial_.setBounds(ampInner.removeFromLeft(kDial));
         ampInner.removeFromLeft(kDialGap);
         ampDecayDial_.setBounds(ampInner.removeFromLeft(kDial));
@@ -7017,7 +7126,7 @@ void AudiocityAudioProcessorEditor::resized()
 
     // ── Panel 7: Filter ──
     {
-        auto filterInner = makeGroup("Filter", kRowH);
+        auto filterInner = makeGroup("filter", "Filter", kRowH);
         filterCutoffDial_.setBounds(filterInner.removeFromLeft(kDial));
         filterInner.removeFromLeft(kDialGap);
         filterResDial_.setBounds(filterInner.removeFromLeft(kDial));
@@ -7035,102 +7144,106 @@ void AudiocityAudioProcessorEditor::resized()
     // ── Panel 8: Filter Envelope + Mod ──
     {
         constexpr int kFilterModPanelH = 238;
-        auto filterEnvInner = makeGroup("Filter Envelope + Mod", kFilterModPanelH);
+        auto filterEnvInner = makeGroup("filterMod", "Filter Envelope + Mod", kFilterModPanelH);
+        if (!filterEnvInner.isEmpty())
+        {
+            auto row1 = filterEnvInner.removeFromTop(kDialH);
+            filterAttackDial_.setBounds(row1.removeFromLeft(kDial));
+            row1.removeFromLeft(kDialGap);
+            filterDecayDial_.setBounds(row1.removeFromLeft(kDial));
+            row1.removeFromLeft(kDialGap);
+            filterSustainDial_.setBounds(row1.removeFromLeft(kDial));
+            row1.removeFromLeft(kDialGap);
+            filterReleaseDial_.setBounds(row1.removeFromLeft(kDial));
+            row1.removeFromLeft(10);
+            filterEnvelopeGraph_.setBounds(row1.reduced(0, 8));
 
-        auto row1 = filterEnvInner.removeFromTop(kDialH);
-        filterAttackDial_.setBounds(row1.removeFromLeft(kDial));
-        row1.removeFromLeft(kDialGap);
-        filterDecayDial_.setBounds(row1.removeFromLeft(kDial));
-        row1.removeFromLeft(kDialGap);
-        filterSustainDial_.setBounds(row1.removeFromLeft(kDial));
-        row1.removeFromLeft(kDialGap);
-        filterReleaseDial_.setBounds(row1.removeFromLeft(kDial));
-        row1.removeFromLeft(10);
-        filterEnvelopeGraph_.setBounds(row1.reduced(0, 8));
+            filterEnvInner.removeFromTop(8);
 
-        filterEnvInner.removeFromTop(8);
+            auto row2 = filterEnvInner.removeFromTop(kDialH);
+            filterKeytrackDial_.setBounds(row2.removeFromLeft(kDial));
+            row2.removeFromLeft(kDialGap);
+            filterVelDial_.setBounds(row2.removeFromLeft(kDial));
+            row2.removeFromLeft(kDialGap);
+            filterLfoRateDial_.setBounds(row2.removeFromLeft(kDial));
+            row2.removeFromLeft(kDialGap);
+            filterLfoAmtDial_.setBounds(row2.removeFromLeft(kDial));
+            row2.removeFromLeft(10);
+            auto lfoShapeArea = row2.removeFromLeft(120);
+            filterLfoShapeLabel_.setBounds(lfoShapeArea.removeFromTop(16));
+            lfoShapeArea.removeFromTop(2);
+            filterLfoShapeCombo_.setBounds(lfoShapeArea.removeFromTop(24));
+            row2.removeFromLeft(10);
+            auto divArea = row2.removeFromLeft(120);
+            filterLfoDivisionLabel_.setBounds(divArea.removeFromTop(16));
+            divArea.removeFromTop(2);
+            filterLfoDivisionCombo_.setBounds(divArea.removeFromTop(24));
 
-        auto row2 = filterEnvInner.removeFromTop(kDialH);
-        filterKeytrackDial_.setBounds(row2.removeFromLeft(kDial));
-        row2.removeFromLeft(kDialGap);
-        filterVelDial_.setBounds(row2.removeFromLeft(kDial));
-        row2.removeFromLeft(kDialGap);
-        filterLfoRateDial_.setBounds(row2.removeFromLeft(kDial));
-        row2.removeFromLeft(kDialGap);
-        filterLfoAmtDial_.setBounds(row2.removeFromLeft(kDial));
-        row2.removeFromLeft(10);
-        auto lfoShapeArea = row2.removeFromLeft(120);
-        filterLfoShapeLabel_.setBounds(lfoShapeArea.removeFromTop(16));
-        lfoShapeArea.removeFromTop(2);
-        filterLfoShapeCombo_.setBounds(lfoShapeArea.removeFromTop(24));
-        row2.removeFromLeft(10);
-        auto divArea = row2.removeFromLeft(120);
-        filterLfoDivisionLabel_.setBounds(divArea.removeFromTop(16));
-        divArea.removeFromTop(2);
-        filterLfoDivisionCombo_.setBounds(divArea.removeFromTop(24));
-
-        row2.removeFromLeft(12);
-        auto syncArea = row2.removeFromLeft(90);
-        filterLfoRetriggerToggle_.setBounds(syncArea.removeFromTop(22));
-        syncArea.removeFromTop(6);
-        filterLfoTempoSyncToggle_.setBounds(syncArea.removeFromTop(22));
+            row2.removeFromLeft(12);
+            auto syncArea = row2.removeFromLeft(90);
+            filterLfoRetriggerToggle_.setBounds(syncArea.removeFromTop(22));
+            syncArea.removeFromTop(6);
+            filterLfoTempoSyncToggle_.setBounds(syncArea.removeFromTop(22));
+        }
     }
 
     // ── Panel 9: Effects ──
     {
         constexpr int kEffectsPanelH = kRowH + 44;
-        auto fxInner = makeGroup("Effects", kEffectsPanelH);
+        auto fxInner = makeGroup("effects", "Effects", kEffectsPanelH);
+        if (!fxInner.isEmpty())
+        {
+            auto fxDialRow = fxInner.removeFromTop(kDialH);
 
-        auto fxDialRow = fxInner.removeFromTop(kDialH);
+            reverbMixDial_.setBounds(fxDialRow.removeFromLeft(kDial));
+            fxDialRow.removeFromLeft(kDialGap);
 
-        reverbMixDial_.setBounds(fxDialRow.removeFromLeft(kDial));
-        fxDialRow.removeFromLeft(kDialGap);
+            const auto delayTimeBounds = fxDialRow.removeFromLeft(kDial);
+            delayTimeDial_.setBounds(delayTimeBounds);
+            fxDialRow.removeFromLeft(kDialGap);
 
-        const auto delayTimeBounds = fxDialRow.removeFromLeft(kDial);
-        delayTimeDial_.setBounds(delayTimeBounds);
-        fxDialRow.removeFromLeft(kDialGap);
+            const auto delayFeedbackBounds = fxDialRow.removeFromLeft(kDial);
+            delayFeedbackDial_.setBounds(delayFeedbackBounds);
+            fxDialRow.removeFromLeft(kDialGap);
 
-        const auto delayFeedbackBounds = fxDialRow.removeFromLeft(kDial);
-        delayFeedbackDial_.setBounds(delayFeedbackBounds);
-        fxDialRow.removeFromLeft(kDialGap);
+            const auto delayMixBounds = fxDialRow.removeFromLeft(kDial);
+            delayMixDial_.setBounds(delayMixBounds);
+            fxDialRow.removeFromLeft(kDialGap * 2);
 
-        const auto delayMixBounds = fxDialRow.removeFromLeft(kDial);
-        delayMixDial_.setBounds(delayMixBounds);
-        fxDialRow.removeFromLeft(kDialGap * 2);
+            const auto dcFilterDialBounds = fxDialRow.removeFromLeft(kDial);
+            dcFilterCutoffDial_.setBounds(dcFilterDialBounds);
+            fxDialRow.removeFromLeft(kDialGap);
 
-        const auto dcFilterDialBounds = fxDialRow.removeFromLeft(kDial);
-        dcFilterCutoffDial_.setBounds(dcFilterDialBounds);
-        fxDialRow.removeFromLeft(kDialGap);
+            autopanRateDial_.setBounds(fxDialRow.removeFromLeft(kDial));
+            fxDialRow.removeFromLeft(kDialGap);
+            const auto autopanDepthBounds = fxDialRow.removeFromLeft(kDial);
+            autopanDepthDial_.setBounds(autopanDepthBounds);
+            fxDialRow.removeFromLeft(kDialGap);
+            const auto saturationDriveBounds = fxDialRow.removeFromLeft(kDial);
+            saturationDriveDial_.setBounds(saturationDriveBounds);
 
-        autopanRateDial_.setBounds(fxDialRow.removeFromLeft(kDial));
-        fxDialRow.removeFromLeft(kDialGap);
-        const auto autopanDepthBounds = fxDialRow.removeFromLeft(kDial);
-        autopanDepthDial_.setBounds(autopanDepthBounds);
-        fxDialRow.removeFromLeft(kDialGap);
-        const auto saturationDriveBounds = fxDialRow.removeFromLeft(kDial);
-        saturationDriveDial_.setBounds(saturationDriveBounds);
+            fxInner.removeFromTop(10);
+            auto fxControlRow = fxInner.removeFromTop(24);
 
-        fxInner.removeFromTop(10);
-        auto fxControlRow = fxInner.removeFromTop(24);
+            constexpr int kDelaySyncW = 120;
+            const auto delayClusterLeft = delayTimeBounds.getX();
+            const auto delayClusterRight = delayMixBounds.getRight();
+            const auto delaySyncX = delayClusterLeft + (delayClusterRight - delayClusterLeft - kDelaySyncW) / 2;
+            delayTempoSyncToggle_.setBounds(delaySyncX, fxControlRow.getY(), kDelaySyncW, 24);
 
-        constexpr int kDelaySyncW = 120;
-        const auto delayClusterLeft = delayTimeBounds.getX();
-        const auto delayClusterRight = delayMixBounds.getRight();
-        const auto delaySyncX = delayClusterLeft + (delayClusterRight - delayClusterLeft - kDelaySyncW) / 2;
-        delayTempoSyncToggle_.setBounds(delaySyncX, fxControlRow.getY(), kDelaySyncW, 24);
+            constexpr int kDcFilterW = 108;
+            const auto dcFilterX = dcFilterDialBounds.getX() + (dcFilterDialBounds.getWidth() - kDcFilterW) / 2;
+            dcFilterEnabledToggle_.setBounds(dcFilterX, fxControlRow.getY(), kDcFilterW, 24);
 
-        constexpr int kDcFilterW = 108;
-        const auto dcFilterX = dcFilterDialBounds.getX() + (dcFilterDialBounds.getWidth() - kDcFilterW) / 2;
-        dcFilterEnabledToggle_.setBounds(dcFilterX, fxControlRow.getY(), kDcFilterW, 24);
-
-        constexpr int kSatModeW = 92;
-        const auto satModeX = saturationDriveBounds.getX() + (saturationDriveBounds.getWidth() - kSatModeW) / 2;
-        saturationModeCombo_.setBounds(satModeX, fxControlRow.getY(), kSatModeW, 24);
+            constexpr int kSatModeW = 92;
+            const auto satModeX = saturationDriveBounds.getX() + (saturationDriveBounds.getWidth() - kSatModeW) / 2;
+            saturationModeCombo_.setBounds(satModeX, fxControlRow.getY(), kSatModeW, 24);
+        }
     }
 
     // ── Panel 10: Output ──
     {
-        auto outInner = makeGroup("Output", kRowH);
+        auto outInner = makeGroup("output", "Output", kRowH);
         fadeInDial_.setBounds(outInner.removeFromLeft(kDial));
         outInner.removeFromLeft(kDialGap);
         fadeOutDial_.setBounds(outInner.removeFromLeft(kDial));
@@ -7158,7 +7271,7 @@ void AudiocityAudioProcessorEditor::resized()
 
     if (showDiagnosticsPanel_)
     {
-        auto diagInner = makeGroup("Diagnostics", 56);
+        auto diagInner = makeGroup("diagnostics", "Diagnostics", 56);
         diagnosticsLabel_.setBounds(diagInner.removeFromTop(22));
     }
     else
@@ -8165,7 +8278,27 @@ void AudiocityAudioProcessorEditor::regenerateWaveform()
 void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const
 {
     for (const auto& group : groupBoxes_)
+    {
         paintSectionCard(g, group.bounds.toFloat(), group.title);
+
+        if (!group.collapsible)
+            continue;
+
+        auto headerBounds = group.bounds;
+        headerBounds.setHeight(24);
+        auto toggleBounds = headerBounds.removeFromRight(54);
+        g.setColour(group.expanded ? uiTextStrongColour() : uiTextMutedColour().brighter(0.08f));
+        g.setFont(juce::Font(juce::FontOptions(10.5f)).boldened());
+        g.drawText(group.expanded ? "- Hide" : "+ Show", toggleBounds, juce::Justification::centredRight, false);
+
+        if (!group.expanded)
+        {
+            auto messageBounds = group.bounds.reduced(12, 0).withTrimmedTop(28).removeFromTop(14);
+            g.setColour(uiTextMutedColour().withAlpha(0.9f));
+            g.setFont(juce::Font(juce::FontOptions(10.5f)));
+            g.drawText("Click header to reveal advanced controls", messageBounds, juce::Justification::centredLeft, false);
+        }
+    }
 }
 
 // ─── Tooltips ──────────────────────────────────────────────────────────────────
@@ -8186,6 +8319,10 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         processor_.isRexRuntimeAvailable() ? "Load Sample, SFZ, or REX (Ctrl+O)" : "Load Sample (Ctrl+O)");
     diagnosticsToggleButton_.setTooltip(
         "Show or hide preload, stream, and voice diagnostics (Ctrl+Alt+D)");
+    waveformResetRangesButton_.setTooltip(
+        "Reset playback and loop ranges to the full sample");
+    waveformInteractionSummaryLabel_.setTooltip(
+        "Trim and loop are edited directly in the waveform: drag handles, Shift-drag loop handles to move playback too, use the mouse wheel to zoom, and middle-drag to pan");
     generatePreviewButton_.setTooltip(
         "Play/Stop Generate Preview (Space on Generate tab)");
 
@@ -8977,6 +9114,28 @@ void AudiocityAudioProcessorEditor::updateSampleInformationDisplay()
     {
         sampleInfoBadge_.setBadge({}, juce::Colour(0xff3a3a52));
     }
+
+    waveformResetRangesButton_.setEnabled(sampleLength > 0);
+
+    juce::String waveformSummaryText;
+    if (sampleLength > 0)
+    {
+        waveformSummaryText = "Trim " + sampleInfoPlaybackValue_.getText();
+        if (!playbackIsFullRange)
+            waveformSummaryText += " (" + sampleInfoPlaybackDurationValue_.getText() + ")";
+
+        waveformSummaryText += "  |  Loop " + sampleInfoLoopValue_.getText();
+        if (!loopIsFullRange)
+            waveformSummaryText += " (" + sampleInfoLoopDurationValue_.getText() + ")";
+
+        waveformSummaryText += "  |  Drag waveform handles. Shift-drag loop handles to move playback too. Wheel zoom, middle-drag pan.";
+    }
+    else
+    {
+        waveformSummaryText = "Load a sample, then drag waveform handles to trim or loop. Wheel zoom, middle-drag pan.";
+    }
+
+    waveformInteractionSummaryLabel_.setText(waveformSummaryText, juce::dontSendNotification);
 }
 
 void AudiocityAudioProcessorEditor::updateDiagnosticsStatusText()

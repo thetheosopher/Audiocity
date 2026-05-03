@@ -69,8 +69,9 @@ Modernize Audiocity into a premium sampler interface that feels fast, musical, t
 - [x] Phase 1.1: Refresh tab chrome and global editor palette.
 - [x] Phase 1.2: Refresh waveform, graph, and metering visuals.
 - [x] Phase 1.3: Hide diagnostics behind an explicit reveal instead of always-on panel space.
-- [ ] Phase 2.1: Reduce trim/loop dependence on knob-only editing.
+- [x] Phase 2.1: Reduce trim/loop dependence on knob-only editing.
 - [ ] Phase 2.2: Improve slice visibility and interactions.
+- [x] Phase 3.0: Collapse secondary Sample-page sections behind progressive disclosure.
 - [ ] Phase 3.1: Rework Player into a persistent performance surface.
 - [ ] Phase 3.2: Fold Library into a persistent or quickly accessible browser rail.
 - [ ] Phase 4.1: Add visual modulation routing and destination feedback.
@@ -89,8 +90,13 @@ Modernize Audiocity into a premium sampler interface that feels fast, musical, t
 - 2026-05-03: Phase 1.2 landed in the Sample page: waveform, envelope, filter, and output meter visuals now use the new palette and clearer overlay contrast.
 - 2026-05-03: Phase 1.3 landed: diagnostics moved behind a `Tech` toggle in the Sample top bar, with `Ctrl+Alt+D` as a keyboard reveal.
 - 2026-05-03: Validation passed with a CMake build after the UI slice landed.
+- 2026-05-03: Phase 2.1 landed in the Sample page: waveform trim and loop editing now has an explicit summary row, direct-manipulation hinting, and a quick reset action directly under the waveform.
+- 2026-05-03: Phase 3.0 landed in the Sample page: `Program Map`, `Filter Envelope + Mod`, and `Effects` now collapse behind section headers so the primary path stays visible.
+- 2026-05-03: Phase 2.2 advanced: slice markers now render with stronger caps and small numeric badges for compact slice sets, improving visual scanability without changing engine behavior.
+- 2026-05-03: Validation passed again after the waveform-summary, collapsible-section, and slice-visibility changes.
 
 ## Validation Notes
 - Current repo validation is strong for engine behavior, but UI visual changes do not yet have a dedicated screenshot or golden-image harness.
 - Until a UI snapshot harness exists, each UI milestone must at minimum compile cleanly and be documented here.
 - 2026-05-03: `Build_CMakeTools` completed successfully after the Phase 1 UI changes.
+- 2026-05-03: `Build_CMakeTools` completed successfully after the Phase 2.1, Phase 3.0, and slice-visibility follow-up changes.

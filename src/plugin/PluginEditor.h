@@ -187,19 +187,29 @@ private:
     // ── Group box painting helper ──
     struct GroupBox
     {
+        juce::String key;
         juce::String title;
         juce::Rectangle<int> bounds;
+        bool expanded = true;
+        bool collapsible = false;
     };
 
     class PaintCallbackComponent final : public juce::Component
     {
     public:
         std::function<void(juce::Graphics&)> onPaint;
+        std::function<void(const juce::MouseEvent&)> onMouseDown;
 
         void paint(juce::Graphics& g) override
         {
             if (onPaint)
                 onPaint(g);
+        }
+
+        void mouseDown(const juce::MouseEvent& event) override
+        {
+            if (onMouseDown)
+                onMouseDown(event);
         }
     };
 
@@ -528,6 +538,8 @@ private:
     juce::TextButton presetDeleteButton_{ "Delete" };
     juce::TextButton loadButton_{ "Load" };
     juce::TextButton diagnosticsToggleButton_{ "Tech" };
+    juce::TextButton waveformResetRangesButton_{ "Reset" };
+    juce::Label waveformInteractionSummaryLabel_{ {}, "" };
     juce::Label sampleInfoSourceLabel_{ {}, "Source" };
     juce::Label sampleInfoSourceValue_{ {}, "None" };
     juce::Label sampleInfoRateLabel_{ {}, "Sample Rate" };
@@ -991,6 +1003,7 @@ private:
     void paintPlayerPane(juce::Graphics& g, juce::Rectangle<int> area) const;
     void paintSampleBrowserPane(juce::Graphics& g, juce::Rectangle<int> browserArea) const;
     void paintAboutPane(juce::Graphics& g, juce::Rectangle<int> area) const;
+    void handleSampleControlsMouseDown(const juce::MouseEvent& event);
     void updateTabVisibility();
     void updateGeneratePreviewButtonText();
     void refreshCaptureWaveform(bool force = false);
@@ -998,6 +1011,9 @@ private:
     void updateGeneratePulseWidthControlState();
     void updateDiagnosticsStatusText();
     void updateSampleInformationDisplay();
+    [[nodiscard]] bool isSampleGroupExpanded(const juce::String& key) const;
+    [[nodiscard]] bool isSampleGroupCollapsible(const juce::String& key) const;
+    void toggleSampleGroupExpanded(const juce::String& key);
     void updateAmpEnvelopeGraphFromDials();
     void updateFilterEnvelopeGraphFromDials();
     void updateFilterResponseGraphFromControls();
@@ -1016,6 +1032,10 @@ private:
 
     juce::String mappingUndoProgramPath_;
     std::optional<audiocity::engine::SettingsSnapshot> lastSettingsSnapshot_;
+    bool sampleProgramMapExpanded_ = false;
+    bool sampleModulationExpanded_ = false;
+    bool sampleFilterModExpanded_ = false;
+    bool sampleEffectsExpanded_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudiocityAudioProcessorEditor)
 };
