@@ -7,7 +7,38 @@ namespace audiocity::plugin
 namespace
 {
 const juce::Identifier kImportedProgramPathStateProperty{ "importedProgramPath" };
+const juce::Identifier kImportedProgramFormatStateProperty{ "importedProgramFormat" };
 const juce::Identifier kLegacyImportedProgramPathStateProperty{ "sfzProgramPath" };
+
+juce::String formatImportedProgramFormat(const ImportedProgramFormat format)
+{
+    switch (format)
+    {
+        case ImportedProgramFormat::sfz:
+            return "sfz";
+        case ImportedProgramFormat::rex:
+            return "rex";
+        case ImportedProgramFormat::sampleSlices:
+            return "sampleSlices";
+        case ImportedProgramFormat::unknown:
+        default:
+            return {};
+    }
+}
+
+ImportedProgramFormat parseImportedProgramFormat(const juce::String& formatText)
+{
+    if (formatText.equalsIgnoreCase("sfz"))
+        return ImportedProgramFormat::sfz;
+
+    if (formatText.equalsIgnoreCase("rex"))
+        return ImportedProgramFormat::rex;
+
+    if (formatText.equalsIgnoreCase("sampleSlices"))
+        return ImportedProgramFormat::sampleSlices;
+
+    return ImportedProgramFormat::unknown;
+}
 
 juce::String formatRange(const int low, const int high)
 {
@@ -107,28 +138,58 @@ ImportedProgramFormat detectImportedProgramFormat(const juce::String& programPat
     return ImportedProgramFormat::unknown;
 }
 
-juce::String importedProgramFormatBadge(const juce::String& programPath)
+ImportedProgramFormat readImportedProgramStateFormat(const juce::ValueTree& state)
 {
-    switch (detectImportedProgramFormat(programPath))
+    if (!state.isValid())
+        return ImportedProgramFormat::unknown;
+
+    if (const auto storedFormat = parseImportedProgramFormat(state.getProperty(kImportedProgramFormatStateProperty).toString());
+        storedFormat != ImportedProgramFormat::unknown)
+    {
+        return storedFormat;
+    }
+
+    return detectImportedProgramFormat(readImportedProgramStatePath(state));
+}
+
+juce::String importedProgramFormatBadge(const ImportedProgramFormat format)
+{
+    switch (format)
     {
         case ImportedProgramFormat::sfz:
             return "SFZ";
         case ImportedProgramFormat::rex:
             return "REX";
+        case ImportedProgramFormat::sampleSlices:
+            return "SLICE";
         case ImportedProgramFormat::unknown:
         default:
             return "PROGRAM";
     }
 }
 
+juce::String importedProgramFormatBadge(const juce::String& programPath)
+{
+    return importedProgramFormatBadge(detectImportedProgramFormat(programPath));
+}
+
 void appendImportedProgramState(juce::ValueTree& state,
                                 const juce::String& programPath,
-                                const juce::ValueTree& mappingState)
+                                const juce::ValueTree& mappingState,
+                                const ImportedProgramFormat format)
 {
     if (!state.isValid() || programPath.isEmpty())
         return;
 
     state.setProperty(kImportedProgramPathStateProperty, programPath, nullptr);
+    if (const auto formatText = formatImportedProgramFormat(format != ImportedProgramFormat::unknown
+            ? format
+            : detectImportedProgramFormat(programPath));
+        formatText.isNotEmpty())
+    {
+        state.setProperty(kImportedProgramFormatStateProperty, formatText, nullptr);
+    }
+
     if (mappingState.isValid() && mappingState.hasType(programZoneMappingStateType()))
         state.appendChild(mappingState.createCopy(), nullptr);
 }

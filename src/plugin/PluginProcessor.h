@@ -60,6 +60,7 @@ public:
     bool loadSampleFromFile(const juce::File& file);
     bool importSfzProgram(const juce::File& file);
     bool importRexSliceProgram(const juce::File& file);
+    bool importTransientSliceProgram(const juce::File& file);
     [[nodiscard]] bool hasImportedProgram() const noexcept
     {
         return importedProgramLoaded_.load(std::memory_order_relaxed);
@@ -69,10 +70,12 @@ public:
         return importedProgramZoneCount_.load(std::memory_order_relaxed);
     }
     [[nodiscard]] juce::String getImportedProgramPath() const;
+    [[nodiscard]] audiocity::plugin::ImportedProgramFormat getImportedProgramFormat() const;
     [[nodiscard]] juce::String getImportedProgramName() const;
     [[nodiscard]] juce::String getImportedProgramMapSummary() const;
     [[nodiscard]] juce::StringArray getImportedProgramSampleAssetNames() const;
     [[nodiscard]] std::vector<audiocity::plugin::ProgramZoneListRow> getImportedProgramZoneRows() const;
+    [[nodiscard]] std::vector<int> getImportedProgramSliceMarkerSamples() const;
     [[nodiscard]] juce::ValueTree createImportedProgramMappingState() const;
     bool applyImportedProgramMappingState(const juce::ValueTree& mappingState);
     bool updateImportedProgramZoneMapping(const audiocity::plugin::ProgramZoneEdit& edit);
@@ -84,6 +87,7 @@ public:
     bool deleteImportedProgramZones(const std::vector<int>& zoneIndices);
     [[nodiscard]] int splitImportedProgramZone(int zoneIndex);
     bool remapImportedProgramZonesChromatically(const std::vector<int>& zoneIndices, int baseMidiNote = 36);
+    bool spreadImportedProgramZonesAcrossKeyRange(const std::vector<int>& zoneIndices);
     [[nodiscard]] juce::String getLastImportDiagnosticSummary() const;
     [[nodiscard]] bool isRexRuntimeAvailable() const noexcept { return engine_.isRexRuntimeAvailable(); }
     void loadGeneratedWaveformAsSample(const std::vector<float>& waveform, int rootMidiNote = 60);
@@ -365,6 +369,7 @@ private:
     void stopStreamPrimeWorker();
     void clearImportedProgramMetadata();
     void setImportedProgramMetadata(const juce::File& file,
+                                    audiocity::plugin::ImportedProgramFormat format,
                                     const audiocity::engine::Program& program,
                                     const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset,
                                     const juce::String& diagnosticSummary,
@@ -417,6 +422,7 @@ private:
     std::vector<float> generatedWaveformState_;
     std::vector<float> capturedSampleState_;
     juce::String importedProgramPath_;
+    audiocity::plugin::ImportedProgramFormat importedProgramFormat_ = audiocity::plugin::ImportedProgramFormat::unknown;
     juce::String importedProgramName_;
     juce::String importedProgramMapSummary_;
     audiocity::engine::Program importedProgram_;

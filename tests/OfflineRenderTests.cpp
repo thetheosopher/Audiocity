@@ -7,6 +7,7 @@
 #include "../src/engine/ProgramSnapshot.h"
 #include "../src/engine/RexSliceProgram.h"
 #include "../src/engine/SettingsUndoHistory.h"
+#include "../src/engine/TransientSliceProgram.h"
 #include "../src/engine/SfzImporter.h"
 #include "../src/plugin/CcLearnDial.h"
 #include "../src/plugin/LibraryFileIndex.h"
@@ -706,6 +707,63 @@ bool runProgramMappingChromaticRemapTest()
     return !audiocity::plugin::remapProgramZonesChromatically(program, { 99 }, 36);
 }
 
+bool runProgramMappingKeyRangeSpreadTest()
+{
+    using namespace audiocity::engine;
+
+    Program program;
+    SampleAsset sample;
+    sample.displayName = "spread.wav";
+    sample.lengthSamples = 512;
+    sample.numChannels = 1;
+    sample.sampleRateHz = 48000.0;
+    program.sampleAssets.push_back(sample);
+
+    Group group;
+    group.keyRange = MidiRange::fromUnordered(40, 60);
+    group.velocityRange = VelocityRange::full();
+    program.groups.push_back(group);
+
+    Zone first;
+    first.groupIndex = 0;
+    first.sampleAssetIndex = 0;
+    first.keyRange = MidiRange::fromUnordered(40, 44);
+    first.velocityRange = VelocityRange::fromUnordered(1, 127);
+    first.rootMidiNote = 42;
+    program.zones.push_back(first);
+
+    Zone second = first;
+    second.keyRange = MidiRange::fromUnordered(50, 52);
+    second.rootMidiNote = 51;
+    program.zones.push_back(second);
+
+    Zone third = first;
+    third.keyRange = MidiRange::fromUnordered(58, 60);
+    third.rootMidiNote = 59;
+    program.zones.push_back(third);
+
+    if (!audiocity::plugin::spreadProgramZonesAcrossKeyRange(program, { 2, 0, 1 }))
+        return false;
+
+    if (program.zones[0].keyRange.low != 40
+        || program.zones[0].keyRange.high != 46
+        || program.zones[0].rootMidiNote != 43
+        || program.zones[1].keyRange.low != 47
+        || program.zones[1].keyRange.high != 53
+        || program.zones[1].rootMidiNote != 50
+        || program.zones[2].keyRange.low != 54
+        || program.zones[2].keyRange.high != 60
+        || program.zones[2].rootMidiNote != 57)
+    {
+        return false;
+    }
+
+    if (program.groups[0].keyRange.low != 40 || program.groups[0].keyRange.high != 60)
+        return false;
+
+    return !audiocity::plugin::spreadProgramZonesAcrossKeyRange(program, { 0 });
+}
+
 bool runProgramMappingCreateZoneTest()
 {
     using namespace audiocity::engine;
@@ -1129,11 +1187,28 @@ bool runImportedProgramStateSubtreeRoundTripTest()
         return false;
     }
 
+    juce::ValueTree slicePatchState("patch");
+    const juce::String sliceProgramPath = "C:/Library/Loops/Break.wav";
+    audiocity::plugin::appendImportedProgramState(slicePatchState,
+                                                  sliceProgramPath,
+                                                  mappingState,
+                                                  audiocity::plugin::ImportedProgramFormat::sampleSlices);
+    if (audiocity::plugin::readImportedProgramStatePath(slicePatchState) != sliceProgramPath
+        || audiocity::plugin::readImportedProgramStateFormat(slicePatchState)
+            != audiocity::plugin::ImportedProgramFormat::sampleSlices
+        || audiocity::plugin::detectImportedProgramFormat(sliceProgramPath)
+            != audiocity::plugin::ImportedProgramFormat::unknown
+        || audiocity::plugin::importedProgramFormatBadge(
+               audiocity::plugin::ImportedProgramFormat::sampleSlices)
+            != "SLICE")
+    {
+        return false;
+    }
+
     juce::ValueTree legacyPatchState("patch");
     legacyPatchState.setProperty("sfzProgramPath", "C:/Library/Kits/LegacyImport.sfz", nullptr);
     if (audiocity::plugin::readImportedProgramStatePath(legacyPatchState) != "C:/Library/Kits/LegacyImport.sfz"
-        || audiocity::plugin::detectImportedProgramFormat(
-               audiocity::plugin::readImportedProgramStatePath(legacyPatchState))
+        || audiocity::plugin::readImportedProgramStateFormat(legacyPatchState)
             != audiocity::plugin::ImportedProgramFormat::sfz)
     {
         return false;
@@ -4093,6 +4168,72 @@ bool runRexSliceProgramBuildTest()
     }
 
     return sliceProgram.program.hasPlayableZones();
+}
+
+bool runTransientSliceProgramBuildTest()
+{
+    constexpr int totalSamples = 12000;
+    constexpr int hitSpacing = 4000;
+
+    juce::AudioBuffer<float> sample(1, totalSamples);
+    sample.clear();
+    for (int hit = 0; hit < 3; ++hit)
+    {
+        const auto hitStart = hit * hitSpacing;
+        for (int offset = 0; offset < 480 && hitStart + offset < totalSamples; ++offset)
+        {
+            const auto decay = std::exp(-static_cast<float>(offset) / 70.0f);
+            sample.setSample(0, hitStart + offset, 0.95f * decay);
+        }
+    }
+
+    audiocity::engine::transient_slice::TransientSliceProgram sliceProgram;
+    audiocity::engine::transient_slice::TransientSliceSettings settings;
+    settings.maxSlices = 8;
+    settings.minSliceSamples = 1500;
+
+    if (!audiocity::engine::transient_slice::buildTransientSliceProgram(
+            juce::File("C:/Library/Transient.wav"), sample, 48000.0, sliceProgram, settings))
+    {
+        return false;
+    }
+
+    if (sliceProgram.program.sampleAssets.size() != 1
+        || sliceProgram.sampleDataByAsset.size() != 1
+        || sliceProgram.program.zones.size() != 3
+        || sliceProgram.sliceStartSamples.size() < 3)
+    {
+        return false;
+    }
+
+    if (sliceProgram.sliceStartSamples[0] != 0
+        || sliceProgram.sliceStartSamples[1] < 3400
+        || sliceProgram.sliceStartSamples[1] > 4100
+        || sliceProgram.sliceStartSamples[2] < 7400
+        || sliceProgram.sliceStartSamples[2] > 8100)
+    {
+        return false;
+    }
+
+    for (std::size_t sliceIndex = 0; sliceIndex < sliceProgram.program.zones.size(); ++sliceIndex)
+    {
+        const auto& zone = sliceProgram.program.zones[sliceIndex];
+        const auto expectedNote = audiocity::engine::transient_slice::kDefaultSliceBaseMidiNote + static_cast<int>(sliceIndex);
+        if (zone.sampleAssetIndex != 0
+            || zone.keyRange.low != expectedNote
+            || zone.keyRange.high != expectedNote
+            || zone.rootMidiNote != expectedNote
+            || zone.triggerMode != audiocity::engine::ZoneTriggerMode::oneShot
+            || zone.loopMode != audiocity::engine::ZoneLoopMode::noLoop
+            || zone.sampleEndExclusive <= zone.sampleStart)
+        {
+            return false;
+        }
+    }
+
+    return sliceProgram.program.zones[0].sampleStart == 0
+        && sliceProgram.program.zones[0].sampleEndExclusive <= sliceProgram.program.zones[1].sampleStart
+        && sliceProgram.program.zones[1].sampleEndExclusive <= sliceProgram.program.zones[2].sampleStart;
 }
 
 bool runEditorSampleEditControlsTest()
@@ -8324,6 +8465,7 @@ int main()
         AUDIOCITY_TEST(runProgramMappingSampleWindowEditTest, 100),
         AUDIOCITY_TEST(runProgramMappingZoneOperationsTest, 102),
         AUDIOCITY_TEST(runProgramMappingChromaticRemapTest, 115),
+        AUDIOCITY_TEST(runProgramMappingKeyRangeSpreadTest, 117),
         AUDIOCITY_TEST(runProgramMappingAtomicBatchEditRollbackTest, 111),
         AUDIOCITY_TEST(runProgramMappingAtomicBatchDeleteRollbackTest, 112),
         AUDIOCITY_TEST(runProgramMappingStateRoundTripTest, 101),
@@ -8363,6 +8505,7 @@ int main()
         AUDIOCITY_TEST(runEmbeddedLoopMetadataLoadsWithoutRootNoteTest, 64),
         AUDIOCITY_TEST(runRexRuntimeFallbackSmokeTest, 62),
         AUDIOCITY_TEST(runRexSliceProgramBuildTest, 114),
+        AUDIOCITY_TEST(runTransientSliceProgramBuildTest, 116),
         AUDIOCITY_TEST(runCcLearnDialUserClearCallbackTest, 63),
         AUDIOCITY_TEST(runGeneratedCyclePitchInvariantAcrossSampleCountsTest, 46),
         AUDIOCITY_TEST(runDisplayMinMaxPreservesPolarityTest, 48),

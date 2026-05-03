@@ -1352,6 +1352,25 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
         g.drawLine(lpHX1, lane.getY(), lpHX1, lane.getBottom(), 1.5f);
         g.drawLine(lpHX2, lane.getY(), lpHX2, lane.getBottom(), 1.5f);
 
+        if (!sliceMarkers_.empty())
+        {
+            g.setColour(juce::Colour(0xff61d9ff).withAlpha(0.62f));
+            for (const auto markerSample : sliceMarkers_)
+            {
+                if (markerSample <= 0 || markerSample >= totalSamples_)
+                    continue;
+
+                if (markerSample < viewStartSample_
+                    || markerSample > viewStartSample_ + juce::jmax(1, viewSampleCount_ - 1))
+                {
+                    continue;
+                }
+
+                const auto markerX = juce::jlimit(bounds.getX(), bounds.getRight(), xFromSample(markerSample));
+                g.drawLine(markerX, lane.getY(), markerX, lane.getBottom(), 1.0f);
+            }
+        }
+
         for (int voiceIndex = 0; voiceIndex < static_cast<int>(voicePlaybackPositions_.size()); ++voiceIndex)
         {
             const auto sampleIndex = voicePlaybackPositions_[static_cast<std::size_t>(voiceIndex)];
@@ -1405,7 +1424,16 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
         auto badge = juce::Rectangle<float>(bounds.getRight() - static_cast<float>(badgeWidth) - 8.0f,
             bounds.getY() + 6.0f, static_cast<float>(badgeWidth), 16.0f);
 
-        g.setColour(loopFormatBadge_ == "Apple Loop" ? juce::Colour(0xff5b4b8a) : juce::Colour(0xff4b6b2a));
+        auto badgeColour = juce::Colour(0xff4b6b2a);
+        if (loopFormatBadge_ == "Apple Loop")
+            badgeColour = juce::Colour(0xff5b4b8a);
+        else if (loopFormatBadge_ == "REX")
+            badgeColour = juce::Colour(0xff2b5f93);
+        else if (loopFormatBadge_ == "SFZ")
+            badgeColour = juce::Colour(0xff6c5ce7);
+        else if (loopFormatBadge_ == "SLICE")
+            badgeColour = juce::Colour(0xff1f7a8c);
+        g.setColour(badgeColour);
         g.fillRoundedRectangle(badge, 4.0f);
         g.setColour(juce::Colour(0xffdfe6ff));
         g.setFont(juce::Font(juce::FontOptions(10.0f)));
@@ -1422,6 +1450,8 @@ void AudiocityAudioProcessorEditor::WaveformView::mouseDown(const juce::MouseEve
         juce::PopupMenu menu;
         menu.addItem(1, "Signed", true, displayMode_ == DisplayMode::signedWaveform);
         menu.addItem(2, "Symmetric", true, displayMode_ == DisplayMode::symmetricEnvelope);
+        menu.addSeparator();
+        menu.addItem(3, "Auto Slice Transients", autoSliceEnabled_);
         const auto clickScreenPosition = event.getScreenPosition();
         const juce::Rectangle<int> targetArea(clickScreenPosition.x, clickScreenPosition.y, 1, 1);
 
@@ -1443,6 +1473,11 @@ void AudiocityAudioProcessorEditor::WaveformView::mouseDown(const juce::MouseEve
                     safeThis->setDisplayMode(DisplayMode::symmetricEnvelope);
                     if (safeThis->onDisplayModeSelected)
                         safeThis->onDisplayModeSelected(DisplayMode::symmetricEnvelope);
+                }
+                else if (selectedId == 3)
+                {
+                    if (safeThis->onAutoSliceRequested)
+                        safeThis->onAutoSliceRequested();
                 }
             });
 
@@ -2871,7 +2906,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     };
 
     addAndMakeVisible(loadButton_);
-    loadButton_.setTooltip("Load Sample or SFZ");
+    loadButton_.setTooltip("Load Sample, SFZ, or REX");
     loadButton_.onClick = [this] { openSampleChooser(); };
 
     waveformView_.setDisplayMode(processor_.getWaveformDisplayMode() == 2
@@ -2972,11 +3007,18 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         processor_.setSampleWindow(defaultStart, defaultEnd);
         processor_.setLoopPoints(defaultStart, defaultEnd);
 
+        const auto waveformBadge = processor_.hasImportedProgram()
+            ? audiocity::plugin::importedProgramFormatBadge(processor_.getImportedProgramFormat())
+            : processor_.getLoadedSampleLoopFormatBadge();
         waveformView_.setState(sampleLength, getLoadedSampleWaveformMinMaxByChannel(),
             defaultStart, defaultEnd, defaultStart, defaultEnd,
-            processor_.getLoadedSampleLoopFormatBadge());
+            waveformBadge);
         updateSampleInformationDisplay();
         waveformView_.resetView();
+    };
+    waveformView_.onAutoSliceRequested = [this]
+    {
+        autoSliceLoadedSample();
     };
 
     // Playback mode
@@ -4636,8 +4678,11 @@ void AudiocityAudioProcessorEditor::showMappingZoneContextMenu(const int row, co
     menu.addItem(6,
                  singleSelection ? "Map Zone Chromatically from C1" : "Map Selected Zones Chromatically from C1",
                  true);
-    menu.addSeparator();
     menu.addItem(7,
+                 "Spread Selected Zones Across Current Key Range",
+                 selectedRows.size() > 1);
+    menu.addSeparator();
+    menu.addItem(8,
                  "Select All Zones\tCtrl+A",
                  static_cast<int>(selectedRows.size()) < static_cast<int>(mappingZoneRows_.size()));
 
@@ -4670,6 +4715,9 @@ void AudiocityAudioProcessorEditor::showMappingZoneContextMenu(const int row, co
                     safeThis->remapSelectedMappingZonesChromatically();
                     break;
                 case 7:
+                    safeThis->spreadSelectedMappingZonesAcrossKeyRange();
+                    break;
+                case 8:
                     safeThis->selectAllMappingZones();
                     break;
                 default:
@@ -5284,6 +5332,39 @@ void AudiocityAudioProcessorEditor::remapSelectedMappingZonesChromatically()
     updateDiagnosticsStatusText();
 }
 
+void AudiocityAudioProcessorEditor::spreadSelectedMappingZonesAcrossKeyRange()
+{
+    const auto selectedRows = getSelectedMappingRowIndices();
+    if (selectedRows.size() < 2)
+    {
+        updateMappingEditControls();
+        return;
+    }
+
+    std::vector<int> zoneIndices;
+    zoneIndices.reserve(selectedRows.size());
+    for (const auto selectedRow : selectedRows)
+        zoneIndices.push_back(mappingZoneRows_[static_cast<std::size_t>(selectedRow)].zoneIndex);
+
+    const auto beforeState = captureImportedProgramMappingState();
+    if (!processor_.spreadImportedProgramZonesAcrossKeyRange(zoneIndices))
+    {
+        mappingEditStatusLabel_.setText("Key-range spread failed", juce::dontSendNotification);
+        updateMappingEditControls();
+        return;
+    }
+
+    recordImportedProgramMappingChange(beforeState, "Spread Zones Across Key Range");
+    mappingEditStatusLabel_.setText(
+        juce::String(static_cast<int>(zoneIndices.size())) + " zones spread across their current key range",
+        juce::dontSendNotification);
+    resetMappingBatchEditTracking();
+    refreshMappingZoneRows();
+    selectMappingZoneIndices(zoneIndices);
+    updateMappingDetails();
+    updateDiagnosticsStatusText();
+}
+
 bool AudiocityAudioProcessorEditor::commitMappingZoneEdit(const audiocity::plugin::ProgramZoneEdit& edit,
                                                           const juce::String& statusText)
 {
@@ -5391,6 +5472,36 @@ bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file)
     }
 
     return loaded;
+}
+
+void AudiocityAudioProcessorEditor::autoSliceLoadedSample()
+{
+    if (processor_.hasImportedProgram())
+        return;
+
+    const auto samplePath = processor_.getLoadedSamplePath();
+    if (samplePath.isEmpty())
+        return;
+
+    const juce::File file(samplePath);
+    processor_.panicAllAudio();
+    updateGeneratePreviewButtonText();
+
+    if (!processor_.importTransientSliceProgram(file))
+    {
+        updateDiagnosticsStatusText();
+        return;
+    }
+
+    editorUndoHistory_.clear();
+    mappingUndoProgramPath_ = processor_.getImportedProgramPath();
+    lastSettingsSnapshot_ = captureSettingsSnapshot();
+    processor_.markLibraryRecent(file.getFullPathName());
+    refreshBrowserEntryLibraryFlags();
+    rebuildVisibleSampleList();
+    clearSelectedPresetAfterSourceLoad();
+    refreshUI(true);
+    updateDiagnosticsStatusText();
 }
 
 void AudiocityAudioProcessorEditor::chooseSampleRootFolder()
@@ -8284,7 +8395,7 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     const auto hasImportedProgram = processor_.hasImportedProgram();
     const auto importedProgramPath = processor_.getImportedProgramPath();
     const auto importedProgramName = processor_.getImportedProgramName();
-    const auto importedProgramBadge = audiocity::plugin::importedProgramFormatBadge(importedProgramPath);
+    const auto importedProgramBadge = audiocity::plugin::importedProgramFormatBadge(processor_.getImportedProgramFormat());
     const auto path = processor_.getLoadedSamplePath();
     const auto sampleIdentity = hasImportedProgram
         ? (juce::String("program:") + importedProgramPath)
@@ -8357,10 +8468,15 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
         cachedWaveformPeakResolution_ = targetPeakResolution;
     }
 
+    waveformView_.setAutoSliceEnabled(!hasImportedProgram && path.isNotEmpty());
+    waveformView_.setSliceMarkers(processor_.getImportedProgramSliceMarkerSamples());
+    const auto waveformBadge = hasImportedProgram
+        ? importedProgramBadge
+        : processor_.getLoadedSampleLoopFormatBadge();
     waveformView_.setState(sampleLength, cachedWaveformMinMaxByChannel_,
         processor_.getSampleWindowStart(), processor_.getSampleWindowEnd(),
         processor_.getLoopStart(), processor_.getLoopEnd(),
-        processor_.getLoadedSampleLoopFormatBadge());
+        waveformBadge);
 
     if (forceWaveformReset || isNewLoadedSample)
     {
@@ -8510,7 +8626,7 @@ void AudiocityAudioProcessorEditor::updateSampleInformationDisplay()
     const auto channels = juce::jmax(0, processor_.getLoadedSampleChannels());
     const auto sampleRate = processor_.getLoadedSampleRateHz();
     const auto loopBadge = hasImportedProgram
-        ? audiocity::plugin::importedProgramFormatBadge(importedProgramPath)
+        ? audiocity::plugin::importedProgramFormatBadge(processor_.getImportedProgramFormat())
         : processor_.getLoadedSampleLoopFormatBadge();
 
     juce::String sourceText;
@@ -8619,6 +8735,8 @@ void AudiocityAudioProcessorEditor::updateSampleInformationDisplay()
             badgeColour = juce::Colour(0xff2b5f93);
         else if (loopBadge == "SFZ")
             badgeColour = juce::Colour(0xff6c5ce7);
+        else if (loopBadge == "SLICE")
+            badgeColour = juce::Colour(0xff1f7a8c);
         sampleInfoBadge_.setBadge(loopBadge, badgeColour);
     }
     else
@@ -8676,9 +8794,12 @@ void AudiocityAudioProcessorEditor::pushPlaybackWindow()
 
     // Update waveform view to show new playback bounds
     const auto sampleLength = processor_.getLoadedSampleLength();
+    const auto waveformBadge = processor_.hasImportedProgram()
+        ? audiocity::plugin::importedProgramFormatBadge(processor_.getImportedProgramFormat())
+        : processor_.getLoadedSampleLoopFormatBadge();
     waveformView_.setState(sampleLength, getLoadedSampleWaveformMinMaxByChannel(cachedWaveformPeakResolution_ > 0 ? cachedWaveformPeakResolution_ : 2048),
         ps, pe, processor_.getLoopStart(), processor_.getLoopEnd(),
-        processor_.getLoadedSampleLoopFormatBadge());
+        waveformBadge);
 
     updateSampleInformationDisplay();
 }
@@ -8718,10 +8839,13 @@ void AudiocityAudioProcessorEditor::applyLoopPoints()
     }
 
     const auto sampleLength = processor_.getLoadedSampleLength();
+    const auto waveformBadge = processor_.hasImportedProgram()
+        ? audiocity::plugin::importedProgramFormatBadge(processor_.getImportedProgramFormat())
+        : processor_.getLoadedSampleLoopFormatBadge();
     waveformView_.setState(sampleLength, getLoadedSampleWaveformMinMaxByChannel(cachedWaveformPeakResolution_ > 0 ? cachedWaveformPeakResolution_ : 2048),
         processor_.getSampleWindowStart(), processor_.getSampleWindowEnd(),
         appliedLoopStart, appliedLoopEnd,
-        processor_.getLoadedSampleLoopFormatBadge());
+        waveformBadge);
 
     updateSampleInformationDisplay();
 }

@@ -13,7 +13,8 @@ enum class ImportedProgramFormat
 {
     unknown,
     sfz,
-    rex
+    rex,
+    sampleSlices
 };
 
 struct ImportedProgramDerivedState
@@ -31,10 +32,13 @@ struct ImportedProgramRestoreResult
 
 [[nodiscard]] juce::Identifier importedProgramPathStateProperty();
 [[nodiscard]] ImportedProgramFormat detectImportedProgramFormat(const juce::String& programPath);
+[[nodiscard]] ImportedProgramFormat readImportedProgramStateFormat(const juce::ValueTree& state);
+[[nodiscard]] juce::String importedProgramFormatBadge(ImportedProgramFormat format);
 [[nodiscard]] juce::String importedProgramFormatBadge(const juce::String& programPath);
 void appendImportedProgramState(juce::ValueTree& state,
                                 const juce::String& programPath,
-                                const juce::ValueTree& mappingState);
+                                const juce::ValueTree& mappingState,
+                                ImportedProgramFormat format = ImportedProgramFormat::unknown);
 [[nodiscard]] juce::String readImportedProgramStatePath(const juce::ValueTree& state);
 [[nodiscard]] juce::ValueTree readImportedProgramMappingState(const juce::ValueTree& state);
 [[nodiscard]] ImportedProgramDerivedState buildImportedProgramDerivedState(const audiocity::engine::Program& program);

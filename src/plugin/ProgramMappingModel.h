@@ -120,6 +120,8 @@ struct ProgramZoneEdit
 [[nodiscard]] bool remapProgramZonesChromatically(audiocity::engine::Program& program,
                                                   const std::vector<int>& zoneIndices,
                                                   int baseMidiNote = 36);
+[[nodiscard]] bool spreadProgramZonesAcrossKeyRange(audiocity::engine::Program& program,
+                                                    const std::vector<int>& zoneIndices);
 [[nodiscard]] juce::Identifier programZoneMappingStateType();
 [[nodiscard]] juce::ValueTree createProgramZoneMappingState(const audiocity::engine::Program& program);
 [[nodiscard]] std::vector<ProgramZoneEdit> parseProgramZoneMappingState(const juce::ValueTree& state);

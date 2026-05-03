@@ -308,6 +308,12 @@ private:
                       int loopStart, int loopEnd,
                       juce::String loopFormatBadge);
         using VoicePlaybackPositions = std::array<int, audiocity::engine::VoicePool::maxVoices>;
+        void setSliceMarkers(std::vector<int> sliceMarkers)
+        {
+            sliceMarkers_ = std::move(sliceMarkers);
+            repaint();
+        }
+        void setAutoSliceEnabled(const bool enabled) noexcept { autoSliceEnabled_ = enabled; }
         void setVoicePlaybackPositions(const VoicePlaybackPositions& positions);
         void resetView();
         void setViewRange(int viewStartSample, int viewSampleCount);
@@ -325,6 +331,7 @@ private:
         std::function<void(int, int)> onPlaybackCommitted;
         std::function<void()> onResetRangesRequested;
         std::function<void(DisplayMode)> onDisplayModeSelected;
+        std::function<void()> onAutoSliceRequested;
 
         void paint(juce::Graphics& g) override;
         void mouseDown(const juce::MouseEvent& event) override;
@@ -349,6 +356,7 @@ private:
         int playbackEnd_ = 0;
         int loopStart_ = 0;
         int loopEnd_ = 0;
+        std::vector<int> sliceMarkers_;
         juce::String loopFormatBadge_;
         VoicePlaybackPositions voicePlaybackPositions_{};
 
@@ -358,6 +366,7 @@ private:
         DragMode dragMode_ = DragMode::none;
         int dragAnchorViewStart_ = 0;
         bool linkedPlaybackDuringLoopDrag_ = false;
+        bool autoSliceEnabled_ = false;
         DisplayMode displayMode_ = DisplayMode::signedWaveform;
     };
 
@@ -945,6 +954,7 @@ private:
     void deleteSelectedMappingZone();
     void clearSelectedMappingVelocityFades();
     void remapSelectedMappingZonesChromatically();
+    void spreadSelectedMappingZonesAcrossKeyRange();
     bool commitMappingZoneEdit(const audiocity::plugin::ProgramZoneEdit& edit, const juce::String& statusText);
     void paintMappingListRow(int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected);
     void refreshBrowserEntryLibraryFlags();
@@ -953,6 +963,7 @@ private:
     void applySelectedBrowserTags();
     void rebuildVisibleSampleList();
     bool loadFileAsInstrument(const juce::File& file);
+    void autoSliceLoadedSample();
     void loadSampleFromBrowserRow(int row);
     void previewSampleFromBrowserRow(int row, bool forceRestart = true);
     void updatePlayerKeyboardSizing();

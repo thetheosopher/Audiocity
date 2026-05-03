@@ -110,6 +110,34 @@ bool isValidSampleAssetIndex(const audiocity::engine::Program& program, const in
     return sampleAssetIndex >= 0 && static_cast<std::size_t>(sampleAssetIndex) < program.sampleAssets.size();
 }
 
+bool collectUniqueValidZoneIndices(const audiocity::engine::Program& program,
+                                   const std::vector<int>& zoneIndices,
+                                   std::vector<int>& uniqueZoneIndices)
+{
+    uniqueZoneIndices.clear();
+    uniqueZoneIndices.reserve(zoneIndices.size());
+    for (const auto zoneIndex : zoneIndices)
+    {
+        if (zoneIndex < 0 || static_cast<std::size_t>(zoneIndex) >= program.zones.size())
+            return false;
+
+        auto alreadyQueued = false;
+        for (const auto queuedZoneIndex : uniqueZoneIndices)
+        {
+            if (queuedZoneIndex == zoneIndex)
+            {
+                alreadyQueued = true;
+                break;
+            }
+        }
+
+        if (!alreadyQueued)
+            uniqueZoneIndices.push_back(zoneIndex);
+    }
+
+    return !uniqueZoneIndices.empty();
+}
+
 int findDefaultSampleAssetIndex(const audiocity::engine::Program& program, const int preferredSampleAssetIndex)
 {
     if (isValidSampleAssetIndex(program, preferredSampleAssetIndex))
@@ -611,31 +639,8 @@ bool remapProgramZonesChromatically(audiocity::engine::Program& program,
                                     const std::vector<int>& zoneIndices,
                                     const int baseMidiNote)
 {
-    if (zoneIndices.empty())
-        return false;
-
     std::vector<int> uniqueZoneIndices;
-    uniqueZoneIndices.reserve(zoneIndices.size());
-    for (const auto zoneIndex : zoneIndices)
-    {
-        if (zoneIndex < 0 || static_cast<std::size_t>(zoneIndex) >= program.zones.size())
-            return false;
-
-        auto alreadyQueued = false;
-        for (const auto queuedZoneIndex : uniqueZoneIndices)
-        {
-            if (queuedZoneIndex == zoneIndex)
-            {
-                alreadyQueued = true;
-                break;
-            }
-        }
-
-        if (!alreadyQueued)
-            uniqueZoneIndices.push_back(zoneIndex);
-    }
-
-    if (uniqueZoneIndices.empty())
+    if (!collectUniqueValidZoneIndices(program, zoneIndices, uniqueZoneIndices))
         return false;
 
     const auto firstMappedNote = audiocity::engine::clampMidiNote(baseMidiNote);
@@ -651,6 +656,67 @@ bool remapProgramZonesChromatically(audiocity::engine::Program& program,
         zone.keyRange = audiocity::engine::MidiRange::single(mappedNote);
         zone.rootMidiNote = mappedNote;
         recomputeGroupRangeFromZones(updatedProgram, zone.groupIndex);
+    }
+
+    program = std::move(updatedProgram);
+    return true;
+}
+
+bool spreadProgramZonesAcrossKeyRange(audiocity::engine::Program& program,
+                                      const std::vector<int>& zoneIndices)
+{
+    std::vector<int> uniqueZoneIndices;
+    if (!collectUniqueValidZoneIndices(program, zoneIndices, uniqueZoneIndices)
+        || uniqueZoneIndices.size() < 2)
+    {
+        return false;
+    }
+
+    std::sort(uniqueZoneIndices.begin(), uniqueZoneIndices.end(),
+        [&program](const int lhs, const int rhs)
+        {
+            const auto& leftZone = program.zones[static_cast<std::size_t>(lhs)];
+            const auto& rightZone = program.zones[static_cast<std::size_t>(rhs)];
+            if (leftZone.keyRange.low != rightZone.keyRange.low)
+                return leftZone.keyRange.low < rightZone.keyRange.low;
+
+            if (leftZone.keyRange.high != rightZone.keyRange.high)
+                return leftZone.keyRange.high < rightZone.keyRange.high;
+
+            return lhs < rhs;
+        });
+
+    auto spanLow = audiocity::engine::kMidiNoteMax;
+    auto spanHigh = audiocity::engine::kMidiNoteMin;
+    for (const auto zoneIndex : uniqueZoneIndices)
+    {
+        const auto& zone = program.zones[static_cast<std::size_t>(zoneIndex)];
+        spanLow = juce::jmin(spanLow, zone.keyRange.low);
+        spanHigh = juce::jmax(spanHigh, zone.keyRange.high);
+    }
+
+    const auto totalNotes = spanHigh - spanLow + 1;
+    if (totalNotes < static_cast<int>(uniqueZoneIndices.size()))
+        return false;
+
+    auto updatedProgram = program;
+    auto nextLow = spanLow;
+    auto notesRemaining = totalNotes;
+    auto zonesRemaining = static_cast<int>(uniqueZoneIndices.size());
+    for (const auto zoneIndex : uniqueZoneIndices)
+    {
+        const auto width = juce::jmax(1, notesRemaining / zonesRemaining);
+        const auto extra = notesRemaining % zonesRemaining;
+        const auto zoneWidth = width + (extra > 0 ? 1 : 0);
+        const auto nextHigh = juce::jlimit(nextLow, spanHigh, nextLow + zoneWidth - 1);
+        auto& zone = updatedProgram.zones[static_cast<std::size_t>(zoneIndex)];
+        zone.keyRange = audiocity::engine::MidiRange::fromUnordered(nextLow, nextHigh);
+        zone.rootMidiNote = audiocity::engine::clampMidiNote(nextLow + ((nextHigh - nextLow) / 2));
+        recomputeGroupRangeFromZones(updatedProgram, zone.groupIndex);
+
+        notesRemaining -= (nextHigh - nextLow + 1);
+        --zonesRemaining;
+        nextLow = nextHigh + 1;
     }
 
     program = std::move(updatedProgram);

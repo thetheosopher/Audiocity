@@ -5,12 +5,14 @@
 #include "PresetJson.h"
 #include "../engine/RexSliceProgram.h"
 #include "../engine/SfzImporter.h"
+#include "../engine/TransientSliceProgram.h"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <thread>
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -340,6 +342,48 @@ juce::String makeRexSliceImportSummary(const audiocity::engine::rex::ChromaticSl
         summary += " (truncated at MIDI 127)";
 
     return summary;
+}
+
+juce::String makeTransientSliceImportSummary(
+    const audiocity::engine::transient_slice::TransientSliceProgram& sliceProgram)
+{
+    auto summary = "Transient slices imported: "
+        + juce::String(static_cast<int>(sliceProgram.program.zones.size()))
+        + " zones, mapped chromatically from MIDI "
+        + juce::String(sliceProgram.baseMidiNote);
+
+    if (sliceProgram.truncated)
+        summary += " (truncated at MIDI 127)";
+
+    return summary;
+}
+
+bool readAudioFileToBuffer(const juce::File& file,
+                           juce::AudioBuffer<float>& buffer,
+                           double& sampleRateHz)
+{
+    if (!file.existsAsFile())
+        return false;
+
+    juce::AudioFormatManager formatManager;
+    formatManager.registerBasicFormats();
+
+    std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
+    if (reader == nullptr || reader->lengthInSamples <= 0)
+        return false;
+
+    const auto totalSamples = static_cast<int>(std::min<long long>(
+        reader->lengthInSamples,
+        static_cast<long long>(std::numeric_limits<int>::max())));
+    if (totalSamples <= 0)
+        return false;
+
+    buffer.setSize(juce::jmax(1, static_cast<int>(reader->numChannels)), totalSamples, false, true, true);
+    if (!reader->read(&buffer, 0, totalSamples, 0, true, true))
+        return false;
+
+    sampleRateHz = juce::jmax(1.0, reader->sampleRate);
+    return true;
 }
 
 using ModulationRoute = audiocity::engine::EngineCore::ModulationRoute;
@@ -1123,7 +1167,10 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
             mappingEdits = audiocity::plugin::createProgramZoneMappingState(importedProgram_);
         }
 
-        audiocity::plugin::appendImportedProgramState(state, importedProgramPath, mappingEdits);
+        audiocity::plugin::appendImportedProgramState(state,
+                                  importedProgramPath,
+                                  mappingEdits,
+                                  getImportedProgramFormat());
     }
     {
         std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
@@ -1306,13 +1353,16 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     if (importedProgramPath.isNotEmpty())
     {
         const juce::File importedProgramFile(importedProgramPath);
-        switch (audiocity::plugin::detectImportedProgramFormat(importedProgramPath))
+        switch (audiocity::plugin::readImportedProgramStateFormat(state))
         {
             case audiocity::plugin::ImportedProgramFormat::sfz:
                 restoredSample = importSfzProgram(importedProgramFile);
                 break;
             case audiocity::plugin::ImportedProgramFormat::rex:
                 restoredSample = importRexSliceProgram(importedProgramFile);
+                break;
+            case audiocity::plugin::ImportedProgramFormat::sampleSlices:
+                restoredSample = importTransientSliceProgram(importedProgramFile);
                 break;
             case audiocity::plugin::ImportedProgramFormat::unknown:
             default:
@@ -1762,6 +1812,7 @@ void AudiocityAudioProcessor::clearImportedProgramMetadata()
 
     std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
     importedProgramPath_.clear();
+    importedProgramFormat_ = audiocity::plugin::ImportedProgramFormat::unknown;
     importedProgramName_.clear();
     importedProgramMapSummary_.clear();
     importedProgram_ = {};
@@ -1771,6 +1822,7 @@ void AudiocityAudioProcessor::clearImportedProgramMetadata()
 }
 
 void AudiocityAudioProcessor::setImportedProgramMetadata(const juce::File& file,
+                                                         const audiocity::plugin::ImportedProgramFormat format,
                                                          const audiocity::engine::Program& program,
                                                          const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset,
                                                          const juce::String& diagnosticSummary,
@@ -1779,6 +1831,7 @@ void AudiocityAudioProcessor::setImportedProgramMetadata(const juce::File& file,
     {
         std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
         importedProgramPath_ = file.getFullPathName();
+        importedProgramFormat_ = format;
         importedProgramName_ = juce::String::fromUTF8(program.name.c_str());
         const auto derivedState = audiocity::plugin::buildImportedProgramDerivedState(program);
         importedProgramMapSummary_ = derivedState.mapSummary;
@@ -1821,6 +1874,12 @@ juce::String AudiocityAudioProcessor::getImportedProgramPath() const
     return importedProgramPath_;
 }
 
+audiocity::plugin::ImportedProgramFormat AudiocityAudioProcessor::getImportedProgramFormat() const
+{
+    std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+    return importedProgramFormat_;
+}
+
 juce::String AudiocityAudioProcessor::getImportedProgramName() const
 {
     std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
@@ -1856,6 +1915,33 @@ std::vector<audiocity::plugin::ProgramZoneListRow> AudiocityAudioProcessor::getI
 {
     std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
     return importedProgramZoneRows_;
+}
+
+std::vector<int> AudiocityAudioProcessor::getImportedProgramSliceMarkerSamples() const
+{
+    std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+    if (!importedProgramLoaded_.load(std::memory_order_relaxed)
+        || importedProgram_.sampleAssets.size() != 1
+        || importedProgram_.zones.empty())
+    {
+        return {};
+    }
+
+    std::vector<int> markers;
+    markers.reserve(importedProgram_.zones.size() * 2);
+    for (const auto& zone : importedProgram_.zones)
+    {
+        if (zone.sampleAssetIndex != 0)
+            return {};
+
+        markers.push_back(juce::jmax(0, zone.sampleStart));
+        if (zone.sampleEndExclusive > zone.sampleStart)
+            markers.push_back(zone.sampleEndExclusive);
+    }
+
+    std::sort(markers.begin(), markers.end());
+    markers.erase(std::unique(markers.begin(), markers.end()), markers.end());
+    return markers;
 }
 
 juce::ValueTree AudiocityAudioProcessor::createImportedProgramMappingState() const
@@ -2092,6 +2178,34 @@ bool AudiocityAudioProcessor::remapImportedProgramZonesChromatically(const std::
     return true;
 }
 
+bool AudiocityAudioProcessor::spreadImportedProgramZonesAcrossKeyRange(const std::vector<int>& zoneIndices)
+{
+    audiocity::engine::Program programToPublish;
+    std::vector<juce::AudioBuffer<float>> sampleDataToPublish;
+
+    {
+        std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+        if (!importedProgramLoaded_.load(std::memory_order_relaxed)
+            || importedProgram_.zones.empty()
+            || importedProgramSampleDataByAsset_.empty())
+        {
+            return false;
+        }
+
+        auto updatedProgram = importedProgram_;
+        if (!audiocity::plugin::spreadProgramZonesAcrossKeyRange(updatedProgram, zoneIndices))
+            return false;
+
+        importedProgram_ = std::move(updatedProgram);
+        refreshImportedProgramDerivedStateLocked("Mapping spread: key range");
+        captureImportedProgramSnapshotLocked(programToPublish, sampleDataToPublish);
+    }
+
+    engine_.panic();
+    engine_.setProgram(programToPublish, sampleDataToPublish);
+    return true;
+}
+
 juce::String AudiocityAudioProcessor::getLastImportDiagnosticSummary() const
 {
     std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
@@ -2189,7 +2303,12 @@ bool AudiocityAudioProcessor::importSfzProgram(const juce::File& file)
         capturedSampleRateState_ = 44100.0;
     }
 
-    setImportedProgramMetadata(file, result.program, result.sampleDataByAsset, summary, static_cast<int>(result.program.zones.size()));
+    setImportedProgramMetadata(file,
+                               audiocity::plugin::ImportedProgramFormat::sfz,
+                               result.program,
+                               result.sampleDataByAsset,
+                               summary,
+                               static_cast<int>(result.program.zones.size()));
     suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
     syncSampleDerivedParametersFromEngine();
     setWaveformViewRange(0, engine_.getLoadedSampleLength());
@@ -2241,9 +2360,60 @@ bool AudiocityAudioProcessor::importRexSliceProgram(const juce::File& file)
     }
 
     setImportedProgramMetadata(file,
+                               audiocity::plugin::ImportedProgramFormat::rex,
                                sliceProgram.program,
                                sliceProgram.sampleDataByAsset,
                                makeRexSliceImportSummary(sliceProgram),
+                               static_cast<int>(sliceProgram.program.zones.size()));
+    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
+    syncSampleDerivedParametersFromEngine();
+    setWaveformViewRange(0, engine_.getLoadedSampleLength());
+    return true;
+}
+
+bool AudiocityAudioProcessor::importTransientSliceProgram(const juce::File& file)
+{
+    juce::AudioBuffer<float> sampleBuffer;
+    auto sampleRateHz = 0.0;
+    if (!readAudioFileToBuffer(file, sampleBuffer, sampleRateHz))
+    {
+        setLastImportDiagnosticSummary("Transient slice import failed: sample file could not be read");
+        return false;
+    }
+
+    audiocity::engine::transient_slice::TransientSliceProgram sliceProgram;
+    if (!audiocity::engine::transient_slice::buildTransientSliceProgram(file, sampleBuffer, sampleRateHz, sliceProgram))
+    {
+        setLastImportDiagnosticSummary("Transient slice import failed: not enough slice boundaries were detected");
+        return false;
+    }
+
+    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
+    stopGeneratedWaveformPreview();
+    engine_.panic();
+
+    if (!engine_.loadSampleFromFile(file))
+    {
+        setLastImportDiagnosticSummary("Transient slice import failed: display waveform could not be loaded");
+        return false;
+    }
+
+    engine_.setProgram(sliceProgram.program, sliceProgram.sampleDataByAsset);
+
+    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+        generatedWaveformState_.clear();
+        capturedSampleState_.clear();
+        capturedSampleRateState_ = 44100.0;
+    }
+
+    setImportedProgramMetadata(file,
+                               audiocity::plugin::ImportedProgramFormat::sampleSlices,
+                               sliceProgram.program,
+                               sliceProgram.sampleDataByAsset,
+                               makeTransientSliceImportSummary(sliceProgram),
                                static_cast<int>(sliceProgram.program.zones.size()));
     suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
     syncSampleDerivedParametersFromEngine();
