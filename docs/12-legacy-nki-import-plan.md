@@ -6,6 +6,12 @@ Import older Kontakt `.nki` instruments that reference discrete sample files on 
 
 This plan is intentionally limited to the earlier NKI era where instruments point at external WAV/AIFF samples. It does not target newer monolithic, encrypted, compressed, or database-backed Kontakt library formats.
 
+## Current baseline
+
+- A first playable legacy `.nki` subset is now implemented. The importer still begins with the lightweight probe, but when it finds resolved external WAV/AIFF references plus simple enumerated group/zone metadata tags, it now translates those zones into a playable imported `Program` using Audiocity's existing sample-asset path.
+- Audiocity now also stores an explicit `NKI` imported-program format tag so saved patches can restore those playable legacy imports through the normal imported-program reopen path.
+- The current translation scope is intentionally narrow: resolved sample binding plus key range, velocity range, root note, and simple group naming. Looping, gain/pan, tuning, offsets, and richer Kontakt behavior remain future work.
+
 ## Scope
 
 ### In scope

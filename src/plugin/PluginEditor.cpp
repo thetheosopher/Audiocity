@@ -5584,6 +5584,9 @@ bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file)
 
     const auto loaded = [&]()
     {
+        if (file.getFileExtension().equalsIgnoreCase(".nki"))
+            return processor_.importLegacyNkiProgram(file);
+
         switch (audiocity::plugin::detectImportedProgramFormat(file.getFullPathName()))
         {
             case audiocity::plugin::ImportedProgramFormat::sfz:
@@ -5604,6 +5607,10 @@ bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file)
         processor_.markLibraryRecent(file.getFullPathName());
         refreshBrowserEntryLibraryFlags();
         rebuildVisibleSampleList();
+    }
+    else
+    {
+        updateDiagnosticsStatusText();
     }
 
     return loaded;
@@ -5805,8 +5812,16 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
             SamplePreviewData previewData;
             if (indexedFile.isInstrument)
             {
-                previewData.metadataLine = "SFZ instrument";
-                previewData.loopFormatBadge = "SFZ";
+                if (indexedFile.extensionLower == ".nki")
+                {
+                    previewData.metadataLine = "NKI instrument (legacy subset)";
+                    previewData.loopFormatBadge = "NKI";
+                }
+                else
+                {
+                    previewData.metadataLine = "SFZ instrument";
+                    previewData.loopFormatBadge = "SFZ";
+                }
             }
             else if (const auto cacheIt = cacheEntries.find(cacheKey);
                 cacheIt != cacheEntries.end() && cacheIt->second.fileSizeBytes == fileSizeBytes)
@@ -7161,8 +7176,8 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colours::white.withAlpha(0.95f));
     g.setFont(14.0f);
     const auto dropText = processor_.isRexRuntimeAvailable()
-        ? juce::String("Drop .wav, .aiff, .sfz, .rex, or .rx2 to load")
-        : juce::String("Drop .wav, .aiff, or .sfz to load");
+        ? juce::String("Drop .wav, .aiff, .sfz, .nki, .rex, or .rx2 to open")
+        : juce::String("Drop .wav, .aiff, .sfz, or .nki to open");
     g.drawText(dropText, overlay, juce::Justification::centred);
 }
 
@@ -8436,7 +8451,7 @@ bool AudiocityAudioProcessorEditor::isInterestedInFileDrag(const juce::StringArr
 
         const auto ext = juce::File(path).getFileExtension().toLowerCase();
         DBG("[DnD]   normalized=\"" + path + "\"  ext=\"" + ext + "\"");
-        if (ext == ".sfz" || ext == ".wav" || ext == ".aiff" || ext == ".aif"
+        if (ext == ".sfz" || ext == ".nki" || ext == ".wav" || ext == ".aiff" || ext == ".aif"
             || (processor_.isRexRuntimeAvailable() && (ext == ".rex" || ext == ".rx2")))
         {
             DBG("[DnD]   -> INTERESTED");
@@ -8486,10 +8501,10 @@ void AudiocityAudioProcessorEditor::filesDropped(const juce::StringArray& files,
 void AudiocityAudioProcessorEditor::openSampleChooser()
 {
     const auto wildcard = processor_.isRexRuntimeAvailable()
-        ? juce::String("*.wav;*.aiff;*.aif;*.sfz;*.rex;*.rx2")
-        : juce::String("*.wav;*.aiff;*.aif;*.sfz");
+        ? juce::String("*.wav;*.aiff;*.aif;*.sfz;*.nki;*.rex;*.rx2")
+        : juce::String("*.wav;*.aiff;*.aif;*.sfz;*.nki");
     fileChooser_ = std::make_unique<juce::FileChooser>(
-        processor_.isRexRuntimeAvailable() ? "Load sample, SFZ, or REX" : "Load sample or SFZ",
+        processor_.isRexRuntimeAvailable() ? "Open sample, SFZ, NKI, or REX" : "Open sample, SFZ, or NKI",
         juce::File{},
         wildcard);
 

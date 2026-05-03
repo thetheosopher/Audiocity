@@ -66,6 +66,7 @@ void addDiagnostic(std::vector<SfzDiagnostic>& diagnostics,
         "pan",
         "seq_position",
         "seq_length",
+        "seq_mode",
         "xfin_lovel",
         "xfin_hivel",
         "xfout_lovel",
@@ -91,6 +92,14 @@ void addDiagnostic(std::vector<SfzDiagnostic>& diagnostics,
         || value == "release";
 }
 
+[[nodiscard]] bool isSupportedSeqModeValue(const std::string& value) noexcept
+{
+    return value == "random"
+        || value == "round_robin"
+        || value == "sequence"
+        || value == "sequential";
+}
+
 void validateOpcodeValue(std::vector<SfzDiagnostic>& diagnostics,
                          const std::string& key,
                          const juce::String& value,
@@ -114,6 +123,14 @@ void validateOpcodeValue(std::vector<SfzDiagnostic>& diagnostics,
         addDiagnostic(diagnostics,
             SfzDiagnostic::Severity::warning,
             "Unsupported SFZ trigger value " + value.trim(),
+            file,
+            line);
+    }
+    else if (key == "seq_mode" && !isSupportedSeqModeValue(normalized))
+    {
+        addDiagnostic(diagnostics,
+            SfzDiagnostic::Severity::warning,
+            "Unsupported SFZ seq_mode value " + value.trim(),
             file,
             line);
     }
@@ -417,6 +434,19 @@ void overlayOpcodes(OpcodeMap& target, const Map& source)
     return juce::jlimit(-1.0f, 1.0f, pan);
 }
 
+[[nodiscard]] RoundRobinMode parseRoundRobinMode(const OpcodeMap& opcodes)
+{
+    const auto found = opcodes.find("seq_mode");
+    if (found == opcodes.end())
+        return RoundRobinMode::ordered;
+
+    const auto mode = lowerAscii(found->second.trim().toStdString());
+    if (mode == "random")
+        return RoundRobinMode::cycleRandom;
+
+    return RoundRobinMode::ordered;
+}
+
 [[nodiscard]] ZoneLoopMode parseLoopMode(const OpcodeMap& opcodes)
 {
     const auto found = opcodes.find("loop_mode");
@@ -466,6 +496,7 @@ void overlayOpcodes(OpcodeMap& target, const Map& source)
     group.velocityFadeOut = parseVelocityFadeRange(opcodes, "xfout_lovel", "xfout_hivel");
     group.gainDb = parseFloat(opcodes, "volume").value_or(0.0f);
     group.pan = parsePan(opcodes);
+    group.roundRobinMode = parseRoundRobinMode(opcodes);
     group.triggerMode = parseTriggerMode(opcodes);
     group.chokeGroup = parseInt(opcodes, "off_by").value_or(0);
     return group;
@@ -531,6 +562,8 @@ struct ParserState
 
         auto group = makeGroupFromOpcodes(groupInheritedOpcodes());
         group.name = "SFZ Group " + std::to_string(program.groups.size() + 1);
+        if (group.roundRobinMode == RoundRobinMode::cycleRandom && group.roundRobinGroup <= 0)
+            group.roundRobinGroup = static_cast<int>(program.groups.size()) + 1;
         program.groups.push_back(group);
         currentGroupIndex = static_cast<int>(program.groups.size() - 1);
         return currentGroupIndex;
@@ -650,7 +683,8 @@ struct ParserState
             + (static_cast<float>(parseInt(opcodes, "transpose").value_or(0)) * 100.0f);
         zone.roundRobinPosition = parseInt(opcodes, "seq_position").value_or(0);
         zone.roundRobinLength = juce::jmax(0, parseInt(opcodes, "seq_length").value_or(0));
-        if (zone.roundRobinPosition > 0)
+        zone.roundRobinMode = parseRoundRobinMode(opcodes);
+        if (zone.roundRobinPosition > 0 || zone.roundRobinMode == RoundRobinMode::cycleRandom)
             zone.roundRobinGroup = zone.groupIndex >= 0 ? zone.groupIndex + 1 : 1;
         zone.chokeGroup = parseInt(opcodes, "off_by").value_or(0);
         zone.loopMode = parseLoopMode(opcodes);

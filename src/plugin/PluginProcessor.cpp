@@ -3,6 +3,7 @@
 #include "ImportedProgramState.h"
 #include "PluginEditor.h"
 #include "PresetJson.h"
+#include "../engine/LegacyNkiProbe.h"
 #include "../engine/RexSliceProgram.h"
 #include "../engine/SfzImporter.h"
 #include "../engine/TransientSliceProgram.h"
@@ -327,6 +328,41 @@ juce::String makeSfzImportSummary(const audiocity::engine::SfzImportResult& resu
         summary += diagnostic.severity == audiocity::engine::SfzDiagnostic::Severity::error ? "Error: " : "Warning: ";
         summary += makeDiagnosticText(diagnostic);
     }
+
+    return summary;
+}
+
+juce::String makeLegacyNkiImportSummary(const audiocity::engine::nki::ImportResult& result, const bool imported)
+{
+    int warnings = 0;
+    int errors = 0;
+    for (const auto& diagnostic : result.probe.diagnostics)
+    {
+        if (diagnostic.severity == audiocity::engine::nki::DiagnosticSeverity::error)
+            ++errors;
+        else if (diagnostic.severity == audiocity::engine::nki::DiagnosticSeverity::warning)
+            ++warnings;
+    }
+
+    juce::String summary = imported
+        ? ("NKI imported: " + juce::String(static_cast<int>(result.program.zones.size()))
+            + " zones, " + juce::String(static_cast<int>(result.program.sampleAssets.size())) + " samples")
+        : juce::String("NKI import failed");
+
+    if (errors > 0 || warnings > 0)
+    {
+        summary += " (";
+        if (errors > 0)
+            summary += juce::String(errors) + " errors";
+        if (errors > 0 && warnings > 0)
+            summary += ", ";
+        if (warnings > 0)
+            summary += juce::String(warnings) + " warnings";
+        summary += ")";
+    }
+
+    if (!result.probe.diagnostics.empty())
+        summary += " | " + result.probe.diagnostics.front().message;
 
     return summary;
 }
@@ -1363,6 +1399,9 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
                 break;
             case audiocity::plugin::ImportedProgramFormat::sampleSlices:
                 restoredSample = importTransientSliceProgram(importedProgramFile);
+                break;
+            case audiocity::plugin::ImportedProgramFormat::nki:
+                restoredSample = importLegacyNkiProgram(importedProgramFile);
                 break;
             case audiocity::plugin::ImportedProgramFormat::unknown:
             default:
@@ -2431,6 +2470,86 @@ bool AudiocityAudioProcessor::importSfzProgram(const juce::File& file)
     syncSampleDerivedParametersFromEngine();
     setWaveformViewRange(0, engine_.getLoadedSampleLength());
     return true;
+}
+
+bool AudiocityAudioProcessor::importLegacyNkiProgram(const juce::File& file)
+{
+    if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".nki"))
+    {
+        setLastImportDiagnosticSummary("NKI import failed: file not found or unsupported extension");
+        return false;
+    }
+
+    auto result = audiocity::engine::nki::importFile(file);
+    const auto hasPlayableProgram = result.hasPlayableProgram();
+    const auto imported = !result.hasErrors() && hasPlayableProgram;
+    auto summary = makeLegacyNkiImportSummary(result, imported);
+    if (result.probe.status == audiocity::engine::nki::ProbeStatus::legacyDiscreteSampleCandidate
+        && !hasPlayableProgram && !result.hasErrors())
+    {
+        summary = "NKI import failed: no playable legacy zones";
+    }
+
+    if (!imported)
+    {
+        setLastImportDiagnosticSummary(summary);
+        return false;
+    }
+
+    int displayAssetIndex = -1;
+    for (std::size_t assetIndex = 0; assetIndex < result.sampleDataByAsset.size(); ++assetIndex)
+    {
+        const auto& sampleData = result.sampleDataByAsset[assetIndex];
+        if (sampleData.getNumChannels() > 0 && sampleData.getNumSamples() > 0)
+        {
+            displayAssetIndex = static_cast<int>(assetIndex);
+            break;
+        }
+    }
+
+    if (displayAssetIndex < 0)
+    {
+        setLastImportDiagnosticSummary("NKI import failed: decoded samples were empty");
+        return false;
+    }
+
+    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
+    stopGeneratedWaveformPreview();
+    engine_.panic();
+
+    const auto& displaySample = result.sampleDataByAsset[static_cast<std::size_t>(displayAssetIndex)];
+    const auto& displayAsset = result.program.sampleAssets[static_cast<std::size_t>(displayAssetIndex)];
+    const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
+    engine_.setSampleData(displaySample, displaySampleRate, displayAsset.rootMidiNote);
+    engine_.clearSamplePath();
+    engine_.setProgram(result.program, result.sampleDataByAsset);
+
+    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+        generatedWaveformState_.clear();
+        capturedSampleState_.clear();
+        capturedSampleRateState_ = 44100.0;
+    }
+
+    setImportedProgramMetadata(file,
+                               audiocity::plugin::ImportedProgramFormat::nki,
+                               result.program,
+                               result.sampleDataByAsset,
+                               summary,
+                               static_cast<int>(result.program.zones.size()));
+    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
+    syncSampleDerivedParametersFromEngine();
+    setWaveformViewRange(0, engine_.getLoadedSampleLength());
+    return true;
+}
+
+bool AudiocityAudioProcessor::probeLegacyNkiProgram(const juce::File& file)
+{
+    const auto result = audiocity::engine::nki::probeFile(file);
+    setLastImportDiagnosticSummary(audiocity::engine::nki::buildProbeSummary(result));
+    return false;
 }
 
 bool AudiocityAudioProcessor::importRexSliceProgram(const juce::File& file)

@@ -9,6 +9,7 @@ add_executable(audiocity_offline_tests
     ../src/plugin/LibraryFileIndex.cpp
     ../src/plugin/LibraryMetadata.cpp
     ../src/engine/EngineCore.cpp
+    ../src/engine/LegacyNkiProbe.cpp
     ../src/engine/RexLoader.cpp
     ../src/engine/SfzImporter.cpp
     ../src/engine/VoicePool.cpp)

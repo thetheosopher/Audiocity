@@ -58,6 +58,8 @@ public:
     bool loadPlaybackPresetXml(const juce::String& xmlText, juce::String& errorMessage);
 
     bool loadSampleFromFile(const juce::File& file);
+    bool importLegacyNkiProgram(const juce::File& file);
+    bool probeLegacyNkiProgram(const juce::File& file);
     bool importSfzProgram(const juce::File& file);
     bool importRexSliceProgram(const juce::File& file);
     bool importTransientSliceProgram(const juce::File& file);

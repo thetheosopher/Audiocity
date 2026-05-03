@@ -16,7 +16,7 @@
   - preload segmentation and runtime preload changes for single-sample and imported-program playback
   - single-sample file-backed disk streaming across preload rebuilds
   - imported-program bounded disk-stream cache, processor-worker prime servicing, and note-on/lookahead hit-miss telemetry
-  - SFZ import (#include/default_path/seq_length/release-trigger)
+  - SFZ import (#include/default_path/seq_length/release-trigger/seq_mode=random/velocity-crossfade playback/loop_continuous playback)
   - Mapping state structural round-trip, imported-program state subtree round-trip, legacy replay fallback, and imported-program derived-state summaries
   - Mapping zone create, duplicate, split, delete, chromatic remap, key-range spread, root-note derivation from key centers, and velocity fade edits, including explicit sample-asset selection for new zones
   - atomic imported-program batch mapping apply/delete rollback semantics
@@ -24,3 +24,4 @@
   - real-time modulation routing for mod wheel, aftertouch, velocity, and two macro controls across pitch, filter, and amp destinations, including processor parameter/state plumbing and the first in-plugin modulation surface
   - REX slice decoding, transient slice-program construction for regular samples, manual sample-slice splitting/merging, chromatic slice-program import from `.rex/.rx2`, map-to-root-note snapping, and imported-program path compatibility across generic, explicit sample-slice, and legacy state properties
   - SFZ diagnostics for unsupported opcode values
+  - legacy NKI probe classification plus nearby-sample resolution, group/zone metadata enumeration, simple playable translation, and explicit `.nki` imported-program state tagging

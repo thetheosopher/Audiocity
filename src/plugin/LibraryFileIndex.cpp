@@ -5,7 +5,8 @@ namespace audiocity::plugin
 bool LibraryFileIndex::isSupportedExtension(const juce::String& extensionLower, const bool includeRex)
 {
     const auto extension = extensionLower.toLowerCase();
-    if (extension == ".wav" || extension == ".aif" || extension == ".aiff" || extension == ".sfz")
+    if (extension == ".wav" || extension == ".aif" || extension == ".aiff"
+        || extension == ".sfz" || extension == ".nki")
         return true;
 
     return includeRex && (extension == ".rex" || extension == ".rx2");
@@ -30,7 +31,7 @@ std::optional<LibraryFileIndexEntry> LibraryFileIndex::createEntryForFile(
     entry.fileName = file.getFileName();
     entry.extensionLower = file.getFileExtension().toLowerCase();
     entry.sizeBytes = file.getSize();
-    entry.isInstrument = entry.extensionLower == ".sfz";
+    entry.isInstrument = entry.extensionLower == ".sfz" || entry.extensionLower == ".nki";
     return entry;
 }
 

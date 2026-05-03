@@ -165,6 +165,12 @@
 ## Release v3 — “Pro ecosystem” (broader SFZ + time-stretch + expression)
 
 ### Epic M — Expanded SFZ compatibility (selective)
+
+**Current validated slice**
+- The SFZ importer now supports `seq_mode=random`, mapping imported groups and regions onto Audiocity's existing cycle-random round-robin engine mode.
+- `seq_mode=random` now also establishes a round-robin group when the SFZ omits explicit `seq_position` values, so the engine no longer falls back to first-match playback for those random groups.
+- Offline tests cover importer translation of `seq_mode=random` plus diagnostics for unsupported `seq_mode` values.
+
 ### Epic N — Time-stretch modes (independent time/pitch)
 ### Epic O — Expressive MIDI (optional)
 
@@ -173,9 +179,19 @@
 # Cross-cutting Epics
 
 ## X1 — Deterministic offline render harness expansion
+**Current validated slice**
+- Offline tests now cover SFZ velocity-crossfade import-to-playback behavior, proving `xfin_*` and `xfout_*` translation survives importer parsing and changes rendered energy across low, mid, and high note velocities.
+- Offline tests now also cover SFZ `loop_mode=loop_continuous` import-to-playback behavior, proving imported loop windows keep sounding after note-off when the engine should stay in continuous loop mode.
+
 - Add fixtures for SFZ include/default_path, RR, velocity crossfades, looping.
 
 ## X2 — Diagnostics & observability
+
+**Current validated slice**
+- Failed file-import attempts now refresh the editor diagnostics line immediately, so parser and probe summaries are visible without waiting for a later UI change.
+- Legacy NKI groundwork now includes a first playable subset for simple discrete-sample `.nki` files: the importer classifies files by extracted external WAV/AIFF references, resolves them against nearby sample folders, translates enumerated group/zone metadata into a playable imported program when that subset is present, stores an explicit `NKI` imported-program format tag for restore, and still warns when the file instead looks container-based or otherwise unsupported.
+- Offline tests cover discrete-sample candidate detection, nearby-sample resolution, group/zone metadata enumeration, simple drum-style playable translation, explicit `.nki` imported-program format tagging, unsupported container-format rejection, and library indexing of `.nki` instruments.
+
 - Non-RT logging pipeline + Diagnostics tab.
 
 ## X3 — Dependency management & licensing hygiene

@@ -14,7 +14,8 @@ enum class ImportedProgramFormat
     unknown,
     sfz,
     rex,
-    sampleSlices
+    sampleSlices,
+    nki
 };
 
 struct ImportedProgramDerivedState

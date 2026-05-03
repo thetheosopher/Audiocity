@@ -20,6 +20,8 @@ juce::String formatImportedProgramFormat(const ImportedProgramFormat format)
             return "rex";
         case ImportedProgramFormat::sampleSlices:
             return "sampleSlices";
+        case ImportedProgramFormat::nki:
+            return "nki";
         case ImportedProgramFormat::unknown:
         default:
             return {};
@@ -36,6 +38,9 @@ ImportedProgramFormat parseImportedProgramFormat(const juce::String& formatText)
 
     if (formatText.equalsIgnoreCase("sampleSlices"))
         return ImportedProgramFormat::sampleSlices;
+
+    if (formatText.equalsIgnoreCase("nki"))
+        return ImportedProgramFormat::nki;
 
     return ImportedProgramFormat::unknown;
 }
@@ -135,6 +140,9 @@ ImportedProgramFormat detectImportedProgramFormat(const juce::String& programPat
     if (extension.equalsIgnoreCase(".rex") || extension.equalsIgnoreCase(".rx2"))
         return ImportedProgramFormat::rex;
 
+    if (extension.equalsIgnoreCase(".nki"))
+        return ImportedProgramFormat::nki;
+
     return ImportedProgramFormat::unknown;
 }
 
@@ -162,6 +170,8 @@ juce::String importedProgramFormatBadge(const ImportedProgramFormat format)
             return "REX";
         case ImportedProgramFormat::sampleSlices:
             return "SLICE";
+        case ImportedProgramFormat::nki:
+            return "NKI";
         case ImportedProgramFormat::unknown:
         default:
             return "PROGRAM";
