@@ -23,6 +23,76 @@
 
 class AudiocityAudioProcessor;
 
+class PlayerModulationPanel final : public juce::Component
+{
+public:
+    explicit PlayerModulationPanel(AudiocityAudioProcessor& processor);
+
+    static constexpr int preferredHeight() noexcept { return 278; }
+
+    void paint(juce::Graphics& g) override;
+    void resized() override;
+    void syncFromProcessor();
+    void setControlTooltips();
+    void forEachDial(const std::function<void(CcLearnDial&, const juce::String&)>& visitor);
+
+private:
+    enum class RouteSlot
+    {
+        modWheel,
+        aftertouch,
+        velocity,
+        macro1,
+        macro2
+    };
+
+    struct RouteDialSet
+    {
+        RouteSlot slot;
+        CcLearnDial* pitchDial = nullptr;
+        CcLearnDial* filterDial = nullptr;
+        CcLearnDial* ampDial = nullptr;
+        const char* pitchParamId = nullptr;
+        const char* filterParamId = nullptr;
+        const char* ampParamId = nullptr;
+        const char* pitchTooltip = nullptr;
+        const char* filterTooltip = nullptr;
+        const char* ampTooltip = nullptr;
+    };
+
+    struct MacroDialSet
+    {
+        std::size_t index = 0;
+        CcLearnDial* valueDial = nullptr;
+        const char* valueParamId = nullptr;
+        const char* valueTooltip = nullptr;
+    };
+
+    [[nodiscard]] std::array<RouteDialSet, 5> routeDialSets() noexcept;
+    [[nodiscard]] std::array<MacroDialSet, 2> macroDialSets() noexcept;
+    void pushToProcessor();
+    void paintGroupBox(juce::Graphics& g, juce::Rectangle<int> bounds, const juce::String& title) const;
+
+    AudiocityAudioProcessor& processor_;
+    CcLearnDial modWheelPitchDial_{ "MW Pitch", -1200, 1200, 1, "ct", 0 };
+    CcLearnDial modWheelFilterDial_{ "MW Filt", -20000, 20000, 1, "Hz", 0 };
+    CcLearnDial modWheelAmpDial_{ "MW Amp", -100, 100, 1, "%", 0 };
+    CcLearnDial aftertouchPitchDial_{ "AT Pitch", -1200, 1200, 1, "ct", 0 };
+    CcLearnDial aftertouchFilterDial_{ "AT Filt", -20000, 20000, 1, "Hz", 0 };
+    CcLearnDial aftertouchAmpDial_{ "AT Amp", -100, 100, 1, "%", 0 };
+    CcLearnDial velocityPitchDial_{ "Vel Pitch", -1200, 1200, 1, "ct", 0 };
+    CcLearnDial velocityFilterDial_{ "Vel Filt", -20000, 20000, 1, "Hz", 0 };
+    CcLearnDial velocityAmpDial_{ "Vel Amp", -100, 100, 1, "%", 0 };
+    CcLearnDial macro1ValueDial_{ "Macro 1", 0, 100, 1, "%", 0 };
+    CcLearnDial macro1PitchDial_{ "M1 Pitch", -1200, 1200, 1, "ct", 0 };
+    CcLearnDial macro1FilterDial_{ "M1 Filt", -20000, 20000, 1, "Hz", 0 };
+    CcLearnDial macro1AmpDial_{ "M1 Amp", -100, 100, 1, "%", 0 };
+    CcLearnDial macro2ValueDial_{ "Macro 2", 0, 100, 1, "%", 0 };
+    CcLearnDial macro2PitchDial_{ "M2 Pitch", -1200, 1200, 1, "ct", 0 };
+    CcLearnDial macro2FilterDial_{ "M2 Filt", -20000, 20000, 1, "Hz", 0 };
+    CcLearnDial macro2AmpDial_{ "M2 Amp", -100, 100, 1, "%", 0 };
+};
+
 class MappingOverviewComponent final : public juce::Component
 {
 public:
@@ -480,6 +550,7 @@ private:
     CcLearnDial pitchBendRangeDial_{ "PB Range", 0, 24, 1, "st", 2 };
     CcLearnDial pitchLfoRateDial_{ "P LFO Hz", 0, 40, 0.001, "Hz", 0 };
     CcLearnDial pitchLfoDepthDial_{ "P LFO D", 0, 100, 1, "ct", 0 };
+    PlayerModulationPanel modulationPanel_;
 
     // ── Waveform ──
     WaveformView waveformView_;

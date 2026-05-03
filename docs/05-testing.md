@@ -21,5 +21,5 @@
   - Mapping zone create, duplicate, split, delete, and velocity fade edits, including explicit sample-asset selection for new zones
   - atomic imported-program batch mapping apply/delete rollback semantics
   - chronological editor undo-history behavior across imported-program mapping snapshots and sample/settings edits, including coalescing, undo labels, and create/duplicate/split structural zone operations
-  - real-time CC1 modulation routing for pitch, filter, and amp destinations, including processor parameter/state plumbing for the first mod-wheel destinations
+  - real-time modulation routing for mod wheel, aftertouch, velocity, and two macro controls across pitch, filter, and amp destinations, including processor parameter/state plumbing and the first in-plugin modulation surface
   - SFZ diagnostics for unsupported opcode values

@@ -19,6 +19,7 @@
 
 #include <cmath>
 #include <array>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -3265,6 +3266,64 @@ bool runParameterIdSafetyTest()
     }
 
     return paramIdCount > 0;
+}
+
+bool runEditorFilterLfoPushPreservesAdvancedControlsTest()
+{
+    const auto editorFile = fixtureFile("src/plugin/PluginEditor.cpp");
+    if (!editorFile.existsAsFile())
+        return false;
+
+    const auto editorSource = editorFile.loadFileAsString();
+    const auto functionStart = editorSource.indexOf("void AudiocityAudioProcessorEditor::pushFilterSettings()");
+    if (functionStart < 0)
+        return false;
+
+    const auto functionEnd = editorSource.indexOf(functionStart, "processor_.setFilterSettings(settings);");
+    if (functionEnd <= functionStart)
+        return false;
+
+    const auto pushBlock = editorSource.substring(functionStart, functionEnd);
+
+    return pushBlock.contains("filterLfoRateKeyDial_.getValue()")
+        && pushBlock.contains("filterLfoAmtKeyDial_.getValue()")
+        && pushBlock.contains("filterLfoStartPhaseDial_.getValue()")
+        && pushBlock.contains("filterLfoStartRandDial_.getValue()")
+        && pushBlock.contains("filterLfoFadeInDial_.getValue()")
+        && pushBlock.contains("filterLfoRateKeySyncToggle_.getToggleState()")
+        && pushBlock.contains("filterLfoKeytrackLinearToggle_.getToggleState()")
+        && pushBlock.contains("filterLfoUnipolarToggle_.getToggleState()")
+        && !pushBlock.contains("settings.lfoRateKeyTracking = 0.0f")
+        && !pushBlock.contains("settings.lfoAmountKeyTracking = 0.0f")
+        && !pushBlock.contains("settings.lfoStartPhaseDegrees = 0.0f")
+        && !pushBlock.contains("settings.lfoStartPhaseRandomDegrees = 0.0f")
+        && !pushBlock.contains("settings.lfoFadeInMs = 0.0f")
+        && !pushBlock.contains("settings.lfoRateKeytrackInTempoSync = true")
+        && !pushBlock.contains("settings.lfoKeytrackLinear = false")
+        && !pushBlock.contains("settings.lfoUnipolar = false");
+}
+
+bool runEditorModulationPanelExtractionTest()
+{
+    const auto editorHeader = fixtureFile("src/plugin/PluginEditor.h");
+    const auto editorSource = fixtureFile("src/plugin/PluginEditor.cpp");
+    if (!editorHeader.existsAsFile() || !editorSource.existsAsFile())
+        return false;
+
+    const auto headerText = editorHeader.loadFileAsString();
+    const auto sourceText = editorSource.loadFileAsString();
+    const auto editorClassStart = headerText.indexOf("class AudiocityAudioProcessorEditor final");
+    if (editorClassStart < 0)
+        return false;
+
+    const auto editorClassBody = headerText.substring(editorClassStart);
+    return headerText.contains("class PlayerModulationPanel final")
+        && headerText.contains("PlayerModulationPanel modulationPanel_;")
+        && sourceText.contains("void PlayerModulationPanel::pushToProcessor()")
+        && sourceText.contains("void PlayerModulationPanel::syncFromProcessor()")
+        && sourceText.contains("void PlayerModulationPanel::forEachDial")
+        && !editorClassBody.contains("void pushModulationControls()")
+        && !editorClassBody.contains("void syncModulationControlsFromProcessor()");
 }
 
 bool runPlaybackModesTest()
@@ -7278,7 +7337,7 @@ bool runPitchBendRangeAndRealtimeModulationTest()
         && ratio12 > ratio2 * 1.5f;
 }
 
-bool runModWheelRoutingRealtimeTest()
+bool runModulationRoutingRealtimeTest()
 {
     constexpr int channels = 2;
     constexpr int blockSize = 256;
@@ -7303,7 +7362,7 @@ bool runModWheelRoutingRealtimeTest()
         engine.setAmpEnvelope(sustain);
 
         auto routing = engine.getModulationRoutingSettings();
-        routing.modWheelToPitchCents = modWheelToPitchCents;
+        routing.modWheel.toPitchCents = modWheelToPitchCents;
         engine.setModulationRoutingSettings(routing);
 
         engine.setSampleData(createOneCycleSine(cycleSamples), sourceSampleRate, rootMidiNote);
@@ -7330,6 +7389,83 @@ bool runModWheelRoutingRealtimeTest()
         return estimateFrequencyFromPositiveCrossings(output, outputSampleRate, blockSize * 20);
     };
 
+    auto renderAftertouchPitchFrequency = [&](const float aftertouchToPitchCents, const bool applyAftertouch) -> float
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(outputSampleRate, blockSize, channels);
+
+        audiocity::engine::EngineCore::AdsrSettings sustain;
+        sustain.attackSeconds = 0.0001f;
+        sustain.decaySeconds = 0.0001f;
+        sustain.sustainLevel = 1.0f;
+        sustain.releaseSeconds = 0.25f;
+        engine.setAmpEnvelope(sustain);
+
+        auto routing = engine.getModulationRoutingSettings();
+        routing.aftertouch.toPitchCents = aftertouchToPitchCents;
+        engine.setModulationRoutingSettings(routing);
+
+        engine.setSampleData(createOneCycleSine(cycleSamples), sourceSampleRate, rootMidiNote);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+
+        juce::AudioBuffer<float> output(channels, blockSize * blocks);
+        for (int block = 0; block < blocks; ++block)
+        {
+            juce::AudioBuffer<float> blockBuffer(channels, blockSize);
+            juce::MidiBuffer midi;
+
+            if (block == 0)
+                midi.addEvent(juce::MidiMessage::noteOn(1, rootMidiNote, 1.0f), 0);
+
+            if (applyAftertouch && block == 8)
+                engine.channelPressure(127, 0);
+
+            engine.render(blockBuffer, midi);
+
+            for (int ch = 0; ch < channels; ++ch)
+                output.copyFrom(ch, block * blockSize, blockBuffer, ch, 0, blockSize);
+        }
+
+        return estimateFrequencyFromPositiveCrossings(output, outputSampleRate, blockSize * 20);
+    };
+
+    auto renderVelocityPitchFrequency = [&](const float velocityToPitchCents, const float noteVelocity) -> float
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(outputSampleRate, blockSize, channels);
+
+        audiocity::engine::EngineCore::AdsrSettings sustain;
+        sustain.attackSeconds = 0.0001f;
+        sustain.decaySeconds = 0.0001f;
+        sustain.sustainLevel = 1.0f;
+        sustain.releaseSeconds = 0.25f;
+        engine.setAmpEnvelope(sustain);
+
+        auto routing = engine.getModulationRoutingSettings();
+        routing.velocity.toPitchCents = velocityToPitchCents;
+        engine.setModulationRoutingSettings(routing);
+
+        engine.setSampleData(createOneCycleSine(cycleSamples), sourceSampleRate, rootMidiNote);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+
+        juce::AudioBuffer<float> output(channels, blockSize * blocks);
+        for (int block = 0; block < blocks; ++block)
+        {
+            juce::AudioBuffer<float> blockBuffer(channels, blockSize);
+            juce::MidiBuffer midi;
+
+            if (block == 0)
+                midi.addEvent(juce::MidiMessage::noteOn(1, rootMidiNote, noteVelocity), 0);
+
+            engine.render(blockBuffer, midi);
+
+            for (int ch = 0; ch < channels; ++ch)
+                output.copyFrom(ch, block * blockSize, blockBuffer, ch, 0, blockSize);
+        }
+
+        return estimateFrequencyFromPositiveCrossings(output, outputSampleRate, blockSize * 20);
+    };
+
     auto renderAmpEnergy = [&](const float modWheelToAmp, const bool applyWheel) -> float
     {
         audiocity::engine::EngineCore engine;
@@ -7343,7 +7479,7 @@ bool runModWheelRoutingRealtimeTest()
         engine.setAmpEnvelope(sustain);
 
         auto routing = engine.getModulationRoutingSettings();
-        routing.modWheelToAmp = modWheelToAmp;
+        routing.modWheel.toAmp = modWheelToAmp;
         engine.setModulationRoutingSettings(routing);
 
         engine.setSampleData(createOneCycleSine(cycleSamples), sourceSampleRate, rootMidiNote);
@@ -7360,6 +7496,46 @@ bool runModWheelRoutingRealtimeTest()
 
             if (applyWheel && block == 8)
                 midi.addEvent(juce::MidiMessage::controllerEvent(1, 1, 127), 0);
+
+            engine.render(blockBuffer, midi);
+            if (block >= 16)
+                accumulatedEnergy += blockEnergy(blockBuffer);
+        }
+
+        return accumulatedEnergy;
+    };
+
+    auto renderMacroAmpEnergy = [&](const int macroIndex, const float macroToAmp, const float macroValue) -> float
+    {
+        audiocity::engine::EngineCore engine;
+        engine.prepare(outputSampleRate, blockSize, channels);
+
+        audiocity::engine::EngineCore::AdsrSettings sustain;
+        sustain.attackSeconds = 0.0001f;
+        sustain.decaySeconds = 0.0001f;
+        sustain.sustainLevel = 1.0f;
+        sustain.releaseSeconds = 0.25f;
+        engine.setAmpEnvelope(sustain);
+
+        auto routing = engine.getModulationRoutingSettings();
+        routing.macros[static_cast<std::size_t>(macroIndex)].toAmp = macroToAmp;
+        engine.setModulationRoutingSettings(routing);
+
+        auto macroValues = engine.getMacroControlValues();
+        macroValues[static_cast<std::size_t>(macroIndex)] = macroValue;
+        engine.setMacroControlValues(macroValues);
+
+        engine.setSampleData(createOneCycleSine(cycleSamples), sourceSampleRate, rootMidiNote);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+
+        float accumulatedEnergy = 0.0f;
+        for (int block = 0; block < blocks; ++block)
+        {
+            juce::AudioBuffer<float> blockBuffer(channels, blockSize);
+            juce::MidiBuffer midi;
+
+            if (block == 0)
+                midi.addEvent(juce::MidiMessage::noteOn(1, rootMidiNote, 1.0f), 0);
 
             engine.render(blockBuffer, midi);
             if (block >= 16)
@@ -7397,7 +7573,7 @@ bool runModWheelRoutingRealtimeTest()
         engine.setFilterSettings(filter);
 
         auto routing = engine.getModulationRoutingSettings();
-        routing.modWheelToFilterHz = modWheelToFilterHz;
+        routing.modWheel.toFilterHz = modWheelToFilterHz;
         engine.setModulationRoutingSettings(routing);
 
         engine.setSampleData(brightSample, outputSampleRate, rootMidiNote);
@@ -7423,6 +7599,61 @@ bool runModWheelRoutingRealtimeTest()
         return accumulatedEnergy;
     };
 
+    auto renderMacroFilterEnergy = [&](const int macroIndex, const float macroToFilterHz, const float macroValue) -> float
+    {
+        juce::AudioBuffer<float> brightSample(1, 4096);
+        for (int i = 0; i < brightSample.getNumSamples(); ++i)
+        {
+            const auto low = std::sin(2.0 * juce::MathConstants<double>::pi * i * 180.0 / outputSampleRate);
+            const auto high = 0.7 * std::sin(2.0 * juce::MathConstants<double>::pi * i * 5200.0 / outputSampleRate);
+            brightSample.setSample(0, i, static_cast<float>(0.25 * low + high));
+        }
+
+        audiocity::engine::EngineCore engine;
+        engine.prepare(outputSampleRate, blockSize, channels);
+
+        audiocity::engine::EngineCore::AdsrSettings sustain;
+        sustain.attackSeconds = 0.0001f;
+        sustain.decaySeconds = 0.0001f;
+        sustain.sustainLevel = 1.0f;
+        sustain.releaseSeconds = 0.25f;
+        engine.setAmpEnvelope(sustain);
+
+        audiocity::engine::EngineCore::FilterSettings filter;
+        filter.mode = audiocity::engine::EngineCore::FilterSettings::Mode::lowPass12;
+        filter.baseCutoffHz = 900.0f;
+        filter.envAmountHz = 0.0f;
+        filter.resonance = 0.1f;
+        engine.setFilterSettings(filter);
+
+        auto routing = engine.getModulationRoutingSettings();
+        routing.macros[static_cast<std::size_t>(macroIndex)].toFilterHz = macroToFilterHz;
+        engine.setModulationRoutingSettings(routing);
+
+        auto macroValues = engine.getMacroControlValues();
+        macroValues[static_cast<std::size_t>(macroIndex)] = macroValue;
+        engine.setMacroControlValues(macroValues);
+
+        engine.setSampleData(brightSample, outputSampleRate, rootMidiNote);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
+
+        float accumulatedEnergy = 0.0f;
+        for (int block = 0; block < blocks; ++block)
+        {
+            juce::AudioBuffer<float> blockBuffer(channels, blockSize);
+            juce::MidiBuffer midi;
+
+            if (block == 0)
+                midi.addEvent(juce::MidiMessage::noteOn(1, rootMidiNote, 1.0f), 0);
+
+            engine.render(blockBuffer, midi);
+            if (block >= 16)
+                accumulatedEnergy += blockEnergy(blockBuffer);
+        }
+
+        return accumulatedEnergy;
+    };
+
     const auto basePitchHz = renderPitchFrequency(200.0f, false);
     const auto wheelPitchHz = renderPitchFrequency(200.0f, true);
     if (basePitchHz <= 0.0f || wheelPitchHz <= 0.0f)
@@ -7432,11 +7663,26 @@ bool runModWheelRoutingRealtimeTest()
     const auto ampWheelEnergy = renderAmpEnergy(-1.0f, true);
     const auto filterBaseEnergy = renderFilterEnergy(6000.0f, false);
     const auto filterWheelEnergy = renderFilterEnergy(6000.0f, true);
+    const auto aftertouchBasePitchHz = renderAftertouchPitchFrequency(300.0f, false);
+    const auto aftertouchPitchHz = renderAftertouchPitchFrequency(300.0f, true);
+    const auto lowVelocityPitchHz = renderVelocityPitchFrequency(400.0f, 0.25f);
+    const auto highVelocityPitchHz = renderVelocityPitchFrequency(400.0f, 1.0f);
+    const auto macro1FilterBaseEnergy = renderMacroFilterEnergy(0, 6000.0f, 0.0f);
+    const auto macro1FilterEnergy = renderMacroFilterEnergy(0, 6000.0f, 1.0f);
+    const auto macro2AmpBaseEnergy = renderMacroAmpEnergy(1, -1.0f, 0.0f);
+    const auto macro2AmpEnergy = renderMacroAmpEnergy(1, -1.0f, 1.0f);
 
     return wheelPitchHz > basePitchHz * 1.08f
         && ampBaseEnergy > 0.1f
         && ampWheelEnergy < ampBaseEnergy * 0.2f
-        && filterWheelEnergy > filterBaseEnergy * 1.15f;
+        && filterWheelEnergy > filterBaseEnergy * 1.15f
+        && aftertouchBasePitchHz > 0.0f
+        && aftertouchPitchHz > aftertouchBasePitchHz * 1.08f
+        && lowVelocityPitchHz > 0.0f
+        && highVelocityPitchHz > lowVelocityPitchHz * 1.12f
+        && macro1FilterEnergy > macro1FilterBaseEnergy * 1.15f
+        && macro2AmpBaseEnergy > 0.1f
+        && macro2AmpEnergy < macro2AmpBaseEnergy * 0.2f;
 }
 
 bool runVoicePlaybackStateSnapshotTest()
@@ -7897,381 +8143,162 @@ bool runPeakPreviewCacheResetClearsFileTest()
     const auto loaded = store.load();
     return loaded.libraryRootPath.isEmpty() && loaded.entries.empty();
 }
+
+struct OfflineTestCase
+{
+    const char* name = nullptr;
+    bool (*run)() = nullptr;
+    int failureCode = 1;
+};
+
+template <std::size_t TestCount>
+int runOfflineTests(const OfflineTestCase (&tests)[TestCount])
+{
+    for (const auto& test : tests)
+    {
+        if (test.run != nullptr && test.run())
+            continue;
+
+        std::fprintf(stderr, "Offline test failed: %s (exit %d)\n", test.name, test.failureCode);
+        return test.failureCode;
+    }
+
+    return 0;
+}
 }
 
 int main()
 {
-    if (!runDeterminismTest())
-        return 1;
-
-    if (!runProgramModelRangeAndZoneMatchingTest())
-        return 73;
-
-    if (!runProgramSnapshotBuildAndMatchTest())
-        return 75;
-
-    if (!runProgramMappingRowsTest())
-        return 97;
-
-    if (!runProgramMappingEditTest())
-        return 98;
-
-    if (!runProgramMappingOverviewEditTest())
-        return 99;
-
-    if (!runProgramMappingSampleWindowEditTest())
-        return 100;
-
-    if (!runProgramMappingZoneOperationsTest())
-        return 102;
-
-    if (!runProgramMappingAtomicBatchEditRollbackTest())
-        return 111;
-
-    if (!runProgramMappingAtomicBatchDeleteRollbackTest())
-        return 112;
-
-    if (!runProgramMappingStateRoundTripTest())
-        return 101;
-
-    if (!runProgramMappingStructuralStateRoundTripTest())
-        return 103;
-
-    if (!runImportedProgramStateSubtreeRoundTripTest())
-        return 106;
-
-    if (!runImportedProgramStateLegacyReplayFallbackTest())
-        return 107;
-
-    if (!runImportedProgramRestoreResultSuccessTest())
-        return 108;
-
-    if (!runImportedProgramRestoreResultAtomicFailureTest())
-        return 109;
-
-    if (!runImportedProgramDerivedStateSummaryTest())
-        return 110;
-
-    if (!runSfzImportIncludeDefineDefaultPathTest())
-        return 87;
-
-    if (!runSfzImportRoundRobinPlaybackTest())
-        return 88;
-
-    if (!runSfzImportSeqLengthPlaybackTest())
-        return 104;
-
-    if (!runSfzImportReleaseTriggerPlaybackTest())
-        return 105;
-
-    if (!runSfzImporterDiagnosticsTest())
-        return 89;
-
-    if (!runSameOffsetMidiEventOrderTest())
-        return 74;
-
-    if (!runEngineProgramSnapshotZoneSelectionTest())
-        return 76;
-
-    if (!runEngineProgramSampleAssetBindingTest())
-        return 77;
-
-    if (!runEngineProgramStereoAssetPlaybackTest())
-        return 81;
-
-    if (!runEngineProgramRoundRobinZoneSelectionTest())
-        return 82;
-
-    if (!runEngineProgramLayeredZonePlaybackTest())
-        return 90;
-
-    if (!runEngineProgramVelocityFadeInTest())
-        return 91;
-
-    if (!runEngineProgramCycleRandomRoundRobinZoneSelectionTest())
-        return 85;
-
-    if (!runEngineProgramChokeGroupTest())
-        return 83;
-
-    if (!runEngineProgramZoneAndGroupPanTest())
-        return 84;
-
-    if (!runEngineProgramZoneTriggerModeTest())
-        return 86;
-
-    if (!runEngineProgramZoneGainAndTuneTest())
-        return 78;
-
-    if (!runEngineProgramZoneSampleWindowTest())
-        return 79;
-
-    if (!runEngineProgramZoneLoopModeTest())
-        return 80;
-
-    if (!runVoiceStealingEdgeCaseTest())
-        return 2;
-
-    if (!runPolyphonyLimitControlTest())
-        return 52;
-
-    if (!runPlaybackModesTest())
-        return 3;
-
-    if (!runLoopMarkersTest())
-        return 4;
-
-    if (!runLoadSampleResetsPlaybackAndLoopRangesTest())
-        return 44;
-
-    if (!runLoadSampleClearsProgramSnapshotTest())
-        return 92;
-
-    if (!runLoadSampleResetsEnvelopeAndFilterDefaultsTest())
-        return 45;
-
-    if (!runFilterModulationAmountsAreBipolarTest())
-        return 70;
-
-    if (!runEmbeddedLoopMetadataLoadsWithoutRootNoteTest())
-        return 64;
-
-    if (!runRexRuntimeFallbackSmokeTest())
-        return 62;
-
-    if (!runCcLearnDialUserClearCallbackTest())
-        return 63;
-
-    if (!runGeneratedCyclePitchInvariantAcrossSampleCountsTest())
-        return 46;
-
-    if (!runDisplayMinMaxPreservesPolarityTest())
-        return 48;
-
-    if (!runLoadedSampleMetadataForGeneratedDataTest())
-        return 69;
-
-    if (!runParameterIdSafetyTest())
-        return 72;
-
-    if (!runEditorSampleEditControlsTest())
-        return 5;
-
-    if (!runPolyphonicDifferentNotesLayerWhenMonoOffTest())
-        return 43;
-
-    if (!runMonoLegatoUsesSingleVoiceTest())
-        return 7;
-
-    if (!runPolyphonicSameNoteReleaseTest())
-        return 24;
-
-    if (!runDenseLoopModeOverflowDoesNotStickNotesTest())
-        return 55;
-
-    if (!runQueueSaturatedByPitchBendStillReleasesNoteOffTest())
-        return 56;
-
-    if (!runGlideChangesLegatoTransitionTest())
-        return 8;
-
-    if (!runPreloadSegmentationDeterminismTest())
-        return 9;
-
-    if (!runRuntimePreloadChangeStabilityTest())
-        return 10;
-
-    if (!runRuntimeSampleReloadStabilityTest())
-        return 11;
-
-    if (!runLoopModeRuntimePreloadChangeStabilityTest())
-        return 12;
-
-    if (!runSegmentRebuildCounterTest())
-        return 13;
-
-    if (!runProgramPreloadMetricsAndRebuildTest())
-        return 14;
-
-    if (!runSingleSampleFileStreamingPreloadMetricsTest())
-        return 170;
-
-    if (!runProgramStreamPrimingAndCacheMetricsTest())
-        return 171;
-
-    if (!runProgramStreamLookaheadPrimingTest())
-        return 172;
-
-    if (!runProgramMappingCreateZoneTest())
-        return 176;
-
-    if (!runQualityTierDifferenceTest())
-        return 15;
-
-    if (!runQualityTierDeterminismTest())
-        return 16;
-
-    if (!runCpuQualityEnergyDriftSmokeTest())
-        return 17;
-
-    if (!runRuntimeQualitySwitchSmokeTest())
-        return 18;
-
-    if (!runEditorUndoHistoryMixedOrderTest())
-        return 173;
-
-    if (!runEditorUndoHistoryCoalesceAndLabelsTest())
-        return 174;
-
-    if (!runEditorUndoHistoryDuplicateAndSplitTest())
-        return 175;
-
-    if (!runEditorUndoHistoryCreateZoneTest())
-        return 177;
-
-    if (!runSettingsUndoHistoryTest())
-        return 18;
-
-    if (!runSettingsUndoHistoryCapacityTest())
-        return 19;
-
-    if (!runSettingsUndoHistoryCoalesceTest())
-        return 20;
-
-    if (!runSettingsUndoHistoryLabelsTest())
-        return 21;
-
-    if (!runSettingsUndoHistoryEditorStateTest())
-        return 22;
-
-    if (!runSettingsSnapshotCaptureFieldsAffectEqualityTest())
-        return 65;
-
-    if (!runSettingsUndoHistoryTracksCaptureSettingsTest())
-        return 66;
-
-    if (!runPresetXmlRoundTripWithEmbeddedSampleDataTest())
-        return 67;
-
-    if (!runPresetXmlRejectsInvalidPayloadTest())
-        return 68;
-
-    if (!runLibraryMetadataFavoritesAndRecentsTest())
-        return 93;
-
-    if (!runLibraryMetadataValueTreeRoundTripTest())
-        return 94;
-
-    if (!runLibraryMetadataBookmarksTest())
-        return 95;
-
-    if (!runLibraryFileIndexScanTest())
-        return 96;
-
-    if (!runPeakPreviewCacheRoundTripTest())
-        return 70;
-
-    if (!runPeakPreviewCacheResetClearsFileTest())
-        return 71;
-
-    if (!runPlayerPadStateUtilityTest())
-        return 23;
-
-    if (!runFilterModeDifferenceTest())
-        return 25;
-
-    if (!runFilterModulationDifferenceTest())
-        return 26;
-
-    if (!runFilterKeytrackPolarityTest())
-        return 30;
-
-    if (!runFilterLfoDifferenceTest())
-        return 31;
-
-    if (!runPitchLfoVibratoSettingsTest())
-        return 53;
-
-    if (!runFilterLfoShapeDifferenceTest())
-        return 32;
-
-    if (!runAmpLfoTremoloSettingsTest())
-        return 52;
-
-    if (!runFilterLfoTempoSyncSettingsTest())
-        return 33;
-
-    if (!runFilterLfoRetriggerDifferenceTest())
-        return 34;
-
-    if (!runFilterLfoStartPhaseDifferenceTest())
-        return 35;
-
-    if (!runFilterLfoFadeInDifferenceTest())
-        return 36;
-
-    if (!runFilterLfoStartRandomDifferenceTest())
-        return 37;
-
-    if (!runFilterLfoAmountKeytrackingDifferenceTest())
-        return 38;
-
-    if (!runFilterLfoRateKeytrackingDifferenceTest())
-        return 39;
-
-    if (!runFilterLfoRateKeytrackInTempoSyncToggleDifferenceTest())
-        return 40;
-
-    if (!runFilterLfoKeytrackCurveDifferenceTest())
-        return 41;
-
-    if (!runFilterLfoUnipolarDifferenceTest())
-        return 42;
-
-    if (!runUltraQualityDifferenceTest())
-        return 27;
-
-    if (!runUltraQualitySpectralTonePreservationTest())
-        return 178;
-
-    if (!runReverbMixTailTest())
-        return 28;
-
-    if (!runDelayMixTailTest())
-        return 57;
-
-    if (!runDelayTempoSyncRespondsToTempoTest())
-        return 58;
-
-    if (!runDcOffsetFilterRemovesBiasTest())
-        return 59;
-
-    if (!runMasterVolumeGainTest())
-        return 47;
-
-    if (!runPanBalanceTest())
-        return 51;
-
-    if (!runAutopanStereoMotionTest())
-        return 60;
-
-    if (!runSaturationDriveAndModeTest())
-        return 61;
-
-    if (!runTuneCoarseFinePitchShiftTest())
-        return 49;
-
-    if (!runPitchBendRangeAndRealtimeModulationTest())
-        return 50;
-
-    if (!runModWheelRoutingRealtimeTest())
-        return 179;
-
-    if (!runVoicePlaybackStateSnapshotTest())
-        return 54;
-
-    if (!runLoopCrossfadeSmoothsBoundaryTest())
-        return 29;
-
-    return 0;
+#define AUDIOCITY_TEST(fn, code) { #fn, fn, code }
+    const OfflineTestCase tests[] = {
+        AUDIOCITY_TEST(runDeterminismTest, 1),
+        AUDIOCITY_TEST(runProgramModelRangeAndZoneMatchingTest, 73),
+        AUDIOCITY_TEST(runProgramSnapshotBuildAndMatchTest, 75),
+        AUDIOCITY_TEST(runProgramMappingRowsTest, 97),
+        AUDIOCITY_TEST(runProgramMappingEditTest, 98),
+        AUDIOCITY_TEST(runProgramMappingOverviewEditTest, 99),
+        AUDIOCITY_TEST(runProgramMappingSampleWindowEditTest, 100),
+        AUDIOCITY_TEST(runProgramMappingZoneOperationsTest, 102),
+        AUDIOCITY_TEST(runProgramMappingAtomicBatchEditRollbackTest, 111),
+        AUDIOCITY_TEST(runProgramMappingAtomicBatchDeleteRollbackTest, 112),
+        AUDIOCITY_TEST(runProgramMappingStateRoundTripTest, 101),
+        AUDIOCITY_TEST(runProgramMappingStructuralStateRoundTripTest, 103),
+        AUDIOCITY_TEST(runImportedProgramStateSubtreeRoundTripTest, 106),
+        AUDIOCITY_TEST(runImportedProgramStateLegacyReplayFallbackTest, 107),
+        AUDIOCITY_TEST(runImportedProgramRestoreResultSuccessTest, 108),
+        AUDIOCITY_TEST(runImportedProgramRestoreResultAtomicFailureTest, 109),
+        AUDIOCITY_TEST(runImportedProgramDerivedStateSummaryTest, 110),
+        AUDIOCITY_TEST(runSfzImportIncludeDefineDefaultPathTest, 87),
+        AUDIOCITY_TEST(runSfzImportRoundRobinPlaybackTest, 88),
+        AUDIOCITY_TEST(runSfzImportSeqLengthPlaybackTest, 104),
+        AUDIOCITY_TEST(runSfzImportReleaseTriggerPlaybackTest, 105),
+        AUDIOCITY_TEST(runSfzImporterDiagnosticsTest, 89),
+        AUDIOCITY_TEST(runSameOffsetMidiEventOrderTest, 74),
+        AUDIOCITY_TEST(runEngineProgramSnapshotZoneSelectionTest, 76),
+        AUDIOCITY_TEST(runEngineProgramSampleAssetBindingTest, 77),
+        AUDIOCITY_TEST(runEngineProgramStereoAssetPlaybackTest, 81),
+        AUDIOCITY_TEST(runEngineProgramRoundRobinZoneSelectionTest, 82),
+        AUDIOCITY_TEST(runEngineProgramLayeredZonePlaybackTest, 90),
+        AUDIOCITY_TEST(runEngineProgramVelocityFadeInTest, 91),
+        AUDIOCITY_TEST(runEngineProgramCycleRandomRoundRobinZoneSelectionTest, 85),
+        AUDIOCITY_TEST(runEngineProgramChokeGroupTest, 83),
+        AUDIOCITY_TEST(runEngineProgramZoneAndGroupPanTest, 84),
+        AUDIOCITY_TEST(runEngineProgramZoneTriggerModeTest, 86),
+        AUDIOCITY_TEST(runEngineProgramZoneGainAndTuneTest, 78),
+        AUDIOCITY_TEST(runEngineProgramZoneSampleWindowTest, 79),
+        AUDIOCITY_TEST(runEngineProgramZoneLoopModeTest, 80),
+        AUDIOCITY_TEST(runVoiceStealingEdgeCaseTest, 2),
+        AUDIOCITY_TEST(runPolyphonyLimitControlTest, 52),
+        AUDIOCITY_TEST(runPlaybackModesTest, 3),
+        AUDIOCITY_TEST(runLoopMarkersTest, 4),
+        AUDIOCITY_TEST(runLoadSampleResetsPlaybackAndLoopRangesTest, 44),
+        AUDIOCITY_TEST(runLoadSampleClearsProgramSnapshotTest, 92),
+        AUDIOCITY_TEST(runLoadSampleResetsEnvelopeAndFilterDefaultsTest, 45),
+        AUDIOCITY_TEST(runFilterModulationAmountsAreBipolarTest, 70),
+        AUDIOCITY_TEST(runEmbeddedLoopMetadataLoadsWithoutRootNoteTest, 64),
+        AUDIOCITY_TEST(runRexRuntimeFallbackSmokeTest, 62),
+        AUDIOCITY_TEST(runCcLearnDialUserClearCallbackTest, 63),
+        AUDIOCITY_TEST(runGeneratedCyclePitchInvariantAcrossSampleCountsTest, 46),
+        AUDIOCITY_TEST(runDisplayMinMaxPreservesPolarityTest, 48),
+        AUDIOCITY_TEST(runLoadedSampleMetadataForGeneratedDataTest, 69),
+        AUDIOCITY_TEST(runParameterIdSafetyTest, 72),
+        AUDIOCITY_TEST(runEditorFilterLfoPushPreservesAdvancedControlsTest, 180),
+        AUDIOCITY_TEST(runEditorModulationPanelExtractionTest, 181),
+        AUDIOCITY_TEST(runEditorSampleEditControlsTest, 5),
+        AUDIOCITY_TEST(runPolyphonicDifferentNotesLayerWhenMonoOffTest, 43),
+        AUDIOCITY_TEST(runMonoLegatoUsesSingleVoiceTest, 7),
+        AUDIOCITY_TEST(runPolyphonicSameNoteReleaseTest, 24),
+        AUDIOCITY_TEST(runDenseLoopModeOverflowDoesNotStickNotesTest, 55),
+        AUDIOCITY_TEST(runQueueSaturatedByPitchBendStillReleasesNoteOffTest, 56),
+        AUDIOCITY_TEST(runGlideChangesLegatoTransitionTest, 8),
+        AUDIOCITY_TEST(runPreloadSegmentationDeterminismTest, 9),
+        AUDIOCITY_TEST(runRuntimePreloadChangeStabilityTest, 10),
+        AUDIOCITY_TEST(runRuntimeSampleReloadStabilityTest, 11),
+        AUDIOCITY_TEST(runLoopModeRuntimePreloadChangeStabilityTest, 12),
+        AUDIOCITY_TEST(runSegmentRebuildCounterTest, 13),
+        AUDIOCITY_TEST(runProgramPreloadMetricsAndRebuildTest, 14),
+        AUDIOCITY_TEST(runSingleSampleFileStreamingPreloadMetricsTest, 170),
+        AUDIOCITY_TEST(runProgramStreamPrimingAndCacheMetricsTest, 171),
+        AUDIOCITY_TEST(runProgramStreamLookaheadPrimingTest, 172),
+        AUDIOCITY_TEST(runProgramMappingCreateZoneTest, 176),
+        AUDIOCITY_TEST(runQualityTierDifferenceTest, 15),
+        AUDIOCITY_TEST(runQualityTierDeterminismTest, 16),
+        AUDIOCITY_TEST(runCpuQualityEnergyDriftSmokeTest, 17),
+        AUDIOCITY_TEST(runRuntimeQualitySwitchSmokeTest, 18),
+        AUDIOCITY_TEST(runEditorUndoHistoryMixedOrderTest, 173),
+        AUDIOCITY_TEST(runEditorUndoHistoryCoalesceAndLabelsTest, 174),
+        AUDIOCITY_TEST(runEditorUndoHistoryDuplicateAndSplitTest, 175),
+        AUDIOCITY_TEST(runEditorUndoHistoryCreateZoneTest, 177),
+        AUDIOCITY_TEST(runSettingsUndoHistoryTest, 18),
+        AUDIOCITY_TEST(runSettingsUndoHistoryCapacityTest, 19),
+        AUDIOCITY_TEST(runSettingsUndoHistoryCoalesceTest, 20),
+        AUDIOCITY_TEST(runSettingsUndoHistoryLabelsTest, 21),
+        AUDIOCITY_TEST(runSettingsUndoHistoryEditorStateTest, 22),
+        AUDIOCITY_TEST(runSettingsSnapshotCaptureFieldsAffectEqualityTest, 65),
+        AUDIOCITY_TEST(runSettingsUndoHistoryTracksCaptureSettingsTest, 66),
+        AUDIOCITY_TEST(runPresetXmlRoundTripWithEmbeddedSampleDataTest, 67),
+        AUDIOCITY_TEST(runPresetXmlRejectsInvalidPayloadTest, 68),
+        AUDIOCITY_TEST(runLibraryMetadataFavoritesAndRecentsTest, 93),
+        AUDIOCITY_TEST(runLibraryMetadataValueTreeRoundTripTest, 94),
+        AUDIOCITY_TEST(runLibraryMetadataBookmarksTest, 95),
+        AUDIOCITY_TEST(runLibraryFileIndexScanTest, 96),
+        AUDIOCITY_TEST(runPeakPreviewCacheRoundTripTest, 70),
+        AUDIOCITY_TEST(runPeakPreviewCacheResetClearsFileTest, 71),
+        AUDIOCITY_TEST(runPlayerPadStateUtilityTest, 23),
+        AUDIOCITY_TEST(runFilterModeDifferenceTest, 25),
+        AUDIOCITY_TEST(runFilterModulationDifferenceTest, 26),
+        AUDIOCITY_TEST(runFilterKeytrackPolarityTest, 30),
+        AUDIOCITY_TEST(runFilterLfoDifferenceTest, 31),
+        AUDIOCITY_TEST(runPitchLfoVibratoSettingsTest, 53),
+        AUDIOCITY_TEST(runFilterLfoShapeDifferenceTest, 32),
+        AUDIOCITY_TEST(runAmpLfoTremoloSettingsTest, 52),
+        AUDIOCITY_TEST(runFilterLfoTempoSyncSettingsTest, 33),
+        AUDIOCITY_TEST(runFilterLfoRetriggerDifferenceTest, 34),
+        AUDIOCITY_TEST(runFilterLfoStartPhaseDifferenceTest, 35),
+        AUDIOCITY_TEST(runFilterLfoFadeInDifferenceTest, 36),
+        AUDIOCITY_TEST(runFilterLfoStartRandomDifferenceTest, 37),
+        AUDIOCITY_TEST(runFilterLfoAmountKeytrackingDifferenceTest, 38),
+        AUDIOCITY_TEST(runFilterLfoRateKeytrackingDifferenceTest, 39),
+        AUDIOCITY_TEST(runFilterLfoRateKeytrackInTempoSyncToggleDifferenceTest, 40),
+        AUDIOCITY_TEST(runFilterLfoKeytrackCurveDifferenceTest, 41),
+        AUDIOCITY_TEST(runFilterLfoUnipolarDifferenceTest, 42),
+        AUDIOCITY_TEST(runUltraQualityDifferenceTest, 27),
+        AUDIOCITY_TEST(runUltraQualitySpectralTonePreservationTest, 178),
+        AUDIOCITY_TEST(runReverbMixTailTest, 28),
+        AUDIOCITY_TEST(runDelayMixTailTest, 57),
+        AUDIOCITY_TEST(runDelayTempoSyncRespondsToTempoTest, 58),
+        AUDIOCITY_TEST(runDcOffsetFilterRemovesBiasTest, 59),
+        AUDIOCITY_TEST(runMasterVolumeGainTest, 47),
+        AUDIOCITY_TEST(runPanBalanceTest, 51),
+        AUDIOCITY_TEST(runAutopanStereoMotionTest, 60),
+        AUDIOCITY_TEST(runSaturationDriveAndModeTest, 61),
+        AUDIOCITY_TEST(runTuneCoarseFinePitchShiftTest, 49),
+        AUDIOCITY_TEST(runPitchBendRangeAndRealtimeModulationTest, 50),
+        AUDIOCITY_TEST(runModulationRoutingRealtimeTest, 179),
+        AUDIOCITY_TEST(runVoicePlaybackStateSnapshotTest, 54),
+        AUDIOCITY_TEST(runLoopCrossfadeSmoothsBoundaryTest, 29),
+    };
+#undef AUDIOCITY_TEST
+
+    return runOfflineTests(tests);
 }

@@ -1929,11 +1929,217 @@ void MappingOverviewComponent::mouseUp(const juce::MouseEvent&)
         onZoneEditCommitted(committedEdit);
 }
 
+// ─── Player modulation panel ─────────────────────────────────────────────────
+
+PlayerModulationPanel::PlayerModulationPanel(AudiocityAudioProcessor& processor)
+    : processor_(processor)
+{
+    forEachDial([this](CcLearnDial& dial, const juce::String&)
+    {
+        addAndMakeVisible(dial);
+        dial.setDoubleClickResetValue(0.0);
+        dial.onValueChange = [this] { pushToProcessor(); };
+    });
+}
+
+std::array<PlayerModulationPanel::RouteDialSet, 5> PlayerModulationPanel::routeDialSets() noexcept
+{
+    return {{
+        { RouteSlot::modWheel, &modWheelPitchDial_, &modWheelFilterDial_, &modWheelAmpDial_,
+            "modWheelPitch", "modWheelFilter", "modWheelAmp",
+            "MW Pitch - Route MIDI CC1 to pitch in cents",
+            "MW Filt - Route MIDI CC1 to filter cutoff in Hz",
+            "MW Amp - Route MIDI CC1 to gain trim in percent" },
+        { RouteSlot::aftertouch, &aftertouchPitchDial_, &aftertouchFilterDial_, &aftertouchAmpDial_,
+            "aftertouchPitch", "aftertouchFilter", "aftertouchAmp",
+            "AT Pitch - Route channel aftertouch to pitch in cents",
+            "AT Filt - Route channel aftertouch to filter cutoff in Hz",
+            "AT Amp - Route channel aftertouch to gain trim in percent" },
+        { RouteSlot::velocity, &velocityPitchDial_, &velocityFilterDial_, &velocityAmpDial_,
+            "velocityPitch", "velocityFilter", "velocityAmp",
+            "Vel Pitch - Route note-on velocity to pitch in cents",
+            "Vel Filt - Route note-on velocity to filter cutoff in Hz",
+            "Vel Amp - Route note-on velocity to gain trim in percent" },
+        { RouteSlot::macro1, &macro1PitchDial_, &macro1FilterDial_, &macro1AmpDial_,
+            "macro1Pitch", "macro1Filter", "macro1Amp",
+            "M1 Pitch - Route Macro 1 to pitch in cents",
+            "M1 Filt - Route Macro 1 to filter cutoff in Hz",
+            "M1 Amp - Route Macro 1 to gain trim in percent" },
+        { RouteSlot::macro2, &macro2PitchDial_, &macro2FilterDial_, &macro2AmpDial_,
+            "macro2Pitch", "macro2Filter", "macro2Amp",
+            "M2 Pitch - Route Macro 2 to pitch in cents",
+            "M2 Filt - Route Macro 2 to filter cutoff in Hz",
+            "M2 Amp - Route Macro 2 to gain trim in percent" }
+    }};
+}
+
+std::array<PlayerModulationPanel::MacroDialSet, 2> PlayerModulationPanel::macroDialSets() noexcept
+{
+    return {{
+        { 0, &macro1ValueDial_, "macro1Value", "Macro 1 - Macro control value from 0% to 100%" },
+        { 1, &macro2ValueDial_, "macro2Value", "Macro 2 - Macro control value from 0% to 100%" }
+    }};
+}
+
+void PlayerModulationPanel::forEachDial(const std::function<void(CcLearnDial&, const juce::String&)>& visitor)
+{
+    for (const auto& route : routeDialSets())
+    {
+        visitor(*route.pitchDial, route.pitchParamId);
+        visitor(*route.filterDial, route.filterParamId);
+        visitor(*route.ampDial, route.ampParamId);
+    }
+
+    for (const auto& macro : macroDialSets())
+        visitor(*macro.valueDial, macro.valueParamId);
+}
+
+void PlayerModulationPanel::paint(juce::Graphics& g)
+{
+    constexpr int kRowH = 134;
+    constexpr int kGrpGap = 10;
+
+    auto area = getLocalBounds();
+    paintGroupBox(g, area.removeFromTop(kRowH), "Expressive Mod");
+    area.removeFromTop(kGrpGap);
+    paintGroupBox(g, area.removeFromTop(kRowH), "Macro Mod");
+}
+
+void PlayerModulationPanel::resized()
+{
+    constexpr int kDial = 78;
+    constexpr int kGrpPadH = 12;
+    constexpr int kGrpPadV = 8;
+    constexpr int kGrpHdr = 22;
+    constexpr int kGrpGap = 10;
+    constexpr int kDialGap = 6;
+    constexpr int kRowH = 134;
+
+    auto area = getLocalBounds();
+    auto expressiveInner = area.removeFromTop(kRowH).withTrimmedTop(kGrpHdr).reduced(kGrpPadH, kGrpPadV);
+    area.removeFromTop(kGrpGap);
+    auto macroInner = area.removeFromTop(kRowH).withTrimmedTop(kGrpHdr).reduced(kGrpPadH, kGrpPadV);
+
+    const auto routes = routeDialSets();
+    for (int index = 0; index < 3; ++index)
+    {
+        const auto& route = routes[static_cast<std::size_t>(index)];
+        route.pitchDial->setBounds(expressiveInner.removeFromLeft(kDial));
+        expressiveInner.removeFromLeft(kDialGap);
+        route.filterDial->setBounds(expressiveInner.removeFromLeft(kDial));
+        expressiveInner.removeFromLeft(kDialGap);
+        route.ampDial->setBounds(expressiveInner.removeFromLeft(kDial));
+        expressiveInner.removeFromLeft(kDialGap);
+    }
+
+    const auto macros = macroDialSets();
+    for (int index = 0; index < 2; ++index)
+    {
+        const auto& macro = macros[static_cast<std::size_t>(index)];
+        const auto& route = routes[static_cast<std::size_t>(index + 3)];
+        macro.valueDial->setBounds(macroInner.removeFromLeft(kDial));
+        macroInner.removeFromLeft(kDialGap);
+        route.pitchDial->setBounds(macroInner.removeFromLeft(kDial));
+        macroInner.removeFromLeft(kDialGap);
+        route.filterDial->setBounds(macroInner.removeFromLeft(kDial));
+        macroInner.removeFromLeft(kDialGap);
+        route.ampDial->setBounds(macroInner.removeFromLeft(kDial));
+        macroInner.removeFromLeft(kDialGap);
+    }
+}
+
+void PlayerModulationPanel::syncFromProcessor()
+{
+    const auto routing = processor_.getModulationRoutingSettings();
+    const auto macroValues = processor_.getMacroControlValues();
+
+    for (const auto& routeDials : routeDialSets())
+    {
+        const auto* route = &routing.modWheel;
+        switch (routeDials.slot)
+        {
+            case RouteSlot::modWheel: route = &routing.modWheel; break;
+            case RouteSlot::aftertouch: route = &routing.aftertouch; break;
+            case RouteSlot::velocity: route = &routing.velocity; break;
+            case RouteSlot::macro1: route = &routing.macros[0]; break;
+            case RouteSlot::macro2: route = &routing.macros[1]; break;
+        }
+
+        routeDials.pitchDial->setValue(route->toPitchCents, juce::dontSendNotification);
+        routeDials.filterDial->setValue(route->toFilterHz, juce::dontSendNotification);
+        routeDials.ampDial->setValue(route->toAmp * 100.0f, juce::dontSendNotification);
+    }
+
+    for (const auto& macro : macroDialSets())
+        macro.valueDial->setValue(macroValues[macro.index] * 100.0f, juce::dontSendNotification);
+}
+
+void PlayerModulationPanel::setControlTooltips()
+{
+    for (const auto& route : routeDialSets())
+    {
+        route.pitchDial->setLabelTooltip(route.pitchTooltip);
+        route.filterDial->setLabelTooltip(route.filterTooltip);
+        route.ampDial->setLabelTooltip(route.ampTooltip);
+    }
+
+    for (const auto& macro : macroDialSets())
+        macro.valueDial->setLabelTooltip(macro.valueTooltip);
+}
+
+void PlayerModulationPanel::pushToProcessor()
+{
+    auto routing = processor_.getModulationRoutingSettings();
+    auto macroValues = processor_.getMacroControlValues();
+
+    for (const auto& routeDials : routeDialSets())
+    {
+        auto* route = &routing.modWheel;
+        switch (routeDials.slot)
+        {
+            case RouteSlot::modWheel: route = &routing.modWheel; break;
+            case RouteSlot::aftertouch: route = &routing.aftertouch; break;
+            case RouteSlot::velocity: route = &routing.velocity; break;
+            case RouteSlot::macro1: route = &routing.macros[0]; break;
+            case RouteSlot::macro2: route = &routing.macros[1]; break;
+        }
+
+        route->toPitchCents = static_cast<float>(routeDials.pitchDial->getValue());
+        route->toFilterHz = static_cast<float>(routeDials.filterDial->getValue());
+        route->toAmp = juce::jlimit(-1.0f, 1.0f, static_cast<float>(routeDials.ampDial->getValue()) / 100.0f);
+    }
+
+    for (const auto& macro : macroDialSets())
+        macroValues[macro.index] = juce::jlimit(0.0f, 1.0f, static_cast<float>(macro.valueDial->getValue()) / 100.0f);
+
+    processor_.setModulationRoutingSettings(routing);
+    processor_.setMacroControlValues(macroValues);
+}
+
+void PlayerModulationPanel::paintGroupBox(juce::Graphics& g, juce::Rectangle<int> bounds, const juce::String& title) const
+{
+    auto box = bounds.toFloat();
+    g.setColour(juce::Colour(0xff252538));
+    g.fillRoundedRectangle(box, 6.0f);
+    g.setColour(juce::Colour(0xff3a3a52));
+    g.drawRoundedRectangle(box.reduced(0.5f), 6.0f, 1.0f);
+
+    auto header = box.removeFromTop(22.0f);
+    g.setColour(juce::Colour(0xff2d2d44));
+    g.fillRoundedRectangle(header, 6.0f);
+    g.fillRect(header.withTrimmedTop(6.0f));
+
+    g.setColour(juce::Colour(0xff808098));
+    g.setFont(juce::Font(juce::FontOptions(12.0f)));
+    g.drawText(title, header.withTrimmedLeft(10.0f), juce::Justification::centredLeft);
+}
+
 // ─── Editor Constructor ────────────────────────────────────────────────────────
 
 AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProcessor& processor)
     : AudioProcessorEditor(&processor),
     processor_(processor),
+    modulationPanel_(processor),
     mappingZoneListModel_(*this)
 {
     setName("Audiocity");
@@ -3228,6 +3434,11 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         { &fadeOutDial_,        "fadeOut" },
     };
 
+    modulationPanel_.forEachDial([this](CcLearnDial& dial, const juce::String& paramId)
+    {
+        allDials_.push_back({ &dial, paramId });
+    });
+
     for (auto& [dial, paramId] : allDials_)
     {
         dial->onCcClearedByUser = [this, paramId]
@@ -3291,6 +3502,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addToSampleControls(pitchBendRangeDial_);
     addToSampleControls(pitchLfoRateDial_);
     addToSampleControls(pitchLfoDepthDial_);
+    addToSampleControls(modulationPanel_);
     addToSampleControls(ampAttackDial_);
     addToSampleControls(ampDecayDial_);
     addToSampleControls(ampSustainDial_);
@@ -3607,6 +3819,7 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
     const auto pitchLfo = processor_.getPitchLfoSettings();
     pitchLfoRateDial_.setValue(pitchLfo.rateHz, juce::dontSendNotification);
     pitchLfoDepthDial_.setValue(pitchLfo.depthCents, juce::dontSendNotification);
+    modulationPanel_.syncFromProcessor();
 
     const auto playbackMode = processor_.getPlaybackMode();
     playbackModeGateButton_.setToggleState(playbackMode == AudiocityAudioProcessor::PlaybackMode::gate,
@@ -3662,7 +3875,6 @@ void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
     const bool isEditingFilterType = filterTypeCombo_.hasKeyboardFocus(true) || filterTypeCombo_.isPopupActive();
     if (!isEditingFilterType && filterTypeCombo_.getSelectedId() != filterTypeId)
         filterTypeCombo_.setSelectedId(filterTypeId, juce::dontSendNotification);
-
     const auto filterEnv = processor_.getFilterEnvelope();
     filterAttackDial_.setValue(filterEnv.attackSeconds * 1000.0f, juce::dontSendNotification);
     filterDecayDial_.setValue(filterEnv.decaySeconds * 1000.0f, juce::dontSendNotification);
@@ -6357,7 +6569,11 @@ void AudiocityAudioProcessorEditor::resized()
         velocityCurveCombo_.setBounds(rightStack.removeFromTop(24));
     }
 
-    // ── Panel 3: Trim and Loop ──
+    // ── Panel 3-4: Modulation ──
+    modulationPanel_.setBounds(juce::Rectangle<int>(0, scrollY, viewportWidth, PlayerModulationPanel::preferredHeight()));
+    scrollY += PlayerModulationPanel::preferredHeight() + kGrpGap;
+
+    // ── Panel 5: Trim and Loop ──
     {
         auto trimLoopInner = makeGroup("Trim and Loop", kRowH);
 
@@ -6372,7 +6588,7 @@ void AudiocityAudioProcessorEditor::resized()
         loopCrossfadeDial_.setBounds(trimLoopInner.removeFromLeft(kDial));
     }
 
-    // ── Panel 4: Amplitude Envelope ──
+    // ── Panel 6: Amplitude Envelope ──
     {
         auto ampInner = makeGroup("Amplitude Envelope", kRowH);
         ampAttackDial_.setBounds(ampInner.removeFromLeft(kDial));
@@ -6395,7 +6611,7 @@ void AudiocityAudioProcessorEditor::resized()
         ampEnvelopeGraph_.setBounds(ampInner.reduced(0, 8));
     }
 
-    // ── Panel 5: Filter ──
+    // ── Panel 7: Filter ──
     {
         auto filterInner = makeGroup("Filter", kRowH);
         filterCutoffDial_.setBounds(filterInner.removeFromLeft(kDial));
@@ -6412,7 +6628,7 @@ void AudiocityAudioProcessorEditor::resized()
         filterResponseGraph_.setBounds(filterInner.reduced(0, 8));
     }
 
-    // ── Panel 6: Filter Envelope + Mod ──
+    // ── Panel 8: Filter Envelope + Mod ──
     {
         constexpr int kFilterModPanelH = 238;
         auto filterEnvInner = makeGroup("Filter Envelope + Mod", kFilterModPanelH);
@@ -6456,7 +6672,7 @@ void AudiocityAudioProcessorEditor::resized()
         filterLfoTempoSyncToggle_.setBounds(syncArea.removeFromTop(22));
     }
 
-    // ── Panel 7: Effects ──
+    // ── Panel 9: Effects ──
     {
         constexpr int kEffectsPanelH = kRowH + 44;
         auto fxInner = makeGroup("Effects", kEffectsPanelH);
@@ -6508,7 +6724,7 @@ void AudiocityAudioProcessorEditor::resized()
         saturationModeCombo_.setBounds(satModeX, fxControlRow.getY(), kSatModeW, 24);
     }
 
-    // ── Panel 8: Output ──
+    // ── Panel 10: Output ──
     {
         auto outInner = makeGroup("Output", kRowH);
         fadeInDial_.setBounds(outInner.removeFromLeft(kDial));
@@ -7692,6 +7908,7 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Pitch LFO Rate - Vibrato speed in Hz");
     pitchLfoDepthDial_.setLabelTooltip(
         "Pitch LFO Depth - Vibrato amount in cents");
+    modulationPanel_.setControlTooltips();
     playbackStartDial_.setLabelTooltip(
         "Playback Start - Sample position where playback begins");
     playbackEndDial_.setLabelTooltip(
@@ -8049,6 +8266,7 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     const auto pitchLfo = processor_.getPitchLfoSettings();
     pitchLfoRateDial_.setValue(pitchLfo.rateHz, juce::dontSendNotification);
     pitchLfoDepthDial_.setValue(pitchLfo.depthCents, juce::dontSendNotification);
+    modulationPanel_.syncFromProcessor();
 
     playerPadAssignments_ = processor_.getAllPlayerPadAssignments();
     refreshPlayerPadButtons();
@@ -8519,18 +8737,18 @@ void AudiocityAudioProcessorEditor::pushFilterSettings()
     settings.keyTracking = juce::jlimit(-1.0f, 2.0f, static_cast<float>(filterKeytrackDial_.getValue()) / 100.0f);
     settings.velocityAmountHz = juce::jlimit(-12000.0f, 12000.0f, static_cast<float>(filterVelDial_.getValue()));
     settings.lfoRateHz = juce::jlimit(0.0f, 40.0f, static_cast<float>(filterLfoRateDial_.getValue()));
-    settings.lfoRateKeyTracking = 0.0f;
+    settings.lfoRateKeyTracking = juce::jlimit(-1.0f, 2.0f, static_cast<float>(filterLfoRateKeyDial_.getValue()) / 100.0f);
     settings.lfoAmountHz = juce::jlimit(-20000.0f, 20000.0f, static_cast<float>(filterLfoAmtDial_.getValue()));
-    settings.lfoAmountKeyTracking = 0.0f;
-    settings.lfoStartPhaseDegrees = 0.0f;
-    settings.lfoStartPhaseRandomDegrees = 0.0f;
-    settings.lfoFadeInMs = 0.0f;
+    settings.lfoAmountKeyTracking = juce::jlimit(-1.0f, 2.0f, static_cast<float>(filterLfoAmtKeyDial_.getValue()) / 100.0f);
+    settings.lfoStartPhaseDegrees = juce::jlimit(0.0f, 360.0f, static_cast<float>(filterLfoStartPhaseDial_.getValue()));
+    settings.lfoStartPhaseRandomDegrees = juce::jlimit(0.0f, 180.0f, static_cast<float>(filterLfoStartRandDial_.getValue()));
+    settings.lfoFadeInMs = juce::jlimit(0.0f, 5000.0f, static_cast<float>(filterLfoFadeInDial_.getValue()));
     settings.lfoShape = comboIdToLfoShape(filterLfoShapeCombo_.getSelectedId());
     settings.lfoRetrigger = filterLfoRetriggerToggle_.getToggleState();
     settings.lfoTempoSync = filterLfoTempoSyncToggle_.getToggleState();
-    settings.lfoRateKeytrackInTempoSync = true;
-    settings.lfoKeytrackLinear = false;
-    settings.lfoUnipolar = false;
+    settings.lfoRateKeytrackInTempoSync = filterLfoRateKeySyncToggle_.getToggleState();
+    settings.lfoKeytrackLinear = filterLfoKeytrackLinearToggle_.getToggleState();
+    settings.lfoUnipolar = filterLfoUnipolarToggle_.getToggleState();
     settings.lfoSyncDivision = juce::jlimit(0, 11, filterLfoDivisionCombo_.getSelectedId() - 1);
     processor_.setFilterSettings(settings);
     updateFilterResponseGraphFromControls();

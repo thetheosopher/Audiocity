@@ -133,9 +133,10 @@
 ### Epic J — Modulation matrix + multi-LFO/envelopes
 
 **Current validated slice**
-- `EngineCore` now has an RT-safe modulation-routing settings snapshot for the first mod-wheel destinations: pitch, filter cutoff, and amp gain.
-- The processor exposes those routes through automatable parameters and patch-state persistence, so host automation and saved presets can drive the first modulation-routed behavior without relying on the editor timer path.
-- Offline tests now cover real-time CC1 routing during playback and verify audible response across pitch, filter, and amp destinations.
+- `EngineCore` now has an RT-safe modulation-routing settings snapshot for mod wheel, aftertouch, velocity, and two macro controls, with sample-accurate MIDI handling for CC1 and aftertouch plus per-voice velocity routing.
+- The processor exposes those routes and macro values through automatable parameters and patch-state persistence, so host automation and saved presets can drive the first modulation-routed behavior without relying on the editor timer path.
+- The Player page now includes a first modulation surface with expressive-source and macro routing controls in the existing sampler control layout.
+- Offline tests now cover real-time modulation routing during playback and verify audible response across pitch, filter, and amp destinations for the new source set.
 
 ### Epic K — Slicing + slice mapping
 ### Epic L — Mapping productivity tools

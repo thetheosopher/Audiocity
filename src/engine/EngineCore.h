@@ -103,11 +103,23 @@ public:
         float depthCents = 0.0f;
     };
 
+    static constexpr int kMacroControlCount = 2;
+
+    struct ModulationRoute
+    {
+        float toPitchCents = 0.0f;
+        float toFilterHz = 0.0f;
+        float toAmp = 0.0f;
+    };
+
+    using MacroControlValues = std::array<float, kMacroControlCount>;
+
     struct ModulationRoutingSettings
     {
-        float modWheelToPitchCents = 0.0f;
-        float modWheelToFilterHz = 0.0f;
-        float modWheelToAmp = 0.0f;
+        ModulationRoute modWheel;
+        ModulationRoute aftertouch;
+        ModulationRoute velocity;
+        std::array<ModulationRoute, kMacroControlCount> macros{};
     };
 
     struct DelaySettings
@@ -225,6 +237,7 @@ public:
     void noteOn(int noteNumber, float velocity, int sampleOffsetInBlock) noexcept;
     void noteOff(int noteNumber, int sampleOffsetInBlock) noexcept;
     void pitchBend(int pitchWheelValue, int sampleOffsetInBlock) noexcept;
+    void channelPressure(int pressureValue, int sampleOffsetInBlock) noexcept;
 
     void setPitchBendRangeSemitones(float semitones) noexcept { pitchBendRangeSemitones_ = juce::jlimit(0.0f, 24.0f, semitones); }
     [[nodiscard]] float getPitchBendRangeSemitones() const noexcept { return pitchBendRangeSemitones_; }
@@ -237,6 +250,7 @@ public:
     void setAmpLfoSettings(const AmpLfoSettings& settings) noexcept;
     void setPitchLfoSettings(const PitchLfoSettings& settings) noexcept;
     void setModulationRoutingSettings(const ModulationRoutingSettings& settings) noexcept;
+    void setMacroControlValues(const MacroControlValues& values) noexcept;
     void setFilterEnvelope(const AdsrSettings& settings) noexcept;
     void setFilterSettings(const FilterSettings& settings) noexcept;
 
@@ -244,6 +258,7 @@ public:
     [[nodiscard]] AmpLfoSettings getAmpLfoSettings() const noexcept { return ampLfoSettings_; }
     [[nodiscard]] PitchLfoSettings getPitchLfoSettings() const noexcept { return pitchLfoSettings_; }
     [[nodiscard]] ModulationRoutingSettings getModulationRoutingSettings() const noexcept { return modulationRoutingSettings_; }
+    [[nodiscard]] MacroControlValues getMacroControlValues() const noexcept { return macroControlValues_; }
     [[nodiscard]] AdsrSettings getFilterEnvelope() const noexcept { return filterEnvelopeSettings_; }
     [[nodiscard]] FilterSettings getFilterSettings() const noexcept { return filterSettings_; }
 
@@ -318,12 +333,33 @@ private:
         juce::ADSR filterEnvelope;
     };
 
+    struct VoiceStartContext
+    {
+        int noteNumber = 60;
+        float velocity = 0.0f;
+        int rootMidiNote = 60;
+        int zoneIndex = -1;
+        int sampleAssetIndex = -1;
+        float zoneGain = 1.0f;
+        float zonePanLeftGain = 1.0f;
+        float zonePanRightGain = 1.0f;
+        float zoneTuneCents = 0.0f;
+        int chokeGroup = 0;
+        bool releaseOnNoteOff = true;
+        int sampleStart = 0;
+        int sampleEndExclusive = -1;
+        int loopStart = -1;
+        int loopEndExclusive = -1;
+        ZoneLoopMode loopMode = ZoneLoopMode::noLoop;
+        double sourceSampleRateHz = 44100.0;
+    };
+
     struct GlobalModulationFrame
     {
         float combinedPitchRatio = 1.0f;
         float filterLfoValue = 0.0f;
         float ampLfoGain = 1.0f;
-        float modWheelValue = 0.0f;
+        float filterCutoffOffsetHz = 0.0f;
         bool filterLfoActive = false;
     };
 
@@ -332,6 +368,7 @@ private:
         noteOn,
         noteOff,
         pitchBend,
+        channelPressure,
         controller
     };
 
@@ -365,42 +402,9 @@ private:
     void flushPendingEventsAtOffset(int offset,
                                     const ProgramSnapshot* programSnapshot,
                                     const ProgramAudioSnapshot* programAudioSnapshot) noexcept;
-    void startVoice(int voiceIndex,
-                    int noteNumber,
-                    float velocity,
-                    int rootMidiNote,
-                    int zoneIndex,
-                    int sampleAssetIndex,
-                    float zoneGain,
-                    float zonePanLeftGain,
-                    float zonePanRightGain,
-                    float zoneTuneCents,
-                    int chokeGroup,
-                    bool releaseOnNoteOff,
-                    int sampleStart,
-                    int sampleEndExclusive,
-                    int loopStart,
-                    int loopEndExclusive,
-                    ZoneLoopMode loopMode,
-                    double sourceSampleRateHz) noexcept;
-    void retargetVoiceLegato(int voiceIndex,
-                             int noteNumber,
-                             float velocity,
-                             int rootMidiNote,
-                             int zoneIndex,
-                             int sampleAssetIndex,
-                             float zoneGain,
-                             float zonePanLeftGain,
-                             float zonePanRightGain,
-                             float zoneTuneCents,
-                             int chokeGroup,
-                             bool releaseOnNoteOff,
-                             int sampleStart,
-                             int sampleEndExclusive,
-                             int loopStart,
-                             int loopEndExclusive,
-                             ZoneLoopMode loopMode,
-                             double sourceSampleRateHz) noexcept;
+    void startVoice(int voiceIndex, const VoiceStartContext& context) noexcept;
+    void retargetVoiceLegato(int voiceIndex, const VoiceStartContext& context) noexcept;
+    void applyVoiceStartContext(VoiceState& voice, const VoiceStartContext& context) noexcept;
     void stopAllVoicesImmediate() noexcept;
     void stopVoicesForNoteImmediate(int noteNumber) noexcept;
     void stopVoicesInChokeGroupImmediate(int chokeGroup) noexcept;
@@ -486,12 +490,14 @@ private:
                                             float lfoValue,
                                             int noteNumber,
                                             float velocity,
+                                            float modulationFilterOffsetHz,
                                             VoiceState& voice,
                                             int filterChannel) const noexcept;
     [[nodiscard]] float computeFilterCutoffHz(float envValue,
                                               float lfoValue,
                                               int noteNumber,
                                               float velocity,
+                                              float modulationFilterOffsetHz,
                                               const VoiceState& voice) const noexcept;
     [[nodiscard]] float computeFilterResonanceQ() const noexcept;
     [[nodiscard]] GlobalModulationFrame advanceGlobalModulationFrame() noexcept;
@@ -528,6 +534,7 @@ private:
     float pitchBendRangeSemitones_ = 2.0f;
     float currentPitchBendSemitones_ = 0.0f;
     float currentModWheelValue_ = 0.0f;
+    float currentAftertouchValue_ = 0.0f;
     int preloadSamples_ = 32768;
     int segmentRebuildCount_ = 0;
 
@@ -535,6 +542,7 @@ private:
     AmpLfoSettings ampLfoSettings_{};
     PitchLfoSettings pitchLfoSettings_{};
     ModulationRoutingSettings modulationRoutingSettings_{};
+    MacroControlValues macroControlValues_{};
     AdsrSettings filterEnvelopeSettings_{ 0.001f, 0.120f, 0.0f, 0.100f };
     FilterSettings filterSettings_{};
     PlaybackMode playbackMode_ = PlaybackMode::gate;

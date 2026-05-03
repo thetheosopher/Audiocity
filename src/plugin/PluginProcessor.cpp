@@ -6,6 +6,7 @@
 #include "../engine/SfzImporter.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -49,6 +50,20 @@ constexpr auto kPitchLfoDepth = "pitchLfoDepth";
 constexpr auto kModWheelToPitch = "modWheelToPitch";
 constexpr auto kModWheelToFilter = "modWheelToFilter";
 constexpr auto kModWheelToAmp = "modWheelToAmp";
+constexpr auto kAftertouchToPitch = "aftertouchToPitch";
+constexpr auto kAftertouchToFilter = "aftertouchToFilter";
+constexpr auto kAftertouchToAmp = "aftertouchToAmp";
+constexpr auto kVelocityToPitch = "velocityToPitch";
+constexpr auto kVelocityToFilter = "velocityToFilter";
+constexpr auto kVelocityToAmp = "velocityToAmp";
+constexpr auto kMacro1Value = "macro1Value";
+constexpr auto kMacro2Value = "macro2Value";
+constexpr auto kMacro1ToPitch = "macro1ToPitch";
+constexpr auto kMacro1ToFilter = "macro1ToFilter";
+constexpr auto kMacro1ToAmp = "macro1ToAmp";
+constexpr auto kMacro2ToPitch = "macro2ToPitch";
+constexpr auto kMacro2ToFilter = "macro2ToFilter";
+constexpr auto kMacro2ToAmp = "macro2ToAmp";
 
 constexpr auto kAmpAttack = "ampAttack";
 constexpr auto kAmpDecay = "ampDecay";
@@ -178,6 +193,20 @@ constexpr auto kParamPitchLfoDepth = "p_pitchLfoDepth";
 constexpr auto kParamModWheelToPitch = "p_modWheelPitch";
 constexpr auto kParamModWheelToFilter = "p_modWheelFilter";
 constexpr auto kParamModWheelToAmp = "p_modWheelAmp";
+constexpr auto kParamAftertouchToPitch = "p_aftertouchPitch";
+constexpr auto kParamAftertouchToFilter = "p_aftertouchFilter";
+constexpr auto kParamAftertouchToAmp = "p_aftertouchAmp";
+constexpr auto kParamVelocityToPitch = "p_velocityPitch";
+constexpr auto kParamVelocityToFilter = "p_velocityFilter";
+constexpr auto kParamVelocityToAmp = "p_velocityAmp";
+constexpr auto kParamMacro1Value = "p_macro1Value";
+constexpr auto kParamMacro2Value = "p_macro2Value";
+constexpr auto kParamMacro1ToPitch = "p_macro1Pitch";
+constexpr auto kParamMacro1ToFilter = "p_macro1Filter";
+constexpr auto kParamMacro1ToAmp = "p_macro1Amp";
+constexpr auto kParamMacro2ToPitch = "p_macro2Pitch";
+constexpr auto kParamMacro2ToFilter = "p_macro2Filter";
+constexpr auto kParamMacro2ToAmp = "p_macro2Amp";
 constexpr auto kParamPlaybackStart = "p_playbackStart";
 constexpr auto kParamPlaybackEnd = "p_playbackEnd";
 constexpr auto kParamLoopStart = "p_loopStart";
@@ -297,6 +326,195 @@ juce::String makeSfzImportSummary(const audiocity::engine::SfzImportResult& resu
     }
 
     return summary;
+}
+
+using ModulationRoute = audiocity::engine::EngineCore::ModulationRoute;
+using ModulationRoutingSettings = audiocity::engine::EngineCore::ModulationRoutingSettings;
+using MacroControlValues = audiocity::engine::EngineCore::MacroControlValues;
+
+enum class ModulationRouteSlot
+{
+    modWheel,
+    aftertouch,
+    velocity,
+    macro1,
+    macro2
+};
+
+struct ModulationRouteDescriptor
+{
+    ModulationRouteSlot slot;
+    const char* displayName;
+    const char* pitchParameterId;
+    const char* filterParameterId;
+    const char* ampParameterId;
+    const char* pitchProperty;
+    const char* filterProperty;
+    const char* ampProperty;
+};
+
+struct MacroControlDescriptor
+{
+    std::size_t index;
+    const char* displayName;
+    const char* parameterId;
+    const char* property;
+};
+
+constexpr std::array<MacroControlDescriptor, audiocity::engine::EngineCore::kMacroControlCount> kMacroControlDescriptors{{
+    { 0, "Macro 1", kParamMacro1Value, kMacro1Value },
+    { 1, "Macro 2", kParamMacro2Value, kMacro2Value }
+}};
+
+constexpr std::array<ModulationRouteDescriptor, 5> kModulationRouteDescriptors{{
+    { ModulationRouteSlot::modWheel, "Mod Wheel", kParamModWheelToPitch, kParamModWheelToFilter, kParamModWheelToAmp,
+        kModWheelToPitch, kModWheelToFilter, kModWheelToAmp },
+    { ModulationRouteSlot::aftertouch, "Aftertouch", kParamAftertouchToPitch, kParamAftertouchToFilter, kParamAftertouchToAmp,
+        kAftertouchToPitch, kAftertouchToFilter, kAftertouchToAmp },
+    { ModulationRouteSlot::velocity, "Velocity", kParamVelocityToPitch, kParamVelocityToFilter, kParamVelocityToAmp,
+        kVelocityToPitch, kVelocityToFilter, kVelocityToAmp },
+    { ModulationRouteSlot::macro1, "Macro 1", kParamMacro1ToPitch, kParamMacro1ToFilter, kParamMacro1ToAmp,
+        kMacro1ToPitch, kMacro1ToFilter, kMacro1ToAmp },
+    { ModulationRouteSlot::macro2, "Macro 2", kParamMacro2ToPitch, kParamMacro2ToFilter, kParamMacro2ToAmp,
+        kMacro2ToPitch, kMacro2ToFilter, kMacro2ToAmp }
+}};
+
+ModulationRoute& modulationRouteForSlot(ModulationRoutingSettings& settings, const ModulationRouteSlot slot) noexcept
+{
+    switch (slot)
+    {
+        case ModulationRouteSlot::modWheel: return settings.modWheel;
+        case ModulationRouteSlot::aftertouch: return settings.aftertouch;
+        case ModulationRouteSlot::velocity: return settings.velocity;
+        case ModulationRouteSlot::macro1: return settings.macros[0];
+        case ModulationRouteSlot::macro2: return settings.macros[1];
+    }
+
+    return settings.modWheel;
+}
+
+const ModulationRoute& modulationRouteForSlot(const ModulationRoutingSettings& settings, const ModulationRouteSlot slot) noexcept
+{
+    switch (slot)
+    {
+        case ModulationRouteSlot::modWheel: return settings.modWheel;
+        case ModulationRouteSlot::aftertouch: return settings.aftertouch;
+        case ModulationRouteSlot::velocity: return settings.velocity;
+        case ModulationRouteSlot::macro1: return settings.macros[0];
+        case ModulationRouteSlot::macro2: return settings.macros[1];
+    }
+
+    return settings.modWheel;
+}
+
+const MacroControlDescriptor* macroControlDescriptorForSlot(const ModulationRouteSlot slot) noexcept
+{
+    switch (slot)
+    {
+        case ModulationRouteSlot::macro1: return &kMacroControlDescriptors[0];
+        case ModulationRouteSlot::macro2: return &kMacroControlDescriptors[1];
+        default: return nullptr;
+    }
+}
+
+void addMacroControlParameter(std::vector<std::unique_ptr<juce::RangedAudioParameter>>& params,
+                              const MacroControlDescriptor& descriptor)
+{
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(descriptor.parameterId, descriptor.displayName,
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f));
+}
+
+void addModulationParameters(std::vector<std::unique_ptr<juce::RangedAudioParameter>>& params)
+{
+    const juce::NormalisableRange<float> pitchRange(-1200.0f, 1200.0f, 1.0f);
+    const juce::NormalisableRange<float> filterRange(-20000.0f, 20000.0f, 0.01f, 0.35f);
+    const juce::NormalisableRange<float> ampRange(-1.0f, 1.0f);
+
+    for (const auto& descriptor : kModulationRouteDescriptors)
+    {
+        if (const auto* macroDescriptor = macroControlDescriptorForSlot(descriptor.slot))
+            addMacroControlParameter(params, *macroDescriptor);
+
+        const juce::String sourceName(descriptor.displayName);
+        params.push_back(std::make_unique<juce::AudioParameterFloat>(descriptor.pitchParameterId, sourceName + " To Pitch",
+            pitchRange, 0.0f));
+        params.push_back(std::make_unique<juce::AudioParameterFloat>(descriptor.filterParameterId, sourceName + " To Filter",
+            filterRange, 0.0f));
+        params.push_back(std::make_unique<juce::AudioParameterFloat>(descriptor.ampParameterId, sourceName + " To Amp",
+            ampRange, 0.0f));
+    }
+}
+
+void loadModulationRoutesFromParameters(juce::AudioProcessorValueTreeState& apvts,
+                                        ModulationRoutingSettings& settings) noexcept
+{
+    for (const auto& descriptor : kModulationRouteDescriptors)
+    {
+        auto& route = modulationRouteForSlot(settings, descriptor.slot);
+        route.toPitchCents = apvts.getRawParameterValue(descriptor.pitchParameterId)->load();
+        route.toFilterHz = apvts.getRawParameterValue(descriptor.filterParameterId)->load();
+        route.toAmp = apvts.getRawParameterValue(descriptor.ampParameterId)->load();
+    }
+}
+
+void loadMacroControlsFromParameters(juce::AudioProcessorValueTreeState& apvts,
+                                     MacroControlValues& values) noexcept
+{
+    for (const auto& descriptor : kMacroControlDescriptors)
+        values[descriptor.index] = apvts.getRawParameterValue(descriptor.parameterId)->load();
+}
+
+void storeModulationRoutesToState(juce::ValueTree& state, const ModulationRoutingSettings& settings)
+{
+    for (const auto& descriptor : kModulationRouteDescriptors)
+    {
+        const auto& route = modulationRouteForSlot(settings, descriptor.slot);
+        state.setProperty(descriptor.pitchProperty, route.toPitchCents, nullptr);
+        state.setProperty(descriptor.filterProperty, route.toFilterHz, nullptr);
+        state.setProperty(descriptor.ampProperty, route.toAmp, nullptr);
+    }
+}
+
+void storeMacroControlsToState(juce::ValueTree& state, const MacroControlValues& values)
+{
+    for (const auto& descriptor : kMacroControlDescriptors)
+        state.setProperty(descriptor.property, values[descriptor.index], nullptr);
+}
+
+void restoreModulationRoutesFromState(const juce::ValueTree& state, ModulationRoutingSettings& settings)
+{
+    for (const auto& descriptor : kModulationRouteDescriptors)
+    {
+        auto& route = modulationRouteForSlot(settings, descriptor.slot);
+        route.toPitchCents = static_cast<float>(state.getProperty(descriptor.pitchProperty, route.toPitchCents));
+        route.toFilterHz = static_cast<float>(state.getProperty(descriptor.filterProperty, route.toFilterHz));
+        route.toAmp = static_cast<float>(state.getProperty(descriptor.ampProperty, route.toAmp));
+    }
+}
+
+void restoreMacroControlsFromState(const juce::ValueTree& state, MacroControlValues& values)
+{
+    for (const auto& descriptor : kMacroControlDescriptors)
+        values[descriptor.index] = static_cast<float>(state.getProperty(descriptor.property, values[descriptor.index]));
+}
+
+template <typename UpdatePlainValue>
+void updateModulationRouteParameters(const ModulationRoutingSettings& settings, UpdatePlainValue&& updatePlainValue)
+{
+    for (const auto& descriptor : kModulationRouteDescriptors)
+    {
+        const auto& route = modulationRouteForSlot(settings, descriptor.slot);
+        updatePlainValue(descriptor.pitchParameterId, route.toPitchCents);
+        updatePlainValue(descriptor.filterParameterId, route.toFilterHz);
+        updatePlainValue(descriptor.ampParameterId, route.toAmp);
+    }
+}
+
+template <typename UpdatePlainValue>
+void updateMacroControlParameters(const MacroControlValues& values, UpdatePlainValue&& updatePlainValue)
+{
+    for (const auto& descriptor : kMacroControlDescriptors)
+        updatePlainValue(descriptor.parameterId, values[descriptor.index]);
 }
 
 }
@@ -439,12 +657,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AudiocityAudioProcessor::cre
         juce::NormalisableRange<float>(0.0f, 40.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPitchLfoDepth, "Pitch LFO Depth",
         juce::NormalisableRange<float>(0.0f, 100.0f), 0.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamModWheelToPitch, "Mod Wheel To Pitch",
-        juce::NormalisableRange<float>(-1200.0f, 1200.0f, 1.0f), 0.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamModWheelToFilter, "Mod Wheel To Filter",
-        juce::NormalisableRange<float>(-20000.0f, 20000.0f, 0.01f, 0.35f), 0.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamModWheelToAmp, "Mod Wheel To Amp",
-        juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f));
+    addModulationParameters(params);
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPlaybackStart, "Playback Start",
         juce::NormalisableRange<float>(0.0f, kMaxSamplePositionParam, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(kParamPlaybackEnd, "Playback End",
@@ -573,10 +786,12 @@ void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
     engine_.setPitchLfoSettings(pitchLfo);
 
     auto modulationRouting = engine_.getModulationRoutingSettings();
-    modulationRouting.modWheelToPitchCents = apvts_.getRawParameterValue(kParamModWheelToPitch)->load();
-    modulationRouting.modWheelToFilterHz = apvts_.getRawParameterValue(kParamModWheelToFilter)->load();
-    modulationRouting.modWheelToAmp = apvts_.getRawParameterValue(kParamModWheelToAmp)->load();
+    loadModulationRoutesFromParameters(apvts_, modulationRouting);
     engine_.setModulationRoutingSettings(modulationRouting);
+
+    auto macroValues = engine_.getMacroControlValues();
+    loadMacroControlsFromParameters(apvts_, macroValues);
+    engine_.setMacroControlValues(macroValues);
 
     engine_.setSampleWindow(
         static_cast<int>(std::round(apvts_.getRawParameterValue(kParamPlaybackStart)->load())),
@@ -926,9 +1141,10 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kPitchLfoRate, pitchLfo.rateHz, nullptr);
     state.setProperty(kPitchLfoDepth, pitchLfo.depthCents, nullptr);
     const auto modulationRouting = engine_.getModulationRoutingSettings();
-    state.setProperty(kModWheelToPitch, modulationRouting.modWheelToPitchCents, nullptr);
-    state.setProperty(kModWheelToFilter, modulationRouting.modWheelToFilterHz, nullptr);
-    state.setProperty(kModWheelToAmp, modulationRouting.modWheelToAmp, nullptr);
+    storeModulationRoutesToState(state, modulationRouting);
+
+    const auto macroValues = engine_.getMacroControlValues();
+    storeMacroControlsToState(state, macroValues);
 
     const auto amp = engine_.getAmpEnvelope();
     state.setProperty(kAmpAttack, amp.attackSeconds, nullptr);
@@ -1201,10 +1417,12 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     setPitchLfoSettings(pitchLfo);
 
     auto modulationRouting = engine_.getModulationRoutingSettings();
-    modulationRouting.modWheelToPitchCents = static_cast<float>(state.getProperty(kModWheelToPitch, modulationRouting.modWheelToPitchCents));
-    modulationRouting.modWheelToFilterHz = static_cast<float>(state.getProperty(kModWheelToFilter, modulationRouting.modWheelToFilterHz));
-    modulationRouting.modWheelToAmp = static_cast<float>(state.getProperty(kModWheelToAmp, modulationRouting.modWheelToAmp));
+    restoreModulationRoutesFromState(state, modulationRouting);
     setModulationRoutingSettings(modulationRouting);
+
+    auto macroValues = engine_.getMacroControlValues();
+    restoreMacroControlsFromState(state, macroValues);
+    setMacroControlValues(macroValues);
 
     auto amp = engine_.getAmpEnvelope();
     amp.attackSeconds = static_cast<float>(state.getProperty(kAmpAttack, amp.attackSeconds));
@@ -2060,9 +2278,20 @@ void AudiocityAudioProcessor::setModulationRoutingSettings(const ModulationRouti
 {
     engine_.setModulationRoutingSettings(settings);
     const auto applied = engine_.getModulationRoutingSettings();
-    updateParameterFromPlainValue(kParamModWheelToPitch, applied.modWheelToPitchCents);
-    updateParameterFromPlainValue(kParamModWheelToFilter, applied.modWheelToFilterHz);
-    updateParameterFromPlainValue(kParamModWheelToAmp, applied.modWheelToAmp);
+    updateModulationRouteParameters(applied, [this](const char* parameterId, const float value)
+    {
+        updateParameterFromPlainValue(parameterId, value);
+    });
+}
+
+void AudiocityAudioProcessor::setMacroControlValues(const MacroControlValues& values) noexcept
+{
+    engine_.setMacroControlValues(values);
+    const auto applied = engine_.getMacroControlValues();
+    updateMacroControlParameters(applied, [this](const char* parameterId, const float value)
+    {
+        updateParameterFromPlainValue(parameterId, value);
+    });
 }
 
 void AudiocityAudioProcessor::setSampleWindow(const int startSample, const int endSample) noexcept
