@@ -13,7 +13,8 @@ Support `<control>`, `<global>`, `<master>`, `<group>`, `<region>` with inherita
 - `seq_mode=random` is imported into Audiocity's existing cycle-random round-robin mode, and the importer now assigns a round-robin group even when no explicit `seq_position` values are present.
 - `trigger=release` regions are imported and fire on MIDI note-off instead of note-on.
 - `loop_mode=loop_continuous` regions keep looping after note-off, and that import-to-playback path is now covered by offline tests.
-- `loop_mode=one_shot` maps to one-shot trigger behavior with no active loop.
+- `loop_mode=one_shot` maps to one-shot trigger behavior with no active loop, and that import-to-playback path is now covered by offline tests.
+- `volume`, `pan`, `tune`, and `transpose` are imported into zone gain, pan, and tuning fields, and that import-to-playback path is now covered by offline tests.
 - Velocity crossfades (`xfin_*`, `xfout_*`) are imported into the zone model, preserved through Mapping edits/state restore, and now covered by offline import-to-playback tests across low, mid, and high velocities.
 
 ## Behavior

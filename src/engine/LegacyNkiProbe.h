@@ -40,6 +40,16 @@ struct ProbeZoneMetadata
     int rootKey = -1;
     int lowVelocity = -1;
     int highVelocity = -1;
+    int sampleStart = -1;
+    int sampleEnd = -1;
+    int loopStart = -1;
+    int loopEnd = -1;
+    float gainDb = 0.0f;
+    float pan = 0.0f;
+    float tuneCents = 0.0f;
+    int transposeSemitones = 0;
+    ZoneLoopMode loopMode = ZoneLoopMode::noLoop;
+    bool hasLoopMode = false;
 };
 
 struct ProbeResult

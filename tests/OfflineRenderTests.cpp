@@ -2352,6 +2352,218 @@ bool runSfzImportLoopContinuousPlaybackTest()
     return energy > 50.0f;
 }
 
+bool runSfzImportOneShotPlaybackTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 512;
+    constexpr int blockSize = 64;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_sfz_one_shot_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto sampleFile = tempDirectory.getChildFile("Tone.wav");
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(sampleFile.createOutputStream());
+        if (output == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        output.release();
+        const auto sample = createTestSample(sampleLength);
+        if (!writer->writeFromAudioSampleBuffer(sample, 0, sampleLength))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    const auto sfzFile = tempDirectory.getChildFile("one_shot.sfz");
+    if (!sfzFile.replaceWithText("<region> sample=Tone.wav key=60 loop_mode=one_shot\n"))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    SfzImporter importer;
+    const auto result = importer.importFile(sfzFile);
+    tempDirectory.deleteRecursively();
+
+    if (result.hasErrors()
+        || result.program.zones.size() != 1
+        || result.sampleDataByAsset.size() != 1)
+    {
+        return false;
+    }
+
+    const auto& zone = result.program.zones.front();
+    if (zone.triggerMode != ZoneTriggerMode::oneShot
+        || zone.loopMode != ZoneLoopMode::noLoop)
+    {
+        return false;
+    }
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, 2);
+    engine.setProgram(result.program, result.sampleDataByAsset);
+
+    juce::AudioBuffer<float> block(2, blockSize);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+    engine.render(block, midi);
+    if (engine.activeVoiceCount() != 1 || !engine.isNoteActive(60))
+        return false;
+
+    midi.clear();
+    midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+    engine.render(block, midi);
+    if (engine.activeVoiceCount() != 1 || !engine.isNoteActive(60))
+        return false;
+
+    midi.clear();
+    engine.render(block, midi);
+
+    auto energy = 0.0f;
+    for (int channel = 0; channel < block.getNumChannels(); ++channel)
+    {
+        const auto* data = block.getReadPointer(channel);
+        for (int sampleIndex = 0; sampleIndex < block.getNumSamples(); ++sampleIndex)
+            energy += std::abs(data[sampleIndex]);
+    }
+
+    return energy > 0.01f;
+}
+
+bool runSfzImportGainPanTunePlaybackTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 1024;
+    constexpr int blockSize = 256;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_sfz_gain_pan_tune_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto sampleFile = tempDirectory.getChildFile("Tone.wav");
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(sampleFile.createOutputStream());
+        if (output == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        output.release();
+        const auto sample = createTestSample(sampleLength);
+        if (!writer->writeFromAudioSampleBuffer(sample, 0, sampleLength))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    const auto sfzFile = tempDirectory.getChildFile("gain_pan_tune.sfz");
+    if (!sfzFile.replaceWithText("<region> sample=Tone.wav key=60 volume=-6 pan=75 tune=12.5 transpose=1\n"))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    SfzImporter importer;
+    const auto result = importer.importFile(sfzFile);
+    tempDirectory.deleteRecursively();
+
+    if (result.hasErrors()
+        || result.program.zones.size() != 1
+        || result.sampleDataByAsset.size() != 1)
+    {
+        return false;
+    }
+
+    const auto& zone = result.program.zones.front();
+    if (std::abs(zone.gainDb - (-6.0f)) > 1.0e-6f
+        || std::abs(zone.pan - 0.75f) > 1.0e-6f
+        || std::abs(zone.tuneCents - 112.5f) > 1.0e-6f)
+    {
+        return false;
+    }
+
+    auto renderProgram = [&](const Program& program)
+    {
+        EngineCore engine;
+        engine.prepare(sampleRate, blockSize, 2);
+        engine.setProgram(program, result.sampleDataByAsset);
+
+        juce::AudioBuffer<float> block(2, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+        return block;
+    };
+
+    const auto importedBlock = renderProgram(result.program);
+
+    auto neutralProgram = result.program;
+    neutralProgram.zones.front().gainDb = 0.0f;
+    neutralProgram.zones.front().pan = 0.0f;
+    neutralProgram.zones.front().tuneCents = 0.0f;
+    const auto neutralBlock = renderProgram(neutralProgram);
+
+    auto untunedProgram = result.program;
+    untunedProgram.zones.front().tuneCents = 0.0f;
+    const auto untunedBlock = renderProgram(untunedProgram);
+
+    auto channelEnergy = [](const juce::AudioBuffer<float>& buffer, const int channel)
+    {
+        auto energy = 0.0f;
+        for (int sampleIndex = 0; sampleIndex < buffer.getNumSamples(); ++sampleIndex)
+            energy += std::abs(buffer.getSample(channel, sampleIndex));
+        return energy;
+    };
+
+    const auto importedLeftEnergy = channelEnergy(importedBlock, 0);
+    const auto importedRightEnergy = channelEnergy(importedBlock, 1);
+    const auto neutralTotalEnergy = channelEnergy(neutralBlock, 0) + channelEnergy(neutralBlock, 1);
+    const auto importedTotalEnergy = importedLeftEnergy + importedRightEnergy;
+
+    auto differenceFromUntuned = 0.0f;
+    for (int channel = 0; channel < importedBlock.getNumChannels(); ++channel)
+    {
+        for (int sampleIndex = 0; sampleIndex < importedBlock.getNumSamples(); ++sampleIndex)
+            differenceFromUntuned += std::abs(importedBlock.getSample(channel, sampleIndex)
+                - untunedBlock.getSample(channel, sampleIndex));
+    }
+
+    return importedRightEnergy > 0.01f
+        && importedRightEnergy > importedLeftEnergy * 1.5f
+        && importedTotalEnergy < neutralTotalEnergy * 0.75f
+        && differenceFromUntuned > 1.0f;
+}
+
 bool runSfzImportVelocityCrossfadePlaybackTest()
 {
     using namespace audiocity::engine;
@@ -2848,6 +3060,271 @@ bool runLegacyNkiImportTranslatesLegacyZonesTest()
         && kickEnergy > 0.01f
         && snareEnergy > 0.01f
         && emptyEnergy <= 1.0e-6f;
+}
+
+bool runLegacyNkiImportSampleWindowAndLoopTest()
+{
+    using namespace audiocity::engine::nki;
+
+    constexpr double sampleRate = 48000.0;
+    constexpr int channels = 2;
+    constexpr int blockSize = 64;
+    constexpr int sampleLength = 128;
+    constexpr int sampleStart = 32;
+    constexpr int sampleEnd = 95;
+    constexpr int loopStart = 48;
+    constexpr int loopEnd = 63;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_nki_import_window_loop_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto sampleDirectory = tempDirectory.getChildFile("Samples");
+    if (!sampleDirectory.createDirectory())
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto sampleFile = sampleDirectory.getChildFile("Loop.WAV");
+    {
+        juce::AudioBuffer<float> sample(1, sampleLength);
+        sample.clear();
+        for (int index = loopStart; index <= loopEnd; ++index)
+            sample.setSample(0, index, 0.8f);
+
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(sampleFile.createOutputStream());
+        if (output == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        output.release();
+        if (!writer->writeFromAudioSampleBuffer(sample, 0, sampleLength))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    const auto nkiFile = tempDirectory.getChildFile("LoopedTone.nki");
+    juce::MemoryOutputStream payload;
+    auto writeAscii = [&payload](const char* text)
+    {
+        payload.write(text, std::strlen(text));
+        payload.writeByte(0);
+    };
+
+    payload.write("NKI\0", 4);
+    payload.writeByte(0x51);
+    payload.writeByte(0x09);
+    writeAscii("zone_name=LoopedTone");
+    writeAscii("lowkey=60");
+    writeAscii("highkey=60");
+    writeAscii("rootkey=60");
+    writeAscii("offset=32");
+    writeAscii("end=95");
+    writeAscii("loop_start=48");
+    writeAscii("loop_end=63");
+    writeAscii("loop_mode=loop_continuous");
+    writeAscii("Samples/Loop.WAV");
+    if (!nkiFile.replaceWithData(payload.getData(), payload.getDataSize()))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto result = importFile(nkiFile);
+    if (result.hasErrors()
+        || !result.hasPlayableProgram()
+        || result.program.zones.size() != 1
+        || result.sampleDataByAsset.size() != 1)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto& zone = result.program.zones.front();
+    if (zone.sampleStart != sampleStart
+        || zone.sampleEndExclusive != sampleEnd + 1
+        || zone.loopStart != loopStart
+        || zone.loopEndExclusive != loopEnd + 1
+        || zone.loopMode != audiocity::engine::ZoneLoopMode::continuous)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    using namespace audiocity::engine;
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+
+    EngineCore::AdsrSettings amp;
+    amp.attackSeconds = 0.0001f;
+    amp.decaySeconds = 0.001f;
+    amp.sustainLevel = 1.0f;
+    amp.releaseSeconds = 0.5f;
+    engine.setAmpEnvelope(amp);
+
+    EngineCore::FilterSettings openFilter;
+    openFilter.baseCutoffHz = 20000.0f;
+    openFilter.envAmountHz = 0.0f;
+    openFilter.resonance = 0.0f;
+    engine.setFilterSettings(openFilter);
+
+    EngineCore::DcFilterSettings dc;
+    dc.enabled = false;
+    engine.setDcFilterSettings(dc);
+
+    engine.setProgram(result.program, result.sampleDataByAsset);
+
+    juce::AudioBuffer<float> block(channels, blockSize);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+    engine.render(block, midi);
+
+    midi.clear();
+    engine.render(block, midi);
+
+    midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+    engine.render(block, midi);
+    midi.clear();
+
+    engine.render(block, midi);
+
+    auto energy = 0.0f;
+    for (int channel = 0; channel < block.getNumChannels(); ++channel)
+    {
+        const auto* data = block.getReadPointer(channel);
+        for (int sampleIndex = 0; sampleIndex < block.getNumSamples(); ++sampleIndex)
+            energy += std::abs(data[sampleIndex]);
+    }
+
+    tempDirectory.deleteRecursively();
+    return energy > 50.0f;
+}
+
+bool runLegacyNkiImportGainPanTuneTest()
+{
+    using namespace audiocity::engine::nki;
+
+    constexpr double sampleRate = 48000.0;
+    constexpr int blockSize = 128;
+    constexpr int sampleLength = 512;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_nki_import_gain_pan_tune_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto sampleDirectory = tempDirectory.getChildFile("Samples");
+    if (!sampleDirectory.createDirectory())
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto sampleFile = sampleDirectory.getChildFile("Tone.WAV");
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(sampleFile.createOutputStream());
+        if (output == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        output.release();
+        const auto sample = createTestSample(sampleLength);
+        if (!writer->writeFromAudioSampleBuffer(sample, 0, sampleLength))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    const auto nkiFile = tempDirectory.getChildFile("GainPanTune.nki");
+    juce::MemoryOutputStream payload;
+    auto writeAscii = [&payload](const char* text)
+    {
+        payload.write(text, std::strlen(text));
+        payload.writeByte(0);
+    };
+
+    payload.write("NKI\0", 4);
+    payload.writeByte(0x57);
+    payload.writeByte(0x01);
+    writeAscii("zone_name=GainPanTune");
+    writeAscii("lowkey=60");
+    writeAscii("highkey=60");
+    writeAscii("rootkey=60");
+    writeAscii("volume=-6");
+    writeAscii("pan=75");
+    writeAscii("tune=12.5");
+    writeAscii("transpose=1");
+    writeAscii("Samples/Tone.WAV");
+    if (!nkiFile.replaceWithData(payload.getData(), payload.getDataSize()))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto result = importFile(nkiFile);
+    if (result.hasErrors()
+        || !result.hasPlayableProgram()
+        || result.program.zones.size() != 1
+        || result.sampleDataByAsset.size() != 1)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto& zone = result.program.zones.front();
+    if (std::abs(zone.gainDb - (-6.0f)) > 1.0e-6f
+        || std::abs(zone.pan - 0.75f) > 1.0e-6f
+        || std::abs(zone.tuneCents - 112.5f) > 1.0e-6f)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    using namespace audiocity::engine;
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, 2);
+    engine.setProgram(result.program, result.sampleDataByAsset);
+
+    juce::AudioBuffer<float> block(2, blockSize);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+    engine.render(block, midi);
+
+    auto leftEnergy = 0.0f;
+    auto rightEnergy = 0.0f;
+    for (int sampleIndex = 0; sampleIndex < block.getNumSamples(); ++sampleIndex)
+    {
+        leftEnergy += std::abs(block.getSample(0, sampleIndex));
+        rightEnergy += std::abs(block.getSample(1, sampleIndex));
+    }
+
+    tempDirectory.deleteRecursively();
+    return rightEnergy > 0.01f && rightEnergy > leftEnergy * 1.5f;
 }
 
 bool runLegacyNkiProbeRejectsContainerFormatsTest()
@@ -9438,6 +9915,8 @@ int main()
         AUDIOCITY_TEST(runSfzImportSeqLengthPlaybackTest, 104),
         AUDIOCITY_TEST(runSfzImportReleaseTriggerPlaybackTest, 105),
         AUDIOCITY_TEST(runSfzImportLoopContinuousPlaybackTest, 129),
+        AUDIOCITY_TEST(runSfzImportOneShotPlaybackTest, 131),
+        AUDIOCITY_TEST(runSfzImportGainPanTunePlaybackTest, 133),
         AUDIOCITY_TEST(runSfzImportVelocityCrossfadePlaybackTest, 127),
         AUDIOCITY_TEST(runSfzImporterDiagnosticsTest, 89),
         AUDIOCITY_TEST(runLegacyNkiProbeDetectsDiscreteSampleReferencesTest, 122),
@@ -9445,6 +9924,8 @@ int main()
         AUDIOCITY_TEST(runLegacyNkiProbeResolvesParentSamplesFolderTest, 124),
         AUDIOCITY_TEST(runLegacyNkiProbeEnumeratesZoneMetadataTest, 126),
         AUDIOCITY_TEST(runLegacyNkiImportTranslatesLegacyZonesTest, 128),
+        AUDIOCITY_TEST(runLegacyNkiImportSampleWindowAndLoopTest, 130),
+        AUDIOCITY_TEST(runLegacyNkiImportGainPanTuneTest, 132),
         AUDIOCITY_TEST(runSameOffsetMidiEventOrderTest, 74),
         AUDIOCITY_TEST(runEngineProgramSnapshotZoneSelectionTest, 76),
         AUDIOCITY_TEST(runEngineProgramSampleAssetBindingTest, 77),

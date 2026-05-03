@@ -2,6 +2,9 @@
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
+#include <cctype>
+#include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <map>
 #include <optional>
@@ -153,6 +156,64 @@ std::optional<int> extractTaggedInt(const juce::String& source, const juce::Stri
     return value.getIntValue();
 }
 
+std::optional<float> extractTaggedFloat(const juce::String& source, const juce::StringArray& tags)
+{
+    const auto value = extractTaggedValue(source, tags);
+    if (value.isEmpty())
+        return std::nullopt;
+
+    const auto text = value.toStdString();
+    char* end = nullptr;
+    const auto parsed = std::strtof(text.c_str(), &end);
+    if (end == text.c_str())
+        return std::nullopt;
+
+    while (end != nullptr && *end != '\0' && std::isspace(static_cast<unsigned char>(*end)) != 0)
+        ++end;
+
+    if (end == nullptr || *end != '\0')
+        return std::nullopt;
+
+    return parsed;
+}
+
+float normalisePanValue(const float value)
+{
+    auto pan = value;
+    if (std::abs(pan) > 1.0f)
+        pan /= 100.0f;
+
+    return juce::jlimit(-1.0f, 1.0f, pan);
+}
+
+std::optional<ZoneLoopMode> extractTaggedLoopMode(const juce::String& source)
+{
+    if (const auto numericLoop = extractTaggedInt(source, { "loop=", "loop_enabled=", "loopenabled=" });
+        numericLoop.has_value())
+    {
+        return *numericLoop > 0 ? ZoneLoopMode::sustain : ZoneLoopMode::noLoop;
+    }
+
+    const auto value = extractTaggedValue(source, { "loop_mode=", "loopmode=" });
+    if (value.isEmpty())
+        return std::nullopt;
+
+    const auto normalized = value.toLowerCase();
+    if (normalized == "loop_continuous" || normalized == "continuous")
+        return ZoneLoopMode::continuous;
+
+    if (normalized == "loop_sustain" || normalized == "sustain" || normalized == "loop")
+        return ZoneLoopMode::sustain;
+
+    if (normalized == "no_loop" || normalized == "off" || normalized == "none"
+        || normalized == "one_shot" || normalized == "oneshot")
+    {
+        return ZoneLoopMode::noLoop;
+    }
+
+    return std::nullopt;
+}
+
 juce::String extractGroupName(const juce::String& source)
 {
     static const juce::StringArray tags{ "group=", "group_name=", "groupname=", "grp=" };
@@ -172,6 +233,16 @@ void applyTaggedIntField(const juce::String& source,
                          int& destination)
 {
     if (const auto value = extractTaggedInt(source, tags); value.has_value())
+        destination = juce::jlimit(minimum, maximum, *value);
+}
+
+void applyTaggedFloatField(const juce::String& source,
+                           const juce::StringArray& tags,
+                           const float minimum,
+                           const float maximum,
+                           float& destination)
+{
+    if (const auto value = extractTaggedFloat(source, tags); value.has_value())
         destination = juce::jlimit(minimum, maximum, *value);
 }
 
@@ -223,15 +294,54 @@ void enumerateZoneMetadata(const std::vector<juce::String>& printableStrings,
         applyTaggedIntField(printable, { "root=", "rootkey=", "root_key=" }, 0, 127, pending.rootKey);
         applyTaggedIntField(printable, { "lovel=", "lowvel=", "lowvelocity=" }, 0, 127, pending.lowVelocity);
         applyTaggedIntField(printable, { "hivel=", "highvel=", "highvelocity=" }, 0, 127, pending.highVelocity);
+        applyTaggedIntField(printable,
+            { "offset=", "sample_start=", "samplestart=", "start=" },
+            0,
+            std::numeric_limits<int>::max(),
+            pending.sampleStart);
+        applyTaggedIntField(printable,
+            { "end=", "sample_end=", "sampleend=" },
+            0,
+            std::numeric_limits<int>::max(),
+            pending.sampleEnd);
+        applyTaggedIntField(printable,
+            { "loop_start=", "loopstart=" },
+            0,
+            std::numeric_limits<int>::max(),
+            pending.loopStart);
+        applyTaggedIntField(printable,
+            { "loop_end=", "loopend=" },
+            0,
+            std::numeric_limits<int>::max(),
+            pending.loopEnd);
+        applyTaggedFloatField(printable,
+            { "volume=", "gain=", "vol=" },
+            -96.0f,
+            24.0f,
+            pending.gainDb);
+        applyTaggedFloatField(printable,
+            { "tune=", "finetune=", "fine_tune=" },
+            -2400.0f,
+            2400.0f,
+            pending.tuneCents);
+        applyTaggedIntField(printable, { "transpose=" }, -48, 48, pending.transposeSemitones);
+        if (const auto pan = extractTaggedFloat(printable, { "pan=", "balance=" }); pan.has_value())
+            pending.pan = normalisePanValue(*pan);
+        if (const auto loopMode = extractTaggedLoopMode(printable); loopMode.has_value())
+        {
+            pending.loopMode = *loopMode;
+            pending.hasLoopMode = true;
+        }
 
         if (const auto sampleReference = normaliseCandidateReference(printable, sampleExtensions);
             sampleReference.isNotEmpty())
         {
-            commitZoneMetadata(result, pending, currentGroupName);
+            if (pending.sampleReference.isNotEmpty())
+                commitZoneMetadata(result, pending, currentGroupName);
+
             pending.sampleReference = sampleReference;
             if (pending.groupName.isEmpty())
                 pending.groupName = currentGroupName;
-            commitZoneMetadata(result, pending, currentGroupName);
         }
     }
 
@@ -624,6 +734,23 @@ ImportResult importFile(const juce::File& file)
         zone.keyRange = makeKeyRange(zoneMetadata);
         zone.velocityRange = makeVelocityRange(zoneMetadata);
         zone.rootMidiNote = rootMidiNote;
+        if (zoneMetadata.sampleStart >= 0)
+            zone.sampleStart = juce::jmax(0, zoneMetadata.sampleStart);
+        if (zoneMetadata.sampleEnd >= 0)
+            zone.sampleEndExclusive = juce::jmax(zone.sampleStart + 1, zoneMetadata.sampleEnd + 1);
+        if (zoneMetadata.loopStart >= 0)
+            zone.loopStart = juce::jmax(0, zoneMetadata.loopStart);
+        if (zoneMetadata.loopEnd >= 0)
+        {
+            const auto minimumLoopEndExclusive = zone.loopStart >= 0 ? zone.loopStart + 1 : 1;
+            zone.loopEndExclusive = juce::jmax(minimumLoopEndExclusive, zoneMetadata.loopEnd + 1);
+        }
+        zone.gainDb = zoneMetadata.gainDb;
+        zone.pan = zoneMetadata.pan;
+        zone.tuneCents = zoneMetadata.tuneCents
+            + (static_cast<float>(zoneMetadata.transposeSemitones) * 100.0f);
+        if (zoneMetadata.hasLoopMode)
+            zone.loopMode = zoneMetadata.loopMode;
         result.program.zones.push_back(zone);
     }
 
