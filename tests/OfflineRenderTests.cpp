@@ -5,6 +5,7 @@
 #include "../src/engine/EngineCore.h"
 #include "../src/engine/ProgramModel.h"
 #include "../src/engine/ProgramSnapshot.h"
+#include "../src/engine/RexSliceProgram.h"
 #include "../src/engine/SettingsUndoHistory.h"
 #include "../src/engine/SfzImporter.h"
 #include "../src/plugin/CcLearnDial.h"
@@ -648,6 +649,63 @@ bool runProgramMappingZoneOperationsTest()
         && program.groups[0].keyRange.high == 40;
 }
 
+bool runProgramMappingChromaticRemapTest()
+{
+    using namespace audiocity::engine;
+
+    Program program;
+    SampleAsset sample;
+    sample.displayName = "remap.wav";
+    sample.lengthSamples = 512;
+    sample.numChannels = 1;
+    sample.sampleRateHz = 48000.0;
+    program.sampleAssets.push_back(sample);
+
+    Group group;
+    group.keyRange = MidiRange::fromUnordered(40, 60);
+    group.velocityRange = VelocityRange::full();
+    program.groups.push_back(group);
+
+    Zone first;
+    first.groupIndex = 0;
+    first.sampleAssetIndex = 0;
+    first.keyRange = MidiRange::fromUnordered(40, 44);
+    first.velocityRange = VelocityRange::fromUnordered(1, 127);
+    first.rootMidiNote = 42;
+    program.zones.push_back(first);
+
+    Zone second = first;
+    second.keyRange = MidiRange::fromUnordered(50, 52);
+    second.rootMidiNote = 51;
+    program.zones.push_back(second);
+
+    Zone third = first;
+    third.keyRange = MidiRange::fromUnordered(58, 60);
+    third.rootMidiNote = 59;
+    program.zones.push_back(third);
+
+    if (!audiocity::plugin::remapProgramZonesChromatically(program, { 2, 0 }, 36))
+        return false;
+
+    if (program.zones[2].keyRange.low != 36
+        || program.zones[2].keyRange.high != 36
+        || program.zones[2].rootMidiNote != 36
+        || program.zones[0].keyRange.low != 37
+        || program.zones[0].keyRange.high != 37
+        || program.zones[0].rootMidiNote != 37
+        || program.zones[1].keyRange.low != 50
+        || program.zones[1].keyRange.high != 52
+        || program.zones[1].rootMidiNote != 51)
+    {
+        return false;
+    }
+
+    if (program.groups[0].keyRange.low != 36 || program.groups[0].keyRange.high != 52)
+        return false;
+
+    return !audiocity::plugin::remapProgramZonesChromatically(program, { 99 }, 36);
+}
+
 bool runProgramMappingCreateZoneTest()
 {
     using namespace audiocity::engine;
@@ -1060,11 +1118,26 @@ bool runImportedProgramStateSubtreeRoundTripTest()
 
     const auto mappingState = audiocity::plugin::createProgramZoneMappingState(baseProgram);
     juce::ValueTree patchState("patch");
-    const juce::String sfzPath = "C:/Library/Kits/ImportedKit.sfz";
-    audiocity::plugin::appendImportedProgramState(patchState, sfzPath, mappingState);
+    const juce::String importedProgramPath = "C:/Library/Kits/ImportedKit.rx2";
+    audiocity::plugin::appendImportedProgramState(patchState, importedProgramPath, mappingState);
 
-    if (audiocity::plugin::readImportedProgramStatePath(patchState) != sfzPath)
+    if (audiocity::plugin::readImportedProgramStatePath(patchState) != importedProgramPath
+        || audiocity::plugin::detectImportedProgramFormat(importedProgramPath)
+            != audiocity::plugin::ImportedProgramFormat::rex
+        || audiocity::plugin::importedProgramFormatBadge(importedProgramPath) != "REX")
+    {
         return false;
+    }
+
+    juce::ValueTree legacyPatchState("patch");
+    legacyPatchState.setProperty("sfzProgramPath", "C:/Library/Kits/LegacyImport.sfz", nullptr);
+    if (audiocity::plugin::readImportedProgramStatePath(legacyPatchState) != "C:/Library/Kits/LegacyImport.sfz"
+        || audiocity::plugin::detectImportedProgramFormat(
+               audiocity::plugin::readImportedProgramStatePath(legacyPatchState))
+            != audiocity::plugin::ImportedProgramFormat::sfz)
+    {
+        return false;
+    }
 
     const auto extractedMappingState = audiocity::plugin::readImportedProgramMappingState(patchState);
     if (!extractedMappingState.isValid()
@@ -3949,6 +4022,77 @@ bool runRexRuntimeFallbackSmokeTest()
         && engine.getLoopStart() == 0
         && engine.getLoopEnd() == fullEnd
         && engine.getPlaybackMode() == audiocity::engine::EngineCore::PlaybackMode::loop;
+}
+
+bool runRexSliceProgramBuildTest()
+{
+    const auto rexFixture = fixtureFile("third_party/REXSDK_Win_1.9.2/REX Test Protocol Files/120Mono.rx2");
+    if (!rexFixture.existsAsFile())
+        return true;
+
+    const auto runtimeAvailable = audiocity::engine::rex::isRuntimeAvailable();
+    audiocity::engine::rex::DecodedLoop decoded;
+    const auto decodedOk = audiocity::engine::rex::decodeFile(rexFixture, decoded);
+
+    if (!runtimeAvailable)
+        return !decodedOk;
+
+    if (!decodedOk
+        || decoded.slices.size() <= 1
+        || decoded.audio.getNumSamples() <= 0
+        || decoded.sampleRateHz <= 0.0)
+    {
+        return false;
+    }
+
+    int accumulatedSliceSamples = 0;
+    for (std::size_t sliceIndex = 0; sliceIndex < decoded.slices.size(); ++sliceIndex)
+    {
+        const auto& slice = decoded.slices[sliceIndex];
+        if (slice.audio.getNumSamples() <= 0 || slice.audio.getNumChannels() <= 0)
+            return false;
+
+        if (slice.startSample != accumulatedSliceSamples)
+            return false;
+
+        accumulatedSliceSamples += slice.audio.getNumSamples();
+    }
+
+    if (accumulatedSliceSamples != decoded.audio.getNumSamples())
+        return false;
+
+    audiocity::engine::rex::ChromaticSliceProgram sliceProgram;
+    if (!audiocity::engine::rex::buildChromaticSliceProgram(rexFixture, decoded, sliceProgram))
+        return false;
+
+    if (sliceProgram.baseMidiNote != audiocity::engine::rex::kDefaultSliceBaseMidiNote
+        || sliceProgram.program.sampleAssets.size() != decoded.slices.size()
+        || sliceProgram.program.zones.size() != decoded.slices.size()
+        || sliceProgram.sampleDataByAsset.size() != decoded.slices.size())
+    {
+        return false;
+    }
+
+    for (std::size_t sliceIndex = 0; sliceIndex < sliceProgram.program.zones.size(); ++sliceIndex)
+    {
+        const auto& zone = sliceProgram.program.zones[sliceIndex];
+        const auto& asset = sliceProgram.program.sampleAssets[sliceIndex];
+        const auto expectedNote = audiocity::engine::rex::kDefaultSliceBaseMidiNote + static_cast<int>(sliceIndex);
+        if (zone.sampleAssetIndex != static_cast<int>(sliceIndex)
+            || zone.keyRange.low != expectedNote
+            || zone.keyRange.high != expectedNote
+            || zone.rootMidiNote != expectedNote
+            || zone.triggerMode != audiocity::engine::ZoneTriggerMode::oneShot
+            || zone.loopMode != audiocity::engine::ZoneLoopMode::noLoop
+            || asset.rootMidiNote != expectedNote
+            || asset.lengthSamples != decoded.slices[sliceIndex].audio.getNumSamples()
+            || asset.numChannels != decoded.slices[sliceIndex].audio.getNumChannels())
+        {
+            return false;
+        }
+    }
+
+    return sliceProgram.program.hasPlayableZones();
 }
 
 bool runEditorSampleEditControlsTest()
@@ -8179,6 +8323,7 @@ int main()
         AUDIOCITY_TEST(runProgramMappingOverviewEditTest, 99),
         AUDIOCITY_TEST(runProgramMappingSampleWindowEditTest, 100),
         AUDIOCITY_TEST(runProgramMappingZoneOperationsTest, 102),
+        AUDIOCITY_TEST(runProgramMappingChromaticRemapTest, 115),
         AUDIOCITY_TEST(runProgramMappingAtomicBatchEditRollbackTest, 111),
         AUDIOCITY_TEST(runProgramMappingAtomicBatchDeleteRollbackTest, 112),
         AUDIOCITY_TEST(runProgramMappingStateRoundTripTest, 101),
@@ -8217,6 +8362,7 @@ int main()
         AUDIOCITY_TEST(runFilterModulationAmountsAreBipolarTest, 70),
         AUDIOCITY_TEST(runEmbeddedLoopMetadataLoadsWithoutRootNoteTest, 64),
         AUDIOCITY_TEST(runRexRuntimeFallbackSmokeTest, 62),
+        AUDIOCITY_TEST(runRexSliceProgramBuildTest, 114),
         AUDIOCITY_TEST(runCcLearnDialUserClearCallbackTest, 63),
         AUDIOCITY_TEST(runGeneratedCyclePitchInvariantAcrossSampleCountsTest, 46),
         AUDIOCITY_TEST(runDisplayMinMaxPreservesPolarityTest, 48),

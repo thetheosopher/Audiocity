@@ -3,6 +3,7 @@
 #include "ImportedProgramState.h"
 #include "PluginEditor.h"
 #include "PresetJson.h"
+#include "../engine/RexSliceProgram.h"
 #include "../engine/SfzImporter.h"
 
 #include <algorithm>
@@ -324,6 +325,19 @@ juce::String makeSfzImportSummary(const audiocity::engine::SfzImportResult& resu
         summary += diagnostic.severity == audiocity::engine::SfzDiagnostic::Severity::error ? "Error: " : "Warning: ";
         summary += makeDiagnosticText(diagnostic);
     }
+
+    return summary;
+}
+
+juce::String makeRexSliceImportSummary(const audiocity::engine::rex::ChromaticSliceProgram& sliceProgram)
+{
+    auto summary = "REX slices imported: "
+        + juce::String(static_cast<int>(sliceProgram.program.zones.size()))
+        + " zones, mapped chromatically from MIDI "
+        + juce::String(sliceProgram.baseMidiNote);
+
+    if (sliceProgram.truncated)
+        summary += " (truncated at MIDI 127)";
 
     return summary;
 }
@@ -1283,15 +1297,29 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     if (!state.isValid() || !state.hasType(kPatchRoot))
         return;
 
-    const auto sfzProgramPath = audiocity::plugin::readImportedProgramStatePath(state);
+    const auto importedProgramPath = audiocity::plugin::readImportedProgramStatePath(state);
     const auto samplePath = state.getProperty(kSamplePath).toString();
     const auto storedRootMidiNote = static_cast<int>(state.getProperty(kRootMidiNote, engine_.getRootMidiNote()));
 
     bool restoredSample = false;
     int restoredSampleSource = 0;
-    if (sfzProgramPath.isNotEmpty())
+    if (importedProgramPath.isNotEmpty())
     {
-        restoredSample = importSfzProgram(juce::File(sfzProgramPath));
+        const juce::File importedProgramFile(importedProgramPath);
+        switch (audiocity::plugin::detectImportedProgramFormat(importedProgramPath))
+        {
+            case audiocity::plugin::ImportedProgramFormat::sfz:
+                restoredSample = importSfzProgram(importedProgramFile);
+                break;
+            case audiocity::plugin::ImportedProgramFormat::rex:
+                restoredSample = importRexSliceProgram(importedProgramFile);
+                break;
+            case audiocity::plugin::ImportedProgramFormat::unknown:
+            default:
+                restoredSample = false;
+                break;
+        }
+
         if (restoredSample)
             restoredSampleSource = 4;
     }
@@ -1680,7 +1708,7 @@ juce::String AudiocityAudioProcessor::getLastStateRestoreSourceLabel() const
         case 1: return "file";
         case 2: return "generated";
         case 3: return "captured";
-        case 4: return "sfz";
+        case 4: return "program";
         default: return "none";
     }
 }
@@ -2032,6 +2060,38 @@ int AudiocityAudioProcessor::splitImportedProgramZone(const int zoneIndex)
     return newZoneIndex;
 }
 
+bool AudiocityAudioProcessor::remapImportedProgramZonesChromatically(const std::vector<int>& zoneIndices,
+                                                                    const int baseMidiNote)
+{
+    audiocity::engine::Program programToPublish;
+    std::vector<juce::AudioBuffer<float>> sampleDataToPublish;
+
+    {
+        std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+        if (!importedProgramLoaded_.load(std::memory_order_relaxed)
+            || importedProgram_.zones.empty()
+            || importedProgramSampleDataByAsset_.empty())
+        {
+            return false;
+        }
+
+        auto updatedProgram = importedProgram_;
+        if (!audiocity::plugin::remapProgramZonesChromatically(updatedProgram, zoneIndices, baseMidiNote))
+            return false;
+
+        importedProgram_ = std::move(updatedProgram);
+        refreshImportedProgramDerivedStateLocked(
+            zoneIndices.size() == 1
+                ? "Mapping remapped: zone " + juce::String(zoneIndices.front() + 1)
+                : "Mapping remapped: chromatic");
+        captureImportedProgramSnapshotLocked(programToPublish, sampleDataToPublish);
+    }
+
+    engine_.panic();
+    engine_.setProgram(programToPublish, sampleDataToPublish);
+    return true;
+}
+
 juce::String AudiocityAudioProcessor::getLastImportDiagnosticSummary() const
 {
     std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
@@ -2130,6 +2190,61 @@ bool AudiocityAudioProcessor::importSfzProgram(const juce::File& file)
     }
 
     setImportedProgramMetadata(file, result.program, result.sampleDataByAsset, summary, static_cast<int>(result.program.zones.size()));
+    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
+    syncSampleDerivedParametersFromEngine();
+    setWaveformViewRange(0, engine_.getLoadedSampleLength());
+    return true;
+}
+
+bool AudiocityAudioProcessor::importRexSliceProgram(const juce::File& file)
+{
+    const auto extension = file.getFileExtension();
+    if (!file.existsAsFile()
+        || (!extension.equalsIgnoreCase(".rex") && !extension.equalsIgnoreCase(".rx2")))
+    {
+        setLastImportDiagnosticSummary("REX import failed: file not found or unsupported extension");
+        return false;
+    }
+
+    audiocity::engine::rex::ChromaticSliceProgram sliceProgram;
+    if (!audiocity::engine::rex::decodeFileAsChromaticSliceProgram(file, sliceProgram))
+    {
+        setLastImportDiagnosticSummary("REX import failed: runtime unavailable or slices could not be decoded");
+        return false;
+    }
+
+    if (sliceProgram.program.zones.empty() || sliceProgram.sampleDataByAsset.empty())
+    {
+        setLastImportDiagnosticSummary("REX import failed: no playable slices");
+        return false;
+    }
+
+    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
+    stopGeneratedWaveformPreview();
+    engine_.panic();
+
+    if (!engine_.loadSampleFromFile(file))
+    {
+        setLastImportDiagnosticSummary("REX import failed: display waveform could not be loaded");
+        return false;
+    }
+
+    engine_.setProgram(sliceProgram.program, sliceProgram.sampleDataByAsset);
+
+    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+        generatedWaveformState_.clear();
+        capturedSampleState_.clear();
+        capturedSampleRateState_ = 44100.0;
+    }
+
+    setImportedProgramMetadata(file,
+                               sliceProgram.program,
+                               sliceProgram.sampleDataByAsset,
+                               makeRexSliceImportSummary(sliceProgram),
+                               static_cast<int>(sliceProgram.program.zones.size()));
     suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
     syncSampleDerivedParametersFromEngine();
     setWaveformViewRange(0, engine_.getLoadedSampleLength());

@@ -4,6 +4,7 @@
 #include <juce_core/juce_core.h>
 
 #include "../engine/EngineCore.h"
+#include "ImportedProgramState.h"
 #include "PlayerPadState.h"
 #include "LibraryMetadata.h"
 #include "ProgramMappingModel.h"
@@ -58,6 +59,7 @@ public:
 
     bool loadSampleFromFile(const juce::File& file);
     bool importSfzProgram(const juce::File& file);
+    bool importRexSliceProgram(const juce::File& file);
     [[nodiscard]] bool hasImportedProgram() const noexcept
     {
         return importedProgramLoaded_.load(std::memory_order_relaxed);
@@ -81,6 +83,7 @@ public:
     bool deleteImportedProgramZone(int zoneIndex);
     bool deleteImportedProgramZones(const std::vector<int>& zoneIndices);
     [[nodiscard]] int splitImportedProgramZone(int zoneIndex);
+    bool remapImportedProgramZonesChromatically(const std::vector<int>& zoneIndices, int baseMidiNote = 36);
     [[nodiscard]] juce::String getLastImportDiagnosticSummary() const;
     [[nodiscard]] bool isRexRuntimeAvailable() const noexcept { return engine_.isRexRuntimeAvailable(); }
     void loadGeneratedWaveformAsSample(const std::vector<float>& waveform, int rootMidiNote = 60);
@@ -408,7 +411,7 @@ private:
     std::atomic<bool> capturedAudioLoaded_{ false };
     std::atomic<bool> importedProgramLoaded_{ false };
     std::atomic<int> importedProgramZoneCount_{ 0 };
-    std::atomic<int> lastStateRestoreSource_{ 0 }; // 0=none, 1=file, 2=generated, 3=captured, 4=sfz
+    std::atomic<int> lastStateRestoreSource_{ 0 }; // 0=none, 1=file, 2=generated, 3=captured, 4=imported-program
     mutable std::mutex generatedWaveformStateMutex_;
     mutable std::mutex importedProgramStateMutex_;
     std::vector<float> generatedWaveformState_;

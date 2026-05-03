@@ -9,6 +9,13 @@
 
 namespace audiocity::plugin
 {
+enum class ImportedProgramFormat
+{
+    unknown,
+    sfz,
+    rex
+};
+
 struct ImportedProgramDerivedState
 {
     juce::String mapSummary;
@@ -23,6 +30,8 @@ struct ImportedProgramRestoreResult
 };
 
 [[nodiscard]] juce::Identifier importedProgramPathStateProperty();
+[[nodiscard]] ImportedProgramFormat detectImportedProgramFormat(const juce::String& programPath);
+[[nodiscard]] juce::String importedProgramFormatBadge(const juce::String& programPath);
 void appendImportedProgramState(juce::ValueTree& state,
                                 const juce::String& programPath,
                                 const juce::ValueTree& mappingState);

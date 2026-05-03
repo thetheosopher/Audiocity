@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 
+#include "ImportedProgramState.h"
 #include "LibraryFileIndex.h"
 #include "PeakPreviewCache.h"
 #include "PluginProcessor.h"
@@ -4632,8 +4633,11 @@ void AudiocityAudioProcessorEditor::showMappingZoneContextMenu(const int row, co
     menu.addItem(5,
                  singleSelection ? "Clear Velocity Fades" : "Clear Velocity Fades for Selected Zones",
                  true);
-    menu.addSeparator();
     menu.addItem(6,
+                 singleSelection ? "Map Zone Chromatically from C1" : "Map Selected Zones Chromatically from C1",
+                 true);
+    menu.addSeparator();
+    menu.addItem(7,
                  "Select All Zones\tCtrl+A",
                  static_cast<int>(selectedRows.size()) < static_cast<int>(mappingZoneRows_.size()));
 
@@ -4663,6 +4667,9 @@ void AudiocityAudioProcessorEditor::showMappingZoneContextMenu(const int row, co
                     safeThis->clearSelectedMappingVelocityFades();
                     break;
                 case 6:
+                    safeThis->remapSelectedMappingZonesChromatically();
+                    break;
+                case 7:
                     safeThis->selectAllMappingZones();
                     break;
                 default:
@@ -5239,6 +5246,44 @@ void AudiocityAudioProcessorEditor::clearSelectedMappingVelocityFades()
     updateDiagnosticsStatusText();
 }
 
+void AudiocityAudioProcessorEditor::remapSelectedMappingZonesChromatically()
+{
+    const auto selectedRows = getSelectedMappingRowIndices();
+    if (selectedRows.empty())
+    {
+        updateMappingEditControls();
+        return;
+    }
+
+    constexpr int kChromaticBaseMidiNote = 36;
+
+    std::vector<int> zoneIndices;
+    zoneIndices.reserve(selectedRows.size());
+    for (const auto selectedRow : selectedRows)
+        zoneIndices.push_back(mappingZoneRows_[static_cast<std::size_t>(selectedRow)].zoneIndex);
+
+    const auto beforeState = captureImportedProgramMappingState();
+    if (!processor_.remapImportedProgramZonesChromatically(zoneIndices, kChromaticBaseMidiNote))
+    {
+        mappingEditStatusLabel_.setText("Chromatic remap failed", juce::dontSendNotification);
+        updateMappingEditControls();
+        return;
+    }
+
+    recordImportedProgramMappingChange(beforeState,
+        zoneIndices.size() == 1 ? "Map Zone Chromatically" : "Map Zones Chromatically");
+    mappingEditStatusLabel_.setText(
+        zoneIndices.size() == 1
+            ? "Zone " + juce::String(zoneIndices.front() + 1) + " mapped to C1"
+            : juce::String(static_cast<int>(zoneIndices.size())) + " zones mapped chromatically from C1",
+        juce::dontSendNotification);
+    resetMappingBatchEditTracking();
+    refreshMappingZoneRows();
+    selectMappingZoneIndices(zoneIndices);
+    updateMappingDetails();
+    updateDiagnosticsStatusText();
+}
+
 bool AudiocityAudioProcessorEditor::commitMappingZoneEdit(const audiocity::plugin::ProgramZoneEdit& edit,
                                                           const juce::String& statusText)
 {
@@ -5321,9 +5366,19 @@ bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file)
     processor_.panicAllAudio();
     updateGeneratePreviewButtonText();
 
-    const auto loaded = file.getFileExtension().equalsIgnoreCase(".sfz")
-        ? processor_.importSfzProgram(file)
-        : processor_.loadSampleFromFile(file);
+    const auto loaded = [&]()
+    {
+        switch (audiocity::plugin::detectImportedProgramFormat(file.getFullPathName()))
+        {
+            case audiocity::plugin::ImportedProgramFormat::sfz:
+                return processor_.importSfzProgram(file);
+            case audiocity::plugin::ImportedProgramFormat::rex:
+                return processor_.importRexSliceProgram(file);
+            case audiocity::plugin::ImportedProgramFormat::unknown:
+            default:
+                return processor_.loadSampleFromFile(file);
+        }
+    }();
 
     if (loaded)
     {
@@ -7785,7 +7840,7 @@ void AudiocityAudioProcessorEditor::setupTooltips()
     presetDeleteButton_.setTooltip(
         "Delete Preset - Remove selected preset file");
     loadButton_.setTooltip(
-        "Load Sample (Ctrl+O)");
+        processor_.isRexRuntimeAvailable() ? "Load Sample, SFZ, or REX (Ctrl+O)" : "Load Sample (Ctrl+O)");
     generatePreviewButton_.setTooltip(
         "Play/Stop Generate Preview (Space on Generate tab)");
 
@@ -7872,7 +7927,7 @@ void AudiocityAudioProcessorEditor::setupTooltips()
     mappingEditApplyButton_.setTooltip(
         "Apply zone mapping; with multiple selected rows, Apply uses edited batch controls for every selected zone");
     mappingZoneListBox_.setTooltip(
-        "Imported Program Zones - Ctrl+N creates a zone; Ctrl+A selects all rows; Ctrl or Shift multi-select enables batch edit for velocity fades, gain, pan, RR group/mode, choke, trigger, and loop, or right-click for New, Duplicate, Split, Delete, and Clear Velocity Fades");
+        "Imported Program Zones - Ctrl+N creates a zone; Ctrl+A selects all rows; Ctrl or Shift multi-select enables batch edit for velocity fades, gain, pan, RR group/mode, choke, trigger, and loop, or right-click for New, Duplicate, Split, Map Chromatically, Delete, and Clear Velocity Fades");
     captureRecordButton_.setTooltip(
         "Start/Stop Capture from Plugin Input");
     captureClearButton_.setTooltip(
@@ -8135,7 +8190,10 @@ void AudiocityAudioProcessorEditor::openSampleChooser()
     const auto wildcard = processor_.isRexRuntimeAvailable()
         ? juce::String("*.wav;*.aiff;*.aif;*.sfz;*.rex;*.rx2")
         : juce::String("*.wav;*.aiff;*.aif;*.sfz");
-    fileChooser_ = std::make_unique<juce::FileChooser>("Load sample or SFZ", juce::File{}, wildcard);
+    fileChooser_ = std::make_unique<juce::FileChooser>(
+        processor_.isRexRuntimeAvailable() ? "Load sample, SFZ, or REX" : "Load sample or SFZ",
+        juce::File{},
+        wildcard);
 
     const auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
     fileChooser_->launchAsync(chooserFlags, [this](const juce::FileChooser& chooser)
@@ -8226,9 +8284,10 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     const auto hasImportedProgram = processor_.hasImportedProgram();
     const auto importedProgramPath = processor_.getImportedProgramPath();
     const auto importedProgramName = processor_.getImportedProgramName();
+    const auto importedProgramBadge = audiocity::plugin::importedProgramFormatBadge(importedProgramPath);
     const auto path = processor_.getLoadedSamplePath();
     const auto sampleIdentity = hasImportedProgram
-        ? (juce::String("sfz:") + importedProgramPath)
+        ? (juce::String("program:") + importedProgramPath)
         : path.isNotEmpty()
         ? (juce::String("file:") + path)
         : (processor_.isGeneratedWaveformLoaded()
@@ -8236,8 +8295,8 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
             : (processor_.isCapturedAudioLoaded() ? juce::String("captured") : juce::String("none")));
     const auto sampleLabel = hasImportedProgram
         ? (importedProgramPath.isNotEmpty()
-            ? (juce::String("SFZ: ") + importedProgramPath)
-            : (juce::String("SFZ: ") + (importedProgramName.isNotEmpty() ? importedProgramName : juce::String("Imported Program"))))
+            ? (importedProgramBadge + ": " + importedProgramPath)
+            : (importedProgramBadge + ": " + (importedProgramName.isNotEmpty() ? importedProgramName : juce::String("Imported Program"))))
         : path.isNotEmpty()
         ? path
         : (processor_.isGeneratedWaveformLoaded()
@@ -8450,7 +8509,9 @@ void AudiocityAudioProcessorEditor::updateSampleInformationDisplay()
     const auto sampleLength = processor_.getLoadedSampleLength();
     const auto channels = juce::jmax(0, processor_.getLoadedSampleChannels());
     const auto sampleRate = processor_.getLoadedSampleRateHz();
-    const auto loopBadge = hasImportedProgram ? juce::String("SFZ") : processor_.getLoadedSampleLoopFormatBadge();
+    const auto loopBadge = hasImportedProgram
+        ? audiocity::plugin::importedProgramFormatBadge(importedProgramPath)
+        : processor_.getLoadedSampleLoopFormatBadge();
 
     juce::String sourceText;
     if (hasImportedProgram)

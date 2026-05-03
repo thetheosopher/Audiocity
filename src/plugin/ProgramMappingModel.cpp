@@ -607,6 +607,56 @@ int splitProgramZoneByKey(audiocity::engine::Program& program, const int zoneInd
     return static_cast<int>(program.zones.size() - 1);
 }
 
+bool remapProgramZonesChromatically(audiocity::engine::Program& program,
+                                    const std::vector<int>& zoneIndices,
+                                    const int baseMidiNote)
+{
+    if (zoneIndices.empty())
+        return false;
+
+    std::vector<int> uniqueZoneIndices;
+    uniqueZoneIndices.reserve(zoneIndices.size());
+    for (const auto zoneIndex : zoneIndices)
+    {
+        if (zoneIndex < 0 || static_cast<std::size_t>(zoneIndex) >= program.zones.size())
+            return false;
+
+        auto alreadyQueued = false;
+        for (const auto queuedZoneIndex : uniqueZoneIndices)
+        {
+            if (queuedZoneIndex == zoneIndex)
+            {
+                alreadyQueued = true;
+                break;
+            }
+        }
+
+        if (!alreadyQueued)
+            uniqueZoneIndices.push_back(zoneIndex);
+    }
+
+    if (uniqueZoneIndices.empty())
+        return false;
+
+    const auto firstMappedNote = audiocity::engine::clampMidiNote(baseMidiNote);
+    const auto availableNotes = audiocity::engine::kMidiNoteMax - firstMappedNote + 1;
+    if (static_cast<int>(uniqueZoneIndices.size()) > availableNotes)
+        return false;
+
+    auto updatedProgram = program;
+    for (std::size_t order = 0; order < uniqueZoneIndices.size(); ++order)
+    {
+        const auto mappedNote = firstMappedNote + static_cast<int>(order);
+        auto& zone = updatedProgram.zones[static_cast<std::size_t>(uniqueZoneIndices[order])];
+        zone.keyRange = audiocity::engine::MidiRange::single(mappedNote);
+        zone.rootMidiNote = mappedNote;
+        recomputeGroupRangeFromZones(updatedProgram, zone.groupIndex);
+    }
+
+    program = std::move(updatedProgram);
+    return true;
+}
+
 juce::Identifier programZoneMappingStateType()
 {
     return kProgramZoneMappingStateType;

@@ -159,6 +159,8 @@ bool decodeFile(const juce::File& file, DecodedLoop& out) noexcept
 
     out.audio.setSize(info.fChannels, static_cast<int>(totalFrames), false, true, true);
     out.audio.clear();
+    out.slices.clear();
+    out.slices.reserve(static_cast<std::size_t>(info.fSliceCount));
 
     int frameOffset = 0;
     for (int sliceIndex = 0; sliceIndex < info.fSliceCount; ++sliceIndex)
@@ -187,6 +189,14 @@ bool decodeFile(const juce::File& file, DecodedLoop& out) noexcept
         out.audio.copyFrom(0, frameOffset, left.data(), frameCount);
         if (info.fChannels == 2)
             out.audio.copyFrom(1, frameOffset, right.data(), frameCount);
+
+        DecodedSlice decodedSlice;
+        decodedSlice.startSample = frameOffset;
+        decodedSlice.audio.setSize(info.fChannels, frameCount, false, true, true);
+        decodedSlice.audio.copyFrom(0, 0, left.data(), frameCount);
+        if (info.fChannels == 2)
+            decodedSlice.audio.copyFrom(1, 0, right.data(), frameCount);
+        out.slices.push_back(std::move(decodedSlice));
 
         frameOffset += frameCount;
     }

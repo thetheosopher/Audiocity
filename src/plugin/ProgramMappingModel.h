@@ -117,6 +117,9 @@ struct ProgramZoneEdit
 [[nodiscard]] bool deleteProgramZonesAtomic(audiocity::engine::Program& program,
                                             const std::vector<int>& zoneIndices);
 [[nodiscard]] int splitProgramZoneByKey(audiocity::engine::Program& program, int zoneIndex);
+[[nodiscard]] bool remapProgramZonesChromatically(audiocity::engine::Program& program,
+                                                  const std::vector<int>& zoneIndices,
+                                                  int baseMidiNote = 36);
 [[nodiscard]] juce::Identifier programZoneMappingStateType();
 [[nodiscard]] juce::ValueTree createProgramZoneMappingState(const audiocity::engine::Program& program);
 [[nodiscard]] std::vector<ProgramZoneEdit> parseProgramZoneMappingState(const juce::ValueTree& state);

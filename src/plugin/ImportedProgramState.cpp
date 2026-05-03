@@ -6,7 +6,8 @@ namespace audiocity::plugin
 {
 namespace
 {
-const juce::Identifier kImportedProgramPathStateProperty{ "sfzProgramPath" };
+const juce::Identifier kImportedProgramPathStateProperty{ "importedProgramPath" };
+const juce::Identifier kLegacyImportedProgramPathStateProperty{ "sfzProgramPath" };
 
 juce::String formatRange(const int low, const int high)
 {
@@ -94,6 +95,32 @@ juce::Identifier importedProgramPathStateProperty()
     return kImportedProgramPathStateProperty;
 }
 
+ImportedProgramFormat detectImportedProgramFormat(const juce::String& programPath)
+{
+    const auto extension = juce::File(programPath).getFileExtension();
+    if (extension.equalsIgnoreCase(".sfz"))
+        return ImportedProgramFormat::sfz;
+
+    if (extension.equalsIgnoreCase(".rex") || extension.equalsIgnoreCase(".rx2"))
+        return ImportedProgramFormat::rex;
+
+    return ImportedProgramFormat::unknown;
+}
+
+juce::String importedProgramFormatBadge(const juce::String& programPath)
+{
+    switch (detectImportedProgramFormat(programPath))
+    {
+        case ImportedProgramFormat::sfz:
+            return "SFZ";
+        case ImportedProgramFormat::rex:
+            return "REX";
+        case ImportedProgramFormat::unknown:
+        default:
+            return "PROGRAM";
+    }
+}
+
 void appendImportedProgramState(juce::ValueTree& state,
                                 const juce::String& programPath,
                                 const juce::ValueTree& mappingState)
@@ -111,7 +138,11 @@ juce::String readImportedProgramStatePath(const juce::ValueTree& state)
     if (!state.isValid())
         return {};
 
-    return state.getProperty(kImportedProgramPathStateProperty).toString();
+    auto programPath = state.getProperty(kImportedProgramPathStateProperty).toString();
+    if (programPath.isEmpty())
+        programPath = state.getProperty(kLegacyImportedProgramPathStateProperty).toString();
+
+    return programPath;
 }
 
 juce::ValueTree readImportedProgramMappingState(const juce::ValueTree& state)

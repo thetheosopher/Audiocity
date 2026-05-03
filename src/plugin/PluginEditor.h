@@ -944,6 +944,7 @@ private:
     void splitSelectedMappingZone();
     void deleteSelectedMappingZone();
     void clearSelectedMappingVelocityFades();
+    void remapSelectedMappingZonesChromatically();
     bool commitMappingZoneEdit(const audiocity::plugin::ProgramZoneEdit& edit, const juce::String& statusText);
     void paintMappingListRow(int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected);
     void refreshBrowserEntryLibraryFlags();

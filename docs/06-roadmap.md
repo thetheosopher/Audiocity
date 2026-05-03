@@ -139,7 +139,19 @@
 - Offline tests now cover real-time modulation routing during playback and verify audible response across pitch, filter, and amp destinations for the new source set.
 
 ### Epic K — Slicing + slice mapping
+
+**Current validated slice**
+- `.rex` and `.rx2` files now import as playable slice programs instead of flattening into a single editable sample path, while still keeping the concatenated loop loaded for waveform display and sample inspection.
+- The REX decoder now preserves per-slice boundaries, and the slice-program builder maps slices chromatically from MIDI note 36 so the existing Player pads trigger the first eight slices without extra setup.
+- Imported-program state persistence is now format-agnostic rather than SFZ-only, so REX slice programs restore through the same mapping-state path used by other imported programs.
+- Offline tests cover preserved REX slice boundaries, chromatic slice-program construction, and imported-program path compatibility across the new generic property plus the legacy SFZ path fallback.
+
 ### Epic L — Mapping productivity tools
+
+**Current validated slice**
+- Imported-program zone context menus now include a chromatic remap action that reassigns the selected zones to single-note keys starting at C1 while preserving the rest of each zone's settings.
+- The remap action rides the existing imported-program undo/publish pipeline, so it participates in chronological editor history and republishes atomically to the engine like other mapping edits.
+- Offline tests cover the model-level chromatic remap helper, including ordered remap behavior and group-range recomputation.
 
 ---
 
