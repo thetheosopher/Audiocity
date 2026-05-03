@@ -9,41 +9,40 @@ class DialLookAndFeel final : public juce::LookAndFeel_V4
 public:
     DialLookAndFeel()
     {
-        // Dark theme colours
-        setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xff4fc3f7));   // bright blue arc
-        setColour(juce::Slider::rotarySliderOutlineColourId, juce::Colour(0xff3a3a52)); // dark track
-        setColour(juce::Slider::thumbColourId, juce::Colours::white);
-        setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xffc0c0d0));
-        setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff252538));
+        setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xff78d7ff));
+        setColour(juce::Slider::rotarySliderOutlineColourId, juce::Colour(0xff334252));
+        setColour(juce::Slider::thumbColourId, juce::Colour(0xfff5fbff));
+        setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xffd7e1f2));
+        setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff1d2530));
         setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
 
-        // Toggle buttons
-        setColour(juce::ToggleButton::textColourId, juce::Colour(0xffc0c0d0));
-        setColour(juce::ToggleButton::tickColourId, juce::Colour(0xff4fc3f7));
+        setColour(juce::ToggleButton::textColourId, juce::Colour(0xffcbd5e5));
+        setColour(juce::ToggleButton::tickColourId, juce::Colour(0xff78d7ff));
 
-        // ComboBox
-        setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff252538));
-        setColour(juce::ComboBox::textColourId, juce::Colour(0xffc0c0d0));
-        setColour(juce::ComboBox::outlineColourId, juce::Colour(0xff3a3a52));
-        setColour(juce::ComboBox::arrowColourId, juce::Colour(0xff4fc3f7));
+        setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff1d2530));
+        setColour(juce::ComboBox::textColourId, juce::Colour(0xffd7e1f2));
+        setColour(juce::ComboBox::outlineColourId, juce::Colour(0xff334252));
+        setColour(juce::ComboBox::arrowColourId, juce::Colour(0xff78d7ff));
+        setColour(juce::ComboBox::buttonColourId, juce::Colour(0xff1d2530));
 
-        // Label
-        setColour(juce::Label::textColourId, juce::Colour(0xffc0c0d0));
+        setColour(juce::Label::textColourId, juce::Colour(0xffcbd5e5));
 
-        // TextButton
-        setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2d2d44));
-        setColour(juce::TextButton::textColourOffId, juce::Colour(0xffc0c0d0));
+        setColour(juce::TextButton::buttonColourId, juce::Colour(0xff202833));
+        setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff31516a));
+        setColour(juce::TextButton::textColourOffId, juce::Colour(0xffdfe8f7));
+        setColour(juce::TextButton::textColourOnId, juce::Colour(0xfff5fbff));
 
-        // PopupMenu
-        setColour(juce::PopupMenu::backgroundColourId, juce::Colour(0xff252538));
-        setColour(juce::PopupMenu::textColourId, juce::Colour(0xffc0c0d0));
-        setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(0xff4fc3f7));
+        setColour(juce::PopupMenu::backgroundColourId, juce::Colour(0xff1a202a));
+        setColour(juce::PopupMenu::textColourId, juce::Colour(0xffd7e1f2));
+        setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(0xff31516a));
         setColour(juce::PopupMenu::highlightedTextColourId, juce::Colours::white);
 
-        // Tooltip
         setColour(juce::TooltipWindow::backgroundColourId, juce::Colour(0xfff3e6c8));
         setColour(juce::TooltipWindow::textColourId, juce::Colour(0xff2d2b28));
         setColour(juce::TooltipWindow::outlineColourId, juce::Colour(0xffbfae8e));
+
+        setColour(juce::ScrollBar::backgroundColourId, juce::Colour(0xff121821));
+        setColour(juce::ScrollBar::thumbColourId, juce::Colour(0xff334252));
     }
 
     ~DialLookAndFeel() override = default;
@@ -157,25 +156,26 @@ public:
             auto knobBounds = juce::Rectangle<float>(rw, rw).withCentre({ centreX, centreY })
                                   .reduced((radius - knobRadius));
 
-            // Gradient fill for 3D look
-            auto grad = juce::ColourGradient(juce::Colour(0xff404058), centreX, centreY - knobRadius,
-                                             juce::Colour(0xff28283c), centreX, centreY + knobRadius, false);
+            g.setColour(juce::Colour(0x22000000));
+            g.fillEllipse(knobBounds.translated(0.0f, 1.4f));
+
+            auto grad = juce::ColourGradient(juce::Colour(0xff334050), centreX, centreY - knobRadius,
+                                             juce::Colour(0xff1a2029), centreX, centreY + knobRadius, false);
+            grad.addColour(0.42, juce::Colour(0xff273241));
             g.setGradientFill(grad);
             g.fillEllipse(knobBounds);
 
-            // Subtle border
-            g.setColour(juce::Colour(0xff505068));
+            g.setColour(juce::Colour(0xff46556a));
             g.drawEllipse(knobBounds, 1.0f);
         }
 
-        // Pointer line
         {
             const float pointerLength = knobRadius * 0.7f;
             const float pointerThickness = 2.5f;
             juce::Path pointer;
             pointer.addRoundedRectangle(-pointerThickness * 0.5f, -pointerLength, pointerThickness, pointerLength, 1.0f);
             pointer.applyTransform(juce::AffineTransform::rotation(angle).translated(centreX, centreY));
-            g.setColour(fillColour.brighter(0.3f));
+            g.setColour(fillColour.brighter(0.18f));
             g.fillPath(pointer);
         }
 

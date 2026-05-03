@@ -17,33 +17,66 @@
 
 namespace
 {
+juce::Colour uiBackgroundColour() { return juce::Colour(0xff0f141b); }
+juce::Colour uiChromeColour() { return juce::Colour(0xff151c25); }
+juce::Colour uiPanelColour() { return juce::Colour(0xff1a212c); }
+juce::Colour uiPanelRaisedColour() { return juce::Colour(0xff202834); }
+juce::Colour uiBorderColour() { return juce::Colour(0xff313d4c); }
+juce::Colour uiTextStrongColour() { return juce::Colour(0xffedf3ff); }
+juce::Colour uiTextMutedColour() { return juce::Colour(0xff9ba7b9); }
+juce::Colour uiAccentColour() { return juce::Colour(0xff78d7ff); }
+juce::Colour uiAccentAmberColour() { return juce::Colour(0xffd8a55a); }
+juce::Colour uiAccentGreenColour() { return juce::Colour(0xff6fd6ae); }
+
+void paintSectionCard(juce::Graphics& g, juce::Rectangle<float> box, const juce::String& title)
+{
+    g.setColour(uiPanelColour());
+    g.fillRoundedRectangle(box, 8.0f);
+
+    g.setColour(uiBorderColour());
+    g.drawRoundedRectangle(box.reduced(0.5f), 8.0f, 1.0f);
+
+    auto header = box.removeFromTop(24.0f);
+    g.setColour(uiPanelRaisedColour());
+    g.fillRoundedRectangle(header, 8.0f);
+    g.fillRect(header.withTrimmedTop(8.0f));
+
+    auto accent = juce::Rectangle<float>(header.getX() + 9.0f, header.getY() + 6.0f, 3.0f, header.getHeight() - 12.0f);
+    g.setColour(uiAccentColour());
+    g.fillRoundedRectangle(accent, 1.5f);
+
+    g.setColour(uiTextMutedColour().brighter(0.14f));
+    g.setFont(juce::Font(juce::FontOptions(11.5f)).boldened());
+    g.drawText(title, header.withTrimmedLeft(18.0f), juce::Justification::centredLeft, false);
+}
+
 class TabTextLookAndFeel final : public juce::LookAndFeel_V4
 {
 public:
     void drawTabButton(juce::TabBarButton& button, juce::Graphics& g,
                        bool isMouseOver, bool isMouseDown) override
     {
-        auto area = button.getActiveArea().toFloat().reduced(0.5f, 0.5f);
+        auto area = button.getActiveArea().toFloat().reduced(4.0f, 5.0f);
         const bool isFront = button.isFrontTab();
-
-        auto fill = isFront ? juce::Colour(0xff2f3550) : juce::Colour(0xff1f2438);
-        if (!isFront && isMouseOver)
-            fill = fill.brighter(0.08f);
-        if (!isFront && isMouseDown)
-            fill = fill.brighter(0.14f);
-
-        auto border = isFront ? juce::Colour(0xff6d89c4) : juce::Colour(0xff454a62);
-
-        g.setColour(fill);
-        g.fillRoundedRectangle(area, 4.0f);
-
-        g.setColour(border);
-        g.drawRoundedRectangle(area, 4.0f, isFront ? 1.5f : 1.0f);
 
         if (isFront)
         {
-            g.setColour(juce::Colour(0xff61d9ff));
-            g.fillRect(area.removeFromBottom(2.0f));
+            g.setColour(uiPanelRaisedColour().brighter(0.04f));
+            g.fillRoundedRectangle(area, 7.0f);
+            g.setColour(uiBorderColour().brighter(0.08f));
+            g.drawRoundedRectangle(area, 7.0f, 1.0f);
+        }
+        else if (isMouseOver || isMouseDown)
+        {
+            g.setColour(juce::Colours::white.withAlpha(isMouseDown ? 0.08f : 0.04f));
+            g.fillRoundedRectangle(area, 7.0f);
+        }
+
+        if (isFront)
+        {
+            auto underline = area.withY(area.getBottom() - 2.5f).withHeight(2.5f);
+            g.setColour(uiAccentColour());
+            g.fillRoundedRectangle(underline, 1.25f);
         }
 
         drawTabButtonText(button, g, isMouseOver, isMouseDown);
@@ -52,9 +85,11 @@ public:
     void drawTabButtonText(juce::TabBarButton& button, juce::Graphics& g,
                            bool isMouseOver, bool isMouseDown) override
     {
-        juce::ignoreUnused(isMouseOver, isMouseDown);
+        juce::ignoreUnused(isMouseDown);
 
-        auto colour = juce::Colours::white.withAlpha(button.isFrontTab() ? 0.98f : 0.70f);
+        auto colour = button.isFrontTab()
+            ? uiTextStrongColour()
+            : uiTextMutedColour().withAlpha(isMouseOver ? 0.96f : 0.82f);
         if (auto* bar = button.findParentComponentOfClass<juce::TabbedButtonBar>())
         {
             const auto colourId = button.isFrontTab()
@@ -67,7 +102,7 @@ public:
                 colour = findColour(colourId);
         }
 
-        auto font = juce::Font(juce::FontOptions(14.0f));
+            auto font = juce::Font(juce::FontOptions(13.5f));
         if (button.isFrontTab())
             font = font.boldened();
 
@@ -755,15 +790,15 @@ void AudiocityAudioProcessorEditor::CaptureWaveformView::mouseUp(const juce::Mou
 
 void AudiocityAudioProcessorEditor::AmpEnvelopeGraph::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xff202234));
-    g.setColour(juce::Colour(0xff3a3a52));
+    g.fillAll(uiChromeColour());
+    g.setColour(uiBorderColour());
     g.drawRect(getLocalBounds(), 1);
 
     const auto area = getLocalBounds().toFloat().reduced(10.0f, 8.0f);
     if (area.getWidth() <= 1.0f || area.getHeight() <= 1.0f)
         return;
 
-    g.setColour(juce::Colours::white.withAlpha(0.08f));
+    g.setColour(uiTextStrongColour().withAlpha(0.07f));
     for (int i = 1; i < 4; ++i)
     {
         const auto y = area.getY() + area.getHeight() * (static_cast<float>(i) / 4.0f);
@@ -806,7 +841,7 @@ void AudiocityAudioProcessorEditor::AmpEnvelopeGraph::paint(juce::Graphics& g)
     fill.lineTo(x0, area.getBottom());
     fill.closeSubPath();
 
-    g.setColour(juce::Colour(0xff4fc3f7).withAlpha(0.18f));
+    g.setColour(uiAccentColour().withAlpha(0.16f));
     g.fillPath(fill);
 
     juce::Path env;
@@ -816,10 +851,10 @@ void AudiocityAudioProcessorEditor::AmpEnvelopeGraph::paint(juce::Graphics& g)
     env.lineTo(x3, y3);
     env.lineTo(x4, y4);
 
-    g.setColour(juce::Colour(0xff61d9ff));
+    g.setColour(uiAccentColour());
     g.strokePath(env, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
-    g.setColour(juce::Colour(0xff9ea5bf));
+    g.setColour(uiTextMutedColour());
     g.setFont(juce::Font(juce::FontOptions(10.0f)));
     const auto labelY = juce::jmin(static_cast<int>(area.getBottom()) + 1, getHeight() - 12);
     const auto drawMarker = [&](const juce::String& text, const float centerX)
@@ -838,15 +873,15 @@ void AudiocityAudioProcessorEditor::AmpEnvelopeGraph::paint(juce::Graphics& g)
 
 void AudiocityAudioProcessorEditor::FilterResponseGraph::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xff202234));
-    g.setColour(juce::Colour(0xff3a3a52));
+    g.fillAll(uiChromeColour());
+    g.setColour(uiBorderColour());
     g.drawRect(getLocalBounds(), 1);
 
     const auto area = getLocalBounds().toFloat().reduced(10.0f, 8.0f);
     if (area.getWidth() <= 2.0f || area.getHeight() <= 2.0f)
         return;
 
-    g.setColour(juce::Colours::white.withAlpha(0.08f));
+    g.setColour(uiTextStrongColour().withAlpha(0.07f));
     for (int i = 1; i < 4; ++i)
     {
         const auto y = area.getY() + area.getHeight() * (static_cast<float>(i) / 4.0f);
@@ -929,26 +964,26 @@ void AudiocityAudioProcessorEditor::FilterResponseGraph::paint(juce::Graphics& g
             curve.lineTo(x, y);
     }
 
-    g.setColour(juce::Colour(0xff61d9ff));
+    g.setColour(uiAccentColour());
     g.strokePath(curve, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
     const auto cutoffNorm = std::log10(cutoffHz_ / 20.0f) / std::log10(1000.0f);
     const auto cutoffX = area.getX() + juce::jlimit(0.0f, 1.0f, cutoffNorm) * area.getWidth();
-    g.setColour(juce::Colour(0xfff5b76b).withAlpha(0.9f));
+    g.setColour(uiAccentAmberColour().withAlpha(0.94f));
     g.drawLine(cutoffX, area.getY(), cutoffX, area.getBottom(), 1.0f);
 
     const auto envCutoffHz = juce::jlimit(20.0f, 20000.0f, cutoffHz_ + envAmountHz_);
     const auto envNorm = std::log10(envCutoffHz / 20.0f) / std::log10(1000.0f);
     const auto envX = area.getX() + juce::jlimit(0.0f, 1.0f, envNorm) * area.getWidth();
-    g.setColour(juce::Colour(0xff93d984).withAlpha(0.75f));
+    g.setColour(uiAccentGreenColour().withAlpha(0.82f));
     g.drawLine(envX, area.getY(), envX, area.getBottom(), 1.0f);
 }
 
 void AudiocityAudioProcessorEditor::StereoPeakMeter::paint(juce::Graphics& g)
 {
     const auto bounds = getLocalBounds();
-    g.fillAll(juce::Colour(0xff1f2336));
-    g.setColour(juce::Colour(0xff3a3f55));
+    g.fillAll(uiChromeColour());
+    g.setColour(uiBorderColour());
     g.drawRect(bounds, 1);
 
     auto area = bounds.reduced(8, 6);
@@ -965,21 +1000,21 @@ void AudiocityAudioProcessorEditor::StereoPeakMeter::paint(juce::Graphics& g)
 
     auto drawRow = [&](juce::Rectangle<int> row, const juce::String& label, const float level)
     {
-        g.setColour(juce::Colour(0xffaab2cf));
+        g.setColour(uiTextMutedColour());
         g.setFont(juce::Font(juce::FontOptions(10.0f)).boldened());
         g.drawText(label, row.removeFromLeft(labelWidth), juce::Justification::centredLeft);
 
         auto meterArea = row.reduced(1, 1);
-        g.setColour(juce::Colour(0xff111523));
+        g.setColour(uiBackgroundColour());
         g.fillRoundedRectangle(meterArea.toFloat(), 2.0f);
-        g.setColour(juce::Colour(0xff434a66));
+        g.setColour(uiBorderColour());
         g.drawRoundedRectangle(meterArea.toFloat(), 2.0f, 1.0f);
 
         const int segmentCount = 20;
         for (int i = 1; i < segmentCount; ++i)
         {
             const auto x = meterArea.getX() + static_cast<int>(std::round((meterArea.getWidth() * i) / static_cast<float>(segmentCount)));
-            g.setColour(juce::Colours::white.withAlpha(i % 5 == 0 ? 0.20f : 0.10f));
+            g.setColour(uiTextStrongColour().withAlpha(i % 5 == 0 ? 0.20f : 0.10f));
             g.drawVerticalLine(x, static_cast<float>(meterArea.getY() + 1), static_cast<float>(meterArea.getBottom() - 1));
         }
 
@@ -994,11 +1029,11 @@ void AudiocityAudioProcessorEditor::StereoPeakMeter::paint(juce::Graphics& g)
             clipArea.setWidth(meterArea.getRight() - clipArea.getX());
             if (clipArea.getWidth() > 0)
             {
-                g.setColour(juce::Colour(0xffff5b5b).withAlpha(0.10f));
+                g.setColour(juce::Colour(0xffff6a6a).withAlpha(0.10f));
                 g.fillRect(clipArea);
             }
 
-            g.setColour(juce::Colour(0xffff8c8c).withAlpha(0.55f));
+            g.setColour(juce::Colour(0xffff8f8f).withAlpha(0.55f));
             g.drawVerticalLine(thresholdX, static_cast<float>(meterArea.getY()), static_cast<float>(meterArea.getBottom()));
         }
 
@@ -1008,19 +1043,19 @@ void AudiocityAudioProcessorEditor::StereoPeakMeter::paint(juce::Graphics& g)
 
         if (fillArea.getWidth() > 0)
         {
-            auto gradient = juce::ColourGradient(juce::Colour(0xff74d56a),
+            auto gradient = juce::ColourGradient(juce::Colour(0xff62d59d),
                                                  static_cast<float>(meterArea.getX()),
                                                  static_cast<float>(meterArea.getCentreY()),
-                                                 juce::Colour(0xffef6b73),
+                                                 juce::Colour(0xffef7f73),
                                                  static_cast<float>(meterArea.getRight()),
                                                  static_cast<float>(meterArea.getCentreY()),
                                                  false);
-            gradient.addColour(0.72, juce::Colour(0xfff2c66a));
+            gradient.addColour(0.72, uiAccentAmberColour());
             g.setGradientFill(gradient);
             g.fillRoundedRectangle(fillArea.toFloat(), 2.0f);
 
             const int peakX = juce::jlimit(meterArea.getX(), meterArea.getRight() - 1, fillArea.getRight() - 1);
-            g.setColour(juce::Colours::white.withAlpha(0.7f));
+            g.setColour(uiTextStrongColour().withAlpha(0.7f));
             g.drawVerticalLine(peakX, static_cast<float>(meterArea.getY()), static_cast<float>(meterArea.getBottom()));
         }
     };
@@ -1132,13 +1167,13 @@ void AudiocityAudioProcessorEditor::WaveformView::panByPixels(const float deltaX
 
 void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colours::black.withAlpha(0.85f));
-    g.setColour(juce::Colours::white.withAlpha(0.25f));
+    g.fillAll(uiChromeColour().darker(0.35f));
+    g.setColour(uiBorderColour());
     g.drawRect(getLocalBounds(), 1);
 
     if (totalSamples_ <= 0 || waveformByChannel_.empty())
     {
-        g.setColour(juce::Colours::white.withAlpha(0.4f));
+        g.setColour(uiTextMutedColour());
         g.drawText("Load a sample (WAV/AIFF)", getLocalBounds(), juce::Justification::centred);
         return;
     }
@@ -1172,25 +1207,25 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
         const auto lane = juce::Rectangle<float>(bounds.getX(), laneY, bounds.getWidth(), channelHeight).reduced(0.0f, 1.0f);
         const auto centerY = lane.getCentreY();
 
-        g.setColour(juce::Colours::black.withAlpha(0.35f));
+        g.setColour(uiBackgroundColour().withAlpha(0.72f));
         g.fillRect(lane);
 
-        g.setColour(juce::Colours::black.withAlpha(0.45f));
+        g.setColour(uiBackgroundColour().withAlpha(0.68f));
         if (pbX1 > lane.getX())
             g.fillRect(juce::Rectangle<float>(lane.getX(), lane.getY(), pbX1 - lane.getX(), lane.getHeight()));
         if (pbX2 < lane.getRight())
             g.fillRect(juce::Rectangle<float>(pbX2, lane.getY(), lane.getRight() - pbX2, lane.getHeight()));
 
-        g.setColour(juce::Colours::orange.withAlpha(0.16f));
+        g.setColour(uiAccentAmberColour().withAlpha(0.18f));
         g.fillRect(juce::Rectangle<float>(loopLeft, lane.getY(), juce::jmax(1.0f, loopRight - loopLeft), lane.getHeight()));
 
         if (channelCount > 1)
         {
-            g.setColour(juce::Colours::grey.withAlpha(0.25f));
+            g.setColour(uiBorderColour().withAlpha(0.65f));
             g.drawHorizontalLine(static_cast<int>(lane.getBottom()), lane.getX(), lane.getRight());
         }
 
-        g.setColour(juce::Colour(0xff9a9aad));
+        g.setColour(uiTextMutedColour());
         g.setFont(juce::Font(juce::FontOptions(10.0f)));
         juce::String channelName;
         if (channelCount == 2)
@@ -1253,14 +1288,14 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
                         bottomPath.lineTo(x, bottomY);
                     }
 
-                    g.setColour(juce::Colours::deepskyblue.withAlpha(0.25f));
+                    g.setColour(uiAccentColour().withAlpha(0.22f));
                     g.drawLine(x, centerY, x, topY, 1.0f);
                     g.drawLine(x, centerY, x, bottomY, 1.0f);
                 }
 
-                g.setColour(juce::Colours::deepskyblue.withAlpha(0.95f));
+                g.setColour(uiAccentColour().withAlpha(0.96f));
                 g.strokePath(topPath, juce::PathStrokeType(1.0f, juce::PathStrokeType::mitered, juce::PathStrokeType::butt));
-                g.setColour(juce::Colours::deepskyblue.withAlpha(0.8f));
+                g.setColour(uiAccentColour().withAlpha(0.76f));
                 g.strokePath(bottomPath, juce::PathStrokeType(1.0f, juce::PathStrokeType::mitered, juce::PathStrokeType::butt));
             }
             else
@@ -1330,31 +1365,31 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
                 fillPath.closeSubPath();
 
                 juce::ColourGradient fillGradient(
-                    juce::Colours::deepskyblue.withAlpha(0.32f), lane.getCentreX(), lane.getY(),
-                    juce::Colours::deepskyblue.withAlpha(0.08f), lane.getCentreX(), lane.getBottom(),
+                    uiAccentColour().withAlpha(0.30f), lane.getCentreX(), lane.getY(),
+                    uiAccentColour().withAlpha(0.08f), lane.getCentreX(), lane.getBottom(),
                     false);
-                fillGradient.addColour(0.5, juce::Colours::deepskyblue.withAlpha(0.20f));
+                fillGradient.addColour(0.5, uiAccentColour().withAlpha(0.18f));
                 g.setGradientFill(fillGradient);
                 g.fillPath(fillPath);
 
-                g.setColour(juce::Colours::deepskyblue.withAlpha(0.9f));
+                g.setColour(uiAccentColour().withAlpha(0.94f));
                 g.strokePath(topPath, juce::PathStrokeType(1.35f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-                g.setColour(juce::Colours::deepskyblue.withAlpha(0.7f));
+                g.setColour(uiAccentColour().withAlpha(0.72f));
                 g.strokePath(bottomPath, juce::PathStrokeType(1.35f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
             }
         }
 
-        g.setColour(juce::Colours::limegreen.withAlpha(0.9f));
+        g.setColour(uiAccentGreenColour().withAlpha(0.92f));
         g.drawLine(pbHX1, lane.getY(), pbHX1, lane.getBottom(), 1.5f);
         g.drawLine(pbHX2, lane.getY(), pbHX2, lane.getBottom(), 1.5f);
 
-        g.setColour(juce::Colours::orange.withAlpha(0.9f));
+        g.setColour(uiAccentAmberColour().withAlpha(0.94f));
         g.drawLine(lpHX1, lane.getY(), lpHX1, lane.getBottom(), 1.5f);
         g.drawLine(lpHX2, lane.getY(), lpHX2, lane.getBottom(), 1.5f);
 
         if (!sliceMarkers_.empty())
         {
-            g.setColour(juce::Colour(0xff61d9ff).withAlpha(0.62f));
+            g.setColour(uiAccentColour().withAlpha(0.58f));
             for (const auto markerSample : sliceMarkers_)
             {
                 if (markerSample <= 0 || markerSample >= totalSamples_)
@@ -1389,13 +1424,11 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
     // ── Labels on handles ──
     g.setFont(10.0f);
 
-    // Playback labels (green, at bottom)
-    g.setColour(juce::Colours::limegreen);
+    g.setColour(uiAccentGreenColour());
     g.drawText("P", static_cast<int>(pbHX1) - 6, static_cast<int>(bounds.getBottom()) - 14, 12, 12, juce::Justification::centred);
     g.drawText("P", static_cast<int>(pbHX2) - 6, static_cast<int>(bounds.getBottom()) - 14, 12, 12, juce::Justification::centred);
 
-    // Loop labels (orange, at top)
-    g.setColour(juce::Colours::orange);
+    g.setColour(uiAccentAmberColour());
     g.drawText("S", static_cast<int>(lpHX1) - 6, static_cast<int>(bounds.getY()) + 2, 12, 12, juce::Justification::centred);
     g.drawText("E", static_cast<int>(lpHX2) - 6, static_cast<int>(bounds.getY()) + 2, 12, 12, juce::Justification::centred);
 
@@ -1404,17 +1437,17 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
     const auto topY = bounds.getY() + 10.0f;
     const auto bottomY = bounds.getBottom() - 10.0f;
 
-    g.setColour(juce::Colours::orange.withAlpha(0.95f));
+    g.setColour(uiAccentAmberColour().withAlpha(0.96f));
     g.fillEllipse(lpHX1 - kHandleRadius, topY - kHandleRadius, kHandleRadius * 2.0f, kHandleRadius * 2.0f);
     g.fillEllipse(lpHX2 - kHandleRadius, topY - kHandleRadius, kHandleRadius * 2.0f, kHandleRadius * 2.0f);
-    g.setColour(juce::Colours::black.withAlpha(0.45f));
+    g.setColour(uiBorderColour());
     g.drawEllipse(lpHX1 - kHandleRadius, topY - kHandleRadius, kHandleRadius * 2.0f, kHandleRadius * 2.0f, 1.0f);
     g.drawEllipse(lpHX2 - kHandleRadius, topY - kHandleRadius, kHandleRadius * 2.0f, kHandleRadius * 2.0f, 1.0f);
 
-    g.setColour(juce::Colours::limegreen.withAlpha(0.95f));
+    g.setColour(uiAccentGreenColour().withAlpha(0.96f));
     g.fillEllipse(pbHX1 - kHandleRadius, bottomY - kHandleRadius, kHandleRadius * 2.0f, kHandleRadius * 2.0f);
     g.fillEllipse(pbHX2 - kHandleRadius, bottomY - kHandleRadius, kHandleRadius * 2.0f, kHandleRadius * 2.0f);
-    g.setColour(juce::Colours::black.withAlpha(0.45f));
+    g.setColour(uiBorderColour());
     g.drawEllipse(pbHX1 - kHandleRadius, bottomY - kHandleRadius, kHandleRadius * 2.0f, kHandleRadius * 2.0f, 1.0f);
     g.drawEllipse(pbHX2 - kHandleRadius, bottomY - kHandleRadius, kHandleRadius * 2.0f, kHandleRadius * 2.0f, 1.0f);
 
@@ -2195,20 +2228,7 @@ void PlayerModulationPanel::pushToProcessor()
 
 void PlayerModulationPanel::paintGroupBox(juce::Graphics& g, juce::Rectangle<int> bounds, const juce::String& title) const
 {
-    auto box = bounds.toFloat();
-    g.setColour(juce::Colour(0xff252538));
-    g.fillRoundedRectangle(box, 6.0f);
-    g.setColour(juce::Colour(0xff3a3a52));
-    g.drawRoundedRectangle(box.reduced(0.5f), 6.0f, 1.0f);
-
-    auto header = box.removeFromTop(22.0f);
-    g.setColour(juce::Colour(0xff2d2d44));
-    g.fillRoundedRectangle(header, 6.0f);
-    g.fillRect(header.withTrimmedTop(6.0f));
-
-    g.setColour(juce::Colour(0xff808098));
-    g.setFont(juce::Font(juce::FontOptions(12.0f)));
-    g.drawText(title, header.withTrimmedLeft(10.0f), juce::Justification::centredLeft);
+    paintSectionCard(g, bounds.toFloat(), title);
 }
 
 // ─── Editor Constructor ────────────────────────────────────────────────────────
@@ -2229,14 +2249,16 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 
     addAndMakeVisible(tabBar_);
     tabBar_.setLookAndFeel(&tabTextLookAndFeel);
-    tabBar_.setTabBarDepth(30);
-    tabBar_.addTab("Sample", juce::Colour(0xff252538), &tabSamplePage_, false);
-    tabBar_.addTab("Library", juce::Colour(0xff252538), &tabLibraryPage_, false);
-    tabBar_.addTab("Mapping", juce::Colour(0xff252538), &tabMappingPage_, false);
-    tabBar_.addTab("Player", juce::Colour(0xff252538), &tabPlayerPage_, false);
-    tabBar_.addTab("Generate", juce::Colour(0xff252538), &tabGeneratePage_, false);
-    tabBar_.addTab("Capture", juce::Colour(0xff252538), &tabCapturePage_, false);
-    tabBar_.addTab("About", juce::Colour(0xff252538), &tabAboutPage_, false);
+    tabBar_.setTabBarDepth(34);
+    tabBar_.setColour(juce::TabbedButtonBar::frontTextColourId, uiTextStrongColour());
+    tabBar_.setColour(juce::TabbedButtonBar::tabTextColourId, uiTextMutedColour());
+    tabBar_.addTab("Sample", uiPanelColour(), &tabSamplePage_, false);
+    tabBar_.addTab("Library", uiPanelColour(), &tabLibraryPage_, false);
+    tabBar_.addTab("Mapping", uiPanelColour(), &tabMappingPage_, false);
+    tabBar_.addTab("Player", uiPanelColour(), &tabPlayerPage_, false);
+    tabBar_.addTab("Generate", uiPanelColour(), &tabGeneratePage_, false);
+    tabBar_.addTab("Capture", uiPanelColour(), &tabCapturePage_, false);
+    tabBar_.addTab("About", uiPanelColour(), &tabAboutPage_, false);
     currentTabIndex_ = 0;
     processor_.setEditorTabIndex(currentTabIndex_);
     tabBar_.setCurrentTabIndex(currentTabIndex_);
@@ -2949,6 +2971,16 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(loadButton_);
     loadButton_.setTooltip("Load Sample, SFZ, or REX");
     loadButton_.onClick = [this] { openSampleChooser(); };
+
+    addAndMakeVisible(diagnosticsToggleButton_);
+    diagnosticsToggleButton_.setClickingTogglesState(true);
+    diagnosticsToggleButton_.setToggleState(showDiagnosticsPanel_, juce::dontSendNotification);
+    diagnosticsToggleButton_.onClick = [this]
+    {
+        showDiagnosticsPanel_ = diagnosticsToggleButton_.getToggleState();
+        resized();
+        repaint();
+    };
 
     waveformView_.setDisplayMode(processor_.getWaveformDisplayMode() == 2
         ? WaveformView::DisplayMode::symmetricEnvelope
@@ -4100,6 +4132,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     presetRenameButton_.setVisible(showSampleTab);
     presetDeleteButton_.setVisible(showSampleTab);
     loadButton_.setVisible(showSampleTab);
+    diagnosticsToggleButton_.setVisible(showSampleTab);
     sampleControlsViewport_.setVisible(showSampleTab);
     rootNoteLabel_.setVisible(showSampleTab);
     rootNoteCombo_.setVisible(showSampleTab);
@@ -4184,7 +4217,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     saturationDriveDial_.setVisible(showSampleTab);
     saturationModeCombo_.setVisible(showSampleTab);
     programMapText_.setVisible(showSampleTab && processor_.hasImportedProgram());
-    diagnosticsLabel_.setVisible(showSampleTab);
+    diagnosticsLabel_.setVisible(showSampleTab && showDiagnosticsPanel_);
 
     playerKeyboardLabel_.setVisible(showPlayerTab);
     playerKeyboardViewport_.setVisible(showPlayerTab);
@@ -6284,11 +6317,12 @@ void AudiocityAudioProcessorEditor::paintAboutPane(juce::Graphics& g, juce::Rect
         { "MIDI", "Map hardware controls with MIDI CC learn" }
     }};
 
-    constexpr std::array<AboutRow, 8> shortcutRows{{
+    constexpr std::array<AboutRow, 9> shortcutRows{{
         { "1-7", "Switch between the seven top-level tabs" },
         { "Ctrl+O", "Open a sample file" },
         { "Ctrl+S", "Save the current state to disk" },
         { "Ctrl+Shift+S", "Save the current preset" },
+        { "Ctrl+Alt+D", "Toggle the Sample-page diagnostics panel" },
         { "Ctrl+Z / Y", "Undo or redo sample, parameter, or mapping edits" },
         { "Space", "Play or stop generated waveform preview" },
         { "Enter / Esc", "Load selected browser row or panic audio" },
@@ -6430,7 +6464,7 @@ void AudiocityAudioProcessorEditor::resized()
     constexpr int kStackGap = 2;
     constexpr int kStackColGap = kDialGap + 8;
     constexpr int kRowH     = kGrpHdr + kGrpPadV + kDialH + kGrpPadV;  // 134
-    constexpr int kTopBarH  = 34;
+    constexpr int kTopBarH  = 36;
 
     auto content = getLocalBounds().reduced(kMargin);
     tabBar_.setBounds(content.removeFromTop(30));
@@ -6755,19 +6789,21 @@ void AudiocityAudioProcessorEditor::resized()
         return;
     }
 
-    // ── Top bar: Load button + presets ──
+    // ── Top bar: load + presets + diagnostics toggle ──
     {
         auto topRow = area.removeFromTop(kTopBarH);
-        loadButton_.setBounds(topRow.removeFromRight(32));
-        topRow.removeFromRight(10);
+        loadButton_.setBounds(topRow.removeFromLeft(74));
+        topRow.removeFromLeft(10);
 
-        presetCombo_.setBounds(topRow.removeFromLeft(220));
-        topRow.removeFromLeft(6);
-        presetSaveButton_.setBounds(topRow.removeFromLeft(56));
-        topRow.removeFromLeft(6);
-        presetRenameButton_.setBounds(topRow.removeFromLeft(70));
-        topRow.removeFromLeft(6);
-        presetDeleteButton_.setBounds(topRow.removeFromLeft(64));
+        diagnosticsToggleButton_.setBounds(topRow.removeFromRight(58));
+        topRow.removeFromRight(8);
+        presetDeleteButton_.setBounds(topRow.removeFromRight(68));
+        topRow.removeFromRight(6);
+        presetRenameButton_.setBounds(topRow.removeFromRight(76));
+        topRow.removeFromRight(6);
+        presetSaveButton_.setBounds(topRow.removeFromRight(60));
+        topRow.removeFromRight(10);
+        presetCombo_.setBounds(topRow);
     }
 
     area.removeFromTop(kGrpGap);
@@ -7120,10 +7156,14 @@ void AudiocityAudioProcessorEditor::resized()
         outputLevelMeter_.setBounds(outInner.reduced(0, 6));
     }
 
-    // ── Panel 9: Diagnostics ──
+    if (showDiagnosticsPanel_)
     {
         auto diagInner = makeGroup("Diagnostics", 56);
         diagnosticsLabel_.setBounds(diagInner.removeFromTop(22));
+    }
+    else
+    {
+        diagnosticsLabel_.setBounds({});
     }
 
     sampleControlsContent_.setSize(viewportWidth, juce::jmax(sampleControlsViewport_.getHeight(), scrollY + 4));
@@ -7131,36 +7171,39 @@ void AudiocityAudioProcessorEditor::resized()
 
 void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xff1e1e2e));
+    g.fillAll(uiBackgroundColour());
 
     constexpr int kMargin = 14;
 
-    // Title bar accent
-    g.setColour(juce::Colour(0xff2d2d44));
-    g.fillRect(0, 0, getWidth(), 8);
+    g.setColour(uiPanelRaisedColour());
+    g.fillRect(0, 0, getWidth(), 9);
+    g.setColour(uiAccentColour().withAlpha(0.72f));
+    g.fillRect(0, 9, getWidth(), 2);
 
     auto content = getLocalBounds().reduced(kMargin);
     content.removeFromTop(30);
     content.removeFromTop(8);
 
+    auto paintContentCard = [&g](juce::Rectangle<int> areaToPaint)
+    {
+        auto card = areaToPaint.reduced(6).toFloat();
+        g.setColour(uiPanelColour());
+        g.fillRoundedRectangle(card, 10.0f);
+        g.setColour(uiBorderColour());
+        g.drawRoundedRectangle(card.reduced(0.5f), 10.0f, 1.0f);
+    };
+
     if (currentTabIndex_ == 1)
         paintSampleBrowserPane(g, content);
     else if (currentTabIndex_ == 2)
-    {
-        g.setColour(juce::Colour(0xff252538));
-        g.fillRoundedRectangle(content.reduced(6).toFloat(), 8.0f);
-    }
+        paintContentCard(content);
     else if (currentTabIndex_ == 3)
         paintPlayerPane(g, content);
     else if (currentTabIndex_ == 4 || currentTabIndex_ == 5)
-    {
-        g.setColour(juce::Colour(0xff252538));
-        g.fillRoundedRectangle(content.reduced(6).toFloat(), 8.0f);
-    }
+        paintContentCard(content);
     else if (currentTabIndex_ == 6)
     {
-        g.setColour(juce::Colour(0xff252538));
-        g.fillRoundedRectangle(content.reduced(6).toFloat(), 8.0f);
+        paintContentCard(content);
         paintAboutPane(g, content);
     }
 
@@ -7169,11 +7212,11 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
 
     // Drop overlay
     auto overlay = content.reduced(6);
-    g.setColour(juce::Colours::deepskyblue.withAlpha(0.12f));
+    g.setColour(uiAccentColour().withAlpha(0.12f));
     g.fillRect(overlay);
-    g.setColour(juce::Colours::deepskyblue.withAlpha(0.85f));
+    g.setColour(uiAccentColour().withAlpha(0.85f));
     g.drawRect(overlay, 2);
-    g.setColour(juce::Colours::white.withAlpha(0.95f));
+    g.setColour(uiTextStrongColour().withAlpha(0.95f));
     g.setFont(14.0f);
     const auto dropText = processor_.isRexRuntimeAvailable()
         ? juce::String("Drop .wav, .aiff, .sfz, .nki, .rex, or .rx2 to open")
@@ -7239,6 +7282,16 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
         && (key.getTextCharacter() == 's' || key.getTextCharacter() == 'S'))
     {
         promptSavePreset();
+        return true;
+    }
+
+    if (commandDown && modifiers.isAltDown()
+        && (key.getTextCharacter() == 'd' || key.getTextCharacter() == 'D'))
+    {
+        showDiagnosticsPanel_ = !showDiagnosticsPanel_;
+        diagnosticsToggleButton_.setToggleState(showDiagnosticsPanel_, juce::dontSendNotification);
+        resized();
+        repaint();
         return true;
     }
 
@@ -8112,30 +8165,7 @@ void AudiocityAudioProcessorEditor::regenerateWaveform()
 void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const
 {
     for (const auto& group : groupBoxes_)
-    {
-        auto bf = group.bounds.toFloat();
-
-        // Panel background
-        g.setColour(juce::Colour(0xff252538));
-        g.fillRoundedRectangle(bf, 6.0f);
-
-        // Border
-        g.setColour(juce::Colour(0xff3a3a52));
-        g.drawRoundedRectangle(bf.reduced(0.5f), 6.0f, 1.0f);
-
-        // Header band
-        auto hdr = bf.removeFromTop(22.0f);
-        g.setColour(juce::Colour(0xff2d2d44));
-        g.fillRoundedRectangle(hdr, 6.0f);
-        // Square-off the bottom corners of the header
-        g.fillRect(hdr.withTrimmedTop(6.0f));
-
-        // Title text
-        g.setColour(juce::Colour(0xff808098));
-        g.setFont(juce::Font(juce::FontOptions(12.0f)));
-        g.drawText(group.title, hdr.withTrimmedLeft(10.0f),
-                   juce::Justification::centredLeft);
-    }
+        paintSectionCard(g, group.bounds.toFloat(), group.title);
 }
 
 // ─── Tooltips ──────────────────────────────────────────────────────────────────
@@ -8143,7 +8173,7 @@ void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const
 void AudiocityAudioProcessorEditor::setupTooltips()
 {
     samplePathLabel_.setTooltip(
-        "Shortcuts: Ctrl+O Load  |  Ctrl+Z Undo  |  Ctrl+Y Redo  |  Ctrl+S Save State  |  Ctrl+Shift+S Save Preset  |  Ctrl+D Duplicate Zone  |  Ctrl+Shift+D Split Zone  |  Delete Remove Zone  |  Space Play/Stop (Generate)  |  1-7 Switch Tabs");
+        "Shortcuts: Ctrl+O Load  |  Ctrl+Alt+D Toggle Tech Panel  |  Ctrl+Z Undo  |  Ctrl+Y Redo  |  Ctrl+S Save State  |  Ctrl+Shift+S Save Preset  |  Ctrl+D Duplicate Zone  |  Ctrl+Shift+D Split Zone  |  Delete Remove Zone  |  Space Play/Stop (Generate)  |  1-7 Switch Tabs");
     presetCombo_.setTooltip(
         "Preset Browser - Select a saved sample playback preset");
     presetSaveButton_.setTooltip(
@@ -8154,6 +8184,8 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         "Delete Preset - Remove selected preset file");
     loadButton_.setTooltip(
         processor_.isRexRuntimeAvailable() ? "Load Sample, SFZ, or REX (Ctrl+O)" : "Load Sample (Ctrl+O)");
+    diagnosticsToggleButton_.setTooltip(
+        "Show or hide preload, stream, and voice diagnostics (Ctrl+Alt+D)");
     generatePreviewButton_.setTooltip(
         "Play/Stop Generate Preview (Space on Generate tab)");
 

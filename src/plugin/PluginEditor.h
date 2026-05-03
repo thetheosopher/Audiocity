@@ -390,6 +390,7 @@ private:
     juce::Component tabCapturePage_;
     juce::Component tabAboutPage_;
     int currentTabIndex_ = 0;
+    bool showDiagnosticsPanel_ = false;
 
     struct SampleListEntry
     {
@@ -525,7 +526,8 @@ private:
     juce::TextButton presetSaveButton_{ "Save" };
     juce::TextButton presetRenameButton_{ "Rename" };
     juce::TextButton presetDeleteButton_{ "Delete" };
-    juce::TextButton loadButton_{ "..." };
+    juce::TextButton loadButton_{ "Load" };
+    juce::TextButton diagnosticsToggleButton_{ "Tech" };
     juce::Label sampleInfoSourceLabel_{ {}, "Source" };
     juce::Label sampleInfoSourceValue_{ {}, "None" };
     juce::Label sampleInfoRateLabel_{ {}, "Sample Rate" };
