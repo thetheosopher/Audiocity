@@ -118,9 +118,12 @@ struct ProgramZoneEdit
                                             const std::vector<int>& zoneIndices);
 [[nodiscard]] int splitProgramZoneByKey(audiocity::engine::Program& program, int zoneIndex);
 [[nodiscard]] int splitProgramSliceAtSample(audiocity::engine::Program& program, int sampleIndex);
+[[nodiscard]] int mergeProgramSlicesAtSampleBoundary(audiocity::engine::Program& program, int boundarySample);
 [[nodiscard]] bool remapProgramZonesChromatically(audiocity::engine::Program& program,
                                                   const std::vector<int>& zoneIndices,
                                                   int baseMidiNote = 36);
+[[nodiscard]] bool mapProgramZonesToRootNotes(audiocity::engine::Program& program,
+                                              const std::vector<int>& zoneIndices);
 [[nodiscard]] bool spreadProgramZonesAcrossKeyRange(audiocity::engine::Program& program,
                                                     const std::vector<int>& zoneIndices);
 [[nodiscard]] bool deriveProgramZoneRootNotesFromKeyRanges(audiocity::engine::Program& program,

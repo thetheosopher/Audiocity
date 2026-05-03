@@ -836,6 +836,72 @@ bool runProgramSliceSplitAtSampleTest()
     return audiocity::plugin::splitProgramSliceAtSample(program, 300) < 0;
 }
 
+bool runProgramSliceMergeAtBoundaryTest()
+{
+    using namespace audiocity::engine;
+
+    Program program;
+    SampleAsset sample;
+    sample.displayName = "merge.wav";
+    sample.lengthSamples = 1000;
+    sample.numChannels = 1;
+    sample.sampleRateHz = 48000.0;
+    program.sampleAssets.push_back(sample);
+
+    Group group;
+    group.keyRange = MidiRange::fromUnordered(36, 38);
+    group.velocityRange = VelocityRange::full();
+    program.groups.push_back(group);
+
+    Zone first;
+    first.groupIndex = 0;
+    first.sampleAssetIndex = 0;
+    first.keyRange = MidiRange::single(36);
+    first.velocityRange = VelocityRange::full();
+    first.rootMidiNote = 36;
+    first.sampleStart = 0;
+    first.sampleEndExclusive = 300;
+    first.triggerMode = ZoneTriggerMode::oneShot;
+    program.zones.push_back(first);
+
+    Zone second = first;
+    second.keyRange = MidiRange::single(37);
+    second.rootMidiNote = 37;
+    second.sampleStart = 300;
+    second.sampleEndExclusive = 700;
+    program.zones.push_back(second);
+
+    Zone third = first;
+    third.keyRange = MidiRange::single(38);
+    third.rootMidiNote = 38;
+    third.sampleStart = 700;
+    third.sampleEndExclusive = 1000;
+    program.zones.push_back(third);
+
+    const auto mergedZoneIndex = audiocity::plugin::mergeProgramSlicesAtSampleBoundary(program, 300);
+    if (mergedZoneIndex != 0 || program.zones.size() != 2)
+        return false;
+
+    if (program.zones[0].sampleStart != 0
+        || program.zones[0].sampleEndExclusive != 700
+        || program.zones[0].keyRange.low != 36
+        || program.zones[0].keyRange.high != 36
+        || program.zones[0].rootMidiNote != 36
+        || program.zones[1].sampleStart != 700
+        || program.zones[1].sampleEndExclusive != 1000
+        || program.zones[1].keyRange.low != 37
+        || program.zones[1].keyRange.high != 37
+        || program.zones[1].rootMidiNote != 37)
+    {
+        return false;
+    }
+
+    if (program.groups[0].keyRange.low != 36 || program.groups[0].keyRange.high != 37)
+        return false;
+
+    return audiocity::plugin::mergeProgramSlicesAtSampleBoundary(program, 450) < 0;
+}
+
 bool runProgramMappingDeriveRootNotesTest()
 {
     using namespace audiocity::engine;
@@ -872,6 +938,60 @@ bool runProgramMappingDeriveRootNotesTest()
         && program.zones[1].rootMidiNote == 90
         && program.zones[2].rootMidiNote == 75
         && !audiocity::plugin::deriveProgramZoneRootNotesFromKeyRanges(program, { 99 });
+}
+
+bool runProgramMappingMapToRootNotesTest()
+{
+    using namespace audiocity::engine;
+
+    Program program;
+    SampleAsset sample;
+    sample.displayName = "map_to_root.wav";
+    sample.lengthSamples = 512;
+    sample.numChannels = 1;
+    sample.sampleRateHz = 48000.0;
+    program.sampleAssets.push_back(sample);
+
+    Group group;
+    group.keyRange = MidiRange::fromUnordered(40, 60);
+    group.velocityRange = VelocityRange::full();
+    program.groups.push_back(group);
+
+    Zone first;
+    first.groupIndex = 0;
+    first.sampleAssetIndex = 0;
+    first.keyRange = MidiRange::fromUnordered(40, 44);
+    first.velocityRange = VelocityRange::full();
+    first.rootMidiNote = 42;
+    program.zones.push_back(first);
+
+    Zone second = first;
+    second.keyRange = MidiRange::fromUnordered(50, 52);
+    second.rootMidiNote = 51;
+    program.zones.push_back(second);
+
+    Zone third = first;
+    third.keyRange = MidiRange::fromUnordered(58, 60);
+    third.rootMidiNote = 59;
+    program.zones.push_back(third);
+
+    if (!audiocity::plugin::mapProgramZonesToRootNotes(program, { 2, 0 }))
+        return false;
+
+    if (program.zones[0].keyRange.low != 42
+        || program.zones[0].keyRange.high != 42
+        || program.zones[1].keyRange.low != 50
+        || program.zones[1].keyRange.high != 52
+        || program.zones[2].keyRange.low != 59
+        || program.zones[2].keyRange.high != 59)
+    {
+        return false;
+    }
+
+    if (program.groups[0].keyRange.low != 42 || program.groups[0].keyRange.high != 59)
+        return false;
+
+    return !audiocity::plugin::mapProgramZonesToRootNotes(program, { 99 });
 }
 
 bool runProgramMappingCreateZoneTest()
@@ -8577,7 +8697,9 @@ int main()
         AUDIOCITY_TEST(runProgramMappingChromaticRemapTest, 115),
         AUDIOCITY_TEST(runProgramMappingKeyRangeSpreadTest, 117),
         AUDIOCITY_TEST(runProgramSliceSplitAtSampleTest, 118),
+        AUDIOCITY_TEST(runProgramSliceMergeAtBoundaryTest, 120),
         AUDIOCITY_TEST(runProgramMappingDeriveRootNotesTest, 119),
+        AUDIOCITY_TEST(runProgramMappingMapToRootNotesTest, 121),
         AUDIOCITY_TEST(runProgramMappingAtomicBatchEditRollbackTest, 111),
         AUDIOCITY_TEST(runProgramMappingAtomicBatchDeleteRollbackTest, 112),
         AUDIOCITY_TEST(runProgramMappingStateRoundTripTest, 101),

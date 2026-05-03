@@ -331,6 +331,7 @@ private:
         std::function<void(int, int)> onPlaybackCommitted;
         std::function<void()> onResetRangesRequested;
         std::function<void(DisplayMode)> onDisplayModeSelected;
+        std::function<void(int)> onMergeSliceRequested;
         std::function<void(int)> onSplitSliceRequested;
         std::function<void()> onAutoSliceRequested;
 
@@ -955,6 +956,7 @@ private:
     void deleteSelectedMappingZone();
     void clearSelectedMappingVelocityFades();
     void remapSelectedMappingZonesChromatically();
+    void mapSelectedMappingZonesToRootNotes();
     void spreadSelectedMappingZonesAcrossKeyRange();
     void deriveSelectedMappingZoneRootsFromKeyRange();
     bool commitMappingZoneEdit(const audiocity::plugin::ProgramZoneEdit& edit, const juce::String& statusText);
@@ -966,6 +968,7 @@ private:
     void rebuildVisibleSampleList();
     bool loadFileAsInstrument(const juce::File& file);
     void autoSliceLoadedSample();
+    void mergeLoadedSliceAtBoundary(int boundarySample);
     void splitLoadedSliceAtSample(int sampleIndex);
     void loadSampleFromBrowserRow(int row);
     void previewSampleFromBrowserRow(int row, bool forceRestart = true);

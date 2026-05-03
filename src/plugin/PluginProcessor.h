@@ -87,7 +87,9 @@ public:
     bool deleteImportedProgramZones(const std::vector<int>& zoneIndices);
     [[nodiscard]] int splitImportedProgramZone(int zoneIndex);
     [[nodiscard]] int splitImportedProgramSliceAtSample(int sampleIndex);
+    [[nodiscard]] int mergeImportedProgramSlicesAtSampleBoundary(int boundarySample);
     bool remapImportedProgramZonesChromatically(const std::vector<int>& zoneIndices, int baseMidiNote = 36);
+    bool mapImportedProgramZonesToRootNotes(const std::vector<int>& zoneIndices);
     bool spreadImportedProgramZonesAcrossKeyRange(const std::vector<int>& zoneIndices);
     bool deriveImportedProgramZoneRootsFromKeyRanges(const std::vector<int>& zoneIndices);
     [[nodiscard]] juce::String getLastImportDiagnosticSummary() const;

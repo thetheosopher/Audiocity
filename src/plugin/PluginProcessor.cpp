@@ -2177,6 +2177,37 @@ int AudiocityAudioProcessor::splitImportedProgramSliceAtSample(const int sampleI
     return newZoneIndex;
 }
 
+int AudiocityAudioProcessor::mergeImportedProgramSlicesAtSampleBoundary(const int boundarySample)
+{
+    audiocity::engine::Program programToPublish;
+    std::vector<juce::AudioBuffer<float>> sampleDataToPublish;
+    int mergedZoneIndex = -1;
+
+    {
+        std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+        if (!importedProgramLoaded_.load(std::memory_order_relaxed)
+            || importedProgramFormat_ != audiocity::plugin::ImportedProgramFormat::sampleSlices
+            || importedProgram_.zones.empty()
+            || importedProgramSampleDataByAsset_.empty())
+        {
+            return -1;
+        }
+
+        auto updatedProgram = importedProgram_;
+        mergedZoneIndex = audiocity::plugin::mergeProgramSlicesAtSampleBoundary(updatedProgram, boundarySample);
+        if (mergedZoneIndex < 0)
+            return -1;
+
+        importedProgram_ = std::move(updatedProgram);
+        refreshImportedProgramDerivedStateLocked("Slice merged: zone " + juce::String(mergedZoneIndex + 1));
+        captureImportedProgramSnapshotLocked(programToPublish, sampleDataToPublish);
+    }
+
+    engine_.panic();
+    engine_.setProgram(programToPublish, sampleDataToPublish);
+    return mergedZoneIndex;
+}
+
 bool AudiocityAudioProcessor::remapImportedProgramZonesChromatically(const std::vector<int>& zoneIndices,
                                                                     const int baseMidiNote)
 {
@@ -2201,6 +2232,34 @@ bool AudiocityAudioProcessor::remapImportedProgramZonesChromatically(const std::
             zoneIndices.size() == 1
                 ? "Mapping remapped: zone " + juce::String(zoneIndices.front() + 1)
                 : "Mapping remapped: chromatic");
+        captureImportedProgramSnapshotLocked(programToPublish, sampleDataToPublish);
+    }
+
+    engine_.panic();
+    engine_.setProgram(programToPublish, sampleDataToPublish);
+    return true;
+}
+
+bool AudiocityAudioProcessor::mapImportedProgramZonesToRootNotes(const std::vector<int>& zoneIndices)
+{
+    audiocity::engine::Program programToPublish;
+    std::vector<juce::AudioBuffer<float>> sampleDataToPublish;
+
+    {
+        std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+        if (!importedProgramLoaded_.load(std::memory_order_relaxed)
+            || importedProgram_.zones.empty()
+            || importedProgramSampleDataByAsset_.empty())
+        {
+            return false;
+        }
+
+        auto updatedProgram = importedProgram_;
+        if (!audiocity::plugin::mapProgramZonesToRootNotes(updatedProgram, zoneIndices))
+            return false;
+
+        importedProgram_ = std::move(updatedProgram);
+        refreshImportedProgramDerivedStateLocked("Mapping remapped: root notes");
         captureImportedProgramSnapshotLocked(programToPublish, sampleDataToPublish);
     }
 

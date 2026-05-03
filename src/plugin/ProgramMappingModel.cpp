@@ -729,6 +729,95 @@ int splitProgramSliceAtSample(audiocity::engine::Program& program, const int sam
     return newZoneIndex;
 }
 
+int mergeProgramSlicesAtSampleBoundary(audiocity::engine::Program& program, const int boundarySample)
+{
+    if (program.zones.size() < 2 || program.sampleAssets.size() != 1)
+        return -1;
+
+    const auto baseMidiNote = std::min_element(program.zones.begin(), program.zones.end(),
+        [](const auto& lhs, const auto& rhs)
+        {
+            return lhs.keyRange.low < rhs.keyRange.low;
+        })->keyRange.low;
+
+    std::vector<int> orderedZoneIndices(program.zones.size());
+    std::iota(orderedZoneIndices.begin(), orderedZoneIndices.end(), 0);
+    std::stable_sort(orderedZoneIndices.begin(), orderedZoneIndices.end(),
+        [&program](const int lhs, const int rhs)
+        {
+            const auto& leftZone = program.zones[static_cast<std::size_t>(lhs)];
+            const auto& rightZone = program.zones[static_cast<std::size_t>(rhs)];
+            if (leftZone.sampleStart != rightZone.sampleStart)
+                return leftZone.sampleStart < rightZone.sampleStart;
+
+            return lhs < rhs;
+        });
+
+    auto mergeLeftZoneIndex = -1;
+    auto mergeRightZoneIndex = -1;
+    for (std::size_t order = 0; order + 1 < orderedZoneIndices.size(); ++order)
+    {
+        const auto leftIndex = orderedZoneIndices[order];
+        const auto rightIndex = orderedZoneIndices[order + 1];
+        const auto& leftZone = program.zones[static_cast<std::size_t>(leftIndex)];
+        const auto& rightZone = program.zones[static_cast<std::size_t>(rightIndex)];
+
+        if (leftZone.sampleAssetIndex != 0
+            || rightZone.sampleAssetIndex != 0
+            || !isSingleNoteZone(leftZone)
+            || !isSingleNoteZone(rightZone))
+        {
+            return -1;
+        }
+
+        const auto leftEndExclusive = resolveZoneSampleEndExclusive(program, leftZone);
+        const auto rightStart = juce::jmax(0, rightZone.sampleStart);
+        if (leftEndExclusive == boundarySample && rightStart == boundarySample)
+        {
+            mergeLeftZoneIndex = leftIndex;
+            mergeRightZoneIndex = rightIndex;
+            break;
+        }
+    }
+
+    if (mergeLeftZoneIndex < 0 || mergeRightZoneIndex < 0)
+        return -1;
+
+    auto updatedProgram = program;
+    auto& leftZone = updatedProgram.zones[static_cast<std::size_t>(mergeLeftZoneIndex)];
+    const auto rightZone = updatedProgram.zones[static_cast<std::size_t>(mergeRightZoneIndex)];
+    leftZone.sampleEndExclusive = resolveZoneSampleEndExclusive(updatedProgram, rightZone);
+    if (leftZone.loopStart >= leftZone.sampleEndExclusive)
+        leftZone.loopStart = -1;
+    if (leftZone.loopEndExclusive > leftZone.sampleEndExclusive)
+        leftZone.loopEndExclusive = -1;
+
+    updatedProgram.zones.erase(updatedProgram.zones.begin() + mergeRightZoneIndex);
+
+    std::vector<int> remappedZoneIndices(updatedProgram.zones.size());
+    std::iota(remappedZoneIndices.begin(), remappedZoneIndices.end(), 0);
+    std::stable_sort(remappedZoneIndices.begin(), remappedZoneIndices.end(),
+        [&updatedProgram](const int lhs, const int rhs)
+        {
+            const auto& left = updatedProgram.zones[static_cast<std::size_t>(lhs)];
+            const auto& right = updatedProgram.zones[static_cast<std::size_t>(rhs)];
+            if (left.sampleStart != right.sampleStart)
+                return left.sampleStart < right.sampleStart;
+
+            return lhs < rhs;
+        });
+
+    if (!remapProgramZonesChromatically(updatedProgram, remappedZoneIndices, baseMidiNote))
+        return -1;
+
+    auto mergedZoneIndex = mergeLeftZoneIndex;
+    if (mergeRightZoneIndex < mergeLeftZoneIndex)
+        --mergedZoneIndex;
+
+    program = std::move(updatedProgram);
+    return mergedZoneIndex;
+}
+
 bool remapProgramZonesChromatically(audiocity::engine::Program& program,
                                     const std::vector<int>& zoneIndices,
                                     const int baseMidiNote)
@@ -749,6 +838,26 @@ bool remapProgramZonesChromatically(audiocity::engine::Program& program,
         auto& zone = updatedProgram.zones[static_cast<std::size_t>(uniqueZoneIndices[order])];
         zone.keyRange = audiocity::engine::MidiRange::single(mappedNote);
         zone.rootMidiNote = mappedNote;
+        recomputeGroupRangeFromZones(updatedProgram, zone.groupIndex);
+    }
+
+    program = std::move(updatedProgram);
+    return true;
+}
+
+bool mapProgramZonesToRootNotes(audiocity::engine::Program& program,
+                                const std::vector<int>& zoneIndices)
+{
+    std::vector<int> uniqueZoneIndices;
+    if (!collectUniqueValidZoneIndices(program, zoneIndices, uniqueZoneIndices))
+        return false;
+
+    auto updatedProgram = program;
+    for (const auto zoneIndex : uniqueZoneIndices)
+    {
+        auto& zone = updatedProgram.zones[static_cast<std::size_t>(zoneIndex)];
+        zone.keyRange = audiocity::engine::MidiRange::single(
+            audiocity::engine::clampMidiNote(zone.rootMidiNote));
         recomputeGroupRangeFromZones(updatedProgram, zone.groupIndex);
     }
 
