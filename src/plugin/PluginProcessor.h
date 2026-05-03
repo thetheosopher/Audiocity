@@ -86,8 +86,10 @@ public:
     bool deleteImportedProgramZone(int zoneIndex);
     bool deleteImportedProgramZones(const std::vector<int>& zoneIndices);
     [[nodiscard]] int splitImportedProgramZone(int zoneIndex);
+    [[nodiscard]] int splitImportedProgramSliceAtSample(int sampleIndex);
     bool remapImportedProgramZonesChromatically(const std::vector<int>& zoneIndices, int baseMidiNote = 36);
     bool spreadImportedProgramZonesAcrossKeyRange(const std::vector<int>& zoneIndices);
+    bool deriveImportedProgramZoneRootsFromKeyRanges(const std::vector<int>& zoneIndices);
     [[nodiscard]] juce::String getLastImportDiagnosticSummary() const;
     [[nodiscard]] bool isRexRuntimeAvailable() const noexcept { return engine_.isRexRuntimeAvailable(); }
     void loadGeneratedWaveformAsSample(const std::vector<float>& waveform, int rootMidiNote = 60);

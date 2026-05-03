@@ -1447,17 +1447,24 @@ void AudiocityAudioProcessorEditor::WaveformView::mouseDown(const juce::MouseEve
 
     if (event.mods.isPopupMenu())
     {
+        const auto canSplitSlices = loopFormatBadge_ == "SLICE"
+            && static_cast<int>(sliceMarkers_.size()) >= 2
+            && static_cast<bool>(onSplitSliceRequested);
+        const auto clickSample = juce::jlimit(0,
+            juce::jmax(0, totalSamples_ - 1),
+            sampleFromX(event.position.x));
         juce::PopupMenu menu;
         menu.addItem(1, "Signed", true, displayMode_ == DisplayMode::signedWaveform);
         menu.addItem(2, "Symmetric", true, displayMode_ == DisplayMode::symmetricEnvelope);
         menu.addSeparator();
-        menu.addItem(3, "Auto Slice Transients", autoSliceEnabled_);
+        menu.addItem(3, "Split Slice Here", canSplitSlices);
+        menu.addItem(4, "Auto Slice Transients", autoSliceEnabled_);
         const auto clickScreenPosition = event.getScreenPosition();
         const juce::Rectangle<int> targetArea(clickScreenPosition.x, clickScreenPosition.y, 1, 1);
 
         juce::Component::SafePointer<WaveformView> safeThis(this);
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(targetArea),
-            [safeThis](int selectedId)
+            [safeThis, clickSample](int selectedId)
             {
                 if (safeThis == nullptr)
                     return;
@@ -1475,6 +1482,11 @@ void AudiocityAudioProcessorEditor::WaveformView::mouseDown(const juce::MouseEve
                         safeThis->onDisplayModeSelected(DisplayMode::symmetricEnvelope);
                 }
                 else if (selectedId == 3)
+                {
+                    if (safeThis->onSplitSliceRequested)
+                        safeThis->onSplitSliceRequested(clickSample);
+                }
+                else if (selectedId == 4)
                 {
                     if (safeThis->onAutoSliceRequested)
                         safeThis->onAutoSliceRequested();
@@ -3019,6 +3031,10 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     waveformView_.onAutoSliceRequested = [this]
     {
         autoSliceLoadedSample();
+    };
+    waveformView_.onSplitSliceRequested = [this](const int sampleIndex)
+    {
+        splitLoadedSliceAtSample(sampleIndex);
     };
 
     // Playback mode
@@ -4681,8 +4697,13 @@ void AudiocityAudioProcessorEditor::showMappingZoneContextMenu(const int row, co
     menu.addItem(7,
                  "Spread Selected Zones Across Current Key Range",
                  selectedRows.size() > 1);
+     menu.addItem(8,
+                      selectedRows.size() == 1
+                          ? "Derive Root Note From Key Center"
+                          : "Derive Root Notes From Key Centers",
+                      true);
     menu.addSeparator();
-    menu.addItem(8,
+     menu.addItem(9,
                  "Select All Zones\tCtrl+A",
                  static_cast<int>(selectedRows.size()) < static_cast<int>(mappingZoneRows_.size()));
 
@@ -4718,6 +4739,9 @@ void AudiocityAudioProcessorEditor::showMappingZoneContextMenu(const int row, co
                     safeThis->spreadSelectedMappingZonesAcrossKeyRange();
                     break;
                 case 8:
+                    safeThis->deriveSelectedMappingZoneRootsFromKeyRange();
+                    break;
+                case 9:
                     safeThis->selectAllMappingZones();
                     break;
                 default:
@@ -5365,6 +5389,42 @@ void AudiocityAudioProcessorEditor::spreadSelectedMappingZonesAcrossKeyRange()
     updateDiagnosticsStatusText();
 }
 
+void AudiocityAudioProcessorEditor::deriveSelectedMappingZoneRootsFromKeyRange()
+{
+    const auto selectedRows = getSelectedMappingRowIndices();
+    if (selectedRows.empty())
+    {
+        updateMappingEditControls();
+        return;
+    }
+
+    std::vector<int> zoneIndices;
+    zoneIndices.reserve(selectedRows.size());
+    for (const auto selectedRow : selectedRows)
+        zoneIndices.push_back(mappingZoneRows_[static_cast<std::size_t>(selectedRow)].zoneIndex);
+
+    const auto beforeState = captureImportedProgramMappingState();
+    if (!processor_.deriveImportedProgramZoneRootsFromKeyRanges(zoneIndices))
+    {
+        mappingEditStatusLabel_.setText("Root-note derive failed", juce::dontSendNotification);
+        updateMappingEditControls();
+        return;
+    }
+
+    recordImportedProgramMappingChange(beforeState,
+        zoneIndices.size() == 1 ? "Derive Root Note" : "Derive Root Notes");
+    mappingEditStatusLabel_.setText(
+        zoneIndices.size() == 1
+            ? "Zone " + juce::String(zoneIndices.front() + 1) + " root derived from key center"
+            : juce::String(static_cast<int>(zoneIndices.size())) + " zone roots derived from key centers",
+        juce::dontSendNotification);
+    resetMappingBatchEditTracking();
+    refreshMappingZoneRows();
+    selectMappingZoneIndices(zoneIndices);
+    updateMappingDetails();
+    updateDiagnosticsStatusText();
+}
+
 bool AudiocityAudioProcessorEditor::commitMappingZoneEdit(const audiocity::plugin::ProgramZoneEdit& edit,
                                                           const juce::String& statusText)
 {
@@ -5501,6 +5561,32 @@ void AudiocityAudioProcessorEditor::autoSliceLoadedSample()
     rebuildVisibleSampleList();
     clearSelectedPresetAfterSourceLoad();
     refreshUI(true);
+    updateDiagnosticsStatusText();
+}
+
+void AudiocityAudioProcessorEditor::splitLoadedSliceAtSample(const int sampleIndex)
+{
+    if (!processor_.hasImportedProgram()
+        || processor_.getImportedProgramFormat() != audiocity::plugin::ImportedProgramFormat::sampleSlices)
+    {
+        return;
+    }
+
+    const auto beforeState = captureImportedProgramMappingState();
+    const auto newZoneIndex = processor_.splitImportedProgramSliceAtSample(sampleIndex);
+    if (newZoneIndex < 0)
+    {
+        updateDiagnosticsStatusText();
+        return;
+    }
+
+    recordImportedProgramMappingChange(beforeState, "Split Slice");
+    resetMappingBatchEditTracking();
+    refreshMappingZoneRows();
+    selectMappingZoneIndices({ newZoneIndex });
+    waveformView_.setSliceMarkers(processor_.getImportedProgramSliceMarkerSamples());
+    programMapText_.setText(processor_.getImportedProgramMapSummary(), juce::dontSendNotification);
+    updateMappingDetails();
     updateDiagnosticsStatusText();
 }
 

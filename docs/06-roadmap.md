@@ -146,7 +146,8 @@
 - Imported-program state persistence is now format-agnostic rather than SFZ-only, so REX slice programs restore through the same mapping-state path used by other imported programs.
 - Regular sample files can now be auto-sliced into imported slice programs from transient detection, with the waveform view drawing the derived slice boundaries for single-sample imported programs.
 - Sample-derived slice programs persist as an explicit imported-program format, so transient-sliced WAV/AIFF sources restore through the same generic mapping-state replay path as SFZ and REX imports.
-- Offline tests cover preserved REX slice boundaries, transient slice-program construction, and imported-program path compatibility across the new generic property, explicit sample-slice format metadata, and the legacy SFZ path fallback.
+- Sample-derived slice programs can now be split directly from the waveform context menu at the clicked sample position, with the inserted slice reusing the same source asset and the full slice set being remapped chromatically in order.
+- Offline tests cover preserved REX slice boundaries, transient slice-program construction, manual sample-slice splitting, and imported-program path compatibility across the new generic property, explicit sample-slice format metadata, and the legacy SFZ path fallback.
 
 ### Epic L — Mapping productivity tools
 
@@ -154,7 +155,8 @@
 - Imported-program zone context menus now include a chromatic remap action that reassigns the selected zones to single-note keys starting at C1 while preserving the rest of each zone's settings.
 - The remap action rides the existing imported-program undo/publish pipeline, so it participates in chronological editor history and republishes atomically to the engine like other mapping edits.
 - Imported-program mapping tools now also include a key-range spread action that redistributes the selected zones evenly across their current combined key span while updating root notes to match the new ranges.
-- Offline tests cover both model-level mapping helpers, including ordered chromatic remap behavior, even key-range spreading, and group-range recomputation.
+- Imported-program mapping tools now also include a root-note derive action that resets the selected zones' roots to the midpoint of each current key range.
+- Offline tests cover the model-level mapping helpers, including ordered chromatic remap behavior, even key-range spreading, root-note derivation from key centers, and group-range recomputation.
 
 ---
 

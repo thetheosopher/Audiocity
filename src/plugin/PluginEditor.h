@@ -331,6 +331,7 @@ private:
         std::function<void(int, int)> onPlaybackCommitted;
         std::function<void()> onResetRangesRequested;
         std::function<void(DisplayMode)> onDisplayModeSelected;
+        std::function<void(int)> onSplitSliceRequested;
         std::function<void()> onAutoSliceRequested;
 
         void paint(juce::Graphics& g) override;
@@ -955,6 +956,7 @@ private:
     void clearSelectedMappingVelocityFades();
     void remapSelectedMappingZonesChromatically();
     void spreadSelectedMappingZonesAcrossKeyRange();
+    void deriveSelectedMappingZoneRootsFromKeyRange();
     bool commitMappingZoneEdit(const audiocity::plugin::ProgramZoneEdit& edit, const juce::String& statusText);
     void paintMappingListRow(int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected);
     void refreshBrowserEntryLibraryFlags();
@@ -964,6 +966,7 @@ private:
     void rebuildVisibleSampleList();
     bool loadFileAsInstrument(const juce::File& file);
     void autoSliceLoadedSample();
+    void splitLoadedSliceAtSample(int sampleIndex);
     void loadSampleFromBrowserRow(int row);
     void previewSampleFromBrowserRow(int row, bool forceRestart = true);
     void updatePlayerKeyboardSizing();

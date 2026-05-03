@@ -2146,6 +2146,37 @@ int AudiocityAudioProcessor::splitImportedProgramZone(const int zoneIndex)
     return newZoneIndex;
 }
 
+int AudiocityAudioProcessor::splitImportedProgramSliceAtSample(const int sampleIndex)
+{
+    audiocity::engine::Program programToPublish;
+    std::vector<juce::AudioBuffer<float>> sampleDataToPublish;
+    int newZoneIndex = -1;
+
+    {
+        std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+        if (!importedProgramLoaded_.load(std::memory_order_relaxed)
+            || importedProgramFormat_ != audiocity::plugin::ImportedProgramFormat::sampleSlices
+            || importedProgram_.zones.empty()
+            || importedProgramSampleDataByAsset_.empty())
+        {
+            return -1;
+        }
+
+        auto updatedProgram = importedProgram_;
+        newZoneIndex = audiocity::plugin::splitProgramSliceAtSample(updatedProgram, sampleIndex);
+        if (newZoneIndex < 0)
+            return -1;
+
+        importedProgram_ = std::move(updatedProgram);
+        refreshImportedProgramDerivedStateLocked("Slice split: zone " + juce::String(newZoneIndex + 1));
+        captureImportedProgramSnapshotLocked(programToPublish, sampleDataToPublish);
+    }
+
+    engine_.panic();
+    engine_.setProgram(programToPublish, sampleDataToPublish);
+    return newZoneIndex;
+}
+
 bool AudiocityAudioProcessor::remapImportedProgramZonesChromatically(const std::vector<int>& zoneIndices,
                                                                     const int baseMidiNote)
 {
@@ -2198,6 +2229,34 @@ bool AudiocityAudioProcessor::spreadImportedProgramZonesAcrossKeyRange(const std
 
         importedProgram_ = std::move(updatedProgram);
         refreshImportedProgramDerivedStateLocked("Mapping spread: key range");
+        captureImportedProgramSnapshotLocked(programToPublish, sampleDataToPublish);
+    }
+
+    engine_.panic();
+    engine_.setProgram(programToPublish, sampleDataToPublish);
+    return true;
+}
+
+bool AudiocityAudioProcessor::deriveImportedProgramZoneRootsFromKeyRanges(const std::vector<int>& zoneIndices)
+{
+    audiocity::engine::Program programToPublish;
+    std::vector<juce::AudioBuffer<float>> sampleDataToPublish;
+
+    {
+        std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+        if (!importedProgramLoaded_.load(std::memory_order_relaxed)
+            || importedProgram_.zones.empty()
+            || importedProgramSampleDataByAsset_.empty())
+        {
+            return false;
+        }
+
+        auto updatedProgram = importedProgram_;
+        if (!audiocity::plugin::deriveProgramZoneRootNotesFromKeyRanges(updatedProgram, zoneIndices))
+            return false;
+
+        importedProgram_ = std::move(updatedProgram);
+        refreshImportedProgramDerivedStateLocked("Mapping roots derived: key range");
         captureImportedProgramSnapshotLocked(programToPublish, sampleDataToPublish);
     }
 

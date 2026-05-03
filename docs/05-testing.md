@@ -18,9 +18,9 @@
   - imported-program bounded disk-stream cache, processor-worker prime servicing, and note-on/lookahead hit-miss telemetry
   - SFZ import (#include/default_path/seq_length/release-trigger)
   - Mapping state structural round-trip, imported-program state subtree round-trip, legacy replay fallback, and imported-program derived-state summaries
-  - Mapping zone create, duplicate, split, delete, chromatic remap, key-range spread, and velocity fade edits, including explicit sample-asset selection for new zones
+  - Mapping zone create, duplicate, split, delete, chromatic remap, key-range spread, root-note derivation from key centers, and velocity fade edits, including explicit sample-asset selection for new zones
   - atomic imported-program batch mapping apply/delete rollback semantics
   - chronological editor undo-history behavior across imported-program mapping snapshots and sample/settings edits, including coalescing, undo labels, and create/duplicate/split structural zone operations
   - real-time modulation routing for mod wheel, aftertouch, velocity, and two macro controls across pitch, filter, and amp destinations, including processor parameter/state plumbing and the first in-plugin modulation surface
-  - REX slice decoding, transient slice-program construction for regular samples, chromatic slice-program import from `.rex/.rx2`, and imported-program path compatibility across generic, explicit sample-slice, and legacy state properties
+  - REX slice decoding, transient slice-program construction for regular samples, manual sample-slice splitting, chromatic slice-program import from `.rex/.rx2`, and imported-program path compatibility across generic, explicit sample-slice, and legacy state properties
   - SFZ diagnostics for unsupported opcode values
