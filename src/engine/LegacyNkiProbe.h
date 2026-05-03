@@ -48,6 +48,8 @@ struct ProbeZoneMetadata
     float pan = 0.0f;
     float tuneCents = 0.0f;
     int transposeSemitones = 0;
+    ZoneTriggerMode triggerMode = ZoneTriggerMode::gate;
+    bool hasTriggerMode = false;
     ZoneLoopMode loopMode = ZoneLoopMode::noLoop;
     bool hasLoopMode = false;
 };

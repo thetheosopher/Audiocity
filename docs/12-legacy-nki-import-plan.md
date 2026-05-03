@@ -10,7 +10,7 @@ This plan is intentionally limited to the earlier NKI era where instruments poin
 
 - A first playable legacy `.nki` subset is now implemented. The importer still begins with the lightweight probe, but when it finds resolved external WAV/AIFF references plus simple enumerated group/zone metadata tags, it now translates those zones into a playable imported `Program` using Audiocity's existing sample-asset path.
 - Audiocity now also stores an explicit `NKI` imported-program format tag so saved patches can restore those playable legacy imports through the normal imported-program reopen path.
-- The current translation scope is intentionally narrow but now includes resolved sample binding, key range, velocity range, root note, simple group naming, sample start/end, simple loop start/end plus loop-mode fields, and simple gain/pan/tuning translation. Richer Kontakt behavior remains future work.
+- The current translation scope is intentionally narrow but now includes resolved sample binding, key range, velocity range, root note, simple group naming, sample start/end, simple loop start/end plus loop-mode fields, simple gain/pan/tuning translation, and simple trigger-mode translation. Richer Kontakt behavior remains future work.
 
 ## Scope
 

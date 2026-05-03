@@ -184,6 +184,7 @@
 - Offline tests now also cover SFZ `loop_mode=loop_continuous` import-to-playback behavior, proving imported loop windows keep sounding after note-off when the engine should stay in continuous loop mode.
 - Offline tests now also cover SFZ `loop_mode=one_shot` import-to-playback behavior, proving imported one-shot regions keep playing after note-off without activating loop playback.
 - Offline tests now also cover SFZ gain/pan/tuning import-to-playback behavior, proving imported `volume`, `pan`, `tune`, and `transpose` values survive parsing and measurably change rendered balance, level, and tuned output.
+- Offline tests now also cover SFZ `off_by` import-to-playback behavior, proving imported choke groups stop the previous voice when a later region in the same choke group is triggered.
 
 - Add fixtures for additional SFZ round-robin edge cases and remaining import surfaces.
 
@@ -191,8 +192,8 @@
 
 **Current validated slice**
 - Failed file-import attempts now refresh the editor diagnostics line immediately, so parser and probe summaries are visible without waiting for a later UI change.
-- Legacy NKI groundwork now includes a first playable subset for simple discrete-sample `.nki` files: the importer classifies files by extracted external WAV/AIFF references, resolves them against nearby sample folders, translates enumerated group/zone metadata plus sample-window, loop, gain, pan, and tuning fields into a playable imported program when that subset is present, stores an explicit `NKI` imported-program format tag for restore, and still warns when the file instead looks container-based or otherwise unsupported.
-- Offline tests cover discrete-sample candidate detection, nearby-sample resolution, group/zone metadata enumeration, simple drum-style playable translation, sample-window plus loop translation, gain/pan/tuning translation, explicit `.nki` imported-program format tagging, unsupported container-format rejection, and library indexing of `.nki` instruments.
+- Legacy NKI groundwork now includes a first playable subset for simple discrete-sample `.nki` files: the importer classifies files by extracted external WAV/AIFF references, resolves them against nearby sample folders, translates enumerated group/zone metadata plus sample-window, loop, gain, pan, tuning, and simple trigger-mode fields into a playable imported program when that subset is present, stores an explicit `NKI` imported-program format tag for restore, and still warns when the file instead looks container-based or otherwise unsupported.
+- Offline tests cover discrete-sample candidate detection, nearby-sample resolution, group/zone metadata enumeration, simple drum-style playable translation, sample-window plus loop translation, gain/pan/tuning translation, trigger-mode translation, explicit `.nki` imported-program format tagging, unsupported container-format rejection, and library indexing of `.nki` instruments.
 
 - Non-RT logging pipeline + Diagnostics tab.
 

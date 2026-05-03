@@ -15,6 +15,7 @@ Support `<control>`, `<global>`, `<master>`, `<group>`, `<region>` with inherita
 - `loop_mode=loop_continuous` regions keep looping after note-off, and that import-to-playback path is now covered by offline tests.
 - `loop_mode=one_shot` maps to one-shot trigger behavior with no active loop, and that import-to-playback path is now covered by offline tests.
 - `volume`, `pan`, `tune`, and `transpose` are imported into zone gain, pan, and tuning fields, and that import-to-playback path is now covered by offline tests.
+- `off_by` is imported into choke groups, and that import-to-playback path is now covered by offline tests that verify later notes stop earlier voices in the same choke group.
 - Velocity crossfades (`xfin_*`, `xfout_*`) are imported into the zone model, preserved through Mapping edits/state restore, and now covered by offline import-to-playback tests across low, mid, and high velocities.
 
 ## Behavior

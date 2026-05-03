@@ -2564,6 +2564,93 @@ bool runSfzImportGainPanTunePlaybackTest()
         && differenceFromUntuned > 1.0f;
 }
 
+bool runSfzImportChokeGroupPlaybackTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 512;
+    constexpr int blockSize = 64;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_sfz_choke_group_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto sampleFile = tempDirectory.getChildFile("Tone.wav");
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(sampleFile.createOutputStream());
+        if (output == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        output.release();
+        const auto sample = createTestSample(sampleLength);
+        if (!writer->writeFromAudioSampleBuffer(sample, 0, sampleLength))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    const auto sfzFile = tempDirectory.getChildFile("choke.sfz");
+    if (!sfzFile.replaceWithText(
+            "<region> sample=Tone.wav key=60 off_by=9\n"
+            "<region> sample=Tone.wav key=62 off_by=9\n"))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    SfzImporter importer;
+    const auto result = importer.importFile(sfzFile);
+    tempDirectory.deleteRecursively();
+
+    if (result.hasErrors()
+        || result.program.zones.size() != 2
+        || result.sampleDataByAsset.size() != 1
+        || result.program.zones[0].chokeGroup != 9
+        || result.program.zones[1].chokeGroup != 9)
+    {
+        return false;
+    }
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, 2);
+    engine.setProgram(result.program, result.sampleDataByAsset);
+
+    {
+        juce::AudioBuffer<float> block(2, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+    }
+
+    if (engine.activeVoiceCount() != 1 || !engine.isNoteActive(60))
+        return false;
+
+    {
+        juce::AudioBuffer<float> block(2, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 62, 1.0f), 0);
+        engine.render(block, midi);
+    }
+
+    return engine.activeVoiceCount() == 1
+        && !engine.isNoteActive(60)
+        && engine.isNoteActive(62);
+}
+
 bool runSfzImportVelocityCrossfadePlaybackTest()
 {
     using namespace audiocity::engine;
@@ -3325,6 +3412,137 @@ bool runLegacyNkiImportGainPanTuneTest()
 
     tempDirectory.deleteRecursively();
     return rightEnergy > 0.01f && rightEnergy > leftEnergy * 1.5f;
+}
+
+bool runLegacyNkiImportTriggerModesTest()
+{
+    using namespace audiocity::engine::nki;
+
+    constexpr double sampleRate = 48000.0;
+    constexpr int blockSize = 64;
+    constexpr int sampleLength = 512;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_nki_import_trigger_modes_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto sampleDirectory = tempDirectory.getChildFile("Samples");
+    if (!sampleDirectory.createDirectory())
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto sampleFile = sampleDirectory.getChildFile("Tone.WAV");
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(sampleFile.createOutputStream());
+        if (output == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        output.release();
+        const auto sample = createTestSample(sampleLength);
+        if (!writer->writeFromAudioSampleBuffer(sample, 0, sampleLength))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    const auto nkiFile = tempDirectory.getChildFile("TriggerModes.nki");
+    juce::MemoryOutputStream payload;
+    auto writeAscii = [&payload](const char* text)
+    {
+        payload.write(text, std::strlen(text));
+        payload.writeByte(0);
+    };
+
+    payload.write("NKI\0", 4);
+    payload.writeByte(0x33);
+    payload.writeByte(0x14);
+    writeAscii("zone_name=OneShot");
+    writeAscii("lowkey=60");
+    writeAscii("highkey=60");
+    writeAscii("rootkey=60");
+    writeAscii("trigger=one_shot");
+    writeAscii("Samples/Tone.WAV");
+    writeAscii("zone_name=Release");
+    writeAscii("lowkey=62");
+    writeAscii("highkey=62");
+    writeAscii("rootkey=62");
+    writeAscii("trigger=release");
+    writeAscii("Samples/Tone.WAV");
+    if (!nkiFile.replaceWithData(payload.getData(), payload.getDataSize()))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto result = importFile(nkiFile);
+    if (result.hasErrors()
+        || !result.hasPlayableProgram()
+        || result.program.zones.size() != 2
+        || result.sampleDataByAsset.size() != 1
+        || result.program.zones[0].triggerMode != audiocity::engine::ZoneTriggerMode::oneShot
+        || result.program.zones[1].triggerMode != audiocity::engine::ZoneTriggerMode::release)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    using namespace audiocity::engine;
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, 2);
+    engine.setProgram(result.program, result.sampleDataByAsset);
+
+    auto renderNoteOnOnly = [&](const int midiNote)
+    {
+        juce::AudioBuffer<float> block(2, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, midiNote, 1.0f), 0);
+        engine.render(block, midi);
+    };
+
+    auto renderNoteOffOnly = [&](const int midiNote)
+    {
+        juce::AudioBuffer<float> block(2, blockSize);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOff(1, midiNote), 0);
+        engine.render(block, midi);
+    };
+
+    renderNoteOnOnly(60);
+    renderNoteOffOnly(60);
+    if (engine.activeVoiceCount() != 1 || !engine.isNoteActive(60))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    engine.panic();
+
+    renderNoteOnOnly(62);
+    if (engine.activeVoiceCount() != 0)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    renderNoteOffOnly(62);
+    const auto releaseTriggered = engine.activeVoiceCount() == 1 && engine.isNoteActive(62);
+    tempDirectory.deleteRecursively();
+    return releaseTriggered;
 }
 
 bool runLegacyNkiProbeRejectsContainerFormatsTest()
@@ -9917,6 +10135,7 @@ int main()
         AUDIOCITY_TEST(runSfzImportLoopContinuousPlaybackTest, 129),
         AUDIOCITY_TEST(runSfzImportOneShotPlaybackTest, 131),
         AUDIOCITY_TEST(runSfzImportGainPanTunePlaybackTest, 133),
+        AUDIOCITY_TEST(runSfzImportChokeGroupPlaybackTest, 135),
         AUDIOCITY_TEST(runSfzImportVelocityCrossfadePlaybackTest, 127),
         AUDIOCITY_TEST(runSfzImporterDiagnosticsTest, 89),
         AUDIOCITY_TEST(runLegacyNkiProbeDetectsDiscreteSampleReferencesTest, 122),
@@ -9926,6 +10145,7 @@ int main()
         AUDIOCITY_TEST(runLegacyNkiImportTranslatesLegacyZonesTest, 128),
         AUDIOCITY_TEST(runLegacyNkiImportSampleWindowAndLoopTest, 130),
         AUDIOCITY_TEST(runLegacyNkiImportGainPanTuneTest, 132),
+        AUDIOCITY_TEST(runLegacyNkiImportTriggerModesTest, 134),
         AUDIOCITY_TEST(runSameOffsetMidiEventOrderTest, 74),
         AUDIOCITY_TEST(runEngineProgramSnapshotZoneSelectionTest, 76),
         AUDIOCITY_TEST(runEngineProgramSampleAssetBindingTest, 77),

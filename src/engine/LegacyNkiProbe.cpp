@@ -214,6 +214,34 @@ std::optional<ZoneLoopMode> extractTaggedLoopMode(const juce::String& source)
     return std::nullopt;
 }
 
+std::optional<ZoneTriggerMode> extractTaggedTriggerMode(const juce::String& source)
+{
+    if (const auto oneShot = extractTaggedInt(source, { "one_shot=", "oneshot=" }); oneShot.has_value())
+        return *oneShot > 0 ? ZoneTriggerMode::oneShot : ZoneTriggerMode::gate;
+
+    if (const auto releaseTrigger = extractTaggedInt(source, { "release_trigger=", "releasetrigger=" });
+        releaseTrigger.has_value())
+    {
+        return *releaseTrigger > 0 ? ZoneTriggerMode::release : ZoneTriggerMode::gate;
+    }
+
+    const auto value = extractTaggedValue(source, { "trigger=", "trigger_mode=", "triggermode=" });
+    if (value.isEmpty())
+        return std::nullopt;
+
+    const auto normalized = value.toLowerCase();
+    if (normalized == "release")
+        return ZoneTriggerMode::release;
+
+    if (normalized == "one_shot" || normalized == "oneshot")
+        return ZoneTriggerMode::oneShot;
+
+    if (normalized == "attack" || normalized == "normal" || normalized == "gate")
+        return ZoneTriggerMode::gate;
+
+    return std::nullopt;
+}
+
 juce::String extractGroupName(const juce::String& source)
 {
     static const juce::StringArray tags{ "group=", "group_name=", "groupname=", "grp=" };
@@ -327,6 +355,11 @@ void enumerateZoneMetadata(const std::vector<juce::String>& printableStrings,
         applyTaggedIntField(printable, { "transpose=" }, -48, 48, pending.transposeSemitones);
         if (const auto pan = extractTaggedFloat(printable, { "pan=", "balance=" }); pan.has_value())
             pending.pan = normalisePanValue(*pan);
+        if (const auto triggerMode = extractTaggedTriggerMode(printable); triggerMode.has_value())
+        {
+            pending.triggerMode = *triggerMode;
+            pending.hasTriggerMode = true;
+        }
         if (const auto loopMode = extractTaggedLoopMode(printable); loopMode.has_value())
         {
             pending.loopMode = *loopMode;
@@ -749,6 +782,8 @@ ImportResult importFile(const juce::File& file)
         zone.pan = zoneMetadata.pan;
         zone.tuneCents = zoneMetadata.tuneCents
             + (static_cast<float>(zoneMetadata.transposeSemitones) * 100.0f);
+        if (zoneMetadata.hasTriggerMode)
+            zone.triggerMode = zoneMetadata.triggerMode;
         if (zoneMetadata.hasLoopMode)
             zone.loopMode = zoneMetadata.loopMode;
         result.program.zones.push_back(zone);
