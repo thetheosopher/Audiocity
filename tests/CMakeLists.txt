@@ -62,3 +62,76 @@ add_test(
     COMMAND "${CMAKE_COMMAND}"
         -DAUDIOCITY_SOURCE_DIR=${CMAKE_SOURCE_DIR}
         -P "${CMAKE_CURRENT_LIST_DIR}/PackagingConfigTests.cmake")
+
+add_executable(audiocity_ui_snapshot_harness
+    UiScreenshotHarness.cpp
+    ../src/plugin/PluginProcessor.cpp
+    ../src/plugin/PluginEditor.cpp
+    ../src/plugin/PeakPreviewCache.cpp
+    ../src/plugin/ImportedProgramState.cpp
+    ../src/plugin/PresetJson.cpp
+    ../src/plugin/ProgramMappingModel.cpp
+    ../src/plugin/PlayerPadState.cpp
+    ../src/plugin/CcLearnDial.cpp
+    ../src/plugin/LibraryFileIndex.cpp
+    ../src/plugin/LibraryMetadata.cpp
+    ../src/engine/EngineCore.cpp
+    ../src/engine/LegacyNkiProbe.cpp
+    ../src/engine/RexLoader.cpp
+    ../src/engine/SfzImporter.cpp
+    ../src/engine/VoicePool.cpp)
+
+target_include_directories(audiocity_ui_snapshot_harness
+    PRIVATE
+        ../src
+        ../third_party/REXSDK_Win_1.9.2
+        ${CMAKE_BINARY_DIR}/Audiocity_artefacts/JuceLibraryCode)
+
+if (NOT AUDIOCITY_ASIO_HEADER_DIR STREQUAL "")
+    target_include_directories(audiocity_ui_snapshot_harness PRIVATE "${AUDIOCITY_ASIO_HEADER_DIR}")
+endif ()
+
+if (NOT AUDIOCITY_ASIO_HOST_DIR STREQUAL "")
+    target_include_directories(audiocity_ui_snapshot_harness PRIVATE "${AUDIOCITY_ASIO_HOST_DIR}")
+endif ()
+
+target_compile_definitions(audiocity_ui_snapshot_harness
+    PRIVATE
+        AUDIOCITY_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        REX_WINDOWS=1
+        REX_MAC=0
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_ASIO=${AUDIOCITY_JUCE_ASIO}
+        JucePlugin_Name="Audiocity")
+
+target_link_libraries(audiocity_ui_snapshot_harness
+    PRIVATE
+        AudiocityBinaryData
+        audiocity_rex_sdk
+        juce::juce_audio_basics
+        juce::juce_audio_devices
+        juce::juce_audio_formats
+        juce::juce_audio_processors
+        juce::juce_audio_utils
+        juce::juce_data_structures
+        juce::juce_dsp
+        juce::juce_events
+        juce::juce_graphics
+        juce::juce_gui_basics
+        juce::juce_gui_extra)
+
+if (MSVC)
+    target_compile_options(audiocity_ui_snapshot_harness PRIVATE /W4 /WX /permissive- /FS)
+    target_compile_options(audiocity_ui_snapshot_harness PRIVATE $<$<CONFIG:Debug>:/Z7>)
+endif ()
+
+set(AUDIOCITY_UI_SNAPSHOT_EXE "$<TARGET_FILE:audiocity_ui_snapshot_harness>")
+
+add_test(
+    NAME audiocity_ui_snapshot_harness
+    COMMAND "${CMAKE_COMMAND}"
+        -DAUDIOCITY_UI_SNAPSHOT_EXE=${AUDIOCITY_UI_SNAPSHOT_EXE}
+        -DAUDIOCITY_UI_SNAPSHOT_DIR=${CMAKE_BINARY_DIR}/ui-snapshots
+        -P "${CMAKE_CURRENT_LIST_DIR}/RunUiSnapshotHarness.cmake")
+

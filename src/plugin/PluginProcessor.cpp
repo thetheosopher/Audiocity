@@ -993,7 +993,7 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     const auto numOutputChannels = getTotalNumOutputChannels();
     const auto captureRecording = captureRecording_.load(std::memory_order_acquire);
     const auto monitorCaptureInput = captureRecording
-        || getEditorTabIndex() == 4;
+        || getEditorTabIndex() == 5;
 
     for (auto channel = numInputChannels; channel < numOutputChannels; ++channel)
         buffer.clear(channel, 0, buffer.getNumSamples());
@@ -2839,12 +2839,12 @@ std::pair<int, int> AudiocityAudioProcessor::getWaveformViewRange() const noexce
 
 void AudiocityAudioProcessor::setEditorTabIndex(const int tabIndex) noexcept
 {
-    editorTabIndex_.store(juce::jlimit(0, 4, tabIndex), std::memory_order_relaxed);
+    editorTabIndex_.store(juce::jlimit(0, 6, tabIndex), std::memory_order_relaxed);
 }
 
 int AudiocityAudioProcessor::getEditorTabIndex() const noexcept
 {
-    return juce::jlimit(0, 4, editorTabIndex_.load(std::memory_order_relaxed));
+    return juce::jlimit(0, 6, editorTabIndex_.load(std::memory_order_relaxed));
 }
 
 void AudiocityAudioProcessor::setWaveformDisplayMode(const int modeId) noexcept

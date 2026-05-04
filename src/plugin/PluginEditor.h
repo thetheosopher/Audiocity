@@ -619,6 +619,8 @@ private:
     class AmpEnvelopeGraph final : public juce::Component
     {
     public:
+        std::function<void(float, float, float, float)> onEnvelopeEdited;
+
         void setEnvelope(float attackMs, float decayMs, float sustain, float releaseMs)
         {
             attackMs_ = juce::jmax(0.1f, attackMs);
@@ -629,12 +631,40 @@ private:
         }
 
         void paint(juce::Graphics& g) override;
+        void mouseDown(const juce::MouseEvent& event) override;
+        void mouseDrag(const juce::MouseEvent& event) override;
+        void mouseUp(const juce::MouseEvent& event) override;
 
     private:
+        enum class DragHandle
+        {
+            none,
+            attack,
+            decaySustain,
+            release
+        };
+
+        struct Geometry
+        {
+            juce::Rectangle<float> area;
+            juce::Point<float> attackPoint;
+            juce::Point<float> decayPoint;
+            juce::Point<float> releasePoint;
+        };
+
+        [[nodiscard]] Geometry getGeometry() const;
+        [[nodiscard]] float levelFromY(float y) const;
+        [[nodiscard]] static float holdMsFor(float attackMs, float decayMs, float releaseMs) noexcept;
+        [[nodiscard]] static float totalMsFor(float attackMs, float decayMs, float releaseMs) noexcept;
+        [[nodiscard]] static float solveAttackMsForX(float proportion, float decayMs, float releaseMs) noexcept;
+        [[nodiscard]] static float solveDecayMsForX(float proportion, float attackMs, float releaseMs) noexcept;
+        [[nodiscard]] static float solveReleaseMsForX(float proportion, float attackMs, float decayMs) noexcept;
+
         float attackMs_ = 5.0f;
         float decayMs_ = 150.0f;
         float sustain_ = 0.85f;
         float releaseMs_ = 150.0f;
+        DragHandle dragHandle_ = DragHandle::none;
     };
 
     class FilterResponseGraph final : public juce::Component

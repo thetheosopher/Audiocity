@@ -71,11 +71,13 @@ Modernize Audiocity into a premium sampler interface that feels fast, musical, t
 - [x] Phase 1.3: Hide diagnostics behind an explicit reveal instead of always-on panel space.
 - [x] Phase 2.1: Reduce trim/loop dependence on knob-only editing.
 - [ ] Phase 2.2: Improve slice visibility and interactions.
+- [x] Phase 2.3: Make amp and filter envelope graphs directly editable.
 - [x] Phase 3.0: Collapse secondary Sample-page sections behind progressive disclosure.
 - [ ] Phase 3.1: Rework Player into a persistent performance surface.
 - [ ] Phase 3.2: Fold Library into a persistent or quickly accessible browser rail.
 - [ ] Phase 4.1: Add visual modulation routing and destination feedback.
 - [ ] Phase 5.1: Restructure the full sampler layout around browser/workspace/inspector.
+- [ ] Validation 1.0: Land deterministic UI snapshot capture and artifact export for automated feedback.
 
 ## Risks And Guardrails
 - Do not add audio-thread allocations, locks, file I/O, or logging.
@@ -94,9 +96,18 @@ Modernize Audiocity into a premium sampler interface that feels fast, musical, t
 - 2026-05-03: Phase 3.0 landed in the Sample page: `Program Map`, `Filter Envelope + Mod`, and `Effects` now collapse behind section headers so the primary path stays visible.
 - 2026-05-03: Phase 2.2 advanced: slice markers now render with stronger caps and small numeric badges for compact slice sets, improving visual scanability without changing engine behavior.
 - 2026-05-03: Validation passed again after the waveform-summary, collapsible-section, and slice-visibility changes.
+- 2026-05-04: Phase 2.3 landed: the amp and filter ADSR graphs now expose draggable nodes so envelope shaping can happen directly in the graph while reusing the existing dial and processor update path.
+- 2026-05-04: Editor tab persistence seam corrected: the editor now honors the stored tab index on construction, and the processor tab range/capture-tab monitoring now cover all current tabs instead of the older `0..4` range.
+- 2026-05-04: Screenshot automation scaffolding started in `tests/UiScreenshotHarness.cpp` and `tests/CMakeLists.txt`: the harness is designed to render deterministic offscreen PNG captures across editor tabs for UI review.
 
 ## Validation Notes
 - Current repo validation is strong for engine behavior, but UI visual changes do not yet have a dedicated screenshot or golden-image harness.
 - Until a UI snapshot harness exists, each UI milestone must at minimum compile cleanly and be documented here.
 - 2026-05-03: `Build_CMakeTools` completed successfully after the Phase 1 UI changes.
 - 2026-05-03: `Build_CMakeTools` completed successfully after the Phase 2.1, Phase 3.0, and slice-visibility follow-up changes.
+- 2026-05-04: `Build_CMakeTools` completed successfully after the editable-envelope and tab-state fixes.
+- 2026-05-04: UI snapshot harness scaffolding now exists, with a staged rollout plan:
+	- Stage 1: deterministic offscreen PNG capture for representative editor tabs and states.
+	- Stage 2: publish screenshot artifacts from CI for human feedback on each UI iteration.
+	- Stage 3: add curated baseline images and image-diff thresholds once layouts stabilize.
+- 2026-05-04: The new harness target still needs one more end-to-end validation pass in the Debug/test flow before it can be treated as a fully reliable UI regression check.

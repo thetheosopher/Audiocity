@@ -794,7 +794,8 @@ void AudiocityAudioProcessorEditor::AmpEnvelopeGraph::paint(juce::Graphics& g)
     g.setColour(uiBorderColour());
     g.drawRect(getLocalBounds(), 1);
 
-    const auto area = getLocalBounds().toFloat().reduced(10.0f, 8.0f);
+    const auto geometry = getGeometry();
+    const auto area = geometry.area;
     if (area.getWidth() <= 1.0f || area.getHeight() <= 1.0f)
         return;
 
@@ -805,16 +806,6 @@ void AudiocityAudioProcessorEditor::AmpEnvelopeGraph::paint(juce::Graphics& g)
         g.drawLine(area.getX(), y, area.getRight(), y, 1.0f);
     }
 
-    const auto attack = juce::jmax(0.001f, attackMs_);
-    const auto decay = juce::jmax(0.001f, decayMs_);
-    const auto release = juce::jmax(0.001f, releaseMs_);
-    const auto hold = juce::jmax(5.0f, (attack + decay + release) * 0.3f);
-    const auto total = attack + decay + hold + release;
-
-    auto xFromTime = [&](float t)
-    {
-        return area.getX() + (t / total) * area.getWidth();
-    };
     auto yFromLevel = [&](float level)
     {
         return area.getBottom() - juce::jlimit(0.0f, 1.0f, level) * area.getHeight();
@@ -822,12 +813,12 @@ void AudiocityAudioProcessorEditor::AmpEnvelopeGraph::paint(juce::Graphics& g)
 
     const auto x0 = area.getX();
     const auto y0 = yFromLevel(0.0f);
-    const auto x1 = xFromTime(attack);
-    const auto y1 = yFromLevel(1.0f);
-    const auto x2 = xFromTime(attack + decay);
-    const auto y2 = yFromLevel(sustain_);
-    const auto x3 = xFromTime(attack + decay + hold);
-    const auto y3 = y2;
+    const auto x1 = geometry.attackPoint.x;
+    const auto y1 = geometry.attackPoint.y;
+    const auto x2 = geometry.decayPoint.x;
+    const auto y2 = geometry.decayPoint.y;
+    const auto x3 = geometry.releasePoint.x;
+    const auto y3 = geometry.releasePoint.y;
     const auto x4 = area.getRight();
     const auto y4 = yFromLevel(0.0f);
 
@@ -869,6 +860,216 @@ void AudiocityAudioProcessorEditor::AmpEnvelopeGraph::paint(juce::Graphics& g)
     drawMarker("D", (x1 + x2) * 0.5f);
     drawMarker("S", (x2 + x3) * 0.5f);
     drawMarker("R", (x3 + x4) * 0.5f);
+
+    if (onEnvelopeEdited)
+    {
+        const auto drawHandle = [&](juce::Point<float> center, bool active)
+        {
+            const auto radius = active ? 5.0f : 4.0f;
+            g.setColour(uiChromeColour());
+            g.fillEllipse(center.x - radius - 1.0f, center.y - radius - 1.0f, (radius + 1.0f) * 2.0f, (radius + 1.0f) * 2.0f);
+            g.setColour(active ? uiAccentAmberColour() : uiAccentColour().brighter(0.15f));
+            g.fillEllipse(center.x - radius, center.y - radius, radius * 2.0f, radius * 2.0f);
+        };
+
+        drawHandle(geometry.attackPoint, dragHandle_ == DragHandle::attack);
+        drawHandle(geometry.decayPoint, dragHandle_ == DragHandle::decaySustain);
+        drawHandle(geometry.releasePoint, dragHandle_ == DragHandle::release);
+
+        g.setColour(uiTextMutedColour());
+        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.drawText("Drag nodes", getWidth() - 68, 6, 60, 12, juce::Justification::centredRight);
+    }
+}
+
+void AudiocityAudioProcessorEditor::AmpEnvelopeGraph::mouseDown(const juce::MouseEvent& event)
+{
+    if (!event.mods.isLeftButtonDown() || !onEnvelopeEdited)
+        return;
+
+    const auto geometry = getGeometry();
+    if (geometry.area.isEmpty())
+        return;
+
+    constexpr float kPickRadius = 12.0f;
+    const auto distanceTo = [&](juce::Point<float> point)
+    {
+        return event.position.getDistanceFrom(point);
+    };
+
+    const auto attackDistance = distanceTo(geometry.attackPoint);
+    const auto decayDistance = distanceTo(geometry.decayPoint);
+    const auto releaseDistance = distanceTo(geometry.releasePoint);
+    const auto nearest = juce::jmin(attackDistance, decayDistance, releaseDistance);
+
+    if (nearest > kPickRadius)
+        return;
+
+    if (nearest == attackDistance)
+        dragHandle_ = DragHandle::attack;
+    else if (nearest == decayDistance)
+        dragHandle_ = DragHandle::decaySustain;
+    else
+        dragHandle_ = DragHandle::release;
+
+    mouseDrag(event);
+}
+
+void AudiocityAudioProcessorEditor::AmpEnvelopeGraph::mouseDrag(const juce::MouseEvent& event)
+{
+    if (dragHandle_ == DragHandle::none || !onEnvelopeEdited)
+        return;
+
+    const auto geometry = getGeometry();
+    if (geometry.area.isEmpty())
+        return;
+
+    constexpr float kEdgePadding = 2.0f;
+    const auto clampedX = juce::jlimit(geometry.area.getX() + kEdgePadding,
+        geometry.area.getRight() - kEdgePadding,
+        event.position.x);
+    const auto proportion = (clampedX - geometry.area.getX()) / geometry.area.getWidth();
+
+    auto nextAttack = attackMs_;
+    auto nextDecay = decayMs_;
+    auto nextSustain = sustain_;
+    auto nextRelease = releaseMs_;
+
+    switch (dragHandle_)
+    {
+        case DragHandle::attack:
+            nextAttack = solveAttackMsForX(proportion, decayMs_, releaseMs_);
+            break;
+        case DragHandle::decaySustain:
+            nextDecay = solveDecayMsForX(proportion, attackMs_, releaseMs_);
+            nextSustain = levelFromY(event.position.y);
+            break;
+        case DragHandle::release:
+            nextRelease = solveReleaseMsForX(proportion, attackMs_, decayMs_);
+            nextSustain = levelFromY(event.position.y);
+            break;
+        case DragHandle::none:
+            break;
+    }
+
+    setEnvelope(nextAttack, nextDecay, nextSustain, nextRelease);
+    onEnvelopeEdited(attackMs_, decayMs_, sustain_, releaseMs_);
+}
+
+void AudiocityAudioProcessorEditor::AmpEnvelopeGraph::mouseUp(const juce::MouseEvent&)
+{
+    dragHandle_ = DragHandle::none;
+    repaint();
+}
+
+AudiocityAudioProcessorEditor::AmpEnvelopeGraph::Geometry AudiocityAudioProcessorEditor::AmpEnvelopeGraph::getGeometry() const
+{
+    Geometry geometry;
+    geometry.area = getLocalBounds().toFloat().reduced(10.0f, 8.0f);
+
+    if (geometry.area.getWidth() <= 1.0f || geometry.area.getHeight() <= 1.0f)
+        return geometry;
+
+    const auto attack = juce::jmax(0.1f, attackMs_);
+    const auto decay = juce::jmax(0.1f, decayMs_);
+    const auto release = juce::jmax(0.1f, releaseMs_);
+    const auto total = totalMsFor(attack, decay, release);
+
+    auto xFromTime = [&](float timeMs)
+    {
+        return geometry.area.getX() + (timeMs / total) * geometry.area.getWidth();
+    };
+    auto yFromLevel = [&](float level)
+    {
+        return geometry.area.getBottom() - juce::jlimit(0.0f, 1.0f, level) * geometry.area.getHeight();
+    };
+
+    geometry.attackPoint = { xFromTime(attack), yFromLevel(1.0f) };
+    geometry.decayPoint = { xFromTime(attack + decay), yFromLevel(sustain_) };
+    geometry.releasePoint = { xFromTime(attack + decay + holdMsFor(attack, decay, release)), yFromLevel(sustain_) };
+    return geometry;
+}
+
+float AudiocityAudioProcessorEditor::AmpEnvelopeGraph::levelFromY(float y) const
+{
+    const auto area = getGeometry().area;
+    if (area.getHeight() <= 1.0f)
+        return sustain_;
+
+    return juce::jlimit(0.0f, 1.0f, (area.getBottom() - y) / area.getHeight());
+}
+
+float AudiocityAudioProcessorEditor::AmpEnvelopeGraph::holdMsFor(float attackMs, float decayMs, float releaseMs) noexcept
+{
+    return juce::jmax(5.0f, (attackMs + decayMs + releaseMs) * 0.3f);
+}
+
+float AudiocityAudioProcessorEditor::AmpEnvelopeGraph::totalMsFor(float attackMs, float decayMs, float releaseMs) noexcept
+{
+    return attackMs + decayMs + releaseMs + holdMsFor(attackMs, decayMs, releaseMs);
+}
+
+float AudiocityAudioProcessorEditor::AmpEnvelopeGraph::solveAttackMsForX(float proportion, float decayMs, float releaseMs) noexcept
+{
+    constexpr float kMinMs = 0.1f;
+    constexpr float kMaxMs = 5000.0f;
+    const auto target = juce::jlimit(0.0005f, 0.76f, proportion);
+
+    auto low = kMinMs;
+    auto high = kMaxMs;
+    for (int iteration = 0; iteration < 24; ++iteration)
+    {
+        const auto mid = 0.5f * (low + high);
+        const auto midProportion = mid / totalMsFor(mid, decayMs, releaseMs);
+        if (midProportion < target)
+            low = mid;
+        else
+            high = mid;
+    }
+
+    return 0.5f * (low + high);
+}
+
+float AudiocityAudioProcessorEditor::AmpEnvelopeGraph::solveDecayMsForX(float proportion, float attackMs, float releaseMs) noexcept
+{
+    constexpr float kMinMs = 0.1f;
+    constexpr float kMaxMs = 5000.0f;
+    const auto target = juce::jlimit(0.001f, 0.85f, proportion);
+
+    auto low = kMinMs;
+    auto high = kMaxMs;
+    for (int iteration = 0; iteration < 24; ++iteration)
+    {
+        const auto mid = 0.5f * (low + high);
+        const auto midProportion = (attackMs + mid) / totalMsFor(attackMs, mid, releaseMs);
+        if (midProportion < target)
+            low = mid;
+        else
+            high = mid;
+    }
+
+    return 0.5f * (low + high);
+}
+
+float AudiocityAudioProcessorEditor::AmpEnvelopeGraph::solveReleaseMsForX(float proportion, float attackMs, float decayMs) noexcept
+{
+    constexpr float kMinMs = 0.1f;
+    constexpr float kMaxMs = 5000.0f;
+    const auto target = juce::jlimit(0.15f, 0.999f, proportion);
+
+    auto low = kMinMs;
+    auto high = kMaxMs;
+    for (int iteration = 0; iteration < 24; ++iteration)
+    {
+        const auto mid = 0.5f * (low + high);
+        const auto midProportion = (attackMs + decayMs + holdMsFor(attackMs, decayMs, mid)) / totalMsFor(attackMs, decayMs, mid);
+        if (midProportion > target)
+            low = mid;
+        else
+            high = mid;
+    }
+
+    return 0.5f * (low + high);
 }
 
 void AudiocityAudioProcessorEditor::FilterResponseGraph::paint(juce::Graphics& g)
@@ -2274,7 +2475,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     tabBar_.addTab("Generate", uiPanelColour(), &tabGeneratePage_, false);
     tabBar_.addTab("Capture", uiPanelColour(), &tabCapturePage_, false);
     tabBar_.addTab("About", uiPanelColour(), &tabAboutPage_, false);
-    currentTabIndex_ = 0;
+    currentTabIndex_ = juce::jlimit(0, tabBar_.getNumTabs() - 1, processor_.getEditorTabIndex());
     processor_.setEditorTabIndex(currentTabIndex_);
     tabBar_.setCurrentTabIndex(currentTabIndex_);
 
@@ -3258,6 +3459,15 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     ampLfoShapeCombo_.setSelectedId(1, juce::dontSendNotification);
     ampLfoShapeCombo_.onChange = [this] { pushAmpLfoSettings(); };
     addAndMakeVisible(ampEnvelopeGraph_);
+    ampEnvelopeGraph_.onEnvelopeEdited = [this](float attackMs, float decayMs, float sustain, float releaseMs)
+    {
+        ampAttackDial_.setValue(attackMs, juce::dontSendNotification);
+        ampDecayDial_.setValue(decayMs, juce::dontSendNotification);
+        ampSustainDial_.setValue(sustain * 100.0f, juce::dontSendNotification);
+        ampReleaseDial_.setValue(releaseMs, juce::dontSendNotification);
+        pushAmpEnvelope();
+        updateAmpEnvelopeGraphFromDials();
+    };
     ampAttackDial_.onValueChange = [this] { pushAmpEnvelope(); updateAmpEnvelopeGraphFromDials(); };
     ampDecayDial_.onValueChange = [this] { pushAmpEnvelope(); updateAmpEnvelopeGraphFromDials(); };
     ampSustainDial_.onValueChange = [this] { pushAmpEnvelope(); updateAmpEnvelopeGraphFromDials(); };
@@ -3298,6 +3508,15 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     filterReleaseDial_.setDoubleClickResetValue(5.0);
     filterReleaseDial_.setSkewFactorFromMidPoint(100.0);
     addAndMakeVisible(filterEnvelopeGraph_);
+    filterEnvelopeGraph_.onEnvelopeEdited = [this](float attackMs, float decayMs, float sustain, float releaseMs)
+    {
+        filterAttackDial_.setValue(attackMs, juce::dontSendNotification);
+        filterDecayDial_.setValue(decayMs, juce::dontSendNotification);
+        filterSustainDial_.setValue(sustain * 100.0f, juce::dontSendNotification);
+        filterReleaseDial_.setValue(releaseMs, juce::dontSendNotification);
+        pushFilterEnvelope();
+        updateFilterEnvelopeGraphFromDials();
+    };
     addAndMakeVisible(filterKeytrackDial_);
     filterKeytrackDial_.setDoubleClickResetValue(0.0);
     addAndMakeVisible(filterVelDial_);
