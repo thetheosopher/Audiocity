@@ -180,6 +180,8 @@ private:
     void returnKeyPressed(int lastRowSelected) override;
 
     void timerCallback() override;
+    void paintSampleInspectorPane(juce::Graphics& g) const;
+    void clearSampleInformationComponentBounds();
 
     // ── Custom theme ──
     DialLookAndFeel dialLaf_;
@@ -594,6 +596,8 @@ private:
     WaveformView waveformView_;
     juce::Viewport sampleControlsViewport_;
     PaintCallbackComponent sampleControlsContent_;
+    juce::Rectangle<int> sampleInspectorInfoBounds_;
+    juce::Rectangle<int> sampleInspectorProgramMapBounds_;
 
     // ── Generate ──
     class GeneratedWaveformView final : public juce::Component

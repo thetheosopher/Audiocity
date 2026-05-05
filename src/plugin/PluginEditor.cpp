@@ -2639,6 +2639,13 @@ void PlayerModulationPanel::paint(juce::Graphics& g)
         if (bounds.getWidth() < 118 || bounds.getHeight() < 58)
             return;
 
+        struct FocusState
+        {
+            juce::String text;
+            juce::Colour colour = juce::Colour(0xff7f8aa6);
+            float magnitude = 0.0f;
+        };
+
         const auto countActiveRoutes = [&sourceStates]()
         {
             int activeCount = 0;
@@ -2652,6 +2659,52 @@ void PlayerModulationPanel::paint(juce::Graphics& g)
             return activeCount;
         };
 
+        const auto formatPitchValue = [](const float value)
+        {
+            return juce::String(value >= 0.0f ? "+" : "-")
+                + juce::String(static_cast<int>(std::round(std::abs(value))))
+                + "c";
+        };
+
+        const auto formatFilterValue = [](const float value)
+        {
+            const auto magnitude = std::abs(value);
+            const auto sign = value >= 0.0f ? "+" : "-";
+            if (magnitude >= 1000.0f)
+                return juce::String(sign) + juce::String(magnitude / 1000.0f, 1) + "k";
+
+            return juce::String(sign) + juce::String(static_cast<int>(std::round(magnitude)));
+        };
+
+        const auto formatAmpValue = [](const float value)
+        {
+            return juce::String(value >= 0.0f ? "+" : "-")
+                + juce::String(static_cast<int>(std::round(std::abs(value))))
+                + "%";
+        };
+
+        FocusState focusState;
+        const auto captureFocus = [&sourceStates, &focusState](const juce::String& destinationLabel,
+                                                               auto&& valueGetter,
+                                                               auto&& formatter)
+        {
+            for (std::size_t index = 0; index < sourceStates.size(); ++index)
+            {
+                const auto value = static_cast<float>(valueGetter(sourceStates[index]));
+                const auto magnitude = std::abs(value);
+                if (magnitude <= focusState.magnitude)
+                    continue;
+
+                focusState.magnitude = magnitude;
+                focusState.text = sourceStates[index].shortLabel + " -> " + destinationLabel + " " + formatter(value);
+                focusState.colour = value >= 0.0f ? sourceStates[index].colour : juce::Colour(0xffef7f73);
+            }
+        };
+
+        captureFocus("Pitch", [](const auto& source) { return source.pitch; }, formatPitchValue);
+        captureFocus("Filter", [](const auto& source) { return source.filter; }, formatFilterValue);
+        captureFocus("Amp", [](const auto& source) { return source.amp; }, formatAmpValue);
+
         auto card = bounds.toFloat();
         g.setColour(juce::Colour(0xff101827).withAlpha(0.9f));
         g.fillRoundedRectangle(card, 6.0f);
@@ -2659,16 +2712,25 @@ void PlayerModulationPanel::paint(juce::Graphics& g)
         g.drawRoundedRectangle(card.reduced(0.5f), 6.0f, 1.0f);
 
         auto inner = bounds.reduced(10, 8);
-        auto header = inner.removeFromTop(16);
+        auto header = inner.removeFromTop(28);
+        auto titleRow = header.removeFromTop(14);
         g.setColour(juce::Colour(0xffe5e5ef));
         g.setFont(juce::Font(juce::FontOptions(10.0f)).boldened());
-        g.drawText(title, header.removeFromLeft(juce::jmax(70, header.getWidth() - 86)), juce::Justification::centredLeft, false);
+        g.drawText(title, titleRow.removeFromLeft(juce::jmax(70, titleRow.getWidth() - 86)), juce::Justification::centredLeft, false);
 
         g.setColour(juce::Colour(0xff8fb7ff));
         g.setFont(juce::Font(juce::FontOptions(9.0f)));
-        g.drawText(juce::String(countActiveRoutes()) + " active", header, juce::Justification::centredRight, false);
+        g.drawText(juce::String(countActiveRoutes()) + " active", titleRow, juce::Justification::centredRight, false);
 
-        inner.removeFromTop(4);
+        auto focusRow = header.removeFromTop(10);
+        g.setColour(focusState.magnitude > 0.0f ? focusState.colour : juce::Colour(0xff7f8aa6));
+        g.setFont(juce::Font(juce::FontOptions(8.0f)).boldened());
+        g.drawText(focusState.magnitude > 0.0f ? juce::String("Focus ") + focusState.text : juce::String("Focus idle"),
+                   focusRow,
+                   juce::Justification::centredLeft,
+                   false);
+
+        inner.removeFromTop(2);
 
         const auto paintDestinationRow = [&g, &sourceStates](juce::Rectangle<int> rowBounds,
                                                              const juce::String& destinationLabel,
@@ -2684,6 +2746,18 @@ void PlayerModulationPanel::paint(juce::Graphics& g)
             const auto segmentWidth = (rowBounds.getWidth() - (juce::jmax(0, static_cast<int>(sourceStates.size()) - 1) * kSegmentGap))
                 / juce::jmax(1, static_cast<int>(sourceStates.size()));
 
+            int dominantIndex = -1;
+            float dominantMagnitude = 0.0f;
+            for (std::size_t index = 0; index < sourceStates.size(); ++index)
+            {
+                const auto magnitude = std::abs(static_cast<float>(valueGetter(sourceStates[index])));
+                if (magnitude > dominantMagnitude)
+                {
+                    dominantMagnitude = magnitude;
+                    dominantIndex = static_cast<int>(index);
+                }
+            }
+
             for (std::size_t index = 0; index < sourceStates.size(); ++index)
             {
                 auto segmentBounds = rowBounds.removeFromLeft(segmentWidth).toFloat();
@@ -2692,19 +2766,22 @@ void PlayerModulationPanel::paint(juce::Graphics& g)
 
                 g.setColour(juce::Colour(0xff192131));
                 g.fillRoundedRectangle(segmentBounds, 4.0f);
-                g.setColour(juce::Colour(0xff2b3850));
-                g.drawRoundedRectangle(segmentBounds.reduced(0.5f), 4.0f, 1.0f);
 
                 const auto value = valueGetter(sourceStates[index]);
                 const auto normalized = juce::jlimit(0.0f, 1.0f,
                     magnitudeMax > 0.0f ? std::abs(value) / magnitudeMax : 0.0f);
+                const auto emphasisColour = value >= 0.0f ? sourceStates[index].colour : juce::Colour(0xffef7f73);
+                const auto isDominant = dominantMagnitude > 0.0f && static_cast<int>(index) == dominantIndex;
                 if (normalized > 0.0f)
                 {
                     auto fillBounds = segmentBounds.reduced(1.5f);
                     fillBounds.setWidth(fillBounds.getWidth() * normalized);
-                    g.setColour((value >= 0.0f ? sourceStates[index].colour : juce::Colour(0xffef7f73)).withAlpha(0.86f));
+                    g.setColour(emphasisColour.withAlpha(isDominant ? 0.92f : 0.86f));
                     g.fillRoundedRectangle(fillBounds, 3.0f);
                 }
+
+                g.setColour(isDominant ? emphasisColour.withAlpha(0.95f) : juce::Colour(0xff2b3850));
+                g.drawRoundedRectangle(segmentBounds.reduced(0.5f), 4.0f, isDominant ? 1.4f : 1.0f);
 
                 g.setColour(normalized > 0.0f ? juce::Colour(0xfff5f7ff) : juce::Colour(0xff7f8aa6));
                 g.setFont(juce::Font(juce::FontOptions(8.5f)).boldened());
@@ -4912,7 +4989,9 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     autopanDepthDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
     saturationDriveDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
     saturationModeCombo_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
-    programMapText_.setVisible(showSampleTab && processor_.hasImportedProgram() && isSampleGroupExpanded("programMap"));
+    const bool useSampleInspectorRail = getWidth() >= 640;
+    programMapText_.setVisible(showSampleTab && processor_.hasImportedProgram()
+        && (useSampleInspectorRail || isSampleGroupExpanded("programMap")));
     diagnosticsLabel_.setVisible(showSampleTab && showDiagnosticsPanel_);
 
     playerKeyboardLabel_.setVisible(showPlayerTab || showPerformanceStrip);
@@ -7776,17 +7855,254 @@ void AudiocityAudioProcessorEditor::resized()
 
     area.removeFromTop(kGrpGap);
 
-    const auto waveformHeight = juce::jlimit(180, 320, area.getHeight() / 3);
-    waveformView_.setBounds(area.removeFromTop(waveformHeight));
-    area.removeFromTop(8);
+    sampleInspectorInfoBounds_ = {};
+    sampleInspectorProgramMapBounds_ = {};
 
-    auto waveformInfoRow = area.removeFromTop(26);
+    const auto reparentInspectorComponent = [this](juce::Component& component, juce::Component& target)
+    {
+        if (component.getParentComponent() != &target)
+            target.addAndMakeVisible(component);
+    };
+
+    const auto setSampleInspectorParenting = [&](const bool useInspectorRail)
+    {
+        auto& target = useInspectorRail ? static_cast<juce::Component&>(*this)
+                                        : static_cast<juce::Component&>(sampleControlsContent_);
+
+        reparentInspectorComponent(sampleInfoSourceLabel_, target);
+        reparentInspectorComponent(sampleInfoSourceValue_, target);
+        reparentInspectorComponent(sampleInfoRateLabel_, target);
+        reparentInspectorComponent(sampleInfoRateValue_, target);
+        reparentInspectorComponent(sampleInfoBitDepthLabel_, target);
+        reparentInspectorComponent(sampleInfoBitDepthValue_, target);
+        reparentInspectorComponent(sampleInfoChannelsLabel_, target);
+        reparentInspectorComponent(sampleInfoChannelsValue_, target);
+        reparentInspectorComponent(sampleInfoDurationLabel_, target);
+        reparentInspectorComponent(sampleInfoDurationValue_, target);
+        reparentInspectorComponent(sampleInfoFileSizeLabel_, target);
+        reparentInspectorComponent(sampleInfoFileSizeValue_, target);
+        reparentInspectorComponent(sampleInfoSamplesLabel_, target);
+        reparentInspectorComponent(sampleInfoSamplesValue_, target);
+        reparentInspectorComponent(sampleInfoPlaybackLabel_, target);
+        reparentInspectorComponent(sampleInfoPlaybackValue_, target);
+        reparentInspectorComponent(sampleInfoPlaybackDurationLabel_, target);
+        reparentInspectorComponent(sampleInfoPlaybackDurationValue_, target);
+        reparentInspectorComponent(sampleInfoLoopLabel_, target);
+        reparentInspectorComponent(sampleInfoLoopValue_, target);
+        reparentInspectorComponent(sampleInfoLoopDurationLabel_, target);
+        reparentInspectorComponent(sampleInfoLoopDurationValue_, target);
+        reparentInspectorComponent(sampleInfoTempoLabel_, target);
+        reparentInspectorComponent(sampleInfoTempoValue_, target);
+        reparentInspectorComponent(sampleInfoMetaRootLabel_, target);
+        reparentInspectorComponent(sampleInfoMetaRootValue_, target);
+        reparentInspectorComponent(sampleInfoBadge_, target);
+        reparentInspectorComponent(programMapText_, target);
+    };
+
+    const auto layoutSampleInfoInline = [&](juce::Rectangle<int> infoInner)
+    {
+        auto row1 = infoInner.removeFromTop(24);
+        const auto badgeVisible = sampleInfoBadge_.isVisible() && sampleInfoBadge_.getText().isNotEmpty();
+        const auto badgeWidth = badgeVisible ? (sampleInfoBadge_.getText() == "Apple Loop" ? 72 : 56) : 0;
+        if (badgeVisible)
+        {
+            sampleInfoBadge_.setBounds(row1.removeFromRight(badgeWidth).withSizeKeepingCentre(badgeWidth, 18));
+            row1.removeFromRight(8);
+        }
+        else
+        {
+            sampleInfoBadge_.setBounds({});
+        }
+        sampleInfoSourceLabel_.setBounds(row1.removeFromLeft(40));
+        sampleInfoSourceValue_.setBounds(row1);
+        infoInner.removeFromTop(4);
+        auto row2 = infoInner.removeFromTop(22);
+        auto layoutInlinePair = [](juce::Rectangle<int>& row,
+                                   juce::Label& keyLabel,
+                                   juce::Label& valueLabel,
+                                   int keyWidth,
+                                   int valueWidth)
+        {
+            keyLabel.setBounds(row.removeFromLeft(keyWidth));
+            valueLabel.setBounds(row.removeFromLeft(valueWidth));
+            row.removeFromLeft(10);
+        };
+
+        layoutInlinePair(row2, sampleInfoRateLabel_, sampleInfoRateValue_, 72, 98);
+        layoutInlinePair(row2, sampleInfoBitDepthLabel_, sampleInfoBitDepthValue_, 60, 68);
+        layoutInlinePair(row2, sampleInfoChannelsLabel_, sampleInfoChannelsValue_, 56, 30);
+        layoutInlinePair(row2, sampleInfoSamplesLabel_, sampleInfoSamplesValue_, 66, 86);
+        layoutInlinePair(row2, sampleInfoDurationLabel_, sampleInfoDurationValue_, 56, 72);
+        layoutInlinePair(row2, sampleInfoFileSizeLabel_, sampleInfoFileSizeValue_, 48, 86);
+
+        infoInner.removeFromTop(2);
+        auto row3 = infoInner.removeFromTop(22);
+        auto layoutInlinePairIfVisible = [&layoutInlinePair](juce::Rectangle<int>& row,
+                                                             juce::Label& keyLabel,
+                                                             juce::Label& valueLabel,
+                                                             int keyWidth,
+                                                             int valueWidth)
+        {
+            if (keyLabel.isVisible() && valueLabel.isVisible())
+                layoutInlinePair(row, keyLabel, valueLabel, keyWidth, valueWidth);
+            else
+            {
+                keyLabel.setBounds({});
+                valueLabel.setBounds({});
+            }
+        };
+
+        layoutInlinePairIfVisible(row3, sampleInfoPlaybackLabel_, sampleInfoPlaybackValue_, 120, 150);
+        layoutInlinePairIfVisible(row3, sampleInfoPlaybackDurationLabel_, sampleInfoPlaybackDurationValue_, 124, 90);
+        layoutInlinePairIfVisible(row3, sampleInfoLoopLabel_, sampleInfoLoopValue_, 74, 150);
+        layoutInlinePairIfVisible(row3, sampleInfoLoopDurationLabel_, sampleInfoLoopDurationValue_, 94, 90);
+        if (sampleInfoTempoLabel_.isVisible())
+            layoutInlinePair(row3, sampleInfoTempoLabel_, sampleInfoTempoValue_, 52, 72);
+        if (sampleInfoMetaRootLabel_.isVisible())
+            layoutInlinePair(row3, sampleInfoMetaRootLabel_, sampleInfoMetaRootValue_, 68, 110);
+    };
+
+    const auto layoutSampleInfoInspector = [&](juce::Rectangle<int> inspectorBounds)
+    {
+        auto infoInner = inspectorBounds.withTrimmedTop(30).reduced(12, 10);
+        const auto badgeVisible = sampleInfoBadge_.isVisible() && sampleInfoBadge_.getText().isNotEmpty();
+        const auto badgeWidth = badgeVisible ? (sampleInfoBadge_.getText() == "Apple Loop" ? 72 : 56) : 0;
+
+        auto sourceHeader = infoInner.removeFromTop(14);
+        if (badgeVisible)
+        {
+            sampleInfoBadge_.setBounds(sourceHeader.removeFromRight(badgeWidth).withSizeKeepingCentre(badgeWidth, 18));
+            sourceHeader.removeFromRight(8);
+        }
+        else
+        {
+            sampleInfoBadge_.setBounds({});
+        }
+
+        sampleInfoSourceLabel_.setBounds(sourceHeader.removeFromLeft(46));
+        sampleInfoSourceValue_.setBounds(infoInner.removeFromTop(22));
+        infoInner.removeFromTop(8);
+
+        auto layoutMetricCell = [](juce::Rectangle<int> cell,
+                                   juce::Label& keyLabel,
+                                   juce::Label& valueLabel)
+        {
+            keyLabel.setBounds(cell.removeFromTop(11));
+            cell.removeFromTop(2);
+            valueLabel.setBounds(cell.removeFromTop(16));
+        };
+
+        std::vector<std::pair<juce::Label*, juce::Label*>> metrics;
+        metrics.reserve(12);
+        auto addMetric = [&metrics](juce::Label& keyLabel, juce::Label& valueLabel)
+        {
+            if (keyLabel.isVisible() && valueLabel.isVisible())
+                metrics.push_back({ &keyLabel, &valueLabel });
+            else
+            {
+                keyLabel.setBounds({});
+                valueLabel.setBounds({});
+            }
+        };
+
+        addMetric(sampleInfoRateLabel_, sampleInfoRateValue_);
+        addMetric(sampleInfoBitDepthLabel_, sampleInfoBitDepthValue_);
+        addMetric(sampleInfoChannelsLabel_, sampleInfoChannelsValue_);
+        addMetric(sampleInfoSamplesLabel_, sampleInfoSamplesValue_);
+        addMetric(sampleInfoDurationLabel_, sampleInfoDurationValue_);
+        addMetric(sampleInfoFileSizeLabel_, sampleInfoFileSizeValue_);
+        addMetric(sampleInfoPlaybackLabel_, sampleInfoPlaybackValue_);
+        addMetric(sampleInfoPlaybackDurationLabel_, sampleInfoPlaybackDurationValue_);
+        addMetric(sampleInfoLoopLabel_, sampleInfoLoopValue_);
+        addMetric(sampleInfoLoopDurationLabel_, sampleInfoLoopDurationValue_);
+        addMetric(sampleInfoTempoLabel_, sampleInfoTempoValue_);
+        addMetric(sampleInfoMetaRootLabel_, sampleInfoMetaRootValue_);
+
+        constexpr int kMetricGap = 8;
+        const int columnWidth = (infoInner.getWidth() - kMetricGap) / 2;
+        for (std::size_t index = 0; index < metrics.size(); index += 2)
+        {
+            auto row = infoInner.removeFromTop(30);
+            auto leftCell = row.removeFromLeft(columnWidth);
+            layoutMetricCell(leftCell, *metrics[index].first, *metrics[index].second);
+
+            if (index + 1 < metrics.size())
+            {
+                row.removeFromLeft(kMetricGap);
+                layoutMetricCell(row, *metrics[index + 1].first, *metrics[index + 1].second);
+            }
+
+            infoInner.removeFromTop(4);
+        }
+    };
+
+    auto workspaceArea = area;
+    const bool useSampleInspectorRail = workspaceArea.getWidth() >= 640;
+    setSampleInspectorParenting(useSampleInspectorRail);
+    if (useSampleInspectorRail)
+    {
+        constexpr int kSampleInspectorGap = 10;
+        const int inspectorWidth = juce::jlimit(240, 300, workspaceArea.getWidth() / 3);
+        auto inspectorArea = workspaceArea.removeFromRight(inspectorWidth);
+        workspaceArea.removeFromRight(kSampleInspectorGap);
+
+        const auto visibleMetricCount = [&]()
+        {
+            int count = 0;
+            const auto countMetric = [&count](const juce::Label& keyLabel, const juce::Label& valueLabel)
+            {
+                if (keyLabel.isVisible() && valueLabel.isVisible())
+                    ++count;
+            };
+
+            countMetric(sampleInfoRateLabel_, sampleInfoRateValue_);
+            countMetric(sampleInfoBitDepthLabel_, sampleInfoBitDepthValue_);
+            countMetric(sampleInfoChannelsLabel_, sampleInfoChannelsValue_);
+            countMetric(sampleInfoSamplesLabel_, sampleInfoSamplesValue_);
+            countMetric(sampleInfoDurationLabel_, sampleInfoDurationValue_);
+            countMetric(sampleInfoFileSizeLabel_, sampleInfoFileSizeValue_);
+            countMetric(sampleInfoPlaybackLabel_, sampleInfoPlaybackValue_);
+            countMetric(sampleInfoPlaybackDurationLabel_, sampleInfoPlaybackDurationValue_);
+            countMetric(sampleInfoLoopLabel_, sampleInfoLoopValue_);
+            countMetric(sampleInfoLoopDurationLabel_, sampleInfoLoopDurationValue_);
+            countMetric(sampleInfoTempoLabel_, sampleInfoTempoValue_);
+            countMetric(sampleInfoMetaRootLabel_, sampleInfoMetaRootValue_);
+            return count;
+        }();
+
+        const int metricRows = juce::jmax(1, (visibleMetricCount + 1) / 2);
+        const int infoCardHeight = 74 + metricRows * 34;
+        sampleInspectorInfoBounds_ = inspectorArea.removeFromTop(infoCardHeight);
+        layoutSampleInfoInspector(sampleInspectorInfoBounds_);
+
+        if (processor_.hasImportedProgram())
+        {
+            inspectorArea.removeFromTop(kGrpGap);
+            const int programMapHeight = juce::jmax(148, juce::jmin(214, inspectorArea.getHeight()));
+            sampleInspectorProgramMapBounds_ = inspectorArea.removeFromTop(programMapHeight);
+            programMapText_.setBounds(sampleInspectorProgramMapBounds_.withTrimmedTop(30).reduced(12, 10));
+        }
+        else
+        {
+            programMapText_.setBounds({});
+        }
+    }
+    else
+    {
+        programMapText_.setBounds({});
+    }
+
+    const auto waveformHeight = juce::jlimit(180, 320, workspaceArea.getHeight() / 3);
+    waveformView_.setBounds(workspaceArea.removeFromTop(waveformHeight));
+    workspaceArea.removeFromTop(8);
+
+    auto waveformInfoRow = workspaceArea.removeFromTop(26);
     waveformResetRangesButton_.setBounds(waveformInfoRow.removeFromRight(62));
     waveformInfoRow.removeFromRight(8);
     waveformInteractionSummaryLabel_.setBounds(waveformInfoRow);
 
-    area.removeFromTop(kGrpGap);
-    sampleControlsViewport_.setBounds(area);
+    workspaceArea.removeFromTop(kGrpGap);
+    sampleControlsViewport_.setBounds(workspaceArea);
 
     const auto viewportWidth = juce::jmax(200, sampleControlsViewport_.getWidth() - sampleControlsViewport_.getScrollBarThickness() - 2);
     int scrollY = 0;
@@ -7836,72 +8152,14 @@ void AudiocityAudioProcessorEditor::resized()
     };
 
     // ── Panel 1: Sample Information ──
+    if (!useSampleInspectorRail)
     {
         constexpr int kSampleInfoPanelH = 108;
         auto infoInner = makeGroup("sampleInfo", "Sample Information", kSampleInfoPanelH);
-
-        auto row1 = infoInner.removeFromTop(24);
-        const auto badgeVisible = sampleInfoBadge_.isVisible() && sampleInfoBadge_.getText().isNotEmpty();
-        const auto badgeWidth = badgeVisible ? (sampleInfoBadge_.getText() == "Apple Loop" ? 72 : 56) : 0;
-        if (badgeVisible)
-        {
-            sampleInfoBadge_.setBounds(row1.removeFromRight(badgeWidth).withSizeKeepingCentre(badgeWidth, 18));
-            row1.removeFromRight(8);
-        }
-        else
-        {
-            sampleInfoBadge_.setBounds({});
-        }
-        sampleInfoSourceLabel_.setBounds(row1.removeFromLeft(40));
-        sampleInfoSourceValue_.setBounds(row1);
-        infoInner.removeFromTop(4);
-        auto row2 = infoInner.removeFromTop(22);
-        auto layoutInlinePair = [](juce::Rectangle<int>& row,
-                                   juce::Label& keyLabel,
-                                   juce::Label& valueLabel,
-                                   int keyWidth,
-                                   int valueWidth)
-        {
-            keyLabel.setBounds(row.removeFromLeft(keyWidth));
-            valueLabel.setBounds(row.removeFromLeft(valueWidth));
-            row.removeFromLeft(10);
-        };
-
-        layoutInlinePair(row2, sampleInfoRateLabel_, sampleInfoRateValue_, 72, 98);
-        layoutInlinePair(row2, sampleInfoBitDepthLabel_, sampleInfoBitDepthValue_, 60, 68);
-        layoutInlinePair(row2, sampleInfoChannelsLabel_, sampleInfoChannelsValue_, 56, 30);
-        layoutInlinePair(row2, sampleInfoSamplesLabel_, sampleInfoSamplesValue_, 66, 86);
-        layoutInlinePair(row2, sampleInfoDurationLabel_, sampleInfoDurationValue_, 56, 72);
-        layoutInlinePair(row2, sampleInfoFileSizeLabel_, sampleInfoFileSizeValue_, 48, 86);
-
-        infoInner.removeFromTop(2);
-        auto row3 = infoInner.removeFromTop(22);
-        auto layoutInlinePairIfVisible = [&layoutInlinePair](juce::Rectangle<int>& row,
-                                                              juce::Label& keyLabel,
-                                                              juce::Label& valueLabel,
-                                                              int keyWidth,
-                                                              int valueWidth)
-        {
-            if (keyLabel.isVisible() && valueLabel.isVisible())
-                layoutInlinePair(row, keyLabel, valueLabel, keyWidth, valueWidth);
-            else
-            {
-                keyLabel.setBounds({});
-                valueLabel.setBounds({});
-            }
-        };
-
-        layoutInlinePairIfVisible(row3, sampleInfoPlaybackLabel_, sampleInfoPlaybackValue_, 120, 150);
-        layoutInlinePairIfVisible(row3, sampleInfoPlaybackDurationLabel_, sampleInfoPlaybackDurationValue_, 124, 90);
-        layoutInlinePairIfVisible(row3, sampleInfoLoopLabel_, sampleInfoLoopValue_, 74, 150);
-        layoutInlinePairIfVisible(row3, sampleInfoLoopDurationLabel_, sampleInfoLoopDurationValue_, 94, 90);
-        if (sampleInfoTempoLabel_.isVisible())
-            layoutInlinePair(row3, sampleInfoTempoLabel_, sampleInfoTempoValue_, 52, 72);
-        if (sampleInfoMetaRootLabel_.isVisible())
-            layoutInlinePair(row3, sampleInfoMetaRootLabel_, sampleInfoMetaRootValue_, 68, 110);
+        layoutSampleInfoInline(infoInner);
     }
 
-    if (processor_.hasImportedProgram())
+    if (processor_.hasImportedProgram() && !useSampleInspectorRail)
     {
         auto programInner = makeGroup("programMap", "Program Map", 164);
         if (!programInner.isEmpty())
@@ -8220,6 +8478,9 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
         paintContentCard(content);
         paintAboutPane(g, content);
     }
+
+    if (currentTabIndex_ == 0)
+        paintSampleInspectorPane(g);
 
     if (showPerformanceStrip)
         paintPlayerPane(g, performanceStripArea, true);
@@ -9178,6 +9439,46 @@ void AudiocityAudioProcessorEditor::regenerateWaveform()
 }
 
 // ─── Group box rendering ───────────────────────────────────────────────────────
+
+void AudiocityAudioProcessorEditor::clearSampleInformationComponentBounds()
+{
+    sampleInfoSourceLabel_.setBounds({});
+    sampleInfoSourceValue_.setBounds({});
+    sampleInfoRateLabel_.setBounds({});
+    sampleInfoRateValue_.setBounds({});
+    sampleInfoBitDepthLabel_.setBounds({});
+    sampleInfoBitDepthValue_.setBounds({});
+    sampleInfoChannelsLabel_.setBounds({});
+    sampleInfoChannelsValue_.setBounds({});
+    sampleInfoDurationLabel_.setBounds({});
+    sampleInfoDurationValue_.setBounds({});
+    sampleInfoFileSizeLabel_.setBounds({});
+    sampleInfoFileSizeValue_.setBounds({});
+    sampleInfoSamplesLabel_.setBounds({});
+    sampleInfoSamplesValue_.setBounds({});
+    sampleInfoPlaybackLabel_.setBounds({});
+    sampleInfoPlaybackValue_.setBounds({});
+    sampleInfoPlaybackDurationLabel_.setBounds({});
+    sampleInfoPlaybackDurationValue_.setBounds({});
+    sampleInfoLoopLabel_.setBounds({});
+    sampleInfoLoopValue_.setBounds({});
+    sampleInfoLoopDurationLabel_.setBounds({});
+    sampleInfoLoopDurationValue_.setBounds({});
+    sampleInfoTempoLabel_.setBounds({});
+    sampleInfoTempoValue_.setBounds({});
+    sampleInfoMetaRootLabel_.setBounds({});
+    sampleInfoMetaRootValue_.setBounds({});
+    sampleInfoBadge_.setBounds({});
+}
+
+void AudiocityAudioProcessorEditor::paintSampleInspectorPane(juce::Graphics& g) const
+{
+    if (!sampleInspectorInfoBounds_.isEmpty())
+        paintSectionCard(g, sampleInspectorInfoBounds_.toFloat(), "Sample Information");
+
+    if (!sampleInspectorProgramMapBounds_.isEmpty())
+        paintSectionCard(g, sampleInspectorProgramMapBounds_.toFloat(), "Program Map");
+}
 
 void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const
 {

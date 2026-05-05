@@ -3,7 +3,7 @@
 ## Status
 - Owner: GitHub Copilot + repo maintainers
 - Started: 2026-05-03
-- Current phase: Phase 4 advanced interaction - modulation feedback completed
+- Current phase: Phase 5 structural layout redesign in progress
 
 ## Goal
 Modernize Audiocity into a premium sampler interface that feels fast, musical, tactile, and trustworthy for producers, sound designers, and live performers.
@@ -113,6 +113,8 @@ Modernize Audiocity into a premium sampler interface that feels fast, musical, t
 - 2026-05-04: Phase 4.1 started: the modulation panel now paints per-source destination feedback strips for pitch, filter, and amp routing, including live macro-value context for Macro 1 and Macro 2.
 - 2026-05-05: Validation coverage follow-up landed: the UI snapshot harness now captures a slice-loaded Sample state, the corresponding Mapping state, and a scrolled `sample_modulation` view that keeps the new modulation feedback chips under deterministic screenshot coverage.
 - 2026-05-05: Phase 4.1 completed: the Sample-page modulation surface now compresses route dials enough to reveal a destination-first summary card for Macro 1 and Macro 2, while the existing per-source strips continue to show pitch, filter, and amp routing directly under each source cluster.
+- 2026-05-05: Phase 4.1 follow-up landed: the destination summary cards now surface the strongest active source per destination so dense modulation setups read back faster without expanding the underlying control surface.
+- 2026-05-05: Phase 5.1 started: wide Sample layouts now split into browser, workspace, and inspector columns, moving `Sample Information` and `Program Map` into a fixed right-side rail while narrower widths fall back to the existing inline stack.
 
 ## Validation Notes
 - Current repo validation is strong for engine behavior, but UI visual changes do not yet have a dedicated screenshot or golden-image harness.
@@ -135,3 +137,4 @@ Modernize Audiocity into a premium sampler interface that feels fast, musical, t
 - 2026-05-04: A fresh `scripts/export_ui_snapshots.ps1 -OutputDir build/ui-snapshots-validate` run still compared `PASS` against `tests/ui-snapshot-baselines/current`, so these edits did not require a baseline refresh.
 - 2026-05-05: The snapshot harness coverage was expanded with deterministic slice-program and modulation states, the Sample source label now uses the imported program name instead of a machine-specific temp path, and `scripts/compare_ui_snapshots.ps1 -ActualDir build/ui-snapshots-phase41-coverage -BaselineDir tests/ui-snapshot-baselines/current` returned `PASS` for `about`, `capture`, `generate`, `library`, `mapping`, `player`, `sample`, and `sample_modulation`.
 - 2026-05-05: The Phase 4.1 completion slice compiled cleanly via `CMake: Build Tests (Debug)`, `sample_modulation` was visually reviewed after adding the macro destination summary, `scripts/export_ui_snapshots.ps1 -UpdateBaseline` refreshed only the accepted modulation snapshot baseline, and `scripts/compare_ui_snapshots.ps1 -ActualDir build/ui-snapshots-phase41-progress -BaselineDir tests/ui-snapshot-baselines/current` returned `PASS` for all eight snapshots.
+- 2026-05-05: The Phase 4.1 follow-up and first Phase 5.1 Sample inspector seam both compiled cleanly via `CMake: Build Tests (Debug)`. `scripts/export_ui_snapshots.ps1 -OutputDir build/ui-snapshots-phase51-seam` produced the expected wide-layout Sample changes for visual review, and the accepted state was then refreshed into `tests/ui-snapshot-baselines/current` for ongoing exact-match snapshot validation.
