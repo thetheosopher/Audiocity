@@ -3,7 +3,7 @@
 ## Status
 - Owner: GitHub Copilot + repo maintainers
 - Started: 2026-05-03
-- Current phase: Phase 4 advanced interaction - modulation feedback started
+- Current phase: Phase 4 advanced interaction - modulation feedback completed
 
 ## Goal
 Modernize Audiocity into a premium sampler interface that feels fast, musical, tactile, and trustworthy for producers, sound designers, and live performers.
@@ -75,7 +75,7 @@ Modernize Audiocity into a premium sampler interface that feels fast, musical, t
 - [x] Phase 3.0: Collapse secondary Sample-page sections behind progressive disclosure.
 - [x] Phase 3.1: Rework Player into a persistent performance surface.
 - [x] Phase 3.2: Fold Library into a persistent or quickly accessible browser rail.
-- [ ] Phase 4.1: Add visual modulation routing and destination feedback.
+- [x] Phase 4.1: Add visual modulation routing and destination feedback.
 - [ ] Phase 5.1: Restructure the full sampler layout around browser/workspace/inspector.
 - [x] Validation 1.0: Land deterministic UI snapshot capture and artifact export for automated feedback.
 - [x] Validation 2.0: Add committed UI snapshot baselines plus automated diff reporting in local Debug validation and CI.
@@ -111,6 +111,8 @@ Modernize Audiocity into a premium sampler interface that feels fast, musical, t
 - 2026-05-04: Phase 3.2 landed: Sample, Mapping, Generate, and Capture now keep a compact browser rail built from the existing Library controls, while the full Library tab retains bookmarks and tag-editing depth.
 - 2026-05-04: Phase 3.2 follow-up landed: the compact browser rail now uses denser rows, keeps selection-preview behavior active across rail tabs, and surfaces preview/load affordances directly in the rail status and row text.
 - 2026-05-04: Phase 4.1 started: the modulation panel now paints per-source destination feedback strips for pitch, filter, and amp routing, including live macro-value context for Macro 1 and Macro 2.
+- 2026-05-05: Validation coverage follow-up landed: the UI snapshot harness now captures a slice-loaded Sample state, the corresponding Mapping state, and a scrolled `sample_modulation` view that keeps the new modulation feedback chips under deterministic screenshot coverage.
+- 2026-05-05: Phase 4.1 completed: the Sample-page modulation surface now compresses route dials enough to reveal a destination-first summary card for Macro 1 and Macro 2, while the existing per-source strips continue to show pitch, filter, and amp routing directly under each source cluster.
 
 ## Validation Notes
 - Current repo validation is strong for engine behavior, but UI visual changes do not yet have a dedicated screenshot or golden-image harness.
@@ -131,3 +133,5 @@ Modernize Audiocity into a premium sampler interface that feels fast, musical, t
 - 2026-05-04: Snapshot validation for the strip refinement and browser rail initially failed against the older baselines on `sample`, `library`, `mapping`, `generate`, and `capture` as expected; after visual review, `scripts/export_ui_snapshots.ps1 -UpdateBaseline` refreshed `tests/ui-snapshot-baselines/current`, and a rerun of `scripts/compare_ui_snapshots.ps1` returned `PASS` for all seven tabs.
 - 2026-05-04: Phase 2.2 completion, browser-rail polish, and the first Phase 4.1 modulation-feedback slice all compiled cleanly via `CMake: Build Tests (Debug)`.
 - 2026-05-04: A fresh `scripts/export_ui_snapshots.ps1 -OutputDir build/ui-snapshots-validate` run still compared `PASS` against `tests/ui-snapshot-baselines/current`, so these edits did not require a baseline refresh.
+- 2026-05-05: The snapshot harness coverage was expanded with deterministic slice-program and modulation states, the Sample source label now uses the imported program name instead of a machine-specific temp path, and `scripts/compare_ui_snapshots.ps1 -ActualDir build/ui-snapshots-phase41-coverage -BaselineDir tests/ui-snapshot-baselines/current` returned `PASS` for `about`, `capture`, `generate`, `library`, `mapping`, `player`, `sample`, and `sample_modulation`.
+- 2026-05-05: The Phase 4.1 completion slice compiled cleanly via `CMake: Build Tests (Debug)`, `sample_modulation` was visually reviewed after adding the macro destination summary, `scripts/export_ui_snapshots.ps1 -UpdateBaseline` refreshed only the accepted modulation snapshot baseline, and `scripts/compare_ui_snapshots.ps1 -ActualDir build/ui-snapshots-phase41-progress -BaselineDir tests/ui-snapshot-baselines/current` returned `PASS` for all eight snapshots.

@@ -26,8 +26,8 @@
   {
     "fileName": "mapping.png",
     "relativePath": "mapping.png",
-    "sizeBytes": 53800,
-    "sha256": "4a42c48ad698cef4355177f5ad43fb47f3eb3afa8cc93f02789a4e6d4d2e6cbc"
+    "sizeBytes": 72086,
+    "sha256": "c38b90c172f4a3d46bc146f13651f451b7276268d76eb75a6c290e533083d503"
   },
   {
     "fileName": "player.png",
@@ -36,9 +36,15 @@
     "sha256": "eaae8dacdb0bd7889b09f4fa131c07df6fd18f87410bcc4389895ce74c226b52"
   },
   {
+    "fileName": "sample_modulation.png",
+    "relativePath": "sample_modulation.png",
+    "sizeBytes": 90681,
+    "sha256": "a5a263ffa976c5fcd420178c0e804c98eb523653efa4c64ca4ce0966d269585f"
+  },
+  {
     "fileName": "sample.png",
     "relativePath": "sample.png",
-    "sizeBytes": 83030,
-    "sha256": "2c415c5160c5a5a1ded15971854e1cb2fe79930fdabcb0ee89d502346f5f3fa0"
+    "sizeBytes": 83478,
+    "sha256": "5077f1a82796c6e93c77532ee22035803fe7ae9c638d63fd4581cf28888371e7"
   }
 ]

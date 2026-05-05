@@ -7,6 +7,7 @@
 
 ## UI snapshot automation
 - The UI snapshot harness lives in `tests/UiScreenshotHarness.cpp` and renders deterministic offscreen PNG captures for the main editor tabs.
+- The harness now also captures representative stateful coverage for recent UI work: `sample.png` renders a slice-loaded sample view, `mapping.png` renders the corresponding slice-program mapping state, and `sample_modulation.png` scrolls the Sample page to the modulation section with non-zero routing so both the per-source chips and the destination-first modulation summary are snapshot-tested.
 - Local export path: run `pwsh -File scripts/export_ui_snapshots.ps1` from the repo root.
 - The script probes the harness with `--smoke-exit`, rebuilds the `audiocity_ui_snapshot_harness` target in the default Debug tree, exports PNGs to `build/ui-snapshots` by default, and writes `index.html`, `snapshot-summary.md`, and `snapshot-manifest.json` alongside the images.
 - Committed baselines live under `tests/ui-snapshot-baselines/current`. By default the exporter compares the fresh PNGs against that directory and emits `snapshot-diff-summary.md`, `snapshot-diff-report.json`, and per-image overlay PNGs under `diffs/` when the baseline does not match.

@@ -2509,13 +2509,38 @@ void PlayerModulationPanel::forEachDial(const std::function<void(CcLearnDial&, c
 
 void PlayerModulationPanel::paint(juce::Graphics& g)
 {
+    constexpr int kDial = 56;
+    constexpr int kGrpPadH = 12;
+    constexpr int kGrpPadV = 8;
+    constexpr int kGrpHdr = 22;
     constexpr int kRowH = 134;
     constexpr int kGrpGap = 10;
+    constexpr int kDialGap = 4;
 
     auto area = getLocalBounds();
     paintGroupBox(g, area.removeFromTop(kRowH), "Expressive Mod");
     area.removeFromTop(kGrpGap);
     paintGroupBox(g, area.removeFromTop(kRowH), "Macro Mod");
+
+    struct SummarySourceState
+    {
+        juce::String shortLabel;
+        juce::Colour colour;
+        float pitch = 0.0f;
+        float filter = 0.0f;
+        float amp = 0.0f;
+    };
+
+    const auto expressiveSummarySources = std::array<SummarySourceState, 3>{ {
+        { "MW", juce::Colour(0xff61d9ff), static_cast<float>(modWheelPitchDial_.getValue()), static_cast<float>(modWheelFilterDial_.getValue()), static_cast<float>(modWheelAmpDial_.getValue()) },
+        { "AT", juce::Colour(0xffffba75), static_cast<float>(aftertouchPitchDial_.getValue()), static_cast<float>(aftertouchFilterDial_.getValue()), static_cast<float>(aftertouchAmpDial_.getValue()) },
+        { "VEL", juce::Colour(0xff62d59d), static_cast<float>(velocityPitchDial_.getValue()), static_cast<float>(velocityFilterDial_.getValue()), static_cast<float>(velocityAmpDial_.getValue()) }
+    } };
+
+    const auto macroSummarySources = std::array<SummarySourceState, 2>{ {
+        { "M1", juce::Colour(0xff4fc3ff), static_cast<float>(macro1PitchDial_.getValue()), static_cast<float>(macro1FilterDial_.getValue()), static_cast<float>(macro1AmpDial_.getValue()) },
+        { "M2", juce::Colour(0xffff976b), static_cast<float>(macro2PitchDial_.getValue()), static_cast<float>(macro2FilterDial_.getValue()), static_cast<float>(macro2AmpDial_.getValue()) }
+    } };
 
     const auto paintDestinationChip = [&g](juce::Rectangle<float> chipBounds,
                                            const juce::String& label,
@@ -2589,16 +2614,138 @@ void PlayerModulationPanel::paint(juce::Graphics& g)
         paintDestinationChip(filterChip, "Filter", static_cast<float>(route.filterDial->getValue()), 20000.0f, juce::Colour(0xfff2c14e));
         paintDestinationChip(ampChip, "Amp", static_cast<float>(route.ampDial->getValue()), 100.0f, juce::Colour(0xff62d59d));
     }
+
+    const auto computeSummaryArea = [kDial, kDialGap](juce::Rectangle<int> body,
+                                                      const int clusterCount,
+                                                      const int dialsPerCluster)
+    {
+        auto remainder = body;
+        for (int cluster = 0; cluster < clusterCount; ++cluster)
+        {
+            for (int dial = 0; dial < dialsPerCluster; ++dial)
+            {
+                remainder.removeFromLeft(kDial);
+                remainder.removeFromLeft(kDialGap);
+            }
+        }
+
+        return remainder.reduced(4, 2);
+    };
+
+    const auto paintDestinationMatrix = [&g](juce::Rectangle<int> bounds,
+                                             const juce::String& title,
+                                             const auto& sourceStates)
+    {
+        if (bounds.getWidth() < 118 || bounds.getHeight() < 58)
+            return;
+
+        const auto countActiveRoutes = [&sourceStates]()
+        {
+            int activeCount = 0;
+            for (const auto& source : sourceStates)
+            {
+                activeCount += std::abs(source.pitch) >= 1.0f ? 1 : 0;
+                activeCount += std::abs(source.filter) >= 25.0f ? 1 : 0;
+                activeCount += std::abs(source.amp) >= 1.0f ? 1 : 0;
+            }
+
+            return activeCount;
+        };
+
+        auto card = bounds.toFloat();
+        g.setColour(juce::Colour(0xff101827).withAlpha(0.9f));
+        g.fillRoundedRectangle(card, 6.0f);
+        g.setColour(juce::Colour(0xff34415f).withAlpha(0.95f));
+        g.drawRoundedRectangle(card.reduced(0.5f), 6.0f, 1.0f);
+
+        auto inner = bounds.reduced(10, 8);
+        auto header = inner.removeFromTop(16);
+        g.setColour(juce::Colour(0xffe5e5ef));
+        g.setFont(juce::Font(juce::FontOptions(10.0f)).boldened());
+        g.drawText(title, header.removeFromLeft(juce::jmax(70, header.getWidth() - 86)), juce::Justification::centredLeft, false);
+
+        g.setColour(juce::Colour(0xff8fb7ff));
+        g.setFont(juce::Font(juce::FontOptions(9.0f)));
+        g.drawText(juce::String(countActiveRoutes()) + " active", header, juce::Justification::centredRight, false);
+
+        inner.removeFromTop(4);
+
+        const auto paintDestinationRow = [&g, &sourceStates](juce::Rectangle<int> rowBounds,
+                                                             const juce::String& destinationLabel,
+                                                             auto&& valueGetter,
+                                                             const float magnitudeMax)
+        {
+            auto labelBounds = rowBounds.removeFromLeft(42);
+            g.setColour(juce::Colour(0xff9ea6c5));
+            g.setFont(juce::Font(juce::FontOptions(9.0f)).boldened());
+            g.drawText(destinationLabel, labelBounds, juce::Justification::centredLeft, false);
+
+            constexpr int kSegmentGap = 4;
+            const auto segmentWidth = (rowBounds.getWidth() - (juce::jmax(0, static_cast<int>(sourceStates.size()) - 1) * kSegmentGap))
+                / juce::jmax(1, static_cast<int>(sourceStates.size()));
+
+            for (std::size_t index = 0; index < sourceStates.size(); ++index)
+            {
+                auto segmentBounds = rowBounds.removeFromLeft(segmentWidth).toFloat();
+                if (index + 1 < sourceStates.size())
+                    rowBounds.removeFromLeft(kSegmentGap);
+
+                g.setColour(juce::Colour(0xff192131));
+                g.fillRoundedRectangle(segmentBounds, 4.0f);
+                g.setColour(juce::Colour(0xff2b3850));
+                g.drawRoundedRectangle(segmentBounds.reduced(0.5f), 4.0f, 1.0f);
+
+                const auto value = valueGetter(sourceStates[index]);
+                const auto normalized = juce::jlimit(0.0f, 1.0f,
+                    magnitudeMax > 0.0f ? std::abs(value) / magnitudeMax : 0.0f);
+                if (normalized > 0.0f)
+                {
+                    auto fillBounds = segmentBounds.reduced(1.5f);
+                    fillBounds.setWidth(fillBounds.getWidth() * normalized);
+                    g.setColour((value >= 0.0f ? sourceStates[index].colour : juce::Colour(0xffef7f73)).withAlpha(0.86f));
+                    g.fillRoundedRectangle(fillBounds, 3.0f);
+                }
+
+                g.setColour(normalized > 0.0f ? juce::Colour(0xfff5f7ff) : juce::Colour(0xff7f8aa6));
+                g.setFont(juce::Font(juce::FontOptions(8.5f)).boldened());
+                const auto polarity = normalized > 0.0f ? (value >= 0.0f ? "+" : "-") : "";
+                g.drawText(sourceStates[index].shortLabel + polarity,
+                           segmentBounds.toNearestInt(),
+                           juce::Justification::centred,
+                           false);
+            }
+        };
+
+        constexpr int kRowGap = 5;
+        auto pitchRow = inner.removeFromTop(17);
+        paintDestinationRow(pitchRow, "Pitch", [](const auto& source) { return source.pitch; }, 1200.0f);
+        inner.removeFromTop(kRowGap);
+
+        auto filterRow = inner.removeFromTop(17);
+        paintDestinationRow(filterRow, "Filter", [](const auto& source) { return source.filter; }, 20000.0f);
+        inner.removeFromTop(kRowGap);
+
+        auto ampRow = inner.removeFromTop(17);
+        paintDestinationRow(ampRow, "Amp", [](const auto& source) { return source.amp; }, 100.0f);
+    };
+
+    auto summaryGroups = getLocalBounds();
+    auto expressiveBody = summaryGroups.removeFromTop(kRowH).withTrimmedTop(kGrpHdr).reduced(kGrpPadH, kGrpPadV);
+    summaryGroups.removeFromTop(kGrpGap);
+    auto macroBody = summaryGroups.removeFromTop(kRowH).withTrimmedTop(kGrpHdr).reduced(kGrpPadH, kGrpPadV);
+
+    paintDestinationMatrix(computeSummaryArea(expressiveBody, 3, 3), "Destination Focus", expressiveSummarySources);
+    paintDestinationMatrix(computeSummaryArea(macroBody, 2, 4), "Macro Destinations", macroSummarySources);
 }
 
 void PlayerModulationPanel::resized()
 {
-    constexpr int kDial = 78;
+    constexpr int kDial = 56;
     constexpr int kGrpPadH = 12;
     constexpr int kGrpPadV = 8;
     constexpr int kGrpHdr = 22;
     constexpr int kGrpGap = 10;
-    constexpr int kDialGap = 6;
+    constexpr int kDialGap = 4;
     constexpr int kRowH = 134;
 
     auto area = getLocalBounds();
@@ -9756,6 +9903,7 @@ void AudiocityAudioProcessorEditor::updateSampleInformationDisplay()
 {
     const auto hasImportedProgram = processor_.hasImportedProgram();
     const auto importedProgramPath = processor_.getImportedProgramPath();
+    const auto importedProgramName = processor_.getImportedProgramName();
     const auto samplePath = processor_.getLoadedSamplePath();
     const auto sampleLength = processor_.getLoadedSampleLength();
     const auto channels = juce::jmax(0, processor_.getLoadedSampleChannels());
@@ -9768,7 +9916,7 @@ void AudiocityAudioProcessorEditor::updateSampleInformationDisplay()
 
     juce::String sourceText;
     if (hasImportedProgram)
-        sourceText = importedProgramPath.isNotEmpty() ? importedProgramPath : processor_.getImportedProgramName();
+        sourceText = importedProgramName.isNotEmpty() ? importedProgramName : importedProgramPath;
     else if (samplePath.isNotEmpty())
         sourceText = samplePath;
     else if (processor_.isGeneratedWaveformLoaded())
@@ -9779,6 +9927,7 @@ void AudiocityAudioProcessorEditor::updateSampleInformationDisplay()
         sourceText = "None";
 
     sampleInfoSourceValue_.setText(sourceText, juce::dontSendNotification);
+    sampleInfoSourceValue_.setTooltip(hasImportedProgram ? importedProgramPath : samplePath);
 
     sampleInfoRateValue_.setText(formatHzNoDecimals(sampleRate), juce::dontSendNotification);
 

@@ -21,7 +21,21 @@ struct SnapshotScenario
 {
     const char* fileStem;
     int tabIndex;
+    unsigned int stateFlags = 0;
+    int viewportScrollY = 0;
 };
+
+enum SnapshotStateFlags : unsigned int
+{
+    snapshotStateBaseline = 0u,
+    snapshotStateSliceProgram = 1u << 0,
+    snapshotStateModulation = 1u << 1
+};
+
+bool hasSnapshotState(const SnapshotScenario& scenario, const SnapshotStateFlags flag) noexcept
+{
+    return (scenario.stateFlags & static_cast<unsigned int>(flag)) != 0u;
+}
 
 void logProgress(const juce::String& message)
 {
@@ -42,6 +56,76 @@ std::vector<float> makeSnapshotWaveform()
     }
 
     return waveform;
+}
+
+std::vector<float> makeTransientSliceFixtureWaveform()
+{
+    constexpr int totalSamples = 12000;
+    constexpr int hitSpacing = 4000;
+
+    std::vector<float> waveform(static_cast<std::size_t>(totalSamples), 0.0f);
+    for (int hit = 0; hit < 3; ++hit)
+    {
+        const auto hitStart = hit * hitSpacing;
+        for (int offset = 0; offset < 480 && hitStart + offset < totalSamples; ++offset)
+        {
+            const auto decay = std::exp(-static_cast<float>(offset) / 70.0f);
+            waveform[static_cast<std::size_t>(hitStart + offset)] = 0.95f * decay;
+        }
+    }
+
+    return waveform;
+}
+
+bool writeMonoWaveformWav(const juce::File& file,
+                         const std::vector<float>& waveform,
+                         const double sampleRate)
+{
+    if (auto parent = file.getParentDirectory(); !parent.exists() && !parent.createDirectory())
+        return false;
+
+    if (file.existsAsFile() && !file.deleteFile())
+        return false;
+
+    juce::AudioBuffer<float> buffer(1, static_cast<int>(waveform.size()));
+    auto* write = buffer.getWritePointer(0);
+    for (int index = 0; index < buffer.getNumSamples(); ++index)
+        write[index] = waveform[static_cast<std::size_t>(index)];
+
+    auto stream = std::unique_ptr<juce::FileOutputStream>(file.createOutputStream());
+    if (stream == nullptr || !stream->openedOk())
+        return false;
+
+    juce::WavAudioFormat wav;
+    auto* rawStream = stream.release();
+    std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(rawStream,
+                                                                        sampleRate,
+                                                                        1,
+                                                                        16,
+                                                                        {},
+                                                                        0));
+    if (writer == nullptr)
+    {
+        delete rawStream;
+        return false;
+    }
+
+    return writer->writeFromAudioSampleBuffer(buffer, 0, buffer.getNumSamples());
+}
+
+juce::Result prepareTransientSliceFixtureFile(juce::File& sliceFixtureFile)
+{
+    sliceFixtureFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getChildFile("audiocity-ui-snapshot-transient.wav");
+
+    if (!writeMonoWaveformWav(sliceFixtureFile,
+                              makeTransientSliceFixtureWaveform(),
+                              kSnapshotSampleRate))
+    {
+        return juce::Result::fail("Failed to write transient slice snapshot fixture.");
+    }
+
+    return juce::Result::ok();
 }
 
 void configureProcessorForSnapshots(AudiocityAudioProcessor& processor)
@@ -74,6 +158,79 @@ void configureProcessorForSnapshots(AudiocityAudioProcessor& processor)
     processor.setFilterSettings(filterSettings);
 }
 
+void configureModulationSnapshotState(AudiocityAudioProcessor& processor)
+{
+    AudiocityAudioProcessor::ModulationRoutingSettings routing;
+    routing.modWheel.toPitchCents = 240.0f;
+    routing.modWheel.toFilterHz = 3600.0f;
+    routing.modWheel.toAmp = 18.0f;
+
+    routing.aftertouch.toPitchCents = -90.0f;
+    routing.aftertouch.toFilterHz = 5200.0f;
+    routing.aftertouch.toAmp = 12.0f;
+
+    routing.velocity.toPitchCents = 0.0f;
+    routing.velocity.toFilterHz = -2600.0f;
+    routing.velocity.toAmp = 42.0f;
+
+    routing.macros[0].toPitchCents = 120.0f;
+    routing.macros[0].toFilterHz = 8400.0f;
+    routing.macros[0].toAmp = 24.0f;
+
+    routing.macros[1].toPitchCents = -340.0f;
+    routing.macros[1].toFilterHz = -6800.0f;
+    routing.macros[1].toAmp = -28.0f;
+
+    processor.setModulationRoutingSettings(routing);
+    processor.setMacroControlValues({ 0.72f, 0.38f });
+}
+
+juce::Result configureProcessorForScenario(AudiocityAudioProcessor& processor,
+                                           const SnapshotScenario& scenario,
+                                           const juce::File& transientSliceFixtureFile)
+{
+    configureProcessorForSnapshots(processor);
+
+    if (hasSnapshotState(scenario, snapshotStateSliceProgram))
+    {
+        if (!processor.importTransientSliceProgram(transientSliceFixtureFile))
+        {
+            return juce::Result::fail("Failed to import transient slice snapshot fixture: "
+                + processor.getLastImportDiagnosticSummary());
+        }
+
+        const auto sampleLength = processor.getLoadedSampleLength();
+        processor.setSampleWindow(0, sampleLength);
+        processor.setLoopPoints(sampleLength / 4, (sampleLength * 3) / 4);
+        processor.setWaveformViewRange(0, sampleLength);
+    }
+
+    if (hasSnapshotState(scenario, snapshotStateModulation))
+        configureModulationSnapshotState(processor);
+
+    return juce::Result::ok();
+}
+
+bool setFirstVisibleVerticalViewportScroll(juce::Component& component, const int scrollY)
+{
+    if (auto* viewport = dynamic_cast<juce::Viewport*>(&component))
+    {
+        if (viewport->isVisible() && viewport->getVerticalScrollBar().isVisible())
+        {
+            viewport->setViewPosition(viewport->getViewPositionX(), scrollY);
+            return true;
+        }
+    }
+
+    for (auto* child : component.getChildren())
+    {
+        if (child != nullptr && setFirstVisibleVerticalViewportScroll(*child, scrollY))
+            return true;
+    }
+
+    return false;
+}
+
 bool writeSnapshot(juce::Component& component, const juce::File& outputFile)
 {
     if (auto parent = outputFile.getParentDirectory(); !parent.exists() && !parent.createDirectory())
@@ -93,9 +250,17 @@ bool writeSnapshot(juce::Component& component, const juce::File& outputFile)
 
 juce::Result renderScenario(AudiocityAudioProcessor& processor,
     const SnapshotScenario& scenario,
+    const juce::File& transientSliceFixtureFile,
     const juce::File& outputDirectory)
 {
     logProgress("Rendering " + juce::String(scenario.fileStem));
+
+    if (const auto result = configureProcessorForScenario(processor, scenario, transientSliceFixtureFile);
+        result.failed())
+    {
+        return result;
+    }
+
     processor.setEditorTabIndex(scenario.tabIndex);
 
     std::unique_ptr<juce::AudioProcessorEditor> editor(processor.createEditor());
@@ -105,6 +270,13 @@ juce::Result renderScenario(AudiocityAudioProcessor& processor,
     logProgress("Created editor for " + juce::String(scenario.fileStem));
     editor->setBounds(0, 0, editor->getWidth(), editor->getHeight());
     editor->resized();
+
+    if (scenario.viewportScrollY > 0
+        && !setFirstVisibleVerticalViewportScroll(*editor, scenario.viewportScrollY))
+    {
+        return juce::Result::fail("Failed to scroll viewport for snapshot: " + juce::String(scenario.fileStem));
+    }
+
     logProgress("Laid out editor for " + juce::String(scenario.fileStem));
 
     const auto outputFile = outputDirectory.getChildFile(juce::String(scenario.fileStem) + ".png");
@@ -161,25 +333,39 @@ int main(int argc, char* argv[])
     configureProcessorForSnapshots(*processor);
     logProgress("Configured processor state");
 
+    juce::File transientSliceFixtureFile;
+    if (const auto result = prepareTransientSliceFixtureFile(transientSliceFixtureFile); result.failed())
+    {
+        std::fprintf(stderr, "%s\n", result.getErrorMessage().toStdString().c_str());
+        return 1;
+    }
+
     constexpr SnapshotScenario scenarios[] = {
-        { "sample", 0 },
-        { "library", 1 },
-        { "mapping", 2 },
-        { "player", 3 },
-        { "generate", 4 },
-        { "capture", 5 },
-        { "about", 6 }
+        { "sample", 0, snapshotStateSliceProgram, 0 },
+        { "sample_modulation", 0, snapshotStateModulation, 320 },
+        { "library", 1, snapshotStateBaseline, 0 },
+        { "mapping", 2, snapshotStateSliceProgram, 0 },
+        { "player", 3, snapshotStateBaseline, 0 },
+        { "generate", 4, snapshotStateBaseline, 0 },
+        { "capture", 5, snapshotStateBaseline, 0 },
+        { "about", 6, snapshotStateBaseline, 0 }
     };
 
     for (const auto& scenario : scenarios)
     {
-        if (const auto result = renderScenario(*processor, scenario, outputDirectory); result.failed())
+        if (const auto result = renderScenario(*processor,
+                                               scenario,
+                                               transientSliceFixtureFile,
+                                               outputDirectory);
+            result.failed())
         {
+            transientSliceFixtureFile.deleteFile();
             std::fprintf(stderr, "%s\n", result.getErrorMessage().toStdString().c_str());
             return 1;
         }
     }
 
+    transientSliceFixtureFile.deleteFile();
     processor->releaseResources();
     return 0;
 }
