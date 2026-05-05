@@ -552,6 +552,8 @@ private:
     juce::TextButton presetRenameButton_{ "Rename" };
     juce::TextButton presetDeleteButton_{ "Delete" };
     juce::TextButton loadButton_{ "Load" };
+    juce::TextButton sampleBrowserRailToggleButton_{ "Browse" };
+    juce::TextButton sampleInspectorRailToggleButton_{ "Inspect" };
     juce::TextButton diagnosticsToggleButton_{ "Tech" };
     juce::TextButton waveformResetRangesButton_{ "Reset" };
     juce::Label waveformInteractionSummaryLabel_{ {}, "" };
@@ -599,6 +601,7 @@ private:
     juce::Rectangle<int> sampleInspectorInfoBounds_;
     juce::Rectangle<int> sampleInspectorProgramMapBounds_;
     juce::Rectangle<int> sampleInspectorOutputBounds_;
+    juce::Rectangle<int> sampleInspectorEffectsBounds_;
 
     // ── Generate ──
     class GeneratedWaveformView final : public juce::Component
@@ -1039,6 +1042,10 @@ private:
     void updatePerformanceStripStatus(float outputLeftPeak, float outputRightPeak);
     [[nodiscard]] bool shouldShowPersistentBrowserRail() const noexcept;
     [[nodiscard]] bool shouldShowPersistentPerformanceStrip() const noexcept;
+    [[nodiscard]] bool shouldShowSampleInspectorRail() const noexcept;
+    [[nodiscard]] bool shouldShowWideSampleInspectorMode() const noexcept;
+    [[nodiscard]] bool shouldShowSampleProgramMapInspector() const noexcept;
+    [[nodiscard]] bool shouldShowSampleEffectsInspector() const noexcept;
     void layoutSampleBrowserArea(juce::Rectangle<int> area, bool compactLayout);
     void layoutPlayerPerformanceArea(juce::Rectangle<int> area, bool compactLayout);
     std::vector<int> mappingBatchTrackedSelectionRows_;
@@ -1089,6 +1096,8 @@ private:
     bool sampleModulationExpanded_ = false;
     bool sampleFilterModExpanded_ = false;
     bool sampleEffectsExpanded_ = false;
+    bool sampleBrowserRailEnabled_ = true;
+    bool sampleInspectorRailEnabled_ = true;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudiocityAudioProcessorEditor)
 };

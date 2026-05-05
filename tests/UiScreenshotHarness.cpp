@@ -23,6 +23,8 @@ struct SnapshotScenario
     int tabIndex;
     unsigned int stateFlags = 0;
     int viewportScrollY = 0;
+    int editorWidth = 0;
+    int editorHeight = 0;
 };
 
 enum SnapshotStateFlags : unsigned int
@@ -268,7 +270,9 @@ juce::Result renderScenario(AudiocityAudioProcessor& processor,
         return juce::Result::fail("Failed to create editor for snapshot rendering.");
 
     logProgress("Created editor for " + juce::String(scenario.fileStem));
-    editor->setBounds(0, 0, editor->getWidth(), editor->getHeight());
+    const int editorWidth = scenario.editorWidth > 0 ? scenario.editorWidth : editor->getWidth();
+    const int editorHeight = scenario.editorHeight > 0 ? scenario.editorHeight : editor->getHeight();
+    editor->setBounds(0, 0, editorWidth, editorHeight);
     editor->resized();
 
     if (scenario.viewportScrollY > 0
@@ -343,6 +347,7 @@ int main(int argc, char* argv[])
     constexpr SnapshotScenario scenarios[] = {
         { "sample", 0, snapshotStateSliceProgram, 0 },
         { "sample_modulation", 0, snapshotStateModulation, 320 },
+        { "sample_wide", 0, snapshotStateSliceProgram, 0, 1240, 1100 },
         { "library", 1, snapshotStateBaseline, 0 },
         { "mapping", 2, snapshotStateSliceProgram, 0 },
         { "player", 3, snapshotStateBaseline, 0 },

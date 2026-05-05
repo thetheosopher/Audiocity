@@ -3719,6 +3719,30 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     loadButton_.setTooltip("Load Sample, SFZ, or REX");
     loadButton_.onClick = [this] { openSampleChooser(); };
 
+    addAndMakeVisible(sampleBrowserRailToggleButton_);
+    sampleBrowserRailToggleButton_.setClickingTogglesState(true);
+    sampleBrowserRailToggleButton_.setToggleState(sampleBrowserRailEnabled_, juce::dontSendNotification);
+    sampleBrowserRailToggleButton_.setTooltip("Show the browser rail on wide Sample layouts.");
+    sampleBrowserRailToggleButton_.onClick = [this]
+    {
+        sampleBrowserRailEnabled_ = sampleBrowserRailToggleButton_.getToggleState();
+        updateTabVisibility();
+        resized();
+        repaint();
+    };
+
+    addAndMakeVisible(sampleInspectorRailToggleButton_);
+    sampleInspectorRailToggleButton_.setClickingTogglesState(true);
+    sampleInspectorRailToggleButton_.setToggleState(sampleInspectorRailEnabled_, juce::dontSendNotification);
+    sampleInspectorRailToggleButton_.setTooltip("Show the right-side inspector when the Sample layout has enough width.");
+    sampleInspectorRailToggleButton_.onClick = [this]
+    {
+        sampleInspectorRailEnabled_ = sampleInspectorRailToggleButton_.getToggleState();
+        updateTabVisibility();
+        resized();
+        repaint();
+    };
+
     addAndMakeVisible(diagnosticsToggleButton_);
     diagnosticsToggleButton_.setClickingTogglesState(true);
     diagnosticsToggleButton_.setToggleState(showDiagnosticsPanel_, juce::dontSendNotification);
@@ -4841,11 +4865,10 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     const bool showGenerateTab = (currentTabIndex_ == 4);
     const bool showCaptureTab = (currentTabIndex_ == 5);
     const bool showAboutTab = (currentTabIndex_ == 6);
-    const auto sampleLayoutMode = resolveSampleLayoutModeForWidth(computeResponsiveContentWidth(getWidth()));
     const bool showBrowserRail = shouldShowPersistentBrowserRail();
     const bool showPerformanceStrip = shouldShowPersistentPerformanceStrip();
-    const bool useProgramMapInspector = showSampleTab
-        && sampleLayoutMode == SampleLayoutMode::browserWorkspaceInspector;
+    const bool useProgramMapInspector = showSampleTab && shouldShowSampleProgramMapInspector();
+    const bool useEffectsInspector = showSampleTab && shouldShowSampleEffectsInspector();
     const bool showBrowserSurface = showLibraryTab || showBrowserRail;
     const bool showBrowserCancelButton = showBrowserSurface && sampleScanInProgress_.load(std::memory_order_relaxed);
     const int browserRowHeight = showBrowserRail ? 54 : 66;
@@ -4930,6 +4953,8 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     presetRenameButton_.setVisible(showSampleTab);
     presetDeleteButton_.setVisible(showSampleTab);
     loadButton_.setVisible(showSampleTab);
+    sampleBrowserRailToggleButton_.setVisible(showSampleTab);
+    sampleInspectorRailToggleButton_.setVisible(showSampleTab);
     diagnosticsToggleButton_.setVisible(showSampleTab);
     waveformResetRangesButton_.setVisible(showSampleTab);
     waveformInteractionSummaryLabel_.setVisible(showSampleTab);
@@ -5008,17 +5033,17 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     masterVolumeDial_.setVisible(showSampleTab);
     panDial_.setVisible(showSampleTab);
     outputLevelMeter_.setVisible(showSampleTab);
-    reverbMixDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
-    delayTimeDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
-    delayFeedbackDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
-    delayMixDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
-    delayTempoSyncToggle_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
-    dcFilterEnabledToggle_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
-    dcFilterCutoffDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
-    autopanRateDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
-    autopanDepthDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
-    saturationDriveDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
-    saturationModeCombo_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
+    reverbMixDial_.setVisible(showSampleTab && (useEffectsInspector || isSampleGroupExpanded("effects")));
+    delayTimeDial_.setVisible(showSampleTab && (useEffectsInspector || isSampleGroupExpanded("effects")));
+    delayFeedbackDial_.setVisible(showSampleTab && (useEffectsInspector || isSampleGroupExpanded("effects")));
+    delayMixDial_.setVisible(showSampleTab && (useEffectsInspector || isSampleGroupExpanded("effects")));
+    delayTempoSyncToggle_.setVisible(showSampleTab && (useEffectsInspector || isSampleGroupExpanded("effects")));
+    dcFilterEnabledToggle_.setVisible(showSampleTab && (useEffectsInspector || isSampleGroupExpanded("effects")));
+    dcFilterCutoffDial_.setVisible(showSampleTab && (useEffectsInspector || isSampleGroupExpanded("effects")));
+    autopanRateDial_.setVisible(showSampleTab && (useEffectsInspector || isSampleGroupExpanded("effects")));
+    autopanDepthDial_.setVisible(showSampleTab && (useEffectsInspector || isSampleGroupExpanded("effects")));
+    saturationDriveDial_.setVisible(showSampleTab && (useEffectsInspector || isSampleGroupExpanded("effects")));
+    saturationModeCombo_.setVisible(showSampleTab && (useEffectsInspector || isSampleGroupExpanded("effects")));
     programMapText_.setVisible(showSampleTab && processor_.hasImportedProgram()
         && (useProgramMapInspector || isSampleGroupExpanded("programMap")));
     diagnosticsLabel_.setVisible(showSampleTab && showDiagnosticsPanel_);
@@ -7185,10 +7210,59 @@ bool AudiocityAudioProcessorEditor::shouldShowPersistentBrowserRail() const noex
     if (currentTabIndex_ == 0)
     {
         const auto sampleLayoutMode = resolveSampleLayoutModeForWidth(computeResponsiveContentWidth(getWidth()));
-        return sampleLayoutMode == SampleLayoutMode::browserWorkspaceInspector;
+        return sampleBrowserRailEnabled_
+            && sampleLayoutMode == SampleLayoutMode::browserWorkspaceInspector;
     }
 
     return true;
+}
+
+bool AudiocityAudioProcessorEditor::shouldShowSampleInspectorRail() const noexcept
+{
+    if (currentTabIndex_ != 0 || !sampleInspectorRailEnabled_)
+        return false;
+
+    const auto sampleLayoutMode = resolveSampleLayoutModeForWidth(computeResponsiveContentWidth(getWidth()));
+    return sampleLayoutMode != SampleLayoutMode::inlineStack;
+}
+
+bool AudiocityAudioProcessorEditor::shouldShowWideSampleInspectorMode() const noexcept
+{
+    if (!shouldShowSampleInspectorRail())
+        return false;
+
+    const auto sampleLayoutMode = resolveSampleLayoutModeForWidth(computeResponsiveContentWidth(getWidth()));
+    return sampleLayoutMode == SampleLayoutMode::browserWorkspaceInspector
+        && shouldShowPersistentBrowserRail();
+}
+
+bool AudiocityAudioProcessorEditor::shouldShowSampleProgramMapInspector() const noexcept
+{
+    return shouldShowWideSampleInspectorMode() && processor_.hasImportedProgram();
+}
+
+bool AudiocityAudioProcessorEditor::shouldShowSampleEffectsInspector() const noexcept
+{
+    if (!shouldShowWideSampleInspectorMode())
+        return false;
+
+    constexpr int kSampleInfoCardHeight = 278;
+    constexpr int kSampleProgramMapCardHeight = 188;
+    constexpr int kSampleEffectsCardHeight = 230;
+    constexpr int kTopBarH = 36;
+    constexpr int kTopGap = 10;
+    constexpr int kMargin = 14;
+
+    int availableHeight = getHeight() - (kMargin * 2) - 30 - 8;
+    if (shouldShowPersistentPerformanceStrip())
+        availableHeight -= computePersistentPerformanceStripHeight(availableHeight) + kTopGap;
+
+    availableHeight -= kTopBarH + kTopGap;
+    availableHeight -= kSampleInfoCardHeight + kTopGap;
+    if (processor_.hasImportedProgram())
+        availableHeight -= kSampleProgramMapCardHeight + kTopGap;
+
+    return availableHeight >= kSampleEffectsCardHeight;
 }
 
 void AudiocityAudioProcessorEditor::layoutSampleBrowserArea(juce::Rectangle<int> browserArea,
@@ -7617,6 +7691,8 @@ void AudiocityAudioProcessorEditor::resized()
     constexpr int kRowH     = kGrpHdr + kGrpPadV + kDialH + kGrpPadV;  // 134
     constexpr int kTopBarH  = 36;
 
+    updateTabVisibility();
+
     auto content = getLocalBounds().reduced(kMargin);
     tabBar_.setBounds(content.removeFromTop(30));
     content.removeFromTop(8);
@@ -7653,7 +7729,23 @@ void AudiocityAudioProcessorEditor::resized()
     }
 
     if (showBrowserRail)
+    {
+        const bool showBrowserCancelButton = sampleScanInProgress_.load(std::memory_order_relaxed);
+        sampleBrowserRootLabel_.setVisible(true);
+        sampleBrowserChooseRootButton_.setVisible(true);
+        sampleBrowserRefreshButton_.setVisible(true);
+        sampleBrowserCancelButton_.setVisible(showBrowserCancelButton);
+        sampleBrowserFilterEditor_.setVisible(true);
+        sampleBrowserSortCombo_.setVisible(true);
+        sampleBrowserFavoriteButton_.setVisible(true);
+        sampleBrowserFavoritesOnlyToggle_.setVisible(true);
+        sampleBrowserRecentOnlyToggle_.setVisible(true);
+        sampleBrowserListBox_.setVisible(true);
+        sampleBrowserCountLabel_.setVisible(true);
+        sampleBrowserPreviewLabel_.setVisible(true);
+        sampleBrowserListBox_.setRowHeight(54);
         layoutSampleBrowserArea(browserRailArea, true);
+    }
 
     if (currentTabIndex_ == 2)
     {
@@ -7881,6 +7973,10 @@ void AudiocityAudioProcessorEditor::resized()
         topRow.removeFromLeft(10);
 
         diagnosticsToggleButton_.setBounds(topRow.removeFromRight(58));
+        topRow.removeFromRight(6);
+        sampleInspectorRailToggleButton_.setBounds(topRow.removeFromRight(60));
+        topRow.removeFromRight(6);
+        sampleBrowserRailToggleButton_.setBounds(topRow.removeFromRight(60));
         topRow.removeFromRight(8);
         presetDeleteButton_.setBounds(topRow.removeFromRight(68));
         topRow.removeFromRight(6);
@@ -7896,11 +7992,11 @@ void AudiocityAudioProcessorEditor::resized()
     sampleInspectorInfoBounds_ = {};
     sampleInspectorProgramMapBounds_ = {};
     sampleInspectorOutputBounds_ = {};
+    sampleInspectorEffectsBounds_ = {};
 
-    const auto sampleLayoutMode = resolveSampleLayoutModeForWidth(computeResponsiveContentWidth(getWidth()));
-    const bool useSampleInspectorRail = sampleLayoutMode != SampleLayoutMode::inlineStack;
-    const bool useProgramMapInspector = sampleLayoutMode == SampleLayoutMode::browserWorkspaceInspector
-        && processor_.hasImportedProgram();
+    const bool useSampleInspectorRail = shouldShowSampleInspectorRail();
+    const bool useProgramMapInspector = shouldShowSampleProgramMapInspector();
+    const bool useEffectsInspector = shouldShowSampleEffectsInspector();
 
     const auto reparentInspectorComponent = [this](juce::Component& component, juce::Component& target)
     {
@@ -7937,11 +8033,13 @@ void AudiocityAudioProcessorEditor::resized()
     const int infoCardHeight = 74 + metricRows * 34;
     const bool useOutputInspector = useSampleInspectorRail
         && !useProgramMapInspector
+        && !useEffectsInspector
         && (area.getHeight() - infoCardHeight - kGrpGap) >= 184;
 
     const auto setSampleInspectorParenting = [&](const bool useInfoInspector,
                                                  const bool useProgramInspector,
-                                                 const bool useOutputInspectorCard)
+                                                 const bool useOutputInspectorCard,
+                                                 const bool useEffectsInspectorCard)
     {
         auto& infoTarget = useInfoInspector ? static_cast<juce::Component&>(*this)
                                             : static_cast<juce::Component&>(sampleControlsContent_);
@@ -7990,9 +8088,26 @@ void AudiocityAudioProcessorEditor::resized()
         reparentInspectorComponent(qualityCpuButton_, outputTarget);
         reparentInspectorComponent(qualityFidelityButton_, outputTarget);
         reparentInspectorComponent(qualityUltraButton_, outputTarget);
+
+        auto& effectsTarget = useEffectsInspectorCard ? static_cast<juce::Component&>(*this)
+                                                      : static_cast<juce::Component&>(sampleControlsContent_);
+        reparentInspectorComponent(reverbMixDial_, effectsTarget);
+        reparentInspectorComponent(delayTimeDial_, effectsTarget);
+        reparentInspectorComponent(delayFeedbackDial_, effectsTarget);
+        reparentInspectorComponent(delayMixDial_, effectsTarget);
+        reparentInspectorComponent(delayTempoSyncToggle_, effectsTarget);
+        reparentInspectorComponent(dcFilterEnabledToggle_, effectsTarget);
+        reparentInspectorComponent(dcFilterCutoffDial_, effectsTarget);
+        reparentInspectorComponent(autopanRateDial_, effectsTarget);
+        reparentInspectorComponent(autopanDepthDial_, effectsTarget);
+        reparentInspectorComponent(saturationDriveDial_, effectsTarget);
+        reparentInspectorComponent(saturationModeCombo_, effectsTarget);
     };
 
-    setSampleInspectorParenting(useSampleInspectorRail, useProgramMapInspector, useOutputInspector);
+    setSampleInspectorParenting(useSampleInspectorRail,
+        useProgramMapInspector,
+        useOutputInspector,
+        useEffectsInspector);
 
     const auto layoutSampleInfoInline = [&](juce::Rectangle<int> infoInner)
     {
@@ -8163,6 +8278,42 @@ void AudiocityAudioProcessorEditor::resized()
         qualityUltraButton_.setBounds(qualityRow);
     };
 
+    const auto layoutEffectsInspector = [&](juce::Rectangle<int> inspectorBounds)
+    {
+        auto effectsInner = inspectorBounds.withTrimmedTop(30).reduced(12, 10);
+        constexpr int kInspectorGap = 6;
+
+        auto topRow = effectsInner.removeFromTop(68);
+        const int topCellWidth = (topRow.getWidth() - kInspectorGap * 3) / 4;
+        reverbMixDial_.setBounds(topRow.removeFromLeft(topCellWidth));
+        topRow.removeFromLeft(kInspectorGap);
+        delayTimeDial_.setBounds(topRow.removeFromLeft(topCellWidth));
+        topRow.removeFromLeft(kInspectorGap);
+        delayFeedbackDial_.setBounds(topRow.removeFromLeft(topCellWidth));
+        topRow.removeFromLeft(kInspectorGap);
+        delayMixDial_.setBounds(topRow);
+
+        effectsInner.removeFromTop(8);
+        auto middleRow = effectsInner.removeFromTop(24);
+        delayTempoSyncToggle_.setBounds(middleRow.removeFromLeft(132));
+        middleRow.removeFromLeft(8);
+        saturationModeCombo_.setBounds(middleRow.removeFromRight(96));
+
+        effectsInner.removeFromTop(8);
+        auto bottomRow = effectsInner.removeFromTop(68);
+        const int bottomCellWidth = (bottomRow.getWidth() - kInspectorGap * 3) / 4;
+        dcFilterCutoffDial_.setBounds(bottomRow.removeFromLeft(bottomCellWidth));
+        bottomRow.removeFromLeft(kInspectorGap);
+        autopanRateDial_.setBounds(bottomRow.removeFromLeft(bottomCellWidth));
+        bottomRow.removeFromLeft(kInspectorGap);
+        autopanDepthDial_.setBounds(bottomRow.removeFromLeft(bottomCellWidth));
+        bottomRow.removeFromLeft(kInspectorGap);
+        saturationDriveDial_.setBounds(bottomRow);
+
+        effectsInner.removeFromTop(8);
+        dcFilterEnabledToggle_.setBounds(effectsInner.removeFromTop(24));
+    };
+
     auto workspaceArea = area;
     if (useSampleInspectorRail)
     {
@@ -8177,7 +8328,9 @@ void AudiocityAudioProcessorEditor::resized()
         if (useProgramMapInspector)
         {
             inspectorArea.removeFromTop(kGrpGap);
-            const int programMapHeight = juce::jmax(148, juce::jmin(214, inspectorArea.getHeight()));
+            const int programMapHeight = useEffectsInspector
+                ? juce::jmax(150, juce::jmin(188, inspectorArea.getHeight()))
+                : juce::jmax(148, juce::jmin(214, inspectorArea.getHeight()));
             sampleInspectorProgramMapBounds_ = inspectorArea.removeFromTop(programMapHeight);
             programMapText_.setBounds(sampleInspectorProgramMapBounds_.withTrimmedTop(30).reduced(12, 10));
             fadeInDial_.setBounds({});
@@ -8190,10 +8343,54 @@ void AudiocityAudioProcessorEditor::resized()
             qualityCpuButton_.setBounds({});
             qualityFidelityButton_.setBounds({});
             qualityUltraButton_.setBounds({});
+
+            if (useEffectsInspector)
+            {
+                inspectorArea.removeFromTop(kGrpGap);
+                const int effectsCardHeight = juce::jmin(230, inspectorArea.getHeight());
+                sampleInspectorEffectsBounds_ = inspectorArea.removeFromTop(effectsCardHeight);
+                layoutEffectsInspector(sampleInspectorEffectsBounds_);
+            }
+            else
+            {
+                reverbMixDial_.setBounds({});
+                delayTimeDial_.setBounds({});
+                delayFeedbackDial_.setBounds({});
+                delayMixDial_.setBounds({});
+                delayTempoSyncToggle_.setBounds({});
+                dcFilterEnabledToggle_.setBounds({});
+                dcFilterCutoffDial_.setBounds({});
+                autopanRateDial_.setBounds({});
+                autopanDepthDial_.setBounds({});
+                saturationDriveDial_.setBounds({});
+                saturationModeCombo_.setBounds({});
+            }
         }
         else
         {
             programMapText_.setBounds({});
+
+            if (useEffectsInspector)
+            {
+                inspectorArea.removeFromTop(kGrpGap);
+                const int effectsCardHeight = juce::jmin(230, inspectorArea.getHeight());
+                sampleInspectorEffectsBounds_ = inspectorArea.removeFromTop(effectsCardHeight);
+                layoutEffectsInspector(sampleInspectorEffectsBounds_);
+            }
+            else
+            {
+                reverbMixDial_.setBounds({});
+                delayTimeDial_.setBounds({});
+                delayFeedbackDial_.setBounds({});
+                delayMixDial_.setBounds({});
+                delayTempoSyncToggle_.setBounds({});
+                dcFilterEnabledToggle_.setBounds({});
+                dcFilterCutoffDial_.setBounds({});
+                autopanRateDial_.setBounds({});
+                autopanDepthDial_.setBounds({});
+                saturationDriveDial_.setBounds({});
+                saturationModeCombo_.setBounds({});
+            }
 
             if (useOutputInspector)
             {
@@ -8451,6 +8648,7 @@ void AudiocityAudioProcessorEditor::resized()
     }
 
     // ── Panel 9: Effects ──
+    if (!useEffectsInspector)
     {
         constexpr int kEffectsPanelH = kRowH + 44;
         auto fxInner = makeGroup("effects", "Effects", kEffectsPanelH);
@@ -9612,6 +9810,9 @@ void AudiocityAudioProcessorEditor::paintSampleInspectorPane(juce::Graphics& g) 
 
     if (!sampleInspectorOutputBounds_.isEmpty())
         paintSectionCard(g, sampleInspectorOutputBounds_.toFloat(), "Output");
+
+    if (!sampleInspectorEffectsBounds_.isEmpty())
+        paintSectionCard(g, sampleInspectorEffectsBounds_.toFloat(), "Effects");
 }
 
 void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const
