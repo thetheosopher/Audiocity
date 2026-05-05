@@ -3901,7 +3901,9 @@ void AudiocityAudioProcessor::clearVoicePlaybackPositions() noexcept
         position.store(-1, std::memory_order_relaxed);
 }
 
+#if ! defined(AUDIOCITY_UI_SNAPSHOT_HARNESS)
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new AudiocityAudioProcessor();
 }
+#endif

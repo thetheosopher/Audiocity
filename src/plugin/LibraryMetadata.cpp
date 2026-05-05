@@ -4,14 +4,30 @@ namespace audiocity::plugin
 {
 namespace
 {
-const juce::Identifier kLibraryMetadata{ "libraryMetadata" };
-const juce::Identifier kFavorite{ "favorite" };
-const juce::Identifier kRecent{ "recent" };
-const juce::Identifier kBookmark{ "bookmark" };
-const juce::Identifier kTagged{ "tagged" };
-const juce::Identifier kTag{ "tag" };
-const juce::Identifier kPath{ "path" };
-const juce::Identifier kName{ "name" };
+#define AUDIOCITY_LIBRARY_METADATA_IDENTIFIER(name, text) \
+    const juce::Identifier& name##Identifier() \
+    { \
+        static const juce::Identifier identifier{ text }; \
+        return identifier; \
+    }
+
+AUDIOCITY_LIBRARY_METADATA_IDENTIFIER(kLibraryMetadata, "libraryMetadata")
+AUDIOCITY_LIBRARY_METADATA_IDENTIFIER(kFavorite, "favorite")
+AUDIOCITY_LIBRARY_METADATA_IDENTIFIER(kRecent, "recent")
+AUDIOCITY_LIBRARY_METADATA_IDENTIFIER(kBookmark, "bookmark")
+AUDIOCITY_LIBRARY_METADATA_IDENTIFIER(kTagged, "tagged")
+AUDIOCITY_LIBRARY_METADATA_IDENTIFIER(kTag, "tag")
+AUDIOCITY_LIBRARY_METADATA_IDENTIFIER(kPath, "path")
+AUDIOCITY_LIBRARY_METADATA_IDENTIFIER(kName, "name")
+
+#define kLibraryMetadata kLibraryMetadataIdentifier()
+#define kFavorite kFavoriteIdentifier()
+#define kRecent kRecentIdentifier()
+#define kBookmark kBookmarkIdentifier()
+#define kTagged kTaggedIdentifier()
+#define kTag kTagIdentifier()
+#define kPath kPathIdentifier()
+#define kName kNameIdentifier()
 }
 
 juce::Identifier LibraryMetadata::valueTreeType()

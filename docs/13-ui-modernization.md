@@ -3,7 +3,7 @@
 ## Status
 - Owner: GitHub Copilot + repo maintainers
 - Started: 2026-05-03
-- Current phase: Phase 2 - sample editor directness
+- Current phase: Validation 2.0 - baseline diff automation active
 
 ## Goal
 Modernize Audiocity into a premium sampler interface that feels fast, musical, tactile, and trustworthy for producers, sound designers, and live performers.
@@ -73,11 +73,12 @@ Modernize Audiocity into a premium sampler interface that feels fast, musical, t
 - [ ] Phase 2.2: Improve slice visibility and interactions.
 - [x] Phase 2.3: Make amp and filter envelope graphs directly editable.
 - [x] Phase 3.0: Collapse secondary Sample-page sections behind progressive disclosure.
-- [ ] Phase 3.1: Rework Player into a persistent performance surface.
+- [x] Phase 3.1: Rework Player into a persistent performance surface.
 - [ ] Phase 3.2: Fold Library into a persistent or quickly accessible browser rail.
 - [ ] Phase 4.1: Add visual modulation routing and destination feedback.
 - [ ] Phase 5.1: Restructure the full sampler layout around browser/workspace/inspector.
-- [ ] Validation 1.0: Land deterministic UI snapshot capture and artifact export for automated feedback.
+- [x] Validation 1.0: Land deterministic UI snapshot capture and artifact export for automated feedback.
+- [x] Validation 2.0: Add committed UI snapshot baselines plus automated diff reporting in local Debug validation and CI.
 
 ## Risks And Guardrails
 - Do not add audio-thread allocations, locks, file I/O, or logging.
@@ -99,6 +100,12 @@ Modernize Audiocity into a premium sampler interface that feels fast, musical, t
 - 2026-05-04: Phase 2.3 landed: the amp and filter ADSR graphs now expose draggable nodes so envelope shaping can happen directly in the graph while reusing the existing dial and processor update path.
 - 2026-05-04: Editor tab persistence seam corrected: the editor now honors the stored tab index on construction, and the processor tab range/capture-tab monitoring now cover all current tabs instead of the older `0..4` range.
 - 2026-05-04: Screenshot automation scaffolding started in `tests/UiScreenshotHarness.cpp` and `tests/CMakeLists.txt`: the harness is designed to render deterministic offscreen PNG captures across editor tabs for UI review.
+- 2026-05-04: Snapshot harness startup crash resolved: `UiScreenshotHarness.cpp` was overflowing the stack before `main` could honor `--smoke-exit` because `AudiocityAudioProcessor` lived in the `main` stack frame. The harness now keeps the processor on the heap and retains `--smoke-exit` as a cheap startup probe.
+- 2026-05-04: Manual end-to-end snapshot export now passes in the Debug harness path, writing `sample`, `library`, `mapping`, `player`, `generate`, `capture`, and `about` PNGs to `build/tests/ui-snapshots` for UI review.
+- 2026-05-04: Workspace VS Code tasks now use the known-good Visual Studio `cmake.exe` and `ctest.exe` paths, retry by clearing only stale default-config state instead of deleting the whole `build/` tree, and build the UI snapshot harness alongside offline tests in the Debug test path.
+- 2026-05-04: Snapshot review automation now has a reusable export script plus a Windows GitHub Actions workflow that publishes the PNG set, HTML gallery, and manifest as an artifact for pull-request and manual review runs.
+- 2026-05-04: Validation 2.0 landed: committed baselines now live under `tests/ui-snapshot-baselines/current`, the Debug snapshot test compares fresh renders against that baseline set, and the export workflow emits diff summaries plus overlay images when the UI changes.
+- 2026-05-04: Phase 3.1 landed: Sample, Library, Mapping, Generate, and Capture now keep a compact performance strip with the keyboard, quick pads, and an `Open Player` affordance, while the dedicated Player tab remains the full editing surface.
 
 ## Validation Notes
 - Current repo validation is strong for engine behavior, but UI visual changes do not yet have a dedicated screenshot or golden-image harness.
@@ -109,5 +116,9 @@ Modernize Audiocity into a premium sampler interface that feels fast, musical, t
 - 2026-05-04: UI snapshot harness scaffolding now exists, with a staged rollout plan:
 	- Stage 1: deterministic offscreen PNG capture for representative editor tabs and states.
 	- Stage 2: publish screenshot artifacts from CI for human feedback on each UI iteration.
-	- Stage 3: add curated baseline images and image-diff thresholds once layouts stabilize.
-- 2026-05-04: The new harness target still needs one more end-to-end validation pass in the Debug/test flow before it can be treated as a fully reliable UI regression check.
+	- Stage 3: committed baseline images and exact-match diff reporting are now active; thresholds remain configurable in the comparison script if tiny rendering drift ever becomes acceptable.
+- 2026-05-04: Direct Debug validation passed for both `--smoke-exit` and full snapshot export. `build/tests/Debug/audiocity_ui_snapshot_harness.exe --smoke-exit` now exits `0`, and `--output-dir build/tests/ui-snapshots` emits the expected PNG set.
+- 2026-05-04: In this environment, CMake Tools can still be attached to `build/release-selfcontained` while the validated harness flow lives under the default Debug tree. Prefer the repo tasks or explicit Visual Studio CMake binaries when validating the snapshot harness.
+- 2026-05-04: Phase 3.1 validation passed with the Debug test-target build plus a fresh snapshot export review from `scripts/export_ui_snapshots.ps1`, confirming the compact strip renders across the workflow tabs while the About page stays focused on product information.
+- 2026-05-04: Stage 2 artifact publishing is now wired for CI via `.github/workflows/ui-snapshots.yml`, with `scripts/export_ui_snapshots.ps1` producing a reviewable artifact bundle (`.png`, `index.html`, `snapshot-summary.md`, `snapshot-manifest.json`).
+- 2026-05-04: The local/CI snapshot flow now also produces `snapshot-diff-summary.md` and `snapshot-diff-report.json`, and fails validation when fresh snapshots diverge from `tests/ui-snapshot-baselines/current` beyond the configured thresholds.

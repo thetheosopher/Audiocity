@@ -1,12 +1,12 @@
 #include <juce_events/juce_events.h>
 #include <juce_graphics/juce_graphics.h>
 #include <juce_gui_basics/juce_gui_basics.h>
-#include <JuceHeader.h>
 
 #include "plugin/PluginProcessor.h"
 
 #include <cmath>
-#include <iostream>
+#include <cstdio>
+#include <cstring>
 #include <memory>
 #include <numbers>
 #include <vector>
@@ -23,14 +23,9 @@ struct SnapshotScenario
     int tabIndex;
 };
 
-juce::File snapshotLogFile;
-
 void logProgress(const juce::String& message)
 {
-    if (snapshotLogFile == juce::File())
-        return;
-
-    snapshotLogFile.appendText(message + "\n");
+    juce::ignoreUnused(message);
 }
 
 std::vector<float> makeSnapshotWaveform()
@@ -117,14 +112,18 @@ juce::Result renderScenario(AudiocityAudioProcessor& processor,
         return juce::Result::fail("Failed to write snapshot: " + outputFile.getFullPathName());
 
     logProgress("Wrote " + outputFile.getFullPathName());
-    std::cout << outputFile.getFullPathName().toStdString() << std::endl;
+    std::fprintf(stdout, "%s\n", outputFile.getFullPathName().toStdString().c_str());
     return juce::Result::ok();
 }
 }
 
 int main(int argc, char* argv[])
 {
+    if (argc > 1 && std::strcmp(argv[1], "--smoke-exit") == 0)
+        return 0;
+
     juce::String outputDirectoryPath;
+
     for (int index = 1; index < argc; ++index)
     {
         const juce::String argument(argv[index]);
@@ -147,20 +146,19 @@ int main(int argc, char* argv[])
 
     if (!outputDirectory.exists() && !outputDirectory.createDirectory())
     {
-        std::cerr << "Failed to create snapshot directory: " << outputDirectory.getFullPathName().toStdString() << std::endl;
+        std::fprintf(stderr, "Failed to create snapshot directory: %s\n", outputDirectory.getFullPathName().toStdString().c_str());
         return 1;
     }
 
-    snapshotLogFile = outputDirectory.getChildFile("harness.log");
-    snapshotLogFile.deleteFile();
     logProgress("Entering main");
 
     juce::ScopedJuceInitialiser_GUI guiInitialiser;
     logProgress("Initialised JUCE GUI");
 
-    AudiocityAudioProcessor processor;
+    // Keep the processor off the main stack frame; it is large enough to overflow before smoke-exit branches.
+    auto processor = std::make_unique<AudiocityAudioProcessor>();
     logProgress("Created processor");
-    configureProcessorForSnapshots(processor);
+    configureProcessorForSnapshots(*processor);
     logProgress("Configured processor state");
 
     constexpr SnapshotScenario scenarios[] = {
@@ -175,13 +173,13 @@ int main(int argc, char* argv[])
 
     for (const auto& scenario : scenarios)
     {
-        if (const auto result = renderScenario(processor, scenario, outputDirectory); result.failed())
+        if (const auto result = renderScenario(*processor, scenario, outputDirectory); result.failed())
         {
-            std::cerr << result.getErrorMessage().toStdString() << std::endl;
+            std::fprintf(stderr, "%s\n", result.getErrorMessage().toStdString().c_str());
             return 1;
         }
     }
 
-    processor.releaseResources();
+    processor->releaseResources();
     return 0;
 }

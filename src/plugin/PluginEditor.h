@@ -520,6 +520,7 @@ private:
 
     // ── Player ──
     juce::Label playerKeyboardLabel_{ {}, "Piano" };
+    juce::TextButton playerOpenButton_{ "Open Player" };
     juce::Viewport playerKeyboardViewport_;
     juce::MidiKeyboardState playerKeyboardState_;
     juce::MidiKeyboardComponent playerKeyboard_{ playerKeyboardState_, juce::MidiKeyboardComponent::horizontalKeyboard };
@@ -1018,6 +1019,8 @@ private:
     void previewSampleFromBrowserRow(int row, bool forceRestart = true);
     void updatePlayerKeyboardSizing();
     void refreshPlayerPadButtons();
+    [[nodiscard]] bool shouldShowPersistentPerformanceStrip() const noexcept;
+    void layoutPlayerPerformanceArea(juce::Rectangle<int> area, bool compactLayout);
     std::vector<int> mappingBatchTrackedSelectionRows_;
     bool suppressMappingBatchEditTracking_ = false;
     bool mappingBatchVelocityFadeEdited_ = false;
@@ -1030,7 +1033,7 @@ private:
     bool mappingBatchLoopEdited_ = false;
     void showPadAssignmentDialog(int padIndex);
     void syncAutomatedControlsFromProcessor();
-    void paintPlayerPane(juce::Graphics& g, juce::Rectangle<int> area) const;
+    void paintPlayerPane(juce::Graphics& g, juce::Rectangle<int> area, bool compactLayout) const;
     void paintSampleBrowserPane(juce::Graphics& g, juce::Rectangle<int> browserArea) const;
     void paintAboutPane(juce::Graphics& g, juce::Rectangle<int> area) const;
     void handleSampleControlsMouseDown(const juce::MouseEvent& event);

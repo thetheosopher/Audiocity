@@ -10,42 +10,86 @@ constexpr auto kMinZoneGainDb = -96.0f;
 constexpr auto kMaxZoneGainDb = 24.0f;
 constexpr auto kMaxMappingGroupId = 128;
 constexpr int kProgramZoneMappingStateFormatVersion = 2;
-const juce::Identifier kProgramZoneMappingStateType{ "sfzMappingEdits" };
-const juce::Identifier kProgramZoneMappingZoneType{ "zone" };
-const juce::Identifier kProgramZoneMappingStateFormatKey{ "formatVersion" };
-const juce::Identifier kZoneIndex{ "zoneIndex" };
-const juce::Identifier kZoneSampleAssetIndex{ "sampleAssetIndex" };
-const juce::Identifier kZoneGroupIndex{ "groupIndex" };
-const juce::Identifier kKeyLow{ "keyLow" };
-const juce::Identifier kKeyHigh{ "keyHigh" };
-const juce::Identifier kVelocityLow{ "velocityLow" };
-const juce::Identifier kVelocityHigh{ "velocityHigh" };
-const juce::Identifier kZoneVelocityFadeInLow{ "velocityFadeInLow" };
-const juce::Identifier kZoneVelocityFadeInHigh{ "velocityFadeInHigh" };
-const juce::Identifier kZoneVelocityFadeOutLow{ "velocityFadeOutLow" };
-const juce::Identifier kZoneVelocityFadeOutHigh{ "velocityFadeOutHigh" };
-const juce::Identifier kZoneRootMidiNote{ "rootMidiNote" };
-const juce::Identifier kZoneSampleStart{ "sampleStart" };
-const juce::Identifier kZoneSampleEnd{ "sampleEnd" };
-const juce::Identifier kZoneSampleEndExclusive{ "sampleEndExclusive" };
-const juce::Identifier kZoneLoopStart{ "zoneLoopStart" };
-const juce::Identifier kZoneLoopEnd{ "zoneLoopEnd" };
-const juce::Identifier kZoneLoopEndExclusive{ "zoneLoopEndExclusive" };
-const juce::Identifier kZoneGainDb{ "gainDb" };
-const juce::Identifier kZoneRawGainDb{ "zoneGainDbRaw" };
-const juce::Identifier kZonePan{ "zonePan" };
-const juce::Identifier kZoneRawPan{ "zonePanRaw" };
-const juce::Identifier kZoneTuneCents{ "tuneCents" };
-const juce::Identifier kZoneRoundRobinGroup{ "roundRobinGroup" };
-const juce::Identifier kZoneRawRoundRobinGroup{ "zoneRoundRobinGroupRaw" };
-const juce::Identifier kZoneRoundRobinPosition{ "roundRobinPosition" };
-const juce::Identifier kZoneRoundRobinLength{ "roundRobinLength" };
-const juce::Identifier kZoneRoundRobinMode{ "roundRobinMode" };
-const juce::Identifier kZoneChokeGroup{ "chokeGroup" };
-const juce::Identifier kZoneRawChokeGroup{ "zoneChokeGroupRaw" };
-const juce::Identifier kZoneTriggerMode{ "triggerMode" };
-const juce::Identifier kZoneRawTriggerMode{ "zoneTriggerModeRaw" };
-const juce::Identifier kZoneLoopMode{ "loopMode" };
+#define AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(name, text) \
+    const juce::Identifier& name##Identifier() \
+    { \
+        static const juce::Identifier identifier{ text }; \
+        return identifier; \
+    }
+
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kProgramZoneMappingStateType, "sfzMappingEdits")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kProgramZoneMappingZoneType, "zone")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kProgramZoneMappingStateFormatKey, "formatVersion")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneIndex, "zoneIndex")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneSampleAssetIndex, "sampleAssetIndex")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneGroupIndex, "groupIndex")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kKeyLow, "keyLow")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kKeyHigh, "keyHigh")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kVelocityLow, "velocityLow")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kVelocityHigh, "velocityHigh")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneVelocityFadeInLow, "velocityFadeInLow")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneVelocityFadeInHigh, "velocityFadeInHigh")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneVelocityFadeOutLow, "velocityFadeOutLow")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneVelocityFadeOutHigh, "velocityFadeOutHigh")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneRootMidiNote, "rootMidiNote")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneSampleStart, "sampleStart")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneSampleEnd, "sampleEnd")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneSampleEndExclusive, "sampleEndExclusive")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneLoopStart, "zoneLoopStart")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneLoopEnd, "zoneLoopEnd")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneLoopEndExclusive, "zoneLoopEndExclusive")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneGainDb, "gainDb")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneRawGainDb, "zoneGainDbRaw")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZonePan, "zonePan")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneRawPan, "zonePanRaw")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneTuneCents, "tuneCents")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneRoundRobinGroup, "roundRobinGroup")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneRawRoundRobinGroup, "zoneRoundRobinGroupRaw")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneRoundRobinPosition, "roundRobinPosition")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneRoundRobinLength, "roundRobinLength")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneRoundRobinMode, "roundRobinMode")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneChokeGroup, "chokeGroup")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneRawChokeGroup, "zoneChokeGroupRaw")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneTriggerMode, "triggerMode")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneRawTriggerMode, "zoneTriggerModeRaw")
+AUDIOCITY_PROGRAM_MAPPING_IDENTIFIER(kZoneLoopMode, "loopMode")
+
+#define kProgramZoneMappingStateType kProgramZoneMappingStateTypeIdentifier()
+#define kProgramZoneMappingZoneType kProgramZoneMappingZoneTypeIdentifier()
+#define kProgramZoneMappingStateFormatKey kProgramZoneMappingStateFormatKeyIdentifier()
+#define kZoneIndex kZoneIndexIdentifier()
+#define kZoneSampleAssetIndex kZoneSampleAssetIndexIdentifier()
+#define kZoneGroupIndex kZoneGroupIndexIdentifier()
+#define kKeyLow kKeyLowIdentifier()
+#define kKeyHigh kKeyHighIdentifier()
+#define kVelocityLow kVelocityLowIdentifier()
+#define kVelocityHigh kVelocityHighIdentifier()
+#define kZoneVelocityFadeInLow kZoneVelocityFadeInLowIdentifier()
+#define kZoneVelocityFadeInHigh kZoneVelocityFadeInHighIdentifier()
+#define kZoneVelocityFadeOutLow kZoneVelocityFadeOutLowIdentifier()
+#define kZoneVelocityFadeOutHigh kZoneVelocityFadeOutHighIdentifier()
+#define kZoneRootMidiNote kZoneRootMidiNoteIdentifier()
+#define kZoneSampleStart kZoneSampleStartIdentifier()
+#define kZoneSampleEnd kZoneSampleEndIdentifier()
+#define kZoneSampleEndExclusive kZoneSampleEndExclusiveIdentifier()
+#define kZoneLoopStart kZoneLoopStartIdentifier()
+#define kZoneLoopEnd kZoneLoopEndIdentifier()
+#define kZoneLoopEndExclusive kZoneLoopEndExclusiveIdentifier()
+#define kZoneGainDb kZoneGainDbIdentifier()
+#define kZoneRawGainDb kZoneRawGainDbIdentifier()
+#define kZonePan kZonePanIdentifier()
+#define kZoneRawPan kZoneRawPanIdentifier()
+#define kZoneTuneCents kZoneTuneCentsIdentifier()
+#define kZoneRoundRobinGroup kZoneRoundRobinGroupIdentifier()
+#define kZoneRawRoundRobinGroup kZoneRawRoundRobinGroupIdentifier()
+#define kZoneRoundRobinPosition kZoneRoundRobinPositionIdentifier()
+#define kZoneRoundRobinLength kZoneRoundRobinLengthIdentifier()
+#define kZoneRoundRobinMode kZoneRoundRobinModeIdentifier()
+#define kZoneChokeGroup kZoneChokeGroupIdentifier()
+#define kZoneRawChokeGroup kZoneRawChokeGroupIdentifier()
+#define kZoneTriggerMode kZoneTriggerModeIdentifier()
+#define kZoneRawTriggerMode kZoneRawTriggerModeIdentifier()
+#define kZoneLoopMode kZoneLoopModeIdentifier()
 
 juce::String formatRange(const int low, const int high)
 {

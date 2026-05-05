@@ -6,9 +6,20 @@ namespace audiocity::plugin
 {
 namespace
 {
-const juce::Identifier kImportedProgramPathStateProperty{ "importedProgramPath" };
-const juce::Identifier kImportedProgramFormatStateProperty{ "importedProgramFormat" };
-const juce::Identifier kLegacyImportedProgramPathStateProperty{ "sfzProgramPath" };
+#define AUDIOCITY_IMPORTED_PROGRAM_IDENTIFIER(name, text) \
+    const juce::Identifier& name##Identifier() \
+    { \
+        static const juce::Identifier identifier{ text }; \
+        return identifier; \
+    }
+
+AUDIOCITY_IMPORTED_PROGRAM_IDENTIFIER(kImportedProgramPathStateProperty, "importedProgramPath")
+AUDIOCITY_IMPORTED_PROGRAM_IDENTIFIER(kImportedProgramFormatStateProperty, "importedProgramFormat")
+AUDIOCITY_IMPORTED_PROGRAM_IDENTIFIER(kLegacyImportedProgramPathStateProperty, "sfzProgramPath")
+
+#define kImportedProgramPathStateProperty kImportedProgramPathStatePropertyIdentifier()
+#define kImportedProgramFormatStateProperty kImportedProgramFormatStatePropertyIdentifier()
+#define kLegacyImportedProgramPathStateProperty kLegacyImportedProgramPathStatePropertyIdentifier()
 
 juce::String formatImportedProgramFormat(const ImportedProgramFormat format)
 {

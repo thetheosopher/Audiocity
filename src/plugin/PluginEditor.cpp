@@ -6,7 +6,6 @@
 #include "PluginProcessor.h"
 #include "ProgramMappingModel.h"
 #include <BinaryData.h>
-#include <JuceHeader.h>
 
 #include <algorithm>
 #include <cmath>
@@ -112,7 +111,12 @@ public:
     }
 };
 
-TabTextLookAndFeel tabTextLookAndFeel;
+TabTextLookAndFeel& getTabTextLookAndFeel()
+{
+    static TabTextLookAndFeel lookAndFeel;
+    return lookAndFeel;
+}
+
 constexpr auto kPresetFileExtension = ".acp";
 
 int computeWaveformPeakResolution(const int waveformWidthPixels)
@@ -199,6 +203,30 @@ juce::String formatMidiNoteName(const int midiNote)
     const auto name = kNoteNames[clamped % 12];
     const auto octave = (clamped / 12) - 2;
     return juce::String(name) + juce::String(octave) + " (" + juce::String(clamped) + ")";
+}
+
+juce::String formatMidiNoteCompactName(const int midiNote)
+{
+    static constexpr const char* kNoteNames[] = {
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+    };
+
+    const auto clamped = juce::jlimit(0, 127, midiNote);
+    const auto name = kNoteNames[clamped % 12];
+    const auto octave = (clamped / 12) - 2;
+    return juce::String(name) + juce::String(octave);
+}
+
+juce::String formatPlayerPadButtonLabel(const int padIndex,
+                                        const audiocity::plugin::PlayerPadAssignment& assignment,
+                                        const bool compact)
+{
+    if (compact)
+        return "P" + juce::String(padIndex + 1) + "  " + formatMidiNoteCompactName(assignment.noteNumber);
+
+    return "Pad " + juce::String(padIndex + 1)
+        + "  " + formatMidiNoteName(assignment.noteNumber)
+        + "  Vel " + juce::String(assignment.velocity);
 }
 
 int filterModeToComboId(const audiocity::engine::EngineCore::FilterSettings::Mode mode)
@@ -2464,7 +2492,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     tooltipWindow_->setLookAndFeel(&dialLaf_);
 
     addAndMakeVisible(tabBar_);
-    tabBar_.setLookAndFeel(&tabTextLookAndFeel);
+    tabBar_.setLookAndFeel(&getTabTextLookAndFeel());
     tabBar_.setTabBarDepth(34);
     tabBar_.setColour(juce::TabbedButtonBar::frontTextColourId, uiTextStrongColour());
     tabBar_.setColour(juce::TabbedButtonBar::tabTextColourId, uiTextMutedColour());
@@ -2488,6 +2516,17 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     // Player pane
     addAndMakeVisible(playerKeyboardLabel_);
     playerKeyboardLabel_.setJustificationType(juce::Justification::centredLeft);
+
+    addAndMakeVisible(playerOpenButton_);
+    playerOpenButton_.onClick = [this]
+    {
+        tabBar_.setCurrentTabIndex(3);
+        currentTabIndex_ = 3;
+        processor_.setEditorTabIndex(currentTabIndex_);
+        updateTabVisibility();
+        resized();
+        repaint();
+    };
 
     addAndMakeVisible(playerKeyboardViewport_);
     playerKeyboardViewport_.setViewedComponent(&playerKeyboard_, false);
@@ -4301,6 +4340,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     const bool showGenerateTab = (currentTabIndex_ == 4);
     const bool showCaptureTab = (currentTabIndex_ == 5);
     const bool showAboutTab = (currentTabIndex_ == 6);
+    const bool showPerformanceStrip = shouldShowPersistentPerformanceStrip();
 
     sampleBrowserRootLabel_.setVisible(showLibraryTab);
     sampleBrowserChooseRootButton_.setVisible(showLibraryTab);
@@ -4471,14 +4511,17 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     programMapText_.setVisible(showSampleTab && processor_.hasImportedProgram() && isSampleGroupExpanded("programMap"));
     diagnosticsLabel_.setVisible(showSampleTab && showDiagnosticsPanel_);
 
-    playerKeyboardLabel_.setVisible(showPlayerTab);
-    playerKeyboardViewport_.setVisible(showPlayerTab);
-    playerPadsLabel_.setVisible(showPlayerTab);
+    playerKeyboardLabel_.setVisible(showPlayerTab || showPerformanceStrip);
+    playerOpenButton_.setVisible(showPerformanceStrip);
+    playerKeyboardViewport_.setVisible(showPlayerTab || showPerformanceStrip);
+    playerPadsLabel_.setVisible(showPlayerTab || showPerformanceStrip);
     for (int i = 0; i < kPlayerPadCount; ++i)
     {
-        playerPadButtons_[static_cast<std::size_t>(i)].setVisible(showPlayerTab);
+        playerPadButtons_[static_cast<std::size_t>(i)].setVisible(showPlayerTab || showPerformanceStrip);
         playerPadAssignButtons_[static_cast<std::size_t>(i)].setVisible(showPlayerTab);
     }
+
+    refreshPlayerPadButtons();
 
     generateWaveformView_.setVisible(showGenerateTab);
     generateSineButton_.setVisible(showGenerateTab);
@@ -6579,20 +6622,129 @@ void AudiocityAudioProcessorEditor::paintSampleBrowserPane(
     g.drawRoundedRectangle(browserArea.toFloat().reduced(0.5f), 6.0f, 1.0f);
 }
 
-void AudiocityAudioProcessorEditor::paintPlayerPane(juce::Graphics& g, juce::Rectangle<int> area) const
+bool AudiocityAudioProcessorEditor::shouldShowPersistentPerformanceStrip() const noexcept
+{
+    return currentTabIndex_ != 3 && currentTabIndex_ != 6;
+}
+
+void AudiocityAudioProcessorEditor::layoutPlayerPerformanceArea(juce::Rectangle<int> area, const bool compactLayout)
 {
     area = area.reduced(8, 6);
+
+    if (compactLayout)
+    {
+        playerKeyboardLabel_.setText("Performance Strip", juce::dontSendNotification);
+        playerPadsLabel_.setText("Quick Pads", juce::dontSendNotification);
+
+        auto keyboardPanel = area.removeFromTop(102).reduced(8, 8);
+        auto keyboardHeader = keyboardPanel.removeFromTop(18);
+        playerOpenButton_.setBounds(keyboardHeader.removeFromRight(104));
+        playerKeyboardLabel_.setBounds(keyboardHeader);
+        keyboardPanel.removeFromTop(4);
+        playerKeyboardViewport_.setBounds(keyboardPanel);
+        updatePlayerKeyboardSizing();
+
+        area.removeFromTop(8);
+        auto padsPanel = area.reduced(8, 8);
+        playerPadsLabel_.setBounds(padsPanel.removeFromTop(18));
+        padsPanel.removeFromTop(4);
+
+        constexpr int padGap = 6;
+        const int padCellWidth = juce::jmax(72, (padsPanel.getWidth() - (kPlayerPadCount - 1) * padGap) / kPlayerPadCount);
+        const int padCellHeight = juce::jmax(40, padsPanel.getHeight());
+
+        for (int i = 0; i < kPlayerPadCount; ++i)
+        {
+            auto cell = juce::Rectangle<int>(
+                padsPanel.getX() + i * (padCellWidth + padGap),
+                padsPanel.getY(),
+                padCellWidth,
+                padCellHeight);
+            playerPadButtons_[static_cast<std::size_t>(i)].setBounds(cell);
+            playerPadAssignButtons_[static_cast<std::size_t>(i)].setBounds({});
+        }
+
+        return;
+    }
+
+    playerKeyboardLabel_.setText("Piano", juce::dontSendNotification);
+    playerPadsLabel_.setText("Drum Pads", juce::dontSendNotification);
+    playerOpenButton_.setBounds({});
+
+    auto keyboardPanel = area.removeFromTop(computePlayerKeyboardPanelHeight(area.getWidth()));
+    keyboardPanel.reduce(10, 10);
+
+    auto keyboardHeader = keyboardPanel.removeFromTop(26);
+    playerKeyboardLabel_.setBounds(keyboardHeader);
+
+    keyboardPanel.removeFromTop(6);
+    playerKeyboardViewport_.setBounds(keyboardPanel);
+    updatePlayerKeyboardSizing();
+
+    area.removeFromTop(10);
+    auto padsPanel = area.reduced(10, 10);
+    playerPadsLabel_.setBounds(padsPanel.removeFromTop(22));
+    padsPanel.removeFromTop(6);
+
+    constexpr int kPadCols = 4;
+    const int kPadRows = (kPlayerPadCount + kPadCols - 1) / kPadCols;
+    const int padGap = 8;
+    const int padCellWidth = juce::jmax(80, (padsPanel.getWidth() - (kPadCols - 1) * padGap) / kPadCols);
+    const int padCellHeight = juce::jmax(90, (padsPanel.getHeight() - (kPadRows - 1) * padGap) / kPadRows);
+
+    for (int i = 0; i < kPlayerPadCount; ++i)
+    {
+        const int row = i / kPadCols;
+        const int col = i % kPadCols;
+        auto cell = juce::Rectangle<int>(
+            padsPanel.getX() + col * (padCellWidth + padGap),
+            padsPanel.getY() + row * (padCellHeight + padGap),
+            padCellWidth,
+            padCellHeight);
+
+        playerPadButtons_[static_cast<std::size_t>(i)].setBounds(cell);
+
+        constexpr int kAssignW = 28;
+        constexpr int kAssignH = 20;
+        constexpr int kAssignPad = 6;
+        const auto assignBounds = juce::Rectangle<int>(
+            cell.getRight() - kAssignW - kAssignPad,
+            cell.getBottom() - kAssignH - kAssignPad,
+            kAssignW,
+            kAssignH);
+        playerPadAssignButtons_[static_cast<std::size_t>(i)].setBounds(assignBounds);
+        playerPadAssignButtons_[static_cast<std::size_t>(i)].toFront(false);
+    }
+}
+
+void AudiocityAudioProcessorEditor::paintPlayerPane(juce::Graphics& g, juce::Rectangle<int> area, const bool compactLayout) const
+{
+    area = area.reduced(8, 6);
+
+    auto paintPanel = [&g](juce::Rectangle<int> bounds)
+    {
+        g.setColour(uiPanelColour());
+        g.fillRoundedRectangle(bounds.toFloat(), 8.0f);
+        g.setColour(uiBorderColour());
+        g.drawRoundedRectangle(bounds.toFloat().reduced(0.5f), 8.0f, 1.0f);
+    };
+
+    if (compactLayout)
+    {
+        auto keyboardPanel = area.removeFromTop(102);
+        area.removeFromTop(8);
+        auto padsPanel = area;
+
+        paintPanel(keyboardPanel);
+        paintPanel(padsPanel);
+        return;
+    }
 
     auto keyboardPanel = area.removeFromTop(computePlayerKeyboardPanelHeight(area.getWidth()));
     auto padsPanel = area.withTrimmedTop(10);
 
-    g.setColour(juce::Colour(0xff252538));
-    g.fillRoundedRectangle(keyboardPanel.toFloat(), 6.0f);
-    g.fillRoundedRectangle(padsPanel.toFloat(), 6.0f);
-
-    g.setColour(juce::Colour(0xff3a3a52));
-    g.drawRoundedRectangle(keyboardPanel.toFloat().reduced(0.5f), 6.0f, 1.0f);
-    g.drawRoundedRectangle(padsPanel.toFloat().reduced(0.5f), 6.0f, 1.0f);
+    paintPanel(keyboardPanel);
+    paintPanel(padsPanel);
 }
 
 void AudiocityAudioProcessorEditor::paintAboutPane(juce::Graphics& g, juce::Rectangle<int> area) const
@@ -6670,7 +6822,7 @@ void AudiocityAudioProcessorEditor::paintAboutPane(juce::Graphics& g, juce::Rect
     // Version
     g.setColour(juce::Colour(0xff61d9ff));
     g.setFont(juce::Font(juce::FontOptions(13.0f)).boldened());
-    g.drawText("Version " + juce::String(ProjectInfo::versionString),
+    g.drawText("Version " + juce::String(JucePlugin_VersionString),
                area.getX(), textY, area.getWidth(), 20,
                juce::Justification::centredTop);
     textY += 28;
@@ -6781,6 +6933,16 @@ void AudiocityAudioProcessorEditor::resized()
     tabBar_.setBounds(content.removeFromTop(30));
     content.removeFromTop(8);
     auto area = content;
+    juce::Rectangle<int> performanceStripArea;
+    const bool showPerformanceStrip = shouldShowPersistentPerformanceStrip();
+
+    if (showPerformanceStrip)
+    {
+        constexpr int kPerformanceStripGap = 10;
+        constexpr int kPerformanceStripHeight = 196;
+        performanceStripArea = area.removeFromBottom(kPerformanceStripHeight);
+        area.removeFromBottom(kPerformanceStripGap);
+    }
 
     groupBoxes_.clear();
 
@@ -6839,6 +7001,8 @@ void AudiocityAudioProcessorEditor::resized()
         sampleBrowserPreviewLabel_.setBounds(statusRow);
         listArea.removeFromBottom(4);
         sampleBrowserListBox_.setBounds(listArea);
+        if (showPerformanceStrip)
+            layoutPlayerPerformanceArea(performanceStripArea, true);
         return;
     }
 
@@ -6926,58 +7090,14 @@ void AudiocityAudioProcessorEditor::resized()
 
         details.removeFromTop(8);
         mappingDetailsText_.setBounds(details);
+        if (showPerformanceStrip)
+            layoutPlayerPerformanceArea(performanceStripArea, true);
         return;
     }
 
     if (currentTabIndex_ == 3)
     {
-        auto playerArea = area.reduced(8, 6);
-
-        auto keyboardPanel = playerArea.removeFromTop(computePlayerKeyboardPanelHeight(playerArea.getWidth()));
-        keyboardPanel.reduce(10, 10);
-
-        auto keyboardHeader = keyboardPanel.removeFromTop(26);
-        playerKeyboardLabel_.setBounds(keyboardHeader);
-
-        keyboardPanel.removeFromTop(6);
-        playerKeyboardViewport_.setBounds(keyboardPanel);
-        updatePlayerKeyboardSizing();
-
-        playerArea.removeFromTop(10);
-        auto padsPanel = playerArea.reduced(10, 10);
-        playerPadsLabel_.setBounds(padsPanel.removeFromTop(22));
-        padsPanel.removeFromTop(6);
-
-        constexpr int kPadCols = 4;
-        const int kPadRows = (kPlayerPadCount + kPadCols - 1) / kPadCols;
-        const int padGap = 8;
-        const int padCellWidth = juce::jmax(80, (padsPanel.getWidth() - (kPadCols - 1) * padGap) / kPadCols);
-        const int padCellHeight = juce::jmax(90, (padsPanel.getHeight() - (kPadRows - 1) * padGap) / kPadRows);
-
-        for (int i = 0; i < kPlayerPadCount; ++i)
-        {
-            const int row = i / kPadCols;
-            const int col = i % kPadCols;
-            auto cell = juce::Rectangle<int>(
-                padsPanel.getX() + col * (padCellWidth + padGap),
-                padsPanel.getY() + row * (padCellHeight + padGap),
-                padCellWidth,
-                padCellHeight);
-
-            playerPadButtons_[static_cast<std::size_t>(i)].setBounds(cell);
-
-            constexpr int kAssignW = 28;
-            constexpr int kAssignH = 20;
-            constexpr int kAssignPad = 6;
-            const auto assignBounds = juce::Rectangle<int>(
-                cell.getRight() - kAssignW - kAssignPad,
-                cell.getBottom() - kAssignH - kAssignPad,
-                kAssignW,
-                kAssignH);
-            playerPadAssignButtons_[static_cast<std::size_t>(i)].setBounds(assignBounds);
-            playerPadAssignButtons_[static_cast<std::size_t>(i)].toFront(false);
-        }
-
+        layoutPlayerPerformanceArea(area, false);
         return;
     }
 
@@ -7029,6 +7149,9 @@ void AudiocityAudioProcessorEditor::resized()
         generateFrequencyLabel_.setBounds(actionsRow.removeFromLeft(72));
         generateFrequencyCombo_.setBounds(actionsRow.removeFromLeft(190));
 
+        if (showPerformanceStrip)
+            layoutPlayerPerformanceArea(performanceStripArea, true);
+
         return;
     }
 
@@ -7079,6 +7202,8 @@ void AudiocityAudioProcessorEditor::resized()
 
         captureArea.removeFromTop(8);
         captureStatusLabel_.setBounds(captureArea.removeFromTop(22));
+        if (showPerformanceStrip)
+            layoutPlayerPerformanceArea(performanceStripArea, true);
         return;
     }
 
@@ -7197,7 +7322,6 @@ void AudiocityAudioProcessorEditor::resized()
         }
         sampleInfoSourceLabel_.setBounds(row1.removeFromLeft(40));
         sampleInfoSourceValue_.setBounds(row1);
-
         infoInner.removeFromTop(4);
         auto row2 = infoInner.removeFromTop(22);
         auto layoutInlinePair = [](juce::Rectangle<int>& row,
@@ -7499,6 +7623,9 @@ void AudiocityAudioProcessorEditor::resized()
     }
 
     sampleControlsContent_.setSize(viewportWidth, juce::jmax(sampleControlsViewport_.getHeight(), scrollY + 4));
+
+    if (showPerformanceStrip)
+        layoutPlayerPerformanceArea(performanceStripArea, true);
 }
 
 void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
@@ -7515,6 +7642,16 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
     auto content = getLocalBounds().reduced(kMargin);
     content.removeFromTop(30);
     content.removeFromTop(8);
+    juce::Rectangle<int> performanceStripArea;
+    const bool showPerformanceStrip = shouldShowPersistentPerformanceStrip();
+
+    if (showPerformanceStrip)
+    {
+        constexpr int kPerformanceStripGap = 10;
+        constexpr int kPerformanceStripHeight = 196;
+        performanceStripArea = content.removeFromBottom(kPerformanceStripHeight);
+        content.removeFromBottom(kPerformanceStripGap);
+    }
 
     auto paintContentCard = [&g](juce::Rectangle<int> areaToPaint)
     {
@@ -7530,7 +7667,7 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
     else if (currentTabIndex_ == 2)
         paintContentCard(content);
     else if (currentTabIndex_ == 3)
-        paintPlayerPane(g, content);
+        paintPlayerPane(g, content, false);
     else if (currentTabIndex_ == 4 || currentTabIndex_ == 5)
         paintContentCard(content);
     else if (currentTabIndex_ == 6)
@@ -7538,6 +7675,9 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
         paintContentCard(content);
         paintAboutPane(g, content);
     }
+
+    if (showPerformanceStrip)
+        paintPlayerPane(g, performanceStripArea, true);
 
     if (!isHoveringValidDrop_)
         return;
@@ -8923,7 +9063,8 @@ void AudiocityAudioProcessorEditor::updatePlayerKeyboardSizing()
         juce::jmin(18.0f, static_cast<float>(viewportBounds.getWidth()) / static_cast<float>(whiteKeyCount)));
 
     const auto preferredKeyLength = static_cast<int>(std::round(whiteKeyWidth * kWhiteKeyLengthRatio));
-    const auto keyboardHeight = juce::jlimit(64, viewportBounds.getHeight(), preferredKeyLength);
+    const auto minKeyboardHeight = juce::jmin(64, juce::jmax(40, viewportBounds.getHeight()));
+    const auto keyboardHeight = juce::jlimit(minKeyboardHeight, viewportBounds.getHeight(), preferredKeyLength);
 
     playerKeyboard_.setKeyWidth(whiteKeyWidth);
     playerKeyboard_.setSize(static_cast<int>(std::ceil(whiteKeyWidth * static_cast<float>(whiteKeyCount))),
@@ -8933,13 +9074,19 @@ void AudiocityAudioProcessorEditor::updatePlayerKeyboardSizing()
 
 void AudiocityAudioProcessorEditor::refreshPlayerPadButtons()
 {
+    const bool compactLayout = shouldShowPersistentPerformanceStrip();
+
     for (int i = 0; i < kPlayerPadCount; ++i)
     {
         const auto& assignment = playerPadAssignments_[static_cast<std::size_t>(i)];
         playerPadButtons_[static_cast<std::size_t>(i)].setButtonText(
+            formatPlayerPadButtonLabel(i, assignment, compactLayout));
+        playerPadButtons_[static_cast<std::size_t>(i)].setTooltip(
             "Pad " + juce::String(i + 1)
-            + "  " + formatMidiNoteName(assignment.noteNumber)
-            + "  Vel " + juce::String(assignment.velocity));
+            + " -> " + formatMidiNoteName(assignment.noteNumber)
+            + ", velocity " + juce::String(assignment.velocity));
+        playerPadAssignButtons_[static_cast<std::size_t>(i)].setTooltip(
+            "Assign MIDI note and velocity for Pad " + juce::String(i + 1));
     }
 }
 

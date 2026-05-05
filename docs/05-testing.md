@@ -5,6 +5,14 @@
 - Feeds timestamped MIDI into blocks.
 - Writes output WAV for comparisons.
 
+## UI snapshot automation
+- The UI snapshot harness lives in `tests/UiScreenshotHarness.cpp` and renders deterministic offscreen PNG captures for the main editor tabs.
+- Local export path: run `pwsh -File scripts/export_ui_snapshots.ps1` from the repo root.
+- The script probes the harness with `--smoke-exit`, rebuilds the `audiocity_ui_snapshot_harness` target in the default Debug tree, exports PNGs to `build/ui-snapshots` by default, and writes `index.html`, `snapshot-summary.md`, and `snapshot-manifest.json` alongside the images.
+- Committed baselines live under `tests/ui-snapshot-baselines/current`. By default the exporter compares the fresh PNGs against that directory and emits `snapshot-diff-summary.md`, `snapshot-diff-report.json`, and per-image overlay PNGs under `diffs/` when the baseline does not match.
+- Baseline refresh path: run `pwsh -File scripts/export_ui_snapshots.ps1 -UpdateBaseline -BaselineDir tests/ui-snapshot-baselines/current` after intentionally accepting a UI change.
+- CI path: `.github/workflows/ui-snapshots.yml` runs the same script on Windows, compares against the committed baseline set, and uploads the generated review bundle as an artifact.
+
 ## Golden tests
 - Compare hashes or error thresholds.
 - Fixtures cover:

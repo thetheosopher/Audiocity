@@ -1,0 +1,49 @@
+name: UI Snapshots
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/ui-snapshots.yml'
+      - '.vscode/tasks.json'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'docs/13-ui-modernization.md'
+      - 'scripts/export_ui_snapshots.ps1'
+      - 'src/**'
+      - 'tests/**'
+
+jobs:
+  export-ui-snapshots:
+    runs-on: windows-2022
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Export UI snapshots
+        shell: pwsh
+        run: ./scripts/export_ui_snapshots.ps1 -OutputDir artifacts/ui-snapshots -BaselineDir tests/ui-snapshot-baselines/current
+
+      - name: Append snapshot summary
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($summaryPath in @(
+            'artifacts/ui-snapshots/snapshot-summary.md',
+            'artifacts/ui-snapshots/snapshot-diff-summary.md'
+          )) {
+            if (Test-Path -LiteralPath $summaryPath) {
+              Get-Content -LiteralPath $summaryPath | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            }
+          }
+
+      - name: Upload UI snapshot artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-snapshots-${{ github.run_number }}
+          path: artifacts/ui-snapshots
+          if-no-files-found: error
+          retention-days: 14
