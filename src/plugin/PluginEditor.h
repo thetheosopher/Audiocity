@@ -598,6 +598,7 @@ private:
     PaintCallbackComponent sampleControlsContent_;
     juce::Rectangle<int> sampleInspectorInfoBounds_;
     juce::Rectangle<int> sampleInspectorProgramMapBounds_;
+    juce::Rectangle<int> sampleInspectorOutputBounds_;
 
     // ── Generate ──
     class GeneratedWaveformView final : public juce::Component

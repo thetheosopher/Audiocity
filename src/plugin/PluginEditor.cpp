@@ -248,6 +248,33 @@ int computePersistentBrowserRailWidth(const int availableWidth)
     return juce::jlimit(248, 320, availableWidth / 4);
 }
 
+constexpr int kResponsiveEditorHorizontalMargin = 28;
+constexpr int kSampleInspectorMinContentWidth = 900;
+constexpr int kSampleTriColumnMinContentWidth = 1120;
+
+enum class SampleLayoutMode
+{
+    inlineStack,
+    workspaceInspector,
+    browserWorkspaceInspector
+};
+
+int computeResponsiveContentWidth(const int editorWidth)
+{
+    return juce::jmax(0, editorWidth - kResponsiveEditorHorizontalMargin);
+}
+
+SampleLayoutMode resolveSampleLayoutModeForWidth(const int contentWidth) noexcept
+{
+    if (contentWidth >= kSampleTriColumnMinContentWidth)
+        return SampleLayoutMode::browserWorkspaceInspector;
+
+    if (contentWidth >= kSampleInspectorMinContentWidth)
+        return SampleLayoutMode::workspaceInspector;
+
+    return SampleLayoutMode::inlineStack;
+}
+
 int filterModeToComboId(const audiocity::engine::EngineCore::FilterSettings::Mode mode)
 {
     using Mode = audiocity::engine::EngineCore::FilterSettings::Mode;
@@ -4814,8 +4841,11 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     const bool showGenerateTab = (currentTabIndex_ == 4);
     const bool showCaptureTab = (currentTabIndex_ == 5);
     const bool showAboutTab = (currentTabIndex_ == 6);
+    const auto sampleLayoutMode = resolveSampleLayoutModeForWidth(computeResponsiveContentWidth(getWidth()));
     const bool showBrowserRail = shouldShowPersistentBrowserRail();
     const bool showPerformanceStrip = shouldShowPersistentPerformanceStrip();
+    const bool useProgramMapInspector = showSampleTab
+        && sampleLayoutMode == SampleLayoutMode::browserWorkspaceInspector;
     const bool showBrowserSurface = showLibraryTab || showBrowserRail;
     const bool showBrowserCancelButton = showBrowserSurface && sampleScanInProgress_.load(std::memory_order_relaxed);
     const int browserRowHeight = showBrowserRail ? 54 : 66;
@@ -4989,9 +5019,8 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     autopanDepthDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
     saturationDriveDial_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
     saturationModeCombo_.setVisible(showSampleTab && isSampleGroupExpanded("effects"));
-    const bool useSampleInspectorRail = getWidth() >= 640;
     programMapText_.setVisible(showSampleTab && processor_.hasImportedProgram()
-        && (useSampleInspectorRail || isSampleGroupExpanded("programMap")));
+        && (useProgramMapInspector || isSampleGroupExpanded("programMap")));
     diagnosticsLabel_.setVisible(showSampleTab && showDiagnosticsPanel_);
 
     playerKeyboardLabel_.setVisible(showPlayerTab || showPerformanceStrip);
@@ -7150,7 +7179,16 @@ bool AudiocityAudioProcessorEditor::shouldShowPersistentPerformanceStrip() const
 
 bool AudiocityAudioProcessorEditor::shouldShowPersistentBrowserRail() const noexcept
 {
-    return currentTabIndex_ != 1 && currentTabIndex_ != 3 && currentTabIndex_ != 6;
+    if (currentTabIndex_ == 1 || currentTabIndex_ == 3 || currentTabIndex_ == 6)
+        return false;
+
+    if (currentTabIndex_ == 0)
+    {
+        const auto sampleLayoutMode = resolveSampleLayoutModeForWidth(computeResponsiveContentWidth(getWidth()));
+        return sampleLayoutMode == SampleLayoutMode::browserWorkspaceInspector;
+    }
+
+    return true;
 }
 
 void AudiocityAudioProcessorEditor::layoutSampleBrowserArea(juce::Rectangle<int> browserArea,
@@ -7857,6 +7895,12 @@ void AudiocityAudioProcessorEditor::resized()
 
     sampleInspectorInfoBounds_ = {};
     sampleInspectorProgramMapBounds_ = {};
+    sampleInspectorOutputBounds_ = {};
+
+    const auto sampleLayoutMode = resolveSampleLayoutModeForWidth(computeResponsiveContentWidth(getWidth()));
+    const bool useSampleInspectorRail = sampleLayoutMode != SampleLayoutMode::inlineStack;
+    const bool useProgramMapInspector = sampleLayoutMode == SampleLayoutMode::browserWorkspaceInspector
+        && processor_.hasImportedProgram();
 
     const auto reparentInspectorComponent = [this](juce::Component& component, juce::Component& target)
     {
@@ -7864,40 +7908,91 @@ void AudiocityAudioProcessorEditor::resized()
             target.addAndMakeVisible(component);
     };
 
-    const auto setSampleInspectorParenting = [&](const bool useInspectorRail)
+    const auto countVisibleSampleInfoMetrics = [&]()
     {
-        auto& target = useInspectorRail ? static_cast<juce::Component&>(*this)
-                                        : static_cast<juce::Component&>(sampleControlsContent_);
+        int count = 0;
+        const auto countMetric = [&count](const juce::Label& keyLabel, const juce::Label& valueLabel)
+        {
+            if (keyLabel.isVisible() && valueLabel.isVisible())
+                ++count;
+        };
 
-        reparentInspectorComponent(sampleInfoSourceLabel_, target);
-        reparentInspectorComponent(sampleInfoSourceValue_, target);
-        reparentInspectorComponent(sampleInfoRateLabel_, target);
-        reparentInspectorComponent(sampleInfoRateValue_, target);
-        reparentInspectorComponent(sampleInfoBitDepthLabel_, target);
-        reparentInspectorComponent(sampleInfoBitDepthValue_, target);
-        reparentInspectorComponent(sampleInfoChannelsLabel_, target);
-        reparentInspectorComponent(sampleInfoChannelsValue_, target);
-        reparentInspectorComponent(sampleInfoDurationLabel_, target);
-        reparentInspectorComponent(sampleInfoDurationValue_, target);
-        reparentInspectorComponent(sampleInfoFileSizeLabel_, target);
-        reparentInspectorComponent(sampleInfoFileSizeValue_, target);
-        reparentInspectorComponent(sampleInfoSamplesLabel_, target);
-        reparentInspectorComponent(sampleInfoSamplesValue_, target);
-        reparentInspectorComponent(sampleInfoPlaybackLabel_, target);
-        reparentInspectorComponent(sampleInfoPlaybackValue_, target);
-        reparentInspectorComponent(sampleInfoPlaybackDurationLabel_, target);
-        reparentInspectorComponent(sampleInfoPlaybackDurationValue_, target);
-        reparentInspectorComponent(sampleInfoLoopLabel_, target);
-        reparentInspectorComponent(sampleInfoLoopValue_, target);
-        reparentInspectorComponent(sampleInfoLoopDurationLabel_, target);
-        reparentInspectorComponent(sampleInfoLoopDurationValue_, target);
-        reparentInspectorComponent(sampleInfoTempoLabel_, target);
-        reparentInspectorComponent(sampleInfoTempoValue_, target);
-        reparentInspectorComponent(sampleInfoMetaRootLabel_, target);
-        reparentInspectorComponent(sampleInfoMetaRootValue_, target);
-        reparentInspectorComponent(sampleInfoBadge_, target);
-        reparentInspectorComponent(programMapText_, target);
+        countMetric(sampleInfoRateLabel_, sampleInfoRateValue_);
+        countMetric(sampleInfoBitDepthLabel_, sampleInfoBitDepthValue_);
+        countMetric(sampleInfoChannelsLabel_, sampleInfoChannelsValue_);
+        countMetric(sampleInfoSamplesLabel_, sampleInfoSamplesValue_);
+        countMetric(sampleInfoDurationLabel_, sampleInfoDurationValue_);
+        countMetric(sampleInfoFileSizeLabel_, sampleInfoFileSizeValue_);
+        countMetric(sampleInfoPlaybackLabel_, sampleInfoPlaybackValue_);
+        countMetric(sampleInfoPlaybackDurationLabel_, sampleInfoPlaybackDurationValue_);
+        countMetric(sampleInfoLoopLabel_, sampleInfoLoopValue_);
+        countMetric(sampleInfoLoopDurationLabel_, sampleInfoLoopDurationValue_);
+        countMetric(sampleInfoTempoLabel_, sampleInfoTempoValue_);
+        countMetric(sampleInfoMetaRootLabel_, sampleInfoMetaRootValue_);
+        return count;
     };
+
+    const int visibleMetricCount = countVisibleSampleInfoMetrics();
+    const int metricRows = juce::jmax(1, (visibleMetricCount + 1) / 2);
+    const int infoCardHeight = 74 + metricRows * 34;
+    const bool useOutputInspector = useSampleInspectorRail
+        && !useProgramMapInspector
+        && (area.getHeight() - infoCardHeight - kGrpGap) >= 184;
+
+    const auto setSampleInspectorParenting = [&](const bool useInfoInspector,
+                                                 const bool useProgramInspector,
+                                                 const bool useOutputInspectorCard)
+    {
+        auto& infoTarget = useInfoInspector ? static_cast<juce::Component&>(*this)
+                                            : static_cast<juce::Component&>(sampleControlsContent_);
+
+        reparentInspectorComponent(sampleInfoSourceLabel_, infoTarget);
+        reparentInspectorComponent(sampleInfoSourceValue_, infoTarget);
+        reparentInspectorComponent(sampleInfoRateLabel_, infoTarget);
+        reparentInspectorComponent(sampleInfoRateValue_, infoTarget);
+        reparentInspectorComponent(sampleInfoBitDepthLabel_, infoTarget);
+        reparentInspectorComponent(sampleInfoBitDepthValue_, infoTarget);
+        reparentInspectorComponent(sampleInfoChannelsLabel_, infoTarget);
+        reparentInspectorComponent(sampleInfoChannelsValue_, infoTarget);
+        reparentInspectorComponent(sampleInfoDurationLabel_, infoTarget);
+        reparentInspectorComponent(sampleInfoDurationValue_, infoTarget);
+        reparentInspectorComponent(sampleInfoFileSizeLabel_, infoTarget);
+        reparentInspectorComponent(sampleInfoFileSizeValue_, infoTarget);
+        reparentInspectorComponent(sampleInfoSamplesLabel_, infoTarget);
+        reparentInspectorComponent(sampleInfoSamplesValue_, infoTarget);
+        reparentInspectorComponent(sampleInfoPlaybackLabel_, infoTarget);
+        reparentInspectorComponent(sampleInfoPlaybackValue_, infoTarget);
+        reparentInspectorComponent(sampleInfoPlaybackDurationLabel_, infoTarget);
+        reparentInspectorComponent(sampleInfoPlaybackDurationValue_, infoTarget);
+        reparentInspectorComponent(sampleInfoLoopLabel_, infoTarget);
+        reparentInspectorComponent(sampleInfoLoopValue_, infoTarget);
+        reparentInspectorComponent(sampleInfoLoopDurationLabel_, infoTarget);
+        reparentInspectorComponent(sampleInfoLoopDurationValue_, infoTarget);
+        reparentInspectorComponent(sampleInfoTempoLabel_, infoTarget);
+        reparentInspectorComponent(sampleInfoTempoValue_, infoTarget);
+        reparentInspectorComponent(sampleInfoMetaRootLabel_, infoTarget);
+        reparentInspectorComponent(sampleInfoMetaRootValue_, infoTarget);
+        reparentInspectorComponent(sampleInfoBadge_, infoTarget);
+
+        auto& programMapTarget = useProgramInspector ? static_cast<juce::Component&>(*this)
+                                                     : static_cast<juce::Component&>(sampleControlsContent_);
+        reparentInspectorComponent(programMapText_, programMapTarget);
+
+        auto& outputTarget = useOutputInspectorCard ? static_cast<juce::Component&>(*this)
+                                                    : static_cast<juce::Component&>(sampleControlsContent_);
+        reparentInspectorComponent(fadeInDial_, outputTarget);
+        reparentInspectorComponent(fadeOutDial_, outputTarget);
+        reparentInspectorComponent(preloadDial_, outputTarget);
+        reparentInspectorComponent(masterVolumeDial_, outputTarget);
+        reparentInspectorComponent(panDial_, outputTarget);
+        reparentInspectorComponent(outputLevelMeter_, outputTarget);
+        reparentInspectorComponent(qualityLabel_, outputTarget);
+        reparentInspectorComponent(qualityCpuButton_, outputTarget);
+        reparentInspectorComponent(qualityFidelityButton_, outputTarget);
+        reparentInspectorComponent(qualityUltraButton_, outputTarget);
+    };
+
+    setSampleInspectorParenting(useSampleInspectorRail, useProgramMapInspector, useOutputInspector);
 
     const auto layoutSampleInfoInline = [&](juce::Rectangle<int> infoInner)
     {
@@ -8036,9 +8131,39 @@ void AudiocityAudioProcessorEditor::resized()
         }
     };
 
+    const auto layoutOutputInspector = [&](juce::Rectangle<int> inspectorBounds)
+    {
+        auto outputInner = inspectorBounds.withTrimmedTop(30).reduced(12, 10);
+        constexpr int kInspectorDialGap = 6;
+        constexpr int kSmallDialWidth = 60;
+
+        auto row1 = outputInner.removeFromTop(70);
+        fadeInDial_.setBounds(row1.removeFromLeft(kSmallDialWidth));
+        row1.removeFromLeft(kInspectorDialGap);
+        fadeOutDial_.setBounds(row1.removeFromLeft(kSmallDialWidth));
+        row1.removeFromLeft(kInspectorDialGap);
+        preloadDial_.setBounds(row1);
+
+        outputInner.removeFromTop(8);
+        auto row2 = outputInner.removeFromTop(70);
+        masterVolumeDial_.setBounds(row2.removeFromLeft(kSmallDialWidth));
+        row2.removeFromLeft(kInspectorDialGap);
+        panDial_.setBounds(row2.removeFromLeft(kSmallDialWidth));
+        row2.removeFromLeft(kInspectorDialGap);
+        outputLevelMeter_.setBounds(row2.reduced(0, 10));
+
+        outputInner.removeFromTop(8);
+        qualityLabel_.setBounds({});
+        auto qualityRow = outputInner.removeFromTop(24);
+        const int qualityButtonWidth = (qualityRow.getWidth() - kInspectorDialGap * 2) / 3;
+        qualityCpuButton_.setBounds(qualityRow.removeFromLeft(qualityButtonWidth));
+        qualityRow.removeFromLeft(kInspectorDialGap);
+        qualityFidelityButton_.setBounds(qualityRow.removeFromLeft(qualityButtonWidth));
+        qualityRow.removeFromLeft(kInspectorDialGap);
+        qualityUltraButton_.setBounds(qualityRow);
+    };
+
     auto workspaceArea = area;
-    const bool useSampleInspectorRail = workspaceArea.getWidth() >= 640;
-    setSampleInspectorParenting(useSampleInspectorRail);
     if (useSampleInspectorRail)
     {
         constexpr int kSampleInspectorGap = 10;
@@ -8046,45 +8171,50 @@ void AudiocityAudioProcessorEditor::resized()
         auto inspectorArea = workspaceArea.removeFromRight(inspectorWidth);
         workspaceArea.removeFromRight(kSampleInspectorGap);
 
-        const auto visibleMetricCount = [&]()
-        {
-            int count = 0;
-            const auto countMetric = [&count](const juce::Label& keyLabel, const juce::Label& valueLabel)
-            {
-                if (keyLabel.isVisible() && valueLabel.isVisible())
-                    ++count;
-            };
-
-            countMetric(sampleInfoRateLabel_, sampleInfoRateValue_);
-            countMetric(sampleInfoBitDepthLabel_, sampleInfoBitDepthValue_);
-            countMetric(sampleInfoChannelsLabel_, sampleInfoChannelsValue_);
-            countMetric(sampleInfoSamplesLabel_, sampleInfoSamplesValue_);
-            countMetric(sampleInfoDurationLabel_, sampleInfoDurationValue_);
-            countMetric(sampleInfoFileSizeLabel_, sampleInfoFileSizeValue_);
-            countMetric(sampleInfoPlaybackLabel_, sampleInfoPlaybackValue_);
-            countMetric(sampleInfoPlaybackDurationLabel_, sampleInfoPlaybackDurationValue_);
-            countMetric(sampleInfoLoopLabel_, sampleInfoLoopValue_);
-            countMetric(sampleInfoLoopDurationLabel_, sampleInfoLoopDurationValue_);
-            countMetric(sampleInfoTempoLabel_, sampleInfoTempoValue_);
-            countMetric(sampleInfoMetaRootLabel_, sampleInfoMetaRootValue_);
-            return count;
-        }();
-
-        const int metricRows = juce::jmax(1, (visibleMetricCount + 1) / 2);
-        const int infoCardHeight = 74 + metricRows * 34;
         sampleInspectorInfoBounds_ = inspectorArea.removeFromTop(infoCardHeight);
         layoutSampleInfoInspector(sampleInspectorInfoBounds_);
 
-        if (processor_.hasImportedProgram())
+        if (useProgramMapInspector)
         {
             inspectorArea.removeFromTop(kGrpGap);
             const int programMapHeight = juce::jmax(148, juce::jmin(214, inspectorArea.getHeight()));
             sampleInspectorProgramMapBounds_ = inspectorArea.removeFromTop(programMapHeight);
             programMapText_.setBounds(sampleInspectorProgramMapBounds_.withTrimmedTop(30).reduced(12, 10));
+            fadeInDial_.setBounds({});
+            fadeOutDial_.setBounds({});
+            preloadDial_.setBounds({});
+            masterVolumeDial_.setBounds({});
+            panDial_.setBounds({});
+            outputLevelMeter_.setBounds({});
+            qualityLabel_.setBounds({});
+            qualityCpuButton_.setBounds({});
+            qualityFidelityButton_.setBounds({});
+            qualityUltraButton_.setBounds({});
         }
         else
         {
             programMapText_.setBounds({});
+
+            if (useOutputInspector)
+            {
+                inspectorArea.removeFromTop(kGrpGap);
+                const int outputCardHeight = juce::jmin(224, inspectorArea.getHeight());
+                sampleInspectorOutputBounds_ = inspectorArea.removeFromTop(outputCardHeight);
+                layoutOutputInspector(sampleInspectorOutputBounds_);
+            }
+            else
+            {
+                fadeInDial_.setBounds({});
+                fadeOutDial_.setBounds({});
+                preloadDial_.setBounds({});
+                masterVolumeDial_.setBounds({});
+                panDial_.setBounds({});
+                outputLevelMeter_.setBounds({});
+                qualityLabel_.setBounds({});
+                qualityCpuButton_.setBounds({});
+                qualityFidelityButton_.setBounds({});
+                qualityUltraButton_.setBounds({});
+            }
         }
     }
     else
@@ -8159,7 +8289,7 @@ void AudiocityAudioProcessorEditor::resized()
         layoutSampleInfoInline(infoInner);
     }
 
-    if (processor_.hasImportedProgram() && !useSampleInspectorRail)
+    if (processor_.hasImportedProgram() && !useProgramMapInspector)
     {
         auto programInner = makeGroup("programMap", "Program Map", 164);
         if (!programInner.isEmpty())
@@ -8375,6 +8505,7 @@ void AudiocityAudioProcessorEditor::resized()
     }
 
     // ── Panel 10: Output ──
+    if (!useOutputInspector)
     {
         auto outInner = makeGroup("output", "Output", kRowH);
         fadeInDial_.setBounds(outInner.removeFromLeft(kDial));
@@ -9478,6 +9609,9 @@ void AudiocityAudioProcessorEditor::paintSampleInspectorPane(juce::Graphics& g) 
 
     if (!sampleInspectorProgramMapBounds_.isEmpty())
         paintSectionCard(g, sampleInspectorProgramMapBounds_.toFloat(), "Program Map");
+
+    if (!sampleInspectorOutputBounds_.isEmpty())
+        paintSectionCard(g, sampleInspectorOutputBounds_.toFloat(), "Output");
 }
 
 void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const
