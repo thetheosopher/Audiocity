@@ -8,26 +8,26 @@
   {
     "fileName": "capture.png",
     "relativePath": "capture.png",
-    "sizeBytes": 41439,
-    "sha256": "5a8cce42a8c5e3b95f6ae29a09af70b22bbe32419f2b0b48a0ff72bc31c561a6"
+    "sizeBytes": 49990,
+    "sha256": "cbb63baef18c10a05fe98532bf77b59268841cb8c8dd63e6ef13cbc711916357"
   },
   {
     "fileName": "generate.png",
     "relativePath": "generate.png",
-    "sizeBytes": 50712,
-    "sha256": "0bd19ada777c60a24546656e04e36755ff4ac2b4d758762e79412a51edac7020"
+    "sizeBytes": 57749,
+    "sha256": "59791b68674eb40034a08d6b704533a89f0c4fb8e1fbd70446138f599bfa42bf"
   },
   {
     "fileName": "library.png",
     "relativePath": "library.png",
-    "sizeBytes": 37350,
-    "sha256": "76b822fa6b06eccaf0cf5eec79780e51dd8626a675c587396b9b90373311bf96"
+    "sizeBytes": 38797,
+    "sha256": "75bd00765c08ce0ab836f656df33ea74d1c06dbf60af61b3fe33a9a8f242cf55"
   },
   {
     "fileName": "mapping.png",
     "relativePath": "mapping.png",
-    "sizeBytes": 44386,
-    "sha256": "aa5dd9e67f2c371d11d99738d951959cc0b574276132c049e0da658ef4c7ffdf"
+    "sizeBytes": 53800,
+    "sha256": "4a42c48ad698cef4355177f5ad43fb47f3eb3afa8cc93f02789a4e6d4d2e6cbc"
   },
   {
     "fileName": "player.png",
@@ -38,7 +38,7 @@
   {
     "fileName": "sample.png",
     "relativePath": "sample.png",
-    "sizeBytes": 78140,
-    "sha256": "565aaf96ca9f627d962d01ec5b5fbd56a7d03573ddc02dc726fa59063f68770e"
+    "sizeBytes": 83030,
+    "sha256": "2c415c5160c5a5a1ded15971854e1cb2fe79930fdabcb0ee89d502346f5f3fa0"
   }
 ]

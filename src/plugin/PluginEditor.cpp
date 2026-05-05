@@ -229,6 +229,25 @@ juce::String formatPlayerPadButtonLabel(const int padIndex,
         + "  Vel " + juce::String(assignment.velocity);
 }
 
+juce::String formatCompactPeakDb(const float peak)
+{
+    const auto db = juce::Decibels::gainToDecibels(peak, -100.0f);
+    if (db <= -99.0f)
+        return "-inf";
+
+    return juce::String(std::round(db), 0);
+}
+
+int computePersistentPerformanceStripHeight(const int availableHeight)
+{
+    return juce::jlimit(156, 196, availableHeight / 4);
+}
+
+int computePersistentBrowserRailWidth(const int availableWidth)
+{
+    return juce::jlimit(248, 320, availableWidth / 4);
+}
+
 int filterModeToComboId(const audiocity::engine::EngineCore::FilterSettings::Mode mode)
 {
     using Mode = audiocity::engine::EngineCore::FilterSettings::Mode;
@@ -1308,6 +1327,8 @@ void AudiocityAudioProcessorEditor::WaveformView::setState(
     loopStart_ = loopStart;
     loopEnd_ = loopEnd;
     loopFormatBadge_ = std::move(loopFormatBadge);
+    hoveredSliceBoundarySample_ = -1;
+    hoveredSliceRegionIndex_ = -1;
 
     if (viewSampleCount_ <= 0)
         viewSampleCount_ = juce::jmax(1, totalSamples_);
@@ -1349,11 +1370,111 @@ int AudiocityAudioProcessorEditor::WaveformView::sampleFromX(const float x) cons
     return viewStartSample_ + static_cast<int>(norm * static_cast<float>(juce::jmax(1, viewSampleCount_ - 1)));
 }
 
+bool AudiocityAudioProcessorEditor::WaveformView::isSliceViewActive() const noexcept
+{
+    return loopFormatBadge_ == "SLICE" && sliceMarkers_.size() >= 2;
+}
+
 float AudiocityAudioProcessorEditor::WaveformView::xFromSample(const int sample) const noexcept
 {
     const auto width = juce::jmax(1.0f, static_cast<float>(getWidth()));
     const auto local = juce::jlimit(0, juce::jmax(1, viewSampleCount_ - 1), sample - viewStartSample_);
     return (static_cast<float>(local) / static_cast<float>(juce::jmax(1, viewSampleCount_ - 1))) * width;
+}
+
+int AudiocityAudioProcessorEditor::WaveformView::findNearestSliceBoundarySample(const int sampleIndex,
+                                                                                const int toleranceSamples) const noexcept
+{
+    if (!isSliceViewActive())
+        return -1;
+
+    auto nearestBoundary = -1;
+    auto bestDistance = toleranceSamples + 1;
+    for (const auto markerSample : sliceMarkers_)
+    {
+        if (markerSample <= 0 || markerSample >= totalSamples_)
+            continue;
+
+        const auto distance = std::abs(markerSample - sampleIndex);
+        if (distance <= toleranceSamples && distance < bestDistance)
+        {
+            bestDistance = distance;
+            nearestBoundary = markerSample;
+        }
+    }
+
+    return nearestBoundary;
+}
+
+int AudiocityAudioProcessorEditor::WaveformView::findSliceRegionIndexForSample(const int sampleIndex) const noexcept
+{
+    if (!isSliceViewActive())
+        return -1;
+
+    for (int markerIndex = 0; markerIndex + 1 < static_cast<int>(sliceMarkers_.size()); ++markerIndex)
+    {
+        const auto sliceStart = sliceMarkers_[static_cast<std::size_t>(markerIndex)];
+        const auto sliceEnd = sliceMarkers_[static_cast<std::size_t>(markerIndex + 1)];
+        if (sliceEnd <= sliceStart)
+            continue;
+
+        if (sampleIndex >= sliceStart && sampleIndex < sliceEnd)
+            return markerIndex;
+    }
+
+    return -1;
+}
+
+juce::Range<int> AudiocityAudioProcessorEditor::WaveformView::getSliceRegionBounds(const int sliceRegionIndex) const noexcept
+{
+    if (!isSliceViewActive() || sliceRegionIndex < 0 || sliceRegionIndex + 1 >= static_cast<int>(sliceMarkers_.size()))
+        return {};
+
+    const auto sliceStart = sliceMarkers_[static_cast<std::size_t>(sliceRegionIndex)];
+    const auto sliceEnd = sliceMarkers_[static_cast<std::size_t>(sliceRegionIndex + 1)];
+    if (sliceEnd <= sliceStart)
+        return {};
+
+    return { sliceStart, sliceEnd };
+}
+
+void AudiocityAudioProcessorEditor::WaveformView::updateSliceHoverState(const juce::Point<float> position)
+{
+    const auto clearSliceHoverState = [this]()
+    {
+        if (hoveredSliceBoundarySample_ == -1 && hoveredSliceRegionIndex_ == -1)
+            return;
+
+        hoveredSliceBoundarySample_ = -1;
+        hoveredSliceRegionIndex_ = -1;
+        repaint();
+    };
+
+    if (!isSliceViewActive() || totalSamples_ <= 0)
+    {
+        clearSliceHoverState();
+        return;
+    }
+
+    if (!getLocalBounds().toFloat().contains(position))
+    {
+        clearSliceHoverState();
+        return;
+    }
+
+    const auto sampleIndex = juce::jlimit(0, juce::jmax(0, totalSamples_ - 1), sampleFromX(position.x));
+    const auto samplesPerPixel = static_cast<double>(juce::jmax(1, viewSampleCount_))
+        / static_cast<double>(juce::jmax(1, getWidth()));
+    const auto boundaryTolerance = juce::jmax(8, static_cast<int>(std::ceil(samplesPerPixel * 8.0)));
+    const auto nextBoundary = findNearestSliceBoundarySample(sampleIndex, boundaryTolerance);
+    const auto nextRegion = findSliceRegionIndexForSample(sampleIndex);
+
+    if (nextBoundary == hoveredSliceBoundarySample_ && nextRegion == hoveredSliceRegionIndex_)
+        return;
+
+    hoveredSliceBoundarySample_ = nextBoundary;
+    hoveredSliceRegionIndex_ = nextRegion;
+    repaint();
 }
 
 void AudiocityAudioProcessorEditor::WaveformView::clampView()
@@ -1410,6 +1531,8 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
     const auto bounds = getLocalBounds().toFloat();
     const auto channelCount = juce::jmax(1, static_cast<int>(waveformByChannel_.size()));
     const auto channelHeight = bounds.getHeight() / static_cast<float>(channelCount);
+    const auto showCompactSliceLabels = isSliceViewActive() && static_cast<int>(sliceMarkers_.size()) <= 17;
+    const auto hoveredSliceBounds = getSliceRegionBounds(hoveredSliceRegionIndex_);
 
     // ── Playback region markers ──
     const auto pbX1 = xFromSample(playbackStart_);
@@ -1447,6 +1570,17 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
 
         g.setColour(uiAccentAmberColour().withAlpha(0.18f));
         g.fillRect(juce::Rectangle<float>(loopLeft, lane.getY(), juce::jmax(1.0f, loopRight - loopLeft), lane.getHeight()));
+
+        if (!hoveredSliceBounds.isEmpty())
+        {
+            const auto sliceStartX = handleVisualX(xFromSample(hoveredSliceBounds.getStart()));
+            const auto sliceEndX = handleVisualX(xFromSample(hoveredSliceBounds.getEnd()));
+            if (sliceEndX > sliceStartX)
+            {
+                g.setColour(uiAccentColour().withAlpha(channel == 0 ? 0.12f : 0.08f));
+                g.fillRect(juce::Rectangle<float>(sliceStartX, lane.getY(), sliceEndX - sliceStartX, lane.getHeight()));
+            }
+        }
 
         if (channelCount > 1)
         {
@@ -1618,7 +1752,6 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
 
         if (!sliceMarkers_.empty())
         {
-            g.setColour(uiAccentColour().withAlpha(0.58f));
             for (int markerIndex = 0; markerIndex < static_cast<int>(sliceMarkers_.size()); ++markerIndex)
             {
                 const auto markerSample = sliceMarkers_[static_cast<std::size_t>(markerIndex)];
@@ -1632,20 +1765,41 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
                 }
 
                 const auto markerX = juce::jlimit(bounds.getX(), bounds.getRight(), xFromSample(markerSample));
-                g.drawLine(markerX, lane.getY(), markerX, lane.getBottom(), 1.0f);
+                const auto hoveredBoundary = markerSample == hoveredSliceBoundarySample_;
+                g.setColour((hoveredBoundary ? uiAccentAmberColour() : uiAccentColour()).withAlpha(hoveredBoundary ? 0.92f : 0.58f));
+                g.drawLine(markerX, lane.getY(), markerX, lane.getBottom(), hoveredBoundary ? 1.7f : 1.0f);
 
-                g.drawLine(markerX - 3.0f, lane.getY() + 2.0f, markerX + 3.0f, lane.getY() + 2.0f, 1.25f);
+                g.drawLine(markerX - 3.0f, lane.getY() + 2.0f, markerX + 3.0f, lane.getY() + 2.0f, hoveredBoundary ? 1.5f : 1.25f);
+            }
 
-                if (channel == 0 && loopFormatBadge_ == "SLICE" && static_cast<int>(sliceMarkers_.size()) <= 16)
+            if (channel == 0 && showCompactSliceLabels)
+            {
+                for (int sliceIndex = 0; sliceIndex + 1 < static_cast<int>(sliceMarkers_.size()); ++sliceIndex)
                 {
-                    auto labelBounds = juce::Rectangle<float>(markerX - 9.0f, bounds.getY() + 4.0f, 18.0f, 11.0f);
-                    g.setColour(uiPanelRaisedColour().withAlpha(0.94f));
+                    const auto sliceBounds = getSliceRegionBounds(sliceIndex);
+                    if (sliceBounds.isEmpty())
+                        continue;
+
+                    if (sliceBounds.getEnd() < viewStartSample_
+                        || sliceBounds.getStart() > viewStartSample_ + juce::jmax(1, viewSampleCount_ - 1))
+                    {
+                        continue;
+                    }
+
+                    const auto leftX = handleVisualX(xFromSample(sliceBounds.getStart()));
+                    const auto rightX = handleVisualX(xFromSample(sliceBounds.getEnd()));
+                    if (rightX - leftX < 18.0f)
+                        continue;
+
+                    auto labelBounds = juce::Rectangle<float>((leftX + rightX) * 0.5f - 9.0f, bounds.getY() + 4.0f, 18.0f, 11.0f);
+                    const auto hoveredSlice = sliceIndex == hoveredSliceRegionIndex_;
+                    g.setColour((hoveredSlice ? uiAccentAmberColour() : uiPanelRaisedColour()).withAlpha(0.94f));
                     g.fillRoundedRectangle(labelBounds, 3.0f);
-                    g.setColour(uiBorderColour().withAlpha(0.95f));
+                    g.setColour((hoveredSlice ? uiAccentAmberColour() : uiBorderColour()).withAlpha(0.95f));
                     g.drawRoundedRectangle(labelBounds, 3.0f, 1.0f);
                     g.setColour(uiTextStrongColour().withAlpha(0.96f));
                     g.setFont(juce::Font(juce::FontOptions(8.5f)).boldened());
-                    g.drawText(juce::String(markerIndex + 1), labelBounds.toNearestInt(), juce::Justification::centred, false);
+                    g.drawText(juce::String(sliceIndex + 1), labelBounds.toNearestInt(), juce::Justification::centred, false);
                 }
             }
         }
@@ -1727,27 +1881,13 @@ void AudiocityAudioProcessorEditor::WaveformView::mouseDown(const juce::MouseEve
         const auto clickSample = juce::jlimit(0,
             juce::jmax(0, totalSamples_ - 1),
             sampleFromX(event.position.x));
-        auto nearestSliceBoundarySample = -1;
-        if (loopFormatBadge_ == "SLICE" && static_cast<bool>(onMergeSliceRequested))
-        {
-            const auto samplesPerPixel = static_cast<double>(juce::jmax(1, viewSampleCount_))
-                / static_cast<double>(juce::jmax(1, getWidth()));
-            const auto mergeBoundaryTolerance = juce::jmax(8,
-                static_cast<int>(std::ceil(samplesPerPixel * 8.0)));
-            auto bestDistance = mergeBoundaryTolerance + 1;
-            for (const auto markerSample : sliceMarkers_)
-            {
-                if (markerSample <= 0 || markerSample >= totalSamples_)
-                    continue;
-
-                const auto distance = std::abs(markerSample - clickSample);
-                if (distance <= mergeBoundaryTolerance && distance < bestDistance)
-                {
-                    bestDistance = distance;
-                    nearestSliceBoundarySample = markerSample;
-                }
-            }
-        }
+        const auto samplesPerPixel = static_cast<double>(juce::jmax(1, viewSampleCount_))
+            / static_cast<double>(juce::jmax(1, getWidth()));
+        const auto mergeBoundaryTolerance = juce::jmax(8,
+            static_cast<int>(std::ceil(samplesPerPixel * 8.0)));
+        const auto nearestSliceBoundarySample = static_cast<bool>(onMergeSliceRequested)
+            ? findNearestSliceBoundarySample(clickSample, mergeBoundaryTolerance)
+            : -1;
 
         const auto canMergeSlices = nearestSliceBoundarySample >= 0;
         const auto canSplitSlices = loopFormatBadge_ == "SLICE"
@@ -1844,6 +1984,11 @@ void AudiocityAudioProcessorEditor::WaveformView::mouseDown(const juce::MouseEve
     }
 
     dragMode_ = bestMode;
+}
+
+void AudiocityAudioProcessorEditor::WaveformView::mouseMove(const juce::MouseEvent& event)
+{
+    updateSliceHoverState(event.position);
 }
 
 void AudiocityAudioProcessorEditor::WaveformView::mouseDrag(const juce::MouseEvent& event)
@@ -1961,8 +2106,22 @@ void AudiocityAudioProcessorEditor::WaveformView::mouseUp(const juce::MouseEvent
     linkedPlaybackDuringLoopDrag_ = false;
 }
 
-void AudiocityAudioProcessorEditor::WaveformView::mouseDoubleClick(const juce::MouseEvent&)
+void AudiocityAudioProcessorEditor::WaveformView::mouseExit(const juce::MouseEvent&)
 {
+    updateSliceHoverState({ -1.0f, -1.0f });
+}
+
+void AudiocityAudioProcessorEditor::WaveformView::mouseDoubleClick(const juce::MouseEvent& event)
+{
+    if (isSliceViewActive() && static_cast<bool>(onSplitSliceRequested))
+    {
+        const auto clickSample = juce::jlimit(0,
+            juce::jmax(0, totalSamples_ - 1),
+            sampleFromX(event.position.x));
+        onSplitSliceRequested(clickSample);
+        return;
+    }
+
     if (onResetRangesRequested)
         onResetRangesRequested();
     else
@@ -2357,6 +2516,79 @@ void PlayerModulationPanel::paint(juce::Graphics& g)
     paintGroupBox(g, area.removeFromTop(kRowH), "Expressive Mod");
     area.removeFromTop(kGrpGap);
     paintGroupBox(g, area.removeFromTop(kRowH), "Macro Mod");
+
+    const auto paintDestinationChip = [&g](juce::Rectangle<float> chipBounds,
+                                           const juce::String& label,
+                                           const float value,
+                                           const float magnitudeMax,
+                                           const juce::Colour activeColour)
+    {
+        g.setColour(juce::Colour(0xff1a2031));
+        g.fillRoundedRectangle(chipBounds, 3.5f);
+        g.setColour(juce::Colour(0xff34415f));
+        g.drawRoundedRectangle(chipBounds.reduced(0.5f), 3.5f, 1.0f);
+
+        const auto normalized = juce::jlimit(0.0f, 1.0f,
+            magnitudeMax > 0.0f ? std::abs(value) / magnitudeMax : 0.0f);
+        if (normalized > 0.0f)
+        {
+            auto fillBounds = chipBounds.reduced(1.5f);
+            fillBounds.setWidth(fillBounds.getWidth() * normalized);
+            const auto fillColour = value >= 0.0f
+                ? activeColour.withAlpha(0.85f)
+                : juce::Colour(0xffef7f73).withAlpha(0.85f);
+            g.setColour(fillColour);
+            g.fillRoundedRectangle(fillBounds, 2.5f);
+        }
+
+        g.setColour(juce::Colour(0xffe5e5ef));
+        g.setFont(juce::Font(juce::FontOptions(9.0f)).boldened());
+        g.drawText(label, chipBounds.toNearestInt(), juce::Justification::centred, false);
+    };
+
+    const auto routeLabel = [](const PlayerModulationPanel::RouteSlot slot, const float macroValue)
+    {
+        switch (slot)
+        {
+            case PlayerModulationPanel::RouteSlot::modWheel: return juce::String("MW");
+            case PlayerModulationPanel::RouteSlot::aftertouch: return juce::String("AT");
+            case PlayerModulationPanel::RouteSlot::velocity: return juce::String("VEL");
+            case PlayerModulationPanel::RouteSlot::macro1: return juce::String("M1 ") + juce::String(std::round(macroValue)) + "%";
+            case PlayerModulationPanel::RouteSlot::macro2: return juce::String("M2 ") + juce::String(std::round(macroValue)) + "%";
+        }
+
+        return juce::String();
+    };
+
+    for (const auto& route : routeDialSets())
+    {
+        auto clusterBounds = route.pitchDial->getBounds()
+            .getUnion(route.filterDial->getBounds())
+            .getUnion(route.ampDial->getBounds());
+        if (clusterBounds.isEmpty())
+            continue;
+
+        auto feedbackBounds = clusterBounds.withY(clusterBounds.getBottom() + 4).withHeight(14).toFloat();
+        auto labelBounds = feedbackBounds.removeFromLeft(route.slot == RouteSlot::macro1 || route.slot == RouteSlot::macro2 ? 50.0f : 34.0f);
+        g.setColour(juce::Colour(0xff9ea6c5));
+        g.setFont(juce::Font(juce::FontOptions(9.0f)).boldened());
+
+        const auto macroValue = route.slot == RouteSlot::macro1 ? static_cast<float>(macro1ValueDial_.getValue())
+            : (route.slot == RouteSlot::macro2 ? static_cast<float>(macro2ValueDial_.getValue()) : 0.0f);
+        g.drawText(routeLabel(route.slot, macroValue), labelBounds.toNearestInt(), juce::Justification::centredLeft, false);
+
+        constexpr float kChipGap = 4.0f;
+        const auto chipWidth = (feedbackBounds.getWidth() - (2.0f * kChipGap)) / 3.0f;
+        auto pitchChip = feedbackBounds.removeFromLeft(chipWidth);
+        feedbackBounds.removeFromLeft(kChipGap);
+        auto filterChip = feedbackBounds.removeFromLeft(chipWidth);
+        feedbackBounds.removeFromLeft(kChipGap);
+        auto ampChip = feedbackBounds;
+
+        paintDestinationChip(pitchChip, "Pitch", static_cast<float>(route.pitchDial->getValue()), 1200.0f, juce::Colour(0xff61d9ff));
+        paintDestinationChip(filterChip, "Filter", static_cast<float>(route.filterDial->getValue()), 20000.0f, juce::Colour(0xfff2c14e));
+        paintDestinationChip(ampChip, "Amp", static_cast<float>(route.ampDial->getValue()), 100.0f, juce::Colour(0xff62d59d));
+    }
 }
 
 void PlayerModulationPanel::resized()
@@ -2426,6 +2658,8 @@ void PlayerModulationPanel::syncFromProcessor()
 
     for (const auto& macro : macroDialSets())
         macro.valueDial->setValue(macroValues[macro.index] * 100.0f, juce::dontSendNotification);
+
+    repaint();
 }
 
 void PlayerModulationPanel::setControlTooltips()
@@ -2468,6 +2702,7 @@ void PlayerModulationPanel::pushToProcessor()
 
     processor_.setModulationRoutingSettings(routing);
     processor_.setMacroControlValues(macroValues);
+    repaint();
 }
 
 void PlayerModulationPanel::paintGroupBox(juce::Graphics& g, juce::Rectangle<int> bounds, const juce::String& title) const
@@ -2516,6 +2751,10 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     // Player pane
     addAndMakeVisible(playerKeyboardLabel_);
     playerKeyboardLabel_.setJustificationType(juce::Justification::centredLeft);
+
+    addAndMakeVisible(playerStatusLabel_);
+    playerStatusLabel_.setJustificationType(juce::Justification::centredLeft);
+    playerStatusLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8fb7ff));
 
     addAndMakeVisible(playerOpenButton_);
     playerOpenButton_.onClick = [this]
@@ -2575,6 +2814,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         };
     }
     refreshPlayerPadButtons();
+    updatePerformanceStripStatus(0.0f, 0.0f);
 
     // Generate pane
     addAndMakeVisible(generateWaveformView_);
@@ -4056,6 +4296,7 @@ void AudiocityAudioProcessorEditor::timerCallback()
 
     const auto outputPeaks = processor_.consumeOutputPeakLevels();
     outputLevelMeter_.pushLevels(outputPeaks.left, outputPeaks.right);
+    updatePerformanceStripStatus(outputPeaks.left, outputPeaks.right);
 
     if (currentTabIndex_ == 5 || processor_.isInputCaptureRecording())
     {
@@ -4167,12 +4408,21 @@ void AudiocityAudioProcessorEditor::timerCallback()
         }
     }
 
-    if (currentTabIndex_ == 1)
+    if (currentTabIndex_ == 1 || shouldShowPersistentBrowserRail())
     {
         const auto scanning = sampleScanInProgress_.load(std::memory_order_relaxed);
+        const bool shouldShowCancelButton = (currentTabIndex_ == 1 || shouldShowPersistentBrowserRail()) && scanning;
+        if (sampleBrowserCancelButton_.isVisible() != shouldShowCancelButton)
+        {
+            sampleBrowserCancelButton_.setVisible(shouldShowCancelButton);
+            resized();
+        }
+
         const auto statusText = scanning
             ? juce::String("Scanning...")
-            : (processor_.isSamplePreviewPlaying() ? juce::String("Previewing...") : juce::String{});
+            : (processor_.isSamplePreviewPlaying()
+                ? juce::String("Previewing...  |  Dbl-click load")
+                : juce::String("Click preview  |  Dbl-click load"));
         sampleBrowserPreviewLabel_.setText(
             statusText,
             juce::dontSendNotification);
@@ -4340,26 +4590,33 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     const bool showGenerateTab = (currentTabIndex_ == 4);
     const bool showCaptureTab = (currentTabIndex_ == 5);
     const bool showAboutTab = (currentTabIndex_ == 6);
+    const bool showBrowserRail = shouldShowPersistentBrowserRail();
     const bool showPerformanceStrip = shouldShowPersistentPerformanceStrip();
+    const bool showBrowserSurface = showLibraryTab || showBrowserRail;
+    const bool showBrowserCancelButton = showBrowserSurface && sampleScanInProgress_.load(std::memory_order_relaxed);
+    const int browserRowHeight = showBrowserRail ? 54 : 66;
 
-    sampleBrowserRootLabel_.setVisible(showLibraryTab);
-    sampleBrowserChooseRootButton_.setVisible(showLibraryTab);
-    sampleBrowserRefreshButton_.setVisible(showLibraryTab);
-    sampleBrowserCancelButton_.setVisible(showLibraryTab);
+    if (sampleBrowserListBox_.getRowHeight() != browserRowHeight)
+        sampleBrowserListBox_.setRowHeight(browserRowHeight);
+
+    sampleBrowserRootLabel_.setVisible(showBrowserSurface);
+    sampleBrowserChooseRootButton_.setVisible(showBrowserSurface);
+    sampleBrowserRefreshButton_.setVisible(showBrowserSurface);
+    sampleBrowserCancelButton_.setVisible(showBrowserCancelButton);
     sampleBrowserBookmarkCombo_.setVisible(showLibraryTab);
     sampleBrowserAddBookmarkButton_.setVisible(showLibraryTab);
     sampleBrowserRemoveBookmarkButton_.setVisible(showLibraryTab);
-    sampleBrowserFilterEditor_.setVisible(showLibraryTab);
-    sampleBrowserSortCombo_.setVisible(showLibraryTab);
-    sampleBrowserFavoriteButton_.setVisible(showLibraryTab);
-    sampleBrowserFavoritesOnlyToggle_.setVisible(showLibraryTab);
-    sampleBrowserRecentOnlyToggle_.setVisible(showLibraryTab);
+    sampleBrowserFilterEditor_.setVisible(showLibraryTab || showBrowserRail);
+    sampleBrowserSortCombo_.setVisible(showLibraryTab || showBrowserRail);
+    sampleBrowserFavoriteButton_.setVisible(showLibraryTab || showBrowserRail);
+    sampleBrowserFavoritesOnlyToggle_.setVisible(showLibraryTab || showBrowserRail);
+    sampleBrowserRecentOnlyToggle_.setVisible(showLibraryTab || showBrowserRail);
     sampleBrowserTagFilterCombo_.setVisible(showLibraryTab);
     sampleBrowserTagsEditor_.setVisible(showLibraryTab);
     sampleBrowserApplyTagsButton_.setVisible(showLibraryTab);
-    sampleBrowserListBox_.setVisible(showLibraryTab);
-    sampleBrowserCountLabel_.setVisible(showLibraryTab);
-    sampleBrowserPreviewLabel_.setVisible(showLibraryTab);
+    sampleBrowserListBox_.setVisible(showLibraryTab || showBrowserRail);
+    sampleBrowserCountLabel_.setVisible(showLibraryTab || showBrowserRail);
+    sampleBrowserPreviewLabel_.setVisible(showLibraryTab || showBrowserRail);
 
     mappingSummaryLabel_.setVisible(showMappingTab);
     mappingRefreshButton_.setVisible(showMappingTab);
@@ -4512,6 +4769,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     diagnosticsLabel_.setVisible(showSampleTab && showDiagnosticsPanel_);
 
     playerKeyboardLabel_.setVisible(showPlayerTab || showPerformanceStrip);
+    playerStatusLabel_.setVisible(showPerformanceStrip);
     playerOpenButton_.setVisible(showPerformanceStrip);
     playerKeyboardViewport_.setVisible(showPlayerTab || showPerformanceStrip);
     playerPadsLabel_.setVisible(showPlayerTab || showPerformanceStrip);
@@ -4581,7 +4839,13 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
     if (rowNumber < 0 || rowNumber >= static_cast<int>(visibleSampleEntryIndices_.size()))
         return;
 
-    const auto& entry = allSampleEntries_[static_cast<std::size_t>(visibleSampleEntryIndices_[static_cast<std::size_t>(rowNumber)])];
+    const auto sourceIndex = visibleSampleEntryIndices_[static_cast<std::size_t>(rowNumber)];
+    const auto& entry = allSampleEntries_[static_cast<std::size_t>(sourceIndex)];
+    const bool compactBrowserRow = shouldShowPersistentBrowserRail();
+    const bool previewSupported = !entry.file.getFileExtension().equalsIgnoreCase(".sfz");
+    const bool rowPreviewing = previewSupported
+        && processor_.isSamplePreviewPlaying()
+        && sourceIndex == lastPreviewedBrowserSourceIndex_;
     const auto rowBounds = juce::Rectangle<int>(0, 0, width, height).reduced(2, 1);
 
     if (rowIsSelected)
@@ -4595,9 +4859,9 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
         g.fillRoundedRectangle(rowBounds.toFloat(), 4.0f);
     }
 
-    auto content = rowBounds.reduced(6, 4);
-    auto thumbBounds = content.removeFromLeft(120).withTrimmedBottom(1);
-    content.removeFromLeft(8);
+    auto content = rowBounds.reduced(compactBrowserRow ? 5 : 6, 4);
+    auto thumbBounds = content.removeFromLeft(compactBrowserRow ? 82 : 120).withTrimmedBottom(1);
+    content.removeFromLeft(compactBrowserRow ? 6 : 8);
 
     g.setColour(juce::Colour(0xff1f2f4d));
     g.fillRoundedRectangle(thumbBounds.toFloat(), 4.0f);
@@ -4705,15 +4969,17 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
         drawRowBadge(entry.loopFormatBadge, badgeColour, badgeWidth);
     }
 
-    const auto pathWidth = juce::jmax(140, pathArea.getWidth() / 2);
+    const auto pathWidth = compactBrowserRow
+        ? juce::jmax(92, pathArea.getWidth() / 3)
+        : juce::jmax(140, pathArea.getWidth() / 2);
     auto fileArea = pathArea.removeFromLeft(juce::jmax(40, pathArea.getWidth() - pathWidth - 6));
 
     g.setColour(juce::Colour(0xffe5e5ef));
-    g.setFont(juce::Font(juce::FontOptions(13.0f)));
+    g.setFont(juce::Font(juce::FontOptions(compactBrowserRow ? 12.0f : 13.0f)));
     g.drawText(entry.fileName, fileArea, juce::Justification::centredLeft, true);
 
     g.setColour(juce::Colour(0xffa5a5b8));
-    g.setFont(juce::Font(juce::FontOptions(10.5f)));
+    g.setFont(juce::Font(juce::FontOptions(compactBrowserRow ? 10.0f : 10.5f)));
     g.drawText(entry.relativePath, pathArea, juce::Justification::centredRight, true);
 
     auto detailsLine = entry.metadataLine;
@@ -4723,8 +4989,20 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
         detailsLine += "  |  Tags: " + entry.tags.joinIntoString(", ");
 
     g.setColour(juce::Colour(0xffc7c7d8));
-    g.setFont(juce::Font(juce::FontOptions(11.0f)));
+    g.setFont(juce::Font(juce::FontOptions(compactBrowserRow ? 10.0f : 11.0f)));
     g.drawText(detailsLine, content.removeFromTop(15), juce::Justification::centredLeft, true);
+
+    if (compactBrowserRow)
+    {
+        auto actionLine = content.removeFromTop(13);
+        g.setColour(rowPreviewing ? juce::Colour(0xff61d9ff) : juce::Colour(0xff9ea6c5));
+        g.setFont(juce::Font(juce::FontOptions(9.5f)));
+        const auto actionText = rowPreviewing
+            ? juce::String("Previewing  |  Dbl-click load")
+            : (previewSupported ? juce::String("Click preview  |  Dbl-click load")
+                                : juce::String("Dbl-click load"));
+        g.drawText(actionText, actionLine, juce::Justification::centredLeft, true);
+    }
 
 }
 
@@ -5870,7 +6148,7 @@ void AudiocityAudioProcessorEditor::selectedRowsChanged(const int lastRowSelecte
 {
     updateBrowserLibraryControls();
 
-    if (currentTabIndex_ != 1)
+    if (currentTabIndex_ != 1 && !shouldShowPersistentBrowserRail())
         return;
 
     previewSampleFromBrowserRow(lastRowSelected, false);
@@ -6622,9 +6900,150 @@ void AudiocityAudioProcessorEditor::paintSampleBrowserPane(
     g.drawRoundedRectangle(browserArea.toFloat().reduced(0.5f), 6.0f, 1.0f);
 }
 
+void AudiocityAudioProcessorEditor::updatePerformanceStripStatus(const float outputLeftPeak,
+                                                                const float outputRightPeak)
+{
+    const bool previewPlaying = processor_.isGeneratedWaveformPreviewPlaying() || processor_.isSamplePreviewPlaying();
+    const int activeVoices = processor_.getActiveVoiceCount();
+    const auto stateText = previewPlaying ? juce::String("Preview")
+                                          : (activeVoices > 0 ? juce::String("Live") : juce::String("Ready"));
+
+    playerStatusLabel_.setText(
+        stateText
+            + "  V" + juce::String(activeVoices)
+            + "  Out " + formatCompactPeakDb(outputLeftPeak)
+            + " / " + formatCompactPeakDb(outputRightPeak)
+            + " dB",
+        juce::dontSendNotification);
+}
+
 bool AudiocityAudioProcessorEditor::shouldShowPersistentPerformanceStrip() const noexcept
 {
     return currentTabIndex_ != 3 && currentTabIndex_ != 6;
+}
+
+bool AudiocityAudioProcessorEditor::shouldShowPersistentBrowserRail() const noexcept
+{
+    return currentTabIndex_ != 1 && currentTabIndex_ != 3 && currentTabIndex_ != 6;
+}
+
+void AudiocityAudioProcessorEditor::layoutSampleBrowserArea(juce::Rectangle<int> browserArea,
+                                                            const bool compactLayout)
+{
+    browserArea = browserArea.reduced(8, 6);
+
+    if (compactLayout)
+    {
+        auto header = browserArea.removeFromTop(28);
+        if (sampleBrowserCancelButton_.isVisible())
+        {
+            sampleBrowserCancelButton_.setBounds(header.removeFromRight(62));
+            header.removeFromRight(6);
+        }
+        else
+        {
+            sampleBrowserCancelButton_.setBounds({});
+        }
+
+        sampleBrowserRefreshButton_.setBounds(header.removeFromRight(72));
+        header.removeFromRight(6);
+        sampleBrowserChooseRootButton_.setBounds(header.removeFromRight(30));
+        header.removeFromRight(6);
+        sampleBrowserRootLabel_.setBounds(header);
+
+        browserArea.removeFromTop(6);
+        sampleBrowserFilterEditor_.setBounds(browserArea.removeFromTop(28));
+
+        browserArea.removeFromTop(6);
+        auto quickRow = browserArea.removeFromTop(28);
+        auto quickLeft = quickRow.removeFromLeft((quickRow.getWidth() - 6) / 2);
+        sampleBrowserSortCombo_.setBounds(quickLeft);
+        quickRow.removeFromLeft(6);
+        sampleBrowserFavoriteButton_.setBounds(quickRow);
+
+        browserArea.removeFromTop(6);
+        auto toggleRow = browserArea.removeFromTop(28);
+        auto toggleLeft = toggleRow.removeFromLeft((toggleRow.getWidth() - 6) / 2);
+        sampleBrowserFavoritesOnlyToggle_.setBounds(toggleLeft);
+        toggleRow.removeFromLeft(6);
+        sampleBrowserRecentOnlyToggle_.setBounds(toggleRow);
+
+        browserArea.removeFromTop(6);
+        auto listArea = browserArea;
+        auto statusRow = listArea.removeFromBottom(20);
+        sampleBrowserCountLabel_.setBounds(statusRow.removeFromLeft(statusRow.getWidth() / 2));
+        sampleBrowserPreviewLabel_.setBounds(statusRow);
+        listArea.removeFromBottom(4);
+        sampleBrowserListBox_.setBounds(listArea);
+
+        sampleBrowserBookmarkCombo_.setBounds({});
+        sampleBrowserAddBookmarkButton_.setBounds({});
+        sampleBrowserRemoveBookmarkButton_.setBounds({});
+        sampleBrowserTagFilterCombo_.setBounds({});
+        sampleBrowserTagsEditor_.setBounds({});
+        sampleBrowserApplyTagsButton_.setBounds({});
+        return;
+    }
+
+    auto header = browserArea.removeFromTop(28);
+    if (sampleBrowserCancelButton_.isVisible())
+    {
+        sampleBrowserCancelButton_.setBounds(header.removeFromRight(76));
+        header.removeFromRight(6);
+    }
+    else
+    {
+        sampleBrowserCancelButton_.setBounds({});
+    }
+
+    sampleBrowserRefreshButton_.setBounds(header.removeFromRight(84));
+    header.removeFromRight(6);
+    sampleBrowserChooseRootButton_.setBounds(header.removeFromRight(30));
+    header.removeFromRight(6);
+    sampleBrowserRootLabel_.setBounds(header);
+
+    browserArea.removeFromTop(6);
+    auto bookmarkRow = browserArea.removeFromTop(28);
+    sampleBrowserRemoveBookmarkButton_.setBounds(bookmarkRow.removeFromRight(78));
+    bookmarkRow.removeFromRight(6);
+    sampleBrowserAddBookmarkButton_.setBounds(bookmarkRow.removeFromRight(98));
+    bookmarkRow.removeFromRight(6);
+    sampleBrowserBookmarkCombo_.setBounds(bookmarkRow);
+
+    browserArea.removeFromTop(6);
+    auto filterRow = browserArea.removeFromTop(28);
+    constexpr int sortWidth = 104;
+    constexpr int favoriteWidth = 86;
+    constexpr int favoritesOnlyWidth = 96;
+    constexpr int recentOnlyWidth = 78;
+    constexpr int filterControlGap = 6;
+    const auto controlWidth = sortWidth + favoriteWidth + favoritesOnlyWidth + recentOnlyWidth + (4 * filterControlGap);
+    auto filterWidth = juce::jmax(120, filterRow.getWidth() - controlWidth);
+    sampleBrowserFilterEditor_.setBounds(filterRow.removeFromLeft(filterWidth));
+    filterRow.removeFromLeft(filterControlGap);
+    sampleBrowserSortCombo_.setBounds(filterRow.removeFromLeft(sortWidth));
+    filterRow.removeFromLeft(filterControlGap);
+    sampleBrowserFavoriteButton_.setBounds(filterRow.removeFromLeft(favoriteWidth));
+    filterRow.removeFromLeft(filterControlGap);
+    sampleBrowserFavoritesOnlyToggle_.setBounds(filterRow.removeFromLeft(favoritesOnlyWidth));
+    filterRow.removeFromLeft(filterControlGap);
+    sampleBrowserRecentOnlyToggle_.setBounds(filterRow.removeFromLeft(recentOnlyWidth));
+
+    browserArea.removeFromTop(6);
+    auto tagRow = browserArea.removeFromTop(28);
+    sampleBrowserApplyTagsButton_.setBounds(tagRow.removeFromRight(96));
+    tagRow.removeFromRight(6);
+    sampleBrowserTagFilterCombo_.setBounds(tagRow.removeFromRight(132));
+    tagRow.removeFromRight(6);
+    sampleBrowserTagsEditor_.setBounds(tagRow);
+
+    browserArea.removeFromTop(6);
+    auto listArea = browserArea;
+    auto statusRow = listArea.removeFromBottom(20);
+    sampleBrowserCountLabel_.setBounds(statusRow.removeFromLeft(statusRow.getWidth() / 2));
+    sampleBrowserPreviewLabel_.setBounds(statusRow);
+    listArea.removeFromBottom(4);
+    sampleBrowserListBox_.setBounds(listArea);
 }
 
 void AudiocityAudioProcessorEditor::layoutPlayerPerformanceArea(juce::Rectangle<int> area, const bool compactLayout)
@@ -6636,22 +7055,26 @@ void AudiocityAudioProcessorEditor::layoutPlayerPerformanceArea(juce::Rectangle<
         playerKeyboardLabel_.setText("Performance Strip", juce::dontSendNotification);
         playerPadsLabel_.setText("Quick Pads", juce::dontSendNotification);
 
-        auto keyboardPanel = area.removeFromTop(102).reduced(8, 8);
-        auto keyboardHeader = keyboardPanel.removeFromTop(18);
-        playerOpenButton_.setBounds(keyboardHeader.removeFromRight(104));
-        playerKeyboardLabel_.setBounds(keyboardHeader);
+        const int keyboardPanelHeight = juce::jlimit(78, 116, (area.getHeight() * 53) / 100);
+        auto keyboardPanel = area.removeFromTop(keyboardPanelHeight).reduced(8, 8);
+        auto keyboardHeader = keyboardPanel.removeFromTop(34);
+        auto keyboardTitleRow = keyboardHeader.removeFromTop(16);
+        playerOpenButton_.setBounds(keyboardTitleRow.removeFromRight(92));
+        playerKeyboardLabel_.setBounds(keyboardTitleRow);
+        keyboardHeader.removeFromTop(2);
+        playerStatusLabel_.setBounds(keyboardHeader.removeFromTop(14));
         keyboardPanel.removeFromTop(4);
         playerKeyboardViewport_.setBounds(keyboardPanel);
         updatePlayerKeyboardSizing();
 
-        area.removeFromTop(8);
+        area.removeFromTop(6);
         auto padsPanel = area.reduced(8, 8);
-        playerPadsLabel_.setBounds(padsPanel.removeFromTop(18));
+        playerPadsLabel_.setBounds(padsPanel.removeFromTop(16));
         padsPanel.removeFromTop(4);
 
         constexpr int padGap = 6;
-        const int padCellWidth = juce::jmax(72, (padsPanel.getWidth() - (kPlayerPadCount - 1) * padGap) / kPlayerPadCount);
-        const int padCellHeight = juce::jmax(40, padsPanel.getHeight());
+        const int padCellWidth = juce::jmax(64, (padsPanel.getWidth() - (kPlayerPadCount - 1) * padGap) / kPlayerPadCount);
+        const int padCellHeight = juce::jmax(34, padsPanel.getHeight());
 
         for (int i = 0; i < kPlayerPadCount; ++i)
         {
@@ -6668,6 +7091,7 @@ void AudiocityAudioProcessorEditor::layoutPlayerPerformanceArea(juce::Rectangle<
     }
 
     playerKeyboardLabel_.setText("Piano", juce::dontSendNotification);
+    playerStatusLabel_.setBounds({});
     playerPadsLabel_.setText("Drum Pads", juce::dontSendNotification);
     playerOpenButton_.setBounds({});
 
@@ -6731,8 +7155,8 @@ void AudiocityAudioProcessorEditor::paintPlayerPane(juce::Graphics& g, juce::Rec
 
     if (compactLayout)
     {
-        auto keyboardPanel = area.removeFromTop(102);
-        area.removeFromTop(8);
+        auto keyboardPanel = area.removeFromTop(juce::jlimit(78, 116, (area.getHeight() * 53) / 100));
+        area.removeFromTop(6);
         auto padsPanel = area;
 
         paintPanel(keyboardPanel);
@@ -6933,78 +7357,39 @@ void AudiocityAudioProcessorEditor::resized()
     tabBar_.setBounds(content.removeFromTop(30));
     content.removeFromTop(8);
     auto area = content;
+    juce::Rectangle<int> browserRailArea;
     juce::Rectangle<int> performanceStripArea;
+    const bool showBrowserRail = shouldShowPersistentBrowserRail();
     const bool showPerformanceStrip = shouldShowPersistentPerformanceStrip();
 
     if (showPerformanceStrip)
     {
         constexpr int kPerformanceStripGap = 10;
-        constexpr int kPerformanceStripHeight = 196;
+        const int kPerformanceStripHeight = computePersistentPerformanceStripHeight(area.getHeight());
         performanceStripArea = area.removeFromBottom(kPerformanceStripHeight);
         area.removeFromBottom(kPerformanceStripGap);
+    }
+
+    if (showBrowserRail)
+    {
+        constexpr int kBrowserRailGap = 10;
+        const int kBrowserRailWidth = computePersistentBrowserRailWidth(area.getWidth());
+        browserRailArea = area.removeFromLeft(kBrowserRailWidth);
+        area.removeFromLeft(kBrowserRailGap);
     }
 
     groupBoxes_.clear();
 
     if (currentTabIndex_ == 1)
     {
-        auto browserArea = area.reduced(8, 6);
-
-        auto header = browserArea.removeFromTop(28);
-        sampleBrowserCancelButton_.setBounds(header.removeFromRight(76));
-        header.removeFromRight(6);
-        sampleBrowserRefreshButton_.setBounds(header.removeFromRight(84));
-        header.removeFromRight(6);
-        sampleBrowserChooseRootButton_.setBounds(header.removeFromRight(30));
-        header.removeFromRight(6);
-        sampleBrowserRootLabel_.setBounds(header);
-
-        browserArea.removeFromTop(6);
-        auto bookmarkRow = browserArea.removeFromTop(28);
-        sampleBrowserRemoveBookmarkButton_.setBounds(bookmarkRow.removeFromRight(78));
-        bookmarkRow.removeFromRight(6);
-        sampleBrowserAddBookmarkButton_.setBounds(bookmarkRow.removeFromRight(98));
-        bookmarkRow.removeFromRight(6);
-        sampleBrowserBookmarkCombo_.setBounds(bookmarkRow);
-
-        browserArea.removeFromTop(6);
-        auto filterRow = browserArea.removeFromTop(28);
-        constexpr int sortWidth = 104;
-        constexpr int favoriteWidth = 86;
-        constexpr int favoritesOnlyWidth = 96;
-        constexpr int recentOnlyWidth = 78;
-        constexpr int filterControlGap = 6;
-        const auto controlWidth = sortWidth + favoriteWidth + favoritesOnlyWidth + recentOnlyWidth + (4 * filterControlGap);
-        auto filterWidth = juce::jmax(120, filterRow.getWidth() - controlWidth);
-        sampleBrowserFilterEditor_.setBounds(filterRow.removeFromLeft(filterWidth));
-        filterRow.removeFromLeft(filterControlGap);
-        sampleBrowserSortCombo_.setBounds(filterRow.removeFromLeft(sortWidth));
-        filterRow.removeFromLeft(filterControlGap);
-        sampleBrowserFavoriteButton_.setBounds(filterRow.removeFromLeft(favoriteWidth));
-        filterRow.removeFromLeft(filterControlGap);
-        sampleBrowserFavoritesOnlyToggle_.setBounds(filterRow.removeFromLeft(favoritesOnlyWidth));
-        filterRow.removeFromLeft(filterControlGap);
-        sampleBrowserRecentOnlyToggle_.setBounds(filterRow.removeFromLeft(recentOnlyWidth));
-
-        browserArea.removeFromTop(6);
-        auto tagRow = browserArea.removeFromTop(28);
-        sampleBrowserApplyTagsButton_.setBounds(tagRow.removeFromRight(96));
-        tagRow.removeFromRight(6);
-        sampleBrowserTagFilterCombo_.setBounds(tagRow.removeFromRight(132));
-        tagRow.removeFromRight(6);
-        sampleBrowserTagsEditor_.setBounds(tagRow);
-
-        browserArea.removeFromTop(6);
-        auto listArea = browserArea;
-        auto statusRow = listArea.removeFromBottom(20);
-        sampleBrowserCountLabel_.setBounds(statusRow.removeFromLeft(statusRow.getWidth() / 2));
-        sampleBrowserPreviewLabel_.setBounds(statusRow);
-        listArea.removeFromBottom(4);
-        sampleBrowserListBox_.setBounds(listArea);
+        layoutSampleBrowserArea(area, false);
         if (showPerformanceStrip)
             layoutPlayerPerformanceArea(performanceStripArea, true);
         return;
     }
+
+    if (showBrowserRail)
+        layoutSampleBrowserArea(browserRailArea, true);
 
     if (currentTabIndex_ == 2)
     {
@@ -7642,15 +8027,25 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
     auto content = getLocalBounds().reduced(kMargin);
     content.removeFromTop(30);
     content.removeFromTop(8);
+    juce::Rectangle<int> browserRailArea;
     juce::Rectangle<int> performanceStripArea;
+    const bool showBrowserRail = shouldShowPersistentBrowserRail();
     const bool showPerformanceStrip = shouldShowPersistentPerformanceStrip();
 
     if (showPerformanceStrip)
     {
         constexpr int kPerformanceStripGap = 10;
-        constexpr int kPerformanceStripHeight = 196;
+        const int kPerformanceStripHeight = computePersistentPerformanceStripHeight(content.getHeight());
         performanceStripArea = content.removeFromBottom(kPerformanceStripHeight);
         content.removeFromBottom(kPerformanceStripGap);
+    }
+
+    if (showBrowserRail)
+    {
+        constexpr int kBrowserRailGap = 10;
+        const int kBrowserRailWidth = computePersistentBrowserRailWidth(content.getWidth());
+        browserRailArea = content.removeFromLeft(kBrowserRailWidth);
+        content.removeFromLeft(kBrowserRailGap);
     }
 
     auto paintContentCard = [&g](juce::Rectangle<int> areaToPaint)
@@ -7664,7 +8059,10 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
 
     if (currentTabIndex_ == 1)
         paintSampleBrowserPane(g, content);
-    else if (currentTabIndex_ == 2)
+    else if (showBrowserRail)
+        paintSampleBrowserPane(g, browserRailArea);
+
+    if (currentTabIndex_ == 2)
         paintContentCard(content);
     else if (currentTabIndex_ == 3)
         paintPlayerPane(g, content, false);
@@ -7850,7 +8248,7 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
-    if (key.getKeyCode() == juce::KeyPress::returnKey && currentTabIndex_ == 1)
+    if (key.getKeyCode() == juce::KeyPress::returnKey && (currentTabIndex_ == 1 || shouldShowPersistentBrowserRail()))
     {
         const auto selectedRow = sampleBrowserListBox_.getSelectedRow();
         if (selectedRow >= 0)
@@ -9365,6 +9763,8 @@ void AudiocityAudioProcessorEditor::updateSampleInformationDisplay()
     const auto loopBadge = hasImportedProgram
         ? audiocity::plugin::importedProgramFormatBadge(processor_.getImportedProgramFormat())
         : processor_.getLoadedSampleLoopFormatBadge();
+    const auto sliceMarkers = loopBadge == "SLICE" ? processor_.getImportedProgramSliceMarkerSamples() : std::vector<int>{};
+    const auto sliceCount = static_cast<int>(sliceMarkers.size()) >= 2 ? static_cast<int>(sliceMarkers.size()) - 1 : 0;
 
     juce::String sourceText;
     if (hasImportedProgram)
@@ -9494,6 +9894,9 @@ void AudiocityAudioProcessorEditor::updateSampleInformationDisplay()
         if (!loopIsFullRange)
             waveformSummaryText += " (" + sampleInfoLoopDurationValue_.getText() + ")";
 
+        if (sliceCount > 0)
+            waveformSummaryText += "  |  Slices " + juce::String(sliceCount) + ". Hover to inspect, double-click to split, right-click a boundary to merge or re-slice.";
+
         waveformSummaryText += "  |  Drag waveform handles. Shift-drag loop handles to move playback too. Wheel zoom, middle-drag pan.";
     }
     else
@@ -9502,6 +9905,9 @@ void AudiocityAudioProcessorEditor::updateSampleInformationDisplay()
     }
 
     waveformInteractionSummaryLabel_.setText(waveformSummaryText, juce::dontSendNotification);
+    waveformInteractionSummaryLabel_.setTooltip(sliceCount > 0
+        ? "Slice view: hover a slice to inspect it, double-click the waveform to split at that point, and right-click near a boundary to merge adjacent slices or re-run transient slicing"
+        : "Trim and loop are edited directly in the waveform: drag handles, Shift-drag loop handles to move playback too, use the mouse wheel to zoom, and middle-drag to pan");
 }
 
 void AudiocityAudioProcessorEditor::updateDiagnosticsStatusText()

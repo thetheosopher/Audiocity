@@ -3,7 +3,7 @@
 ## Status
 - Owner: GitHub Copilot + repo maintainers
 - Started: 2026-05-03
-- Current phase: Validation 2.0 - baseline diff automation active
+- Current phase: Phase 4 advanced interaction - modulation feedback started
 
 ## Goal
 Modernize Audiocity into a premium sampler interface that feels fast, musical, tactile, and trustworthy for producers, sound designers, and live performers.
@@ -70,11 +70,11 @@ Modernize Audiocity into a premium sampler interface that feels fast, musical, t
 - [x] Phase 1.2: Refresh waveform, graph, and metering visuals.
 - [x] Phase 1.3: Hide diagnostics behind an explicit reveal instead of always-on panel space.
 - [x] Phase 2.1: Reduce trim/loop dependence on knob-only editing.
-- [ ] Phase 2.2: Improve slice visibility and interactions.
+- [x] Phase 2.2: Improve slice visibility and interactions.
 - [x] Phase 2.3: Make amp and filter envelope graphs directly editable.
 - [x] Phase 3.0: Collapse secondary Sample-page sections behind progressive disclosure.
 - [x] Phase 3.1: Rework Player into a persistent performance surface.
-- [ ] Phase 3.2: Fold Library into a persistent or quickly accessible browser rail.
+- [x] Phase 3.2: Fold Library into a persistent or quickly accessible browser rail.
 - [ ] Phase 4.1: Add visual modulation routing and destination feedback.
 - [ ] Phase 5.1: Restructure the full sampler layout around browser/workspace/inspector.
 - [x] Validation 1.0: Land deterministic UI snapshot capture and artifact export for automated feedback.
@@ -105,7 +105,12 @@ Modernize Audiocity into a premium sampler interface that feels fast, musical, t
 - 2026-05-04: Workspace VS Code tasks now use the known-good Visual Studio `cmake.exe` and `ctest.exe` paths, retry by clearing only stale default-config state instead of deleting the whole `build/` tree, and build the UI snapshot harness alongside offline tests in the Debug test path.
 - 2026-05-04: Snapshot review automation now has a reusable export script plus a Windows GitHub Actions workflow that publishes the PNG set, HTML gallery, and manifest as an artifact for pull-request and manual review runs.
 - 2026-05-04: Validation 2.0 landed: committed baselines now live under `tests/ui-snapshot-baselines/current`, the Debug snapshot test compares fresh renders against that baseline set, and the export workflow emits diff summaries plus overlay images when the UI changes.
+- 2026-05-04: Phase 2.2 landed: slice programs now expose clearer region feedback in the waveform, hovered slice boundaries/regions render with stronger emphasis, the compact slice labels align to slice regions, and double-click now splits directly at the cursor while the summary text advertises merge/re-slice gestures.
 - 2026-05-04: Phase 3.1 landed: Sample, Library, Mapping, Generate, and Capture now keep a compact performance strip with the keyboard, quick pads, and an `Open Player` affordance, while the dedicated Player tab remains the full editing surface.
+- 2026-05-04: Phase 3.1 follow-up landed: the compact performance strip now scales down more gracefully at shorter editor heights and exposes a live status line for preview, active voices, and output level state.
+- 2026-05-04: Phase 3.2 landed: Sample, Mapping, Generate, and Capture now keep a compact browser rail built from the existing Library controls, while the full Library tab retains bookmarks and tag-editing depth.
+- 2026-05-04: Phase 3.2 follow-up landed: the compact browser rail now uses denser rows, keeps selection-preview behavior active across rail tabs, and surfaces preview/load affordances directly in the rail status and row text.
+- 2026-05-04: Phase 4.1 started: the modulation panel now paints per-source destination feedback strips for pitch, filter, and amp routing, including live macro-value context for Macro 1 and Macro 2.
 
 ## Validation Notes
 - Current repo validation is strong for engine behavior, but UI visual changes do not yet have a dedicated screenshot or golden-image harness.
@@ -122,3 +127,7 @@ Modernize Audiocity into a premium sampler interface that feels fast, musical, t
 - 2026-05-04: Phase 3.1 validation passed with the Debug test-target build plus a fresh snapshot export review from `scripts/export_ui_snapshots.ps1`, confirming the compact strip renders across the workflow tabs while the About page stays focused on product information.
 - 2026-05-04: Stage 2 artifact publishing is now wired for CI via `.github/workflows/ui-snapshots.yml`, with `scripts/export_ui_snapshots.ps1` producing a reviewable artifact bundle (`.png`, `index.html`, `snapshot-summary.md`, `snapshot-manifest.json`).
 - 2026-05-04: The local/CI snapshot flow now also produces `snapshot-diff-summary.md` and `snapshot-diff-report.json`, and fails validation when fresh snapshots diverge from `tests/ui-snapshot-baselines/current` beyond the configured thresholds.
+- 2026-05-04: Phase 3.1 follow-up and Phase 3.2 both compiled cleanly via `CMake: Build Tests (Debug)`.
+- 2026-05-04: Snapshot validation for the strip refinement and browser rail initially failed against the older baselines on `sample`, `library`, `mapping`, `generate`, and `capture` as expected; after visual review, `scripts/export_ui_snapshots.ps1 -UpdateBaseline` refreshed `tests/ui-snapshot-baselines/current`, and a rerun of `scripts/compare_ui_snapshots.ps1` returned `PASS` for all seven tabs.
+- 2026-05-04: Phase 2.2 completion, browser-rail polish, and the first Phase 4.1 modulation-feedback slice all compiled cleanly via `CMake: Build Tests (Debug)`.
+- 2026-05-04: A fresh `scripts/export_ui_snapshots.ps1 -OutputDir build/ui-snapshots-validate` run still compared `PASS` against `tests/ui-snapshot-baselines/current`, so these edits did not require a baseline refresh.

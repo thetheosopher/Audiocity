@@ -321,6 +321,8 @@ private:
         void setSliceMarkers(std::vector<int> sliceMarkers)
         {
             sliceMarkers_ = std::move(sliceMarkers);
+            hoveredSliceBoundarySample_ = -1;
+            hoveredSliceRegionIndex_ = -1;
             repaint();
         }
         void setAutoSliceEnabled(const bool enabled) noexcept { autoSliceEnabled_ = enabled; }
@@ -347,8 +349,10 @@ private:
 
         void paint(juce::Graphics& g) override;
         void mouseDown(const juce::MouseEvent& event) override;
+        void mouseMove(const juce::MouseEvent& event) override;
         void mouseDrag(const juce::MouseEvent& event) override;
         void mouseUp(const juce::MouseEvent& event) override;
+        void mouseExit(const juce::MouseEvent& event) override;
         void mouseDoubleClick(const juce::MouseEvent& event) override;
         void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
 
@@ -356,8 +360,13 @@ private:
         enum class DragMode { none, dragLoopStart, dragLoopEnd,
                               dragPlaybackStart, dragPlaybackEnd, pan };
 
+        [[nodiscard]] bool isSliceViewActive() const noexcept;
         [[nodiscard]] int sampleFromX(float x) const noexcept;
         [[nodiscard]] float xFromSample(int sample) const noexcept;
+        [[nodiscard]] int findNearestSliceBoundarySample(int sampleIndex, int toleranceSamples) const noexcept;
+        [[nodiscard]] int findSliceRegionIndexForSample(int sampleIndex) const noexcept;
+        [[nodiscard]] juce::Range<int> getSliceRegionBounds(int sliceRegionIndex) const noexcept;
+        void updateSliceHoverState(juce::Point<float> position);
         void clampView();
         void zoomAround(float anchorX, float zoomFactor);
         void panByPixels(float deltaX);
@@ -374,6 +383,8 @@ private:
 
         int viewStartSample_ = 0;
         int viewSampleCount_ = 0;
+        int hoveredSliceBoundarySample_ = -1;
+        int hoveredSliceRegionIndex_ = -1;
 
         DragMode dragMode_ = DragMode::none;
         int dragAnchorViewStart_ = 0;
@@ -520,6 +531,7 @@ private:
 
     // ── Player ──
     juce::Label playerKeyboardLabel_{ {}, "Piano" };
+    juce::Label playerStatusLabel_{ {}, "Ready  V0  Out -inf / -inf dB" };
     juce::TextButton playerOpenButton_{ "Open Player" };
     juce::Viewport playerKeyboardViewport_;
     juce::MidiKeyboardState playerKeyboardState_;
@@ -1019,7 +1031,10 @@ private:
     void previewSampleFromBrowserRow(int row, bool forceRestart = true);
     void updatePlayerKeyboardSizing();
     void refreshPlayerPadButtons();
+    void updatePerformanceStripStatus(float outputLeftPeak, float outputRightPeak);
+    [[nodiscard]] bool shouldShowPersistentBrowserRail() const noexcept;
     [[nodiscard]] bool shouldShowPersistentPerformanceStrip() const noexcept;
+    void layoutSampleBrowserArea(juce::Rectangle<int> area, bool compactLayout);
     void layoutPlayerPerformanceArea(juce::Rectangle<int> area, bool compactLayout);
     std::vector<int> mappingBatchTrackedSelectionRows_;
     bool suppressMappingBatchEditTracking_ = false;
