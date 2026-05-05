@@ -4868,10 +4868,12 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     const bool showBrowserRail = shouldShowPersistentBrowserRail();
     const bool showPerformanceStrip = shouldShowPersistentPerformanceStrip();
     const bool useProgramMapInspector = showSampleTab && shouldShowSampleProgramMapInspector();
+    const bool useFilterModInspector = showSampleTab && shouldShowSampleFilterModInspector();
     const bool useEffectsInspector = showSampleTab && shouldShowSampleEffectsInspector();
     const bool showBrowserSurface = showLibraryTab || showBrowserRail;
     const bool showBrowserCancelButton = showBrowserSurface && sampleScanInProgress_.load(std::memory_order_relaxed);
     const int browserRowHeight = showBrowserRail ? 54 : 66;
+    const bool showFilterModSurface = showSampleTab && (useFilterModInspector || isSampleGroupExpanded("filterMod"));
 
     if (sampleBrowserListBox_.getRowHeight() != browserRowHeight)
         sampleBrowserListBox_.setRowHeight(browserRowHeight);
@@ -4998,29 +5000,29 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     filterTypeLabel_.setVisible(showSampleTab);
     filterTypeCombo_.setVisible(showSampleTab);
     filterResponseGraph_.setVisible(showSampleTab);
-    filterAttackDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
-    filterDecayDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
-    filterSustainDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
-    filterReleaseDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
-    filterEnvelopeGraph_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
-    filterKeytrackDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
-    filterVelDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
-    filterLfoRateDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterAttackDial_.setVisible(showFilterModSurface);
+    filterDecayDial_.setVisible(showFilterModSurface);
+    filterSustainDial_.setVisible(showFilterModSurface);
+    filterReleaseDial_.setVisible(showFilterModSurface);
+    filterEnvelopeGraph_.setVisible(showFilterModSurface);
+    filterKeytrackDial_.setVisible(showFilterModSurface);
+    filterVelDial_.setVisible(showFilterModSurface);
+    filterLfoRateDial_.setVisible(showFilterModSurface);
     filterLfoRateKeyDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
-    filterLfoAmtDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoAmtDial_.setVisible(showFilterModSurface);
     filterLfoAmtKeyDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
     filterLfoStartPhaseDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
     filterLfoStartRandDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
     filterLfoFadeInDial_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
-    filterLfoShapeLabel_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
-    filterLfoShapeCombo_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
-    filterLfoRetriggerToggle_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
-    filterLfoTempoSyncToggle_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoShapeLabel_.setVisible(showFilterModSurface);
+    filterLfoShapeCombo_.setVisible(showFilterModSurface);
+    filterLfoRetriggerToggle_.setVisible(showFilterModSurface);
+    filterLfoTempoSyncToggle_.setVisible(showFilterModSurface);
     filterLfoRateKeySyncToggle_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
     filterLfoKeytrackLinearToggle_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
     filterLfoUnipolarToggle_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
-    filterLfoDivisionLabel_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
-    filterLfoDivisionCombo_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
+    filterLfoDivisionLabel_.setVisible(showFilterModSurface);
+    filterLfoDivisionCombo_.setVisible(showFilterModSurface);
     filterKeytrackSnapLabel_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
     filterKeytrackSnapCombo_.setVisible(showSampleTab && isSampleGroupExpanded("filterMod"));
     fadeInDial_.setVisible(showSampleTab);
@@ -7241,6 +7243,33 @@ bool AudiocityAudioProcessorEditor::shouldShowSampleProgramMapInspector() const 
     return shouldShowWideSampleInspectorMode() && processor_.hasImportedProgram();
 }
 
+bool AudiocityAudioProcessorEditor::shouldShowSampleFilterModInspector() const noexcept
+{
+    if (!shouldShowWideSampleInspectorMode())
+        return false;
+
+    constexpr int kSampleInfoCardHeight = 278;
+    constexpr int kSampleProgramMapCardHeight = 188;
+    constexpr int kSampleEffectsCardHeight = 230;
+    constexpr int kSampleFilterModCardHeight = 282;
+    constexpr int kTopBarH = 36;
+    constexpr int kTopGap = 10;
+    constexpr int kMargin = 14;
+
+    int availableHeight = getHeight() - (kMargin * 2) - 30 - 8;
+    if (shouldShowPersistentPerformanceStrip())
+        availableHeight -= computePersistentPerformanceStripHeight(availableHeight) + kTopGap;
+
+    availableHeight -= kTopBarH + kTopGap;
+    availableHeight -= kSampleInfoCardHeight + kTopGap;
+    if (shouldShowSampleProgramMapInspector())
+        availableHeight -= kSampleProgramMapCardHeight + kTopGap;
+    if (shouldShowSampleEffectsInspector())
+        availableHeight -= kSampleEffectsCardHeight + kTopGap;
+
+    return availableHeight >= kSampleFilterModCardHeight;
+}
+
 bool AudiocityAudioProcessorEditor::shouldShowSampleEffectsInspector() const noexcept
 {
     if (!shouldShowWideSampleInspectorMode())
@@ -7992,10 +8021,12 @@ void AudiocityAudioProcessorEditor::resized()
     sampleInspectorInfoBounds_ = {};
     sampleInspectorProgramMapBounds_ = {};
     sampleInspectorOutputBounds_ = {};
+    sampleInspectorFilterModBounds_ = {};
     sampleInspectorEffectsBounds_ = {};
 
     const bool useSampleInspectorRail = shouldShowSampleInspectorRail();
     const bool useProgramMapInspector = shouldShowSampleProgramMapInspector();
+    const bool useFilterModInspector = shouldShowSampleFilterModInspector();
     const bool useEffectsInspector = shouldShowSampleEffectsInspector();
 
     const auto reparentInspectorComponent = [this](juce::Component& component, juce::Component& target)
@@ -8033,12 +8064,14 @@ void AudiocityAudioProcessorEditor::resized()
     const int infoCardHeight = 74 + metricRows * 34;
     const bool useOutputInspector = useSampleInspectorRail
         && !useProgramMapInspector
+        && !useFilterModInspector
         && !useEffectsInspector
         && (area.getHeight() - infoCardHeight - kGrpGap) >= 184;
 
     const auto setSampleInspectorParenting = [&](const bool useInfoInspector,
                                                  const bool useProgramInspector,
                                                  const bool useOutputInspectorCard,
+                                                 const bool useFilterModInspectorCard,
                                                  const bool useEffectsInspectorCard)
     {
         auto& infoTarget = useInfoInspector ? static_cast<juce::Component&>(*this)
@@ -8089,6 +8122,24 @@ void AudiocityAudioProcessorEditor::resized()
         reparentInspectorComponent(qualityFidelityButton_, outputTarget);
         reparentInspectorComponent(qualityUltraButton_, outputTarget);
 
+        auto& filterModTarget = useFilterModInspectorCard ? static_cast<juce::Component&>(*this)
+                                  : static_cast<juce::Component&>(sampleControlsContent_);
+        reparentInspectorComponent(filterAttackDial_, filterModTarget);
+        reparentInspectorComponent(filterDecayDial_, filterModTarget);
+        reparentInspectorComponent(filterSustainDial_, filterModTarget);
+        reparentInspectorComponent(filterReleaseDial_, filterModTarget);
+        reparentInspectorComponent(filterEnvelopeGraph_, filterModTarget);
+        reparentInspectorComponent(filterKeytrackDial_, filterModTarget);
+        reparentInspectorComponent(filterVelDial_, filterModTarget);
+        reparentInspectorComponent(filterLfoRateDial_, filterModTarget);
+        reparentInspectorComponent(filterLfoAmtDial_, filterModTarget);
+        reparentInspectorComponent(filterLfoShapeLabel_, filterModTarget);
+        reparentInspectorComponent(filterLfoShapeCombo_, filterModTarget);
+        reparentInspectorComponent(filterLfoRetriggerToggle_, filterModTarget);
+        reparentInspectorComponent(filterLfoTempoSyncToggle_, filterModTarget);
+        reparentInspectorComponent(filterLfoDivisionLabel_, filterModTarget);
+        reparentInspectorComponent(filterLfoDivisionCombo_, filterModTarget);
+
         auto& effectsTarget = useEffectsInspectorCard ? static_cast<juce::Component&>(*this)
                                                       : static_cast<juce::Component&>(sampleControlsContent_);
         reparentInspectorComponent(reverbMixDial_, effectsTarget);
@@ -8107,6 +8158,7 @@ void AudiocityAudioProcessorEditor::resized()
     setSampleInspectorParenting(useSampleInspectorRail,
         useProgramMapInspector,
         useOutputInspector,
+        useFilterModInspector,
         useEffectsInspector);
 
     const auto layoutSampleInfoInline = [&](juce::Rectangle<int> infoInner)
@@ -8314,6 +8366,55 @@ void AudiocityAudioProcessorEditor::resized()
         dcFilterEnabledToggle_.setBounds(effectsInner.removeFromTop(24));
     };
 
+    const auto layoutFilterModInspector = [&](juce::Rectangle<int> inspectorBounds)
+    {
+        auto filterModInner = inspectorBounds.withTrimmedTop(30).reduced(12, 10);
+        constexpr int kInspectorGap = 6;
+
+        auto graphRow = filterModInner.removeFromTop(40);
+        filterEnvelopeGraph_.setBounds(graphRow);
+
+        filterModInner.removeFromTop(6);
+        auto envRow = filterModInner.removeFromTop(54);
+        const int envCellWidth = (envRow.getWidth() - kInspectorGap * 3) / 4;
+        filterAttackDial_.setBounds(envRow.removeFromLeft(envCellWidth));
+        envRow.removeFromLeft(kInspectorGap);
+        filterDecayDial_.setBounds(envRow.removeFromLeft(envCellWidth));
+        envRow.removeFromLeft(kInspectorGap);
+        filterSustainDial_.setBounds(envRow.removeFromLeft(envCellWidth));
+        envRow.removeFromLeft(kInspectorGap);
+        filterReleaseDial_.setBounds(envRow);
+
+        filterModInner.removeFromTop(6);
+        auto modRow = filterModInner.removeFromTop(54);
+        const int modCellWidth = (modRow.getWidth() - kInspectorGap * 3) / 4;
+        filterKeytrackDial_.setBounds(modRow.removeFromLeft(modCellWidth));
+        modRow.removeFromLeft(kInspectorGap);
+        filterVelDial_.setBounds(modRow.removeFromLeft(modCellWidth));
+        modRow.removeFromLeft(kInspectorGap);
+        filterLfoRateDial_.setBounds(modRow.removeFromLeft(modCellWidth));
+        modRow.removeFromLeft(kInspectorGap);
+        filterLfoAmtDial_.setBounds(modRow);
+
+        filterModInner.removeFromTop(6);
+        auto comboRow = filterModInner.removeFromTop(40);
+        auto shapeArea = comboRow.removeFromLeft((comboRow.getWidth() - 8) / 2);
+        filterLfoShapeLabel_.setBounds(shapeArea.removeFromTop(11));
+        shapeArea.removeFromTop(2);
+        filterLfoShapeCombo_.setBounds(shapeArea.removeFromTop(24));
+        comboRow.removeFromLeft(8);
+        filterLfoDivisionLabel_.setBounds(comboRow.removeFromTop(11));
+        comboRow.removeFromTop(2);
+        filterLfoDivisionCombo_.setBounds(comboRow.removeFromTop(24));
+
+        filterModInner.removeFromTop(6);
+        auto toggleRow = filterModInner.removeFromTop(24);
+        const int toggleWidth = (toggleRow.getWidth() - 8) / 2;
+        filterLfoRetriggerToggle_.setBounds(toggleRow.removeFromLeft(toggleWidth));
+        toggleRow.removeFromLeft(8);
+        filterLfoTempoSyncToggle_.setBounds(toggleRow);
+    };
+
     auto workspaceArea = area;
     if (useSampleInspectorRail)
     {
@@ -8365,6 +8466,14 @@ void AudiocityAudioProcessorEditor::resized()
                 saturationDriveDial_.setBounds({});
                 saturationModeCombo_.setBounds({});
             }
+
+            if (useFilterModInspector)
+            {
+                inspectorArea.removeFromTop(kGrpGap);
+                const int filterModCardHeight = juce::jmin(282, inspectorArea.getHeight());
+                sampleInspectorFilterModBounds_ = inspectorArea.removeFromTop(filterModCardHeight);
+                layoutFilterModInspector(sampleInspectorFilterModBounds_);
+            }
         }
         else
         {
@@ -8390,6 +8499,14 @@ void AudiocityAudioProcessorEditor::resized()
                 autopanDepthDial_.setBounds({});
                 saturationDriveDial_.setBounds({});
                 saturationModeCombo_.setBounds({});
+            }
+
+            if (useFilterModInspector)
+            {
+                inspectorArea.removeFromTop(kGrpGap);
+                const int filterModCardHeight = juce::jmin(282, inspectorArea.getHeight());
+                sampleInspectorFilterModBounds_ = inspectorArea.removeFromTop(filterModCardHeight);
+                layoutFilterModInspector(sampleInspectorFilterModBounds_);
             }
 
             if (useOutputInspector)
@@ -8602,6 +8719,7 @@ void AudiocityAudioProcessorEditor::resized()
     }
 
     // ── Panel 8: Filter Envelope + Mod ──
+    if (!useFilterModInspector)
     {
         constexpr int kFilterModPanelH = 238;
         auto filterEnvInner = makeGroup("filterMod", "Filter Envelope + Mod", kFilterModPanelH);
@@ -9010,6 +9128,16 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
     }
 
     return juce::AudioProcessorEditor::keyPressed(key);
+}
+
+void AudiocityAudioProcessorEditor::setSampleRailSnapshotState(const bool browserRailEnabled,
+                                                              const bool inspectorRailEnabled)
+{
+    sampleBrowserRailEnabled_ = browserRailEnabled;
+    sampleInspectorRailEnabled_ = inspectorRailEnabled;
+    sampleBrowserRailToggleButton_.setToggleState(sampleBrowserRailEnabled_, juce::dontSendNotification);
+    sampleInspectorRailToggleButton_.setToggleState(sampleInspectorRailEnabled_, juce::dontSendNotification);
+    updateTabVisibility();
 }
 
 void AudiocityAudioProcessorEditor::saveStateToFile()
@@ -9810,6 +9938,9 @@ void AudiocityAudioProcessorEditor::paintSampleInspectorPane(juce::Graphics& g) 
 
     if (!sampleInspectorOutputBounds_.isEmpty())
         paintSectionCard(g, sampleInspectorOutputBounds_.toFloat(), "Output");
+
+    if (!sampleInspectorFilterModBounds_.isEmpty())
+        paintSectionCard(g, sampleInspectorFilterModBounds_.toFloat(), "Filter Envelope + Mod");
 
     if (!sampleInspectorEffectsBounds_.isEmpty())
         paintSectionCard(g, sampleInspectorEffectsBounds_.toFloat(), "Effects");

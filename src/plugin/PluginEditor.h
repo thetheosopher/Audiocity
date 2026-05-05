@@ -167,6 +167,7 @@ public:
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
+    void setSampleRailSnapshotState(bool browserRailEnabled, bool inspectorRailEnabled);
 
 private:
     void handleNoteOn(juce::MidiKeyboardState* source, int midiChannel, int midiNoteNumber, float velocity) override;
@@ -601,6 +602,7 @@ private:
     juce::Rectangle<int> sampleInspectorInfoBounds_;
     juce::Rectangle<int> sampleInspectorProgramMapBounds_;
     juce::Rectangle<int> sampleInspectorOutputBounds_;
+    juce::Rectangle<int> sampleInspectorFilterModBounds_;
     juce::Rectangle<int> sampleInspectorEffectsBounds_;
 
     // ── Generate ──
@@ -1045,6 +1047,7 @@ private:
     [[nodiscard]] bool shouldShowSampleInspectorRail() const noexcept;
     [[nodiscard]] bool shouldShowWideSampleInspectorMode() const noexcept;
     [[nodiscard]] bool shouldShowSampleProgramMapInspector() const noexcept;
+    [[nodiscard]] bool shouldShowSampleFilterModInspector() const noexcept;
     [[nodiscard]] bool shouldShowSampleEffectsInspector() const noexcept;
     void layoutSampleBrowserArea(juce::Rectangle<int> area, bool compactLayout);
     void layoutPlayerPerformanceArea(juce::Rectangle<int> area, bool compactLayout);

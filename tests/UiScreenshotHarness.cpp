@@ -2,6 +2,7 @@
 #include <juce_graphics/juce_graphics.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include "plugin/PluginEditor.h"
 #include "plugin/PluginProcessor.h"
 
 #include <cmath>
@@ -25,6 +26,9 @@ struct SnapshotScenario
     int viewportScrollY = 0;
     int editorWidth = 0;
     int editorHeight = 0;
+    bool overrideSampleRailState = false;
+    bool sampleBrowserRailEnabled = true;
+    bool sampleInspectorRailEnabled = true;
 };
 
 enum SnapshotStateFlags : unsigned int
@@ -269,6 +273,16 @@ juce::Result renderScenario(AudiocityAudioProcessor& processor,
     if (editor == nullptr)
         return juce::Result::fail("Failed to create editor for snapshot rendering.");
 
+    if (scenario.overrideSampleRailState)
+    {
+        auto* audiocityEditor = dynamic_cast<AudiocityAudioProcessorEditor*>(editor.get());
+        if (audiocityEditor == nullptr)
+            return juce::Result::fail("Failed to access Audiocity editor for snapshot rail state.");
+
+        audiocityEditor->setSampleRailSnapshotState(scenario.sampleBrowserRailEnabled,
+                                                    scenario.sampleInspectorRailEnabled);
+    }
+
     logProgress("Created editor for " + juce::String(scenario.fileStem));
     const int editorWidth = scenario.editorWidth > 0 ? scenario.editorWidth : editor->getWidth();
     const int editorHeight = scenario.editorHeight > 0 ? scenario.editorHeight : editor->getHeight();
@@ -348,6 +362,8 @@ int main(int argc, char* argv[])
         { "sample", 0, snapshotStateSliceProgram, 0 },
         { "sample_modulation", 0, snapshotStateModulation, 320 },
         { "sample_wide", 0, snapshotStateSliceProgram, 0, 1240, 1100 },
+        { "sample_wide_tall", 0, snapshotStateSliceProgram, 0, 1240, 1600 },
+        { "sample_wide_focus", 0, snapshotStateSliceProgram, 0, 1240, 1100, true, false, false },
         { "library", 1, snapshotStateBaseline, 0 },
         { "mapping", 2, snapshotStateSliceProgram, 0 },
         { "player", 3, snapshotStateBaseline, 0 },
