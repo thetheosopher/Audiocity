@@ -251,6 +251,39 @@ int computePersistentBrowserRailWidth(const int availableWidth)
 constexpr int kResponsiveEditorHorizontalMargin = 28;
 constexpr int kSampleInspectorMinContentWidth = 900;
 constexpr int kSampleTriColumnMinContentWidth = 1120;
+constexpr int kCollapsedSampleInspectorCardHeight = 36;
+constexpr int kExpandedSampleFilterModInspectorCardHeight = 282;
+constexpr int kExpandedSampleEffectsInspectorCardHeight = 230;
+
+int getSampleInspectorCardHeight(const bool expanded, const int expandedHeight) noexcept
+{
+    return expanded ? expandedHeight : kCollapsedSampleInspectorCardHeight;
+}
+
+juce::Rectangle<int> getSampleInspectorCardHeaderBounds(juce::Rectangle<int> bounds)
+{
+    bounds.setHeight(24);
+    return bounds;
+}
+
+juce::Rectangle<int> getSampleInspectorCardToggleBounds(juce::Rectangle<int> bounds)
+{
+    auto headerBounds = getSampleInspectorCardHeaderBounds(bounds);
+    return headerBounds.removeFromRight(54);
+}
+
+void paintSampleInspectorCardToggle(juce::Graphics& g,
+                                    const juce::Rectangle<int> bounds,
+                                    const bool expanded)
+{
+    if (bounds.isEmpty())
+        return;
+
+    auto toggleBounds = getSampleInspectorCardToggleBounds(bounds);
+    g.setColour(expanded ? uiTextStrongColour() : uiTextMutedColour().brighter(0.08f));
+    g.setFont(juce::Font(juce::FontOptions(10.5f)).boldened());
+    g.drawText(expanded ? "- Hide" : "+ Show", toggleBounds, juce::Justification::centredRight, false);
+}
 
 enum class SampleLayoutMode
 {
@@ -2991,6 +3024,8 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     tabBar_.addTab("About", uiPanelColour(), &tabAboutPage_, false);
     currentTabIndex_ = juce::jlimit(0, tabBar_.getNumTabs() - 1, processor_.getEditorTabIndex());
     processor_.setEditorTabIndex(currentTabIndex_);
+    sampleInspectorFilterModExpanded_ = processor_.getSampleInspectorFilterModExpanded();
+    sampleInspectorEffectsExpanded_ = processor_.getSampleInspectorEffectsExpanded();
     tabBar_.setCurrentTabIndex(currentTabIndex_);
 
     addAndMakeVisible(sampleControlsViewport_);
@@ -3684,14 +3719,24 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     configureSampleInfoPair(sampleInfoMetaRootLabel_, sampleInfoMetaRootValue_);
     sampleInfoSourceLabel_.setText("Path", juce::dontSendNotification);
 
+    addAndMakeVisible(presetFilterEditor_);
+    presetFilterEditor_.setTextToShowWhenEmpty("Find preset...", juce::Colours::grey);
+    presetFilterEditor_.onTextChange = [this]
+    {
+        refreshPresetList(currentPresetName_);
+    };
+
+    addAndMakeVisible(presetCountLabel_);
+    presetCountLabel_.setJustificationType(juce::Justification::centredRight);
+    presetCountLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8a8aa0));
+    presetCountLabel_.setFont(juce::Font(juce::FontOptions(12.0f)));
+
     addAndMakeVisible(presetCombo_);
     presetCombo_.setTextWhenNoChoicesAvailable("No Presets");
     presetCombo_.setTextWhenNothingSelected("Preset...");
     presetCombo_.onChange = [this]
     {
-        const auto hasSelection = presetCombo_.getSelectedId() > 0;
-        presetRenameButton_.setEnabled(hasSelection);
-        presetDeleteButton_.setEnabled(hasSelection);
+        updatePresetActionButtons();
 
         if (!suppressPresetComboChange_)
             loadPresetFromSelection();
@@ -4950,6 +4995,8 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     mappingEditStatusLabel_.setVisible(showMappingTab);
 
     samplePathLabel_.setVisible(false);
+    presetFilterEditor_.setVisible(showSampleTab);
+    presetCountLabel_.setVisible(showSampleTab);
     presetCombo_.setVisible(showSampleTab);
     presetSaveButton_.setVisible(showSampleTab);
     presetRenameButton_.setVisible(showSampleTab);
@@ -6446,7 +6493,27 @@ void AudiocityAudioProcessorEditor::returnKeyPressed(const int lastRowSelected)
 
 void AudiocityAudioProcessorEditor::mouseDown(const juce::MouseEvent& event)
 {
-    juce::ignoreUnused(event);
+    if (currentTabIndex_ == 0 && !event.mods.isPopupMenu() && event.mods.isLeftButtonDown())
+    {
+        if (getSampleInspectorCardHeaderBounds(sampleInspectorFilterModBounds_).contains(event.getPosition()))
+        {
+            sampleInspectorFilterModExpanded_ = !sampleInspectorFilterModExpanded_;
+            processor_.setSampleInspectorFilterModExpanded(sampleInspectorFilterModExpanded_);
+            resized();
+            repaint();
+            return;
+        }
+
+        if (getSampleInspectorCardHeaderBounds(sampleInspectorEffectsBounds_).contains(event.getPosition()))
+        {
+            sampleInspectorEffectsExpanded_ = !sampleInspectorEffectsExpanded_;
+            processor_.setSampleInspectorEffectsExpanded(sampleInspectorEffectsExpanded_);
+            resized();
+            repaint();
+            return;
+        }
+    }
+
     isResizingSampleList_ = false;
 }
 
@@ -7243,15 +7310,10 @@ bool AudiocityAudioProcessorEditor::shouldShowSampleProgramMapInspector() const 
     return shouldShowWideSampleInspectorMode() && processor_.hasImportedProgram();
 }
 
-bool AudiocityAudioProcessorEditor::shouldShowSampleFilterModInspector() const noexcept
+int AudiocityAudioProcessorEditor::getAvailableSampleAdvancedInspectorHeight() const noexcept
 {
-    if (!shouldShowWideSampleInspectorMode())
-        return false;
-
     constexpr int kSampleInfoCardHeight = 278;
     constexpr int kSampleProgramMapCardHeight = 188;
-    constexpr int kSampleEffectsCardHeight = 230;
-    constexpr int kSampleFilterModCardHeight = 282;
     constexpr int kTopBarH = 36;
     constexpr int kTopGap = 10;
     constexpr int kMargin = 14;
@@ -7264,10 +7326,26 @@ bool AudiocityAudioProcessorEditor::shouldShowSampleFilterModInspector() const n
     availableHeight -= kSampleInfoCardHeight + kTopGap;
     if (shouldShowSampleProgramMapInspector())
         availableHeight -= kSampleProgramMapCardHeight + kTopGap;
-    if (shouldShowSampleEffectsInspector())
-        availableHeight -= kSampleEffectsCardHeight + kTopGap;
 
-    return availableHeight >= kSampleFilterModCardHeight;
+    return availableHeight;
+}
+
+bool AudiocityAudioProcessorEditor::shouldShowSampleFilterModInspector() const noexcept
+{
+    if (!shouldShowWideSampleInspectorMode())
+        return false;
+
+    constexpr int kTopGap = 10;
+
+    const int availableHeight = getAvailableSampleAdvancedInspectorHeight();
+    const int filterModCardHeight = getSampleInspectorCardHeight(
+        sampleInspectorFilterModExpanded_,
+        kExpandedSampleFilterModInspectorCardHeight);
+    const int effectsCardHeight = getSampleInspectorCardHeight(
+        sampleInspectorEffectsExpanded_,
+        kExpandedSampleEffectsInspectorCardHeight);
+    const int requiredForBoth = filterModCardHeight + kTopGap + effectsCardHeight;
+    return availableHeight >= requiredForBoth || availableHeight >= filterModCardHeight;
 }
 
 bool AudiocityAudioProcessorEditor::shouldShowSampleEffectsInspector() const noexcept
@@ -7275,23 +7353,21 @@ bool AudiocityAudioProcessorEditor::shouldShowSampleEffectsInspector() const noe
     if (!shouldShowWideSampleInspectorMode())
         return false;
 
-    constexpr int kSampleInfoCardHeight = 278;
-    constexpr int kSampleProgramMapCardHeight = 188;
-    constexpr int kSampleEffectsCardHeight = 230;
-    constexpr int kTopBarH = 36;
     constexpr int kTopGap = 10;
-    constexpr int kMargin = 14;
 
-    int availableHeight = getHeight() - (kMargin * 2) - 30 - 8;
-    if (shouldShowPersistentPerformanceStrip())
-        availableHeight -= computePersistentPerformanceStripHeight(availableHeight) + kTopGap;
+    const int availableHeight = getAvailableSampleAdvancedInspectorHeight();
+    const int filterModCardHeight = getSampleInspectorCardHeight(
+        sampleInspectorFilterModExpanded_,
+        kExpandedSampleFilterModInspectorCardHeight);
+    const int effectsCardHeight = getSampleInspectorCardHeight(
+        sampleInspectorEffectsExpanded_,
+        kExpandedSampleEffectsInspectorCardHeight);
+    const int requiredForBoth = filterModCardHeight + kTopGap + effectsCardHeight;
+    if (availableHeight >= requiredForBoth)
+        return true;
 
-    availableHeight -= kTopBarH + kTopGap;
-    availableHeight -= kSampleInfoCardHeight + kTopGap;
-    if (processor_.hasImportedProgram())
-        availableHeight -= kSampleProgramMapCardHeight + kTopGap;
-
-    return availableHeight >= kSampleEffectsCardHeight;
+    return availableHeight >= effectsCardHeight
+        && availableHeight < filterModCardHeight;
 }
 
 void AudiocityAudioProcessorEditor::layoutSampleBrowserArea(juce::Rectangle<int> browserArea,
@@ -8013,7 +8089,12 @@ void AudiocityAudioProcessorEditor::resized()
         topRow.removeFromRight(6);
         presetSaveButton_.setBounds(topRow.removeFromRight(60));
         topRow.removeFromRight(10);
-        presetCombo_.setBounds(topRow);
+        const auto presetComboWidth = juce::jmin(190, juce::jmax(160, topRow.getWidth() / 3));
+        presetCombo_.setBounds(topRow.removeFromRight(presetComboWidth));
+        topRow.removeFromRight(8);
+        presetCountLabel_.setBounds(topRow.removeFromRight(96));
+        topRow.removeFromRight(8);
+        presetFilterEditor_.setBounds(topRow);
     }
 
     area.removeFromTop(kGrpGap);
@@ -8415,6 +8496,40 @@ void AudiocityAudioProcessorEditor::resized()
         filterLfoTempoSyncToggle_.setBounds(toggleRow);
     };
 
+    const auto clearEffectsInspectorControls = [&]()
+    {
+        reverbMixDial_.setBounds({});
+        delayTimeDial_.setBounds({});
+        delayFeedbackDial_.setBounds({});
+        delayMixDial_.setBounds({});
+        delayTempoSyncToggle_.setBounds({});
+        dcFilterEnabledToggle_.setBounds({});
+        dcFilterCutoffDial_.setBounds({});
+        autopanRateDial_.setBounds({});
+        autopanDepthDial_.setBounds({});
+        saturationDriveDial_.setBounds({});
+        saturationModeCombo_.setBounds({});
+    };
+
+    const auto clearFilterModInspectorControls = [&]()
+    {
+        filterAttackDial_.setBounds({});
+        filterDecayDial_.setBounds({});
+        filterSustainDial_.setBounds({});
+        filterReleaseDial_.setBounds({});
+        filterEnvelopeGraph_.setBounds({});
+        filterKeytrackDial_.setBounds({});
+        filterVelDial_.setBounds({});
+        filterLfoRateDial_.setBounds({});
+        filterLfoAmtDial_.setBounds({});
+        filterLfoShapeLabel_.setBounds({});
+        filterLfoShapeCombo_.setBounds({});
+        filterLfoRetriggerToggle_.setBounds({});
+        filterLfoTempoSyncToggle_.setBounds({});
+        filterLfoDivisionLabel_.setBounds({});
+        filterLfoDivisionCombo_.setBounds({});
+    };
+
     auto workspaceArea = area;
     if (useSampleInspectorRail)
     {
@@ -8448,31 +8563,31 @@ void AudiocityAudioProcessorEditor::resized()
             if (useEffectsInspector)
             {
                 inspectorArea.removeFromTop(kGrpGap);
-                const int effectsCardHeight = juce::jmin(230, inspectorArea.getHeight());
+                const int effectsCardHeight = juce::jmin(
+                    getSampleInspectorCardHeight(sampleInspectorEffectsExpanded_, kExpandedSampleEffectsInspectorCardHeight),
+                    inspectorArea.getHeight());
                 sampleInspectorEffectsBounds_ = inspectorArea.removeFromTop(effectsCardHeight);
-                layoutEffectsInspector(sampleInspectorEffectsBounds_);
+                if (sampleInspectorEffectsExpanded_)
+                    layoutEffectsInspector(sampleInspectorEffectsBounds_);
+                else
+                    clearEffectsInspectorControls();
             }
             else
             {
-                reverbMixDial_.setBounds({});
-                delayTimeDial_.setBounds({});
-                delayFeedbackDial_.setBounds({});
-                delayMixDial_.setBounds({});
-                delayTempoSyncToggle_.setBounds({});
-                dcFilterEnabledToggle_.setBounds({});
-                dcFilterCutoffDial_.setBounds({});
-                autopanRateDial_.setBounds({});
-                autopanDepthDial_.setBounds({});
-                saturationDriveDial_.setBounds({});
-                saturationModeCombo_.setBounds({});
+                clearEffectsInspectorControls();
             }
 
             if (useFilterModInspector)
             {
                 inspectorArea.removeFromTop(kGrpGap);
-                const int filterModCardHeight = juce::jmin(282, inspectorArea.getHeight());
+                const int filterModCardHeight = juce::jmin(
+                    getSampleInspectorCardHeight(sampleInspectorFilterModExpanded_, kExpandedSampleFilterModInspectorCardHeight),
+                    inspectorArea.getHeight());
                 sampleInspectorFilterModBounds_ = inspectorArea.removeFromTop(filterModCardHeight);
-                layoutFilterModInspector(sampleInspectorFilterModBounds_);
+                if (sampleInspectorFilterModExpanded_)
+                    layoutFilterModInspector(sampleInspectorFilterModBounds_);
+                else
+                    clearFilterModInspectorControls();
             }
         }
         else
@@ -8482,31 +8597,31 @@ void AudiocityAudioProcessorEditor::resized()
             if (useEffectsInspector)
             {
                 inspectorArea.removeFromTop(kGrpGap);
-                const int effectsCardHeight = juce::jmin(230, inspectorArea.getHeight());
+                const int effectsCardHeight = juce::jmin(
+                    getSampleInspectorCardHeight(sampleInspectorEffectsExpanded_, kExpandedSampleEffectsInspectorCardHeight),
+                    inspectorArea.getHeight());
                 sampleInspectorEffectsBounds_ = inspectorArea.removeFromTop(effectsCardHeight);
-                layoutEffectsInspector(sampleInspectorEffectsBounds_);
+                if (sampleInspectorEffectsExpanded_)
+                    layoutEffectsInspector(sampleInspectorEffectsBounds_);
+                else
+                    clearEffectsInspectorControls();
             }
             else
             {
-                reverbMixDial_.setBounds({});
-                delayTimeDial_.setBounds({});
-                delayFeedbackDial_.setBounds({});
-                delayMixDial_.setBounds({});
-                delayTempoSyncToggle_.setBounds({});
-                dcFilterEnabledToggle_.setBounds({});
-                dcFilterCutoffDial_.setBounds({});
-                autopanRateDial_.setBounds({});
-                autopanDepthDial_.setBounds({});
-                saturationDriveDial_.setBounds({});
-                saturationModeCombo_.setBounds({});
+                clearEffectsInspectorControls();
             }
 
             if (useFilterModInspector)
             {
                 inspectorArea.removeFromTop(kGrpGap);
-                const int filterModCardHeight = juce::jmin(282, inspectorArea.getHeight());
+                const int filterModCardHeight = juce::jmin(
+                    getSampleInspectorCardHeight(sampleInspectorFilterModExpanded_, kExpandedSampleFilterModInspectorCardHeight),
+                    inspectorArea.getHeight());
                 sampleInspectorFilterModBounds_ = inspectorArea.removeFromTop(filterModCardHeight);
-                layoutFilterModInspector(sampleInspectorFilterModBounds_);
+                if (sampleInspectorFilterModExpanded_)
+                    layoutFilterModInspector(sampleInspectorFilterModBounds_);
+                else
+                    clearFilterModInspectorControls();
             }
 
             if (useOutputInspector)
@@ -9140,6 +9255,25 @@ void AudiocityAudioProcessorEditor::setSampleRailSnapshotState(const bool browse
     updateTabVisibility();
 }
 
+void AudiocityAudioProcessorEditor::setSampleInspectorCardSnapshotState(const bool filterModExpanded,
+                                                                       const bool effectsExpanded)
+{
+    sampleInspectorFilterModExpanded_ = filterModExpanded;
+    sampleInspectorEffectsExpanded_ = effectsExpanded;
+}
+
+void AudiocityAudioProcessorEditor::setPresetSearchSnapshotState(const juce::StringArray& presetNames,
+                                                                 const juce::String& filterText)
+{
+    presetSnapshotNamesOverride_ = presetNames;
+    currentPresetName_.clear();
+    suppressPresetComboChange_ = true;
+    presetFilterEditor_.setText(filterText, juce::dontSendNotification);
+    presetCombo_.setSelectedId(0, juce::dontSendNotification);
+    suppressPresetComboChange_ = false;
+    refreshPresetList();
+}
+
 void AudiocityAudioProcessorEditor::saveStateToFile()
 {
     fileChooser_ = std::make_unique<juce::FileChooser>(
@@ -9197,40 +9331,100 @@ juce::File AudiocityAudioProcessorEditor::presetFileForName(const juce::String& 
     return getPresetDirectory().getChildFile(presetName + kPresetFileExtension);
 }
 
+juce::File AudiocityAudioProcessorEditor::getSelectedPresetFile() const
+{
+    const auto selectedId = presetCombo_.getSelectedId();
+    const auto index = selectedId - 1;
+    if (index < 0 || index >= visiblePresetFiles_.size())
+        return {};
+
+    return visiblePresetFiles_.getReference(index);
+}
+
+void AudiocityAudioProcessorEditor::updatePresetActionButtons()
+{
+    const auto selectedFile = getSelectedPresetFile();
+    const auto hasSelection = selectedFile.existsAsFile();
+    const auto hasLoadedSample = processor_.getLoadedSampleLength() > 0;
+
+    presetSaveButton_.setEnabled(hasLoadedSample);
+    presetRenameButton_.setEnabled(hasSelection);
+    presetDeleteButton_.setEnabled(hasSelection);
+}
+
 void AudiocityAudioProcessorEditor::refreshPresetList(const juce::String& preferredPresetName)
 {
-    const auto presetDirectory = getPresetDirectory();
-    if (!presetDirectory.exists())
-        presetDirectory.createDirectory();
+    visiblePresetFiles_.clear();
 
-    juce::Array<juce::File> presetFiles;
-    presetDirectory.findChildFiles(presetFiles, juce::File::TypesOfFileToFind::findFiles, false,
-        juce::String("*") + kPresetFileExtension);
+    juce::StringArray allPresetNames;
+    const auto filterText = presetFilterEditor_.getText().trim();
+    const auto useSnapshotOverride = presetSnapshotNamesOverride_.size() > 0;
 
-    std::sort(presetFiles.begin(), presetFiles.end(), [](const juce::File& a, const juce::File& b)
+    if (useSnapshotOverride)
     {
-        return a.getFileNameWithoutExtension().compareIgnoreCase(b.getFileNameWithoutExtension()) < 0;
-    });
+        availablePresetFiles_.clear();
+        allPresetNames.addArray(presetSnapshotNamesOverride_);
+        allPresetNames.sort(true);
+    }
+    else
+    {
+        const auto presetDirectory = getPresetDirectory();
+        if (!presetDirectory.exists())
+            presetDirectory.createDirectory();
 
-    availablePresetFiles_ = presetFiles;
+        juce::Array<juce::File> presetFiles;
+        presetDirectory.findChildFiles(presetFiles, juce::File::TypesOfFileToFind::findFiles, false,
+            juce::String("*") + kPresetFileExtension);
+
+        std::sort(presetFiles.begin(), presetFiles.end(), [](const juce::File& a, const juce::File& b)
+        {
+            return a.getFileNameWithoutExtension().compareIgnoreCase(b.getFileNameWithoutExtension()) < 0;
+        });
+
+        availablePresetFiles_ = presetFiles;
+        for (const auto& file : availablePresetFiles_)
+            allPresetNames.add(file.getFileNameWithoutExtension());
+    }
 
     suppressPresetComboChange_ = true;
     presetCombo_.clear(juce::dontSendNotification);
 
-    for (int index = 0; index < availablePresetFiles_.size(); ++index)
+    juce::StringArray visiblePresetNames;
+    for (int index = 0; index < allPresetNames.size(); ++index)
     {
-        const auto fileName = availablePresetFiles_.getReference(index).getFileName();
-        const auto label = fileName.upToLastOccurrenceOf(kPresetFileExtension, false, false);
-        presetCombo_.addItem(label, index + 1);
+        const auto& label = allPresetNames[index];
+        if (filterText.isNotEmpty() && !label.containsIgnoreCase(filterText))
+            continue;
+
+        visiblePresetNames.add(label);
+        presetCombo_.addItem(label, visiblePresetNames.size());
+
+        if (!useSnapshotOverride && index < availablePresetFiles_.size())
+            visiblePresetFiles_.add(availablePresetFiles_.getReference(index));
+    }
+
+    if (allPresetNames.isEmpty())
+    {
+        presetCountLabel_.setText("No presets", juce::dontSendNotification);
+    }
+    else if (filterText.isNotEmpty())
+    {
+        presetCountLabel_.setText(juce::String(visiblePresetNames.size()) + " of "
+                + juce::String(allPresetNames.size()),
+            juce::dontSendNotification);
+    }
+    else
+    {
+        presetCountLabel_.setText(juce::String(allPresetNames.size())
+                + (allPresetNames.size() == 1 ? " preset" : " presets"),
+            juce::dontSendNotification);
     }
 
     const auto selectionName = preferredPresetName.isNotEmpty() ? preferredPresetName : currentPresetName_;
     int selectedId = 0;
-    for (int index = 0; index < availablePresetFiles_.size(); ++index)
+    for (int index = 0; index < visiblePresetNames.size(); ++index)
     {
-        const auto candidate = availablePresetFiles_.getReference(index)
-            .getFileName()
-            .upToLastOccurrenceOf(kPresetFileExtension, false, false);
+        const auto& candidate = visiblePresetNames[index];
         if (candidate == selectionName)
         {
             selectedId = index + 1;
@@ -9238,14 +9432,14 @@ void AudiocityAudioProcessorEditor::refreshPresetList(const juce::String& prefer
         }
     }
 
-    if (selectedId == 0)
+    if (selectedId == 0 && !useSnapshotOverride && filterText.isEmpty())
     {
         const auto currentPresetXml = processor_.createPlaybackPresetXml().trim();
         if (currentPresetXml.isNotEmpty())
         {
-            for (int index = 0; index < availablePresetFiles_.size(); ++index)
+            for (int index = 0; index < visiblePresetFiles_.size(); ++index)
             {
-                const auto candidateXml = availablePresetFiles_.getReference(index).loadFileAsString().trim();
+                const auto candidateXml = visiblePresetFiles_.getReference(index).loadFileAsString().trim();
                 if (candidateXml.isNotEmpty() && candidateXml == currentPresetXml)
                 {
                     selectedId = index + 1;
@@ -9263,17 +9457,12 @@ void AudiocityAudioProcessorEditor::refreshPresetList(const juce::String& prefer
     else
     {
         presetCombo_.setSelectedId(0, juce::dontSendNotification);
-        if (availablePresetFiles_.isEmpty())
+        if (allPresetNames.isEmpty() || useSnapshotOverride)
             currentPresetName_.clear();
     }
 
     suppressPresetComboChange_ = false;
-
-    const auto hasSelection = presetCombo_.getSelectedId() > 0;
-    const auto hasLoadedSample = processor_.getLoadedSampleLength() > 0;
-    presetSaveButton_.setEnabled(hasLoadedSample);
-    presetRenameButton_.setEnabled(hasSelection);
-    presetDeleteButton_.setEnabled(hasSelection);
+    updatePresetActionButtons();
 }
 
 void AudiocityAudioProcessorEditor::savePreset(const juce::String& presetName)
@@ -9392,12 +9581,10 @@ void AudiocityAudioProcessorEditor::showPresetLoadErrorAndOfferDelete(const juce
 
 void AudiocityAudioProcessorEditor::loadPresetFromSelection()
 {
-    const auto selectedId = presetCombo_.getSelectedId();
-    const auto index = selectedId - 1;
-    if (index < 0 || index >= availablePresetFiles_.size())
+    const auto file = getSelectedPresetFile();
+    if (file == juce::File{})
         return;
 
-    const auto file = availablePresetFiles_.getReference(index);
     if (!file.existsAsFile())
     {
         showPresetLoadErrorAndOfferDelete(file, "Preset file does not exist.");
@@ -9425,12 +9612,9 @@ void AudiocityAudioProcessorEditor::loadPresetFromSelection()
 
 void AudiocityAudioProcessorEditor::renameSelectedPreset()
 {
-    const auto selectedId = presetCombo_.getSelectedId();
-    const auto index = selectedId - 1;
-    if (index < 0 || index >= availablePresetFiles_.size())
+    const auto currentFile = getSelectedPresetFile();
+    if (currentFile == juce::File{})
         return;
-
-    const auto currentFile = availablePresetFiles_.getReference(index);
     const auto currentName = currentFile.getFileName().upToLastOccurrenceOf(kPresetFileExtension, false, false);
 
     fileChooser_ = std::make_unique<juce::FileChooser>(
@@ -9480,12 +9664,9 @@ void AudiocityAudioProcessorEditor::renameSelectedPreset()
 
 void AudiocityAudioProcessorEditor::deleteSelectedPreset()
 {
-    const auto selectedId = presetCombo_.getSelectedId();
-    const auto index = selectedId - 1;
-    if (index < 0 || index >= availablePresetFiles_.size())
+    const auto file = getSelectedPresetFile();
+    if (file == juce::File{})
         return;
-
-    const auto file = availablePresetFiles_.getReference(index);
     const auto presetName = file.getFileName().upToLastOccurrenceOf(kPresetFileExtension, false, false);
 
     juce::String message;
@@ -9529,8 +9710,7 @@ void AudiocityAudioProcessorEditor::clearSelectedPresetAfterSourceLoad()
     suppressPresetComboChange_ = true;
     presetCombo_.setSelectedId(0, juce::dontSendNotification);
     suppressPresetComboChange_ = false;
-    presetRenameButton_.setEnabled(false);
-    presetDeleteButton_.setEnabled(false);
+    updatePresetActionButtons();
 }
 
 void AudiocityAudioProcessorEditor::updateGeneratePreviewButtonText()
@@ -9940,10 +10120,16 @@ void AudiocityAudioProcessorEditor::paintSampleInspectorPane(juce::Graphics& g) 
         paintSectionCard(g, sampleInspectorOutputBounds_.toFloat(), "Output");
 
     if (!sampleInspectorFilterModBounds_.isEmpty())
+    {
         paintSectionCard(g, sampleInspectorFilterModBounds_.toFloat(), "Filter Envelope + Mod");
+        paintSampleInspectorCardToggle(g, sampleInspectorFilterModBounds_, sampleInspectorFilterModExpanded_);
+    }
 
     if (!sampleInspectorEffectsBounds_.isEmpty())
+    {
         paintSectionCard(g, sampleInspectorEffectsBounds_.toFloat(), "Effects");
+        paintSampleInspectorCardToggle(g, sampleInspectorEffectsBounds_, sampleInspectorEffectsExpanded_);
+    }
 }
 
 void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const

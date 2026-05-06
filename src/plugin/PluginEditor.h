@@ -168,6 +168,8 @@ public:
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
     void setSampleRailSnapshotState(bool browserRailEnabled, bool inspectorRailEnabled);
+    void setSampleInspectorCardSnapshotState(bool filterModExpanded, bool effectsExpanded);
+    void setPresetSearchSnapshotState(const juce::StringArray& presetNames, const juce::String& filterText);
 
 private:
     void handleNoteOn(juce::MidiKeyboardState* source, int midiChannel, int midiNoteNumber, float velocity) override;
@@ -548,6 +550,8 @@ private:
 
     // ── Sample ──
     juce::Label samplePathLabel_;
+    juce::TextEditor presetFilterEditor_;
+    juce::Label presetCountLabel_{ {}, "No presets" };
     juce::ComboBox presetCombo_;
     juce::TextButton presetSaveButton_{ "Save" };
     juce::TextButton presetRenameButton_{ "Rename" };
@@ -849,8 +853,10 @@ private:
     int captureLastSamples_ = -1;
     bool captureLastRecording_ = false;
     juce::Array<juce::File> availablePresetFiles_;
+    juce::Array<juce::File> visiblePresetFiles_;
     bool suppressPresetComboChange_ = false;
     juce::String currentPresetName_;
+    juce::StringArray presetSnapshotNamesOverride_;
 
     // ── Playback ──
     juce::Label playbackModeLabel_{ {}, "Mode" };
@@ -983,6 +989,8 @@ private:
     [[nodiscard]] juce::File getPresetDirectory() const;
     [[nodiscard]] static juce::String sanitizePresetName(const juce::String& rawName);
     [[nodiscard]] juce::File presetFileForName(const juce::String& presetName) const;
+    [[nodiscard]] juce::File getSelectedPresetFile() const;
+    void updatePresetActionButtons();
     void refreshPresetList(const juce::String& preferredPresetName = {});
     void savePreset(const juce::String& presetName);
     void promptSavePreset();
@@ -1047,6 +1055,7 @@ private:
     [[nodiscard]] bool shouldShowSampleInspectorRail() const noexcept;
     [[nodiscard]] bool shouldShowWideSampleInspectorMode() const noexcept;
     [[nodiscard]] bool shouldShowSampleProgramMapInspector() const noexcept;
+    [[nodiscard]] int getAvailableSampleAdvancedInspectorHeight() const noexcept;
     [[nodiscard]] bool shouldShowSampleFilterModInspector() const noexcept;
     [[nodiscard]] bool shouldShowSampleEffectsInspector() const noexcept;
     void layoutSampleBrowserArea(juce::Rectangle<int> area, bool compactLayout);
@@ -1101,6 +1110,8 @@ private:
     bool sampleEffectsExpanded_ = false;
     bool sampleBrowserRailEnabled_ = true;
     bool sampleInspectorRailEnabled_ = true;
+    bool sampleInspectorFilterModExpanded_ = true;
+    bool sampleInspectorEffectsExpanded_ = true;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudiocityAudioProcessorEditor)
 };

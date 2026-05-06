@@ -29,6 +29,11 @@ struct SnapshotScenario
     bool overrideSampleRailState = false;
     bool sampleBrowserRailEnabled = true;
     bool sampleInspectorRailEnabled = true;
+    bool overrideSampleInspectorCardState = false;
+    bool sampleFilterModInspectorExpanded = true;
+    bool sampleEffectsInspectorExpanded = true;
+    bool overridePresetSearchState = false;
+    const char* presetSearchText = nullptr;
 };
 
 enum SnapshotStateFlags : unsigned int
@@ -273,14 +278,40 @@ juce::Result renderScenario(AudiocityAudioProcessor& processor,
     if (editor == nullptr)
         return juce::Result::fail("Failed to create editor for snapshot rendering.");
 
+    auto* audiocityEditor = dynamic_cast<AudiocityAudioProcessorEditor*>(editor.get());
+    if (audiocityEditor == nullptr)
+        return juce::Result::fail("Failed to access Audiocity editor for snapshot rendering.");
+
     if (scenario.overrideSampleRailState)
     {
-        auto* audiocityEditor = dynamic_cast<AudiocityAudioProcessorEditor*>(editor.get());
-        if (audiocityEditor == nullptr)
-            return juce::Result::fail("Failed to access Audiocity editor for snapshot rail state.");
-
         audiocityEditor->setSampleRailSnapshotState(scenario.sampleBrowserRailEnabled,
                                                     scenario.sampleInspectorRailEnabled);
+
+        if (scenario.overrideSampleInspectorCardState)
+        {
+            audiocityEditor->setSampleInspectorCardSnapshotState(
+                scenario.sampleFilterModInspectorExpanded,
+                scenario.sampleEffectsInspectorExpanded);
+        }
+    }
+    else if (scenario.overrideSampleInspectorCardState)
+    {
+        audiocityEditor->setSampleInspectorCardSnapshotState(
+            scenario.sampleFilterModInspectorExpanded,
+            scenario.sampleEffectsInspectorExpanded);
+    }
+
+    if (scenario.overridePresetSearchState)
+    {
+        static const juce::StringArray kSnapshotPresetNames {
+            "Bass House Punch",
+            "Bass Mono Glide",
+            "Cloud Pad Bloom",
+            "Transient Chop Grid"
+        };
+
+        audiocityEditor->setPresetSearchSnapshotState(kSnapshotPresetNames,
+            juce::String(scenario.presetSearchText != nullptr ? scenario.presetSearchText : ""));
     }
 
     logProgress("Created editor for " + juce::String(scenario.fileStem));
@@ -360,8 +391,13 @@ int main(int argc, char* argv[])
 
     constexpr SnapshotScenario scenarios[] = {
         { "sample", 0, snapshotStateSliceProgram, 0 },
+        { "sample_preset_search", 0, snapshotStateSliceProgram, 0, 0, 0, false, true, true, false, true, true, true, "bass" },
         { "sample_modulation", 0, snapshotStateModulation, 320 },
         { "sample_wide", 0, snapshotStateSliceProgram, 0, 1240, 1100 },
+        { "sample_wide_medium", 0, snapshotStateSliceProgram, 0, 1240, 1060 },
+        { "sample_wide_browser_only", 0, snapshotStateSliceProgram, 0, 1240, 1100, true, true, false },
+        { "sample_wide_inspector_only", 0, snapshotStateSliceProgram, 0, 1240, 1100, true, false, true },
+        { "sample_wide_cards_collapsed", 0, snapshotStateSliceProgram, 0, 1240, 1100, false, true, true, true, false, false },
         { "sample_wide_tall", 0, snapshotStateSliceProgram, 0, 1240, 1600 },
         { "sample_wide_focus", 0, snapshotStateSliceProgram, 0, 1240, 1100, true, false, false },
         { "library", 1, snapshotStateBaseline, 0 },

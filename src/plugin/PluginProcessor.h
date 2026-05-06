@@ -215,6 +215,10 @@ public:
     [[nodiscard]] std::pair<int, int> getWaveformViewRange() const noexcept;
     void setEditorTabIndex(int tabIndex) noexcept;
     [[nodiscard]] int getEditorTabIndex() const noexcept;
+    void setSampleInspectorFilterModExpanded(bool expanded) noexcept;
+    [[nodiscard]] bool getSampleInspectorFilterModExpanded() const noexcept;
+    void setSampleInspectorEffectsExpanded(bool expanded) noexcept;
+    [[nodiscard]] bool getSampleInspectorEffectsExpanded() const noexcept;
     void setWaveformDisplayMode(int modeId) noexcept;
     [[nodiscard]] int getWaveformDisplayMode() const noexcept;
     void setGenerateWaveType(int waveType) noexcept;
@@ -439,6 +443,8 @@ private:
     std::atomic<int> waveformViewStartSample_{ 0 };
     std::atomic<int> waveformViewSampleCount_{ 0 };
     std::atomic<int> editorTabIndex_{ 0 };
+    std::atomic<bool> sampleInspectorFilterModExpanded_{ true };
+    std::atomic<bool> sampleInspectorEffectsExpanded_{ true };
     std::atomic<int> waveformDisplayMode_{ 1 };
     std::atomic<int> generateWaveType_{ 0 };
     std::atomic<int> generateSampleCount_{ 1024 };

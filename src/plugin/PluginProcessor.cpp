@@ -127,6 +127,8 @@ constexpr auto kSampleWindowEnd = "sampleWindowEnd";
 constexpr auto kWaveformViewStartSample = "waveformViewStartSample";
 constexpr auto kWaveformViewSampleCount = "waveformViewSampleCount";
 constexpr auto kEditorTabIndex = "editorTabIndex";
+constexpr auto kSampleInspectorFilterModExpanded = "sampleInspectorFilterModExpanded";
+constexpr auto kSampleInspectorEffectsExpanded = "sampleInspectorEffectsExpanded";
 constexpr auto kWaveformDisplayMode = "waveformDisplayMode";
 constexpr auto kGenerateWaveType = "generateWaveType";
 constexpr auto kGenerateSampleCount = "generateSampleCount";
@@ -251,6 +253,8 @@ bool isPlaybackPresetExcludedProperty(const juce::Identifier& property)
         || propertyName == kWaveformViewStartSample
         || propertyName == kWaveformViewSampleCount
         || propertyName == kEditorTabIndex
+        || propertyName == kSampleInspectorFilterModExpanded
+        || propertyName == kSampleInspectorEffectsExpanded
         || propertyName == kWaveformDisplayMode
         || propertyName == kGenerateWaveType
         || propertyName == kGenerateSampleCount
@@ -1318,6 +1322,12 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kWaveformViewStartSample, waveformViewStartSample_.load(std::memory_order_relaxed), nullptr);
     state.setProperty(kWaveformViewSampleCount, waveformViewSampleCount_.load(std::memory_order_relaxed), nullptr);
     state.setProperty(kEditorTabIndex, editorTabIndex_.load(std::memory_order_relaxed), nullptr);
+    state.setProperty(kSampleInspectorFilterModExpanded,
+        sampleInspectorFilterModExpanded_.load(std::memory_order_relaxed) ? 1 : 0,
+        nullptr);
+    state.setProperty(kSampleInspectorEffectsExpanded,
+        sampleInspectorEffectsExpanded_.load(std::memory_order_relaxed) ? 1 : 0,
+        nullptr);
     state.setProperty(kWaveformDisplayMode, waveformDisplayMode_.load(std::memory_order_relaxed), nullptr);
     state.setProperty(kGenerateWaveType, generateWaveType_.load(std::memory_order_relaxed), nullptr);
     state.setProperty(kGenerateSampleCount, generateSampleCount_.load(std::memory_order_relaxed), nullptr);
@@ -1631,6 +1641,12 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
         static_cast<int>(state.getProperty(kWaveformViewStartSample, waveformViewStartSample_.load(std::memory_order_relaxed))),
         static_cast<int>(state.getProperty(kWaveformViewSampleCount, waveformViewSampleCount_.load(std::memory_order_relaxed))));
     setEditorTabIndex(0);
+    setSampleInspectorFilterModExpanded(static_cast<int>(state.getProperty(
+        kSampleInspectorFilterModExpanded,
+        sampleInspectorFilterModExpanded_.load(std::memory_order_relaxed) ? 1 : 0)) != 0);
+    setSampleInspectorEffectsExpanded(static_cast<int>(state.getProperty(
+        kSampleInspectorEffectsExpanded,
+        sampleInspectorEffectsExpanded_.load(std::memory_order_relaxed) ? 1 : 0)) != 0);
     setWaveformDisplayMode(static_cast<int>(state.getProperty(kWaveformDisplayMode, waveformDisplayMode_.load(std::memory_order_relaxed))));
     setGenerateWaveType(static_cast<int>(state.getProperty(kGenerateWaveType, generateWaveType_.load(std::memory_order_relaxed))));
     setGenerateSampleCount(static_cast<int>(state.getProperty(kGenerateSampleCount, 1024)));
@@ -2845,6 +2861,26 @@ void AudiocityAudioProcessor::setEditorTabIndex(const int tabIndex) noexcept
 int AudiocityAudioProcessor::getEditorTabIndex() const noexcept
 {
     return juce::jlimit(0, 6, editorTabIndex_.load(std::memory_order_relaxed));
+}
+
+void AudiocityAudioProcessor::setSampleInspectorFilterModExpanded(const bool expanded) noexcept
+{
+    sampleInspectorFilterModExpanded_.store(expanded, std::memory_order_relaxed);
+}
+
+bool AudiocityAudioProcessor::getSampleInspectorFilterModExpanded() const noexcept
+{
+    return sampleInspectorFilterModExpanded_.load(std::memory_order_relaxed);
+}
+
+void AudiocityAudioProcessor::setSampleInspectorEffectsExpanded(const bool expanded) noexcept
+{
+    sampleInspectorEffectsExpanded_.store(expanded, std::memory_order_relaxed);
+}
+
+bool AudiocityAudioProcessor::getSampleInspectorEffectsExpanded() const noexcept
+{
+    return sampleInspectorEffectsExpanded_.load(std::memory_order_relaxed);
 }
 
 void AudiocityAudioProcessor::setWaveformDisplayMode(const int modeId) noexcept
