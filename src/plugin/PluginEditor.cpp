@@ -252,6 +252,7 @@ constexpr int kResponsiveEditorHorizontalMargin = 28;
 constexpr int kSampleInspectorMinContentWidth = 900;
 constexpr int kSampleTriColumnMinContentWidth = 1120;
 constexpr int kCollapsedSampleInspectorCardHeight = 36;
+constexpr int kSampleOutputInspectorCardHeight = 186;
 constexpr int kExpandedSampleFilterModInspectorCardHeight = 282;
 constexpr int kExpandedSampleEffectsInspectorCardHeight = 230;
 
@@ -7307,10 +7308,29 @@ bool AudiocityAudioProcessorEditor::shouldShowWideSampleInspectorMode() const no
 
 bool AudiocityAudioProcessorEditor::shouldShowSampleProgramMapInspector() const noexcept
 {
-    return shouldShowWideSampleInspectorMode() && processor_.hasImportedProgram();
+    if (!shouldShowWideSampleInspectorMode() || !processor_.hasImportedProgram())
+        return false;
+
+    const int filterModCardHeight = getSampleInspectorCardHeight(
+        sampleInspectorFilterModExpanded_,
+        kExpandedSampleFilterModInspectorCardHeight);
+    const int effectsCardHeight = getSampleInspectorCardHeight(
+        sampleInspectorEffectsExpanded_,
+        kExpandedSampleEffectsInspectorCardHeight);
+
+    const int availableWithProgramMap = getAvailableSampleAdvancedInspectorHeight(true);
+    const bool anyAdvancedFitsWithProgramMap = availableWithProgramMap >= filterModCardHeight
+        || availableWithProgramMap >= effectsCardHeight;
+    if (anyAdvancedFitsWithProgramMap)
+        return true;
+
+    const int availableWithoutProgramMap = getAvailableSampleAdvancedInspectorHeight(false);
+    const bool anyAdvancedFitsWithoutProgramMap = availableWithoutProgramMap >= filterModCardHeight
+        || availableWithoutProgramMap >= effectsCardHeight;
+    return !anyAdvancedFitsWithoutProgramMap;
 }
 
-int AudiocityAudioProcessorEditor::getAvailableSampleAdvancedInspectorHeight() const noexcept
+int AudiocityAudioProcessorEditor::getAvailableSampleAdvancedInspectorHeight(const bool reserveProgramMap) const noexcept
 {
     constexpr int kSampleInfoCardHeight = 278;
     constexpr int kSampleProgramMapCardHeight = 188;
@@ -7324,8 +7344,9 @@ int AudiocityAudioProcessorEditor::getAvailableSampleAdvancedInspectorHeight() c
 
     availableHeight -= kTopBarH + kTopGap;
     availableHeight -= kSampleInfoCardHeight + kTopGap;
-    if (shouldShowSampleProgramMapInspector())
+    if (reserveProgramMap)
         availableHeight -= kSampleProgramMapCardHeight + kTopGap;
+    availableHeight -= kSampleOutputInspectorCardHeight + kTopGap;
 
     return availableHeight;
 }
@@ -7337,7 +7358,7 @@ bool AudiocityAudioProcessorEditor::shouldShowSampleFilterModInspector() const n
 
     constexpr int kTopGap = 10;
 
-    const int availableHeight = getAvailableSampleAdvancedInspectorHeight();
+    const int availableHeight = getAvailableSampleAdvancedInspectorHeight(shouldShowSampleProgramMapInspector());
     const int filterModCardHeight = getSampleInspectorCardHeight(
         sampleInspectorFilterModExpanded_,
         kExpandedSampleFilterModInspectorCardHeight);
@@ -7355,7 +7376,7 @@ bool AudiocityAudioProcessorEditor::shouldShowSampleEffectsInspector() const noe
 
     constexpr int kTopGap = 10;
 
-    const int availableHeight = getAvailableSampleAdvancedInspectorHeight();
+    const int availableHeight = getAvailableSampleAdvancedInspectorHeight(shouldShowSampleProgramMapInspector());
     const int filterModCardHeight = getSampleInspectorCardHeight(
         sampleInspectorFilterModExpanded_,
         kExpandedSampleFilterModInspectorCardHeight);
@@ -8143,11 +8164,7 @@ void AudiocityAudioProcessorEditor::resized()
     const int visibleMetricCount = countVisibleSampleInfoMetrics();
     const int metricRows = juce::jmax(1, (visibleMetricCount + 1) / 2);
     const int infoCardHeight = 74 + metricRows * 34;
-    const bool useOutputInspector = useSampleInspectorRail
-        && !useProgramMapInspector
-        && !useFilterModInspector
-        && !useEffectsInspector
-        && (area.getHeight() - infoCardHeight - kGrpGap) >= 184;
+    const bool useOutputInspector = useSampleInspectorRail;
 
     const auto setSampleInspectorParenting = [&](const bool useInfoInspector,
                                                  const bool useProgramInspector,
@@ -8383,26 +8400,27 @@ void AudiocityAudioProcessorEditor::resized()
     {
         auto outputInner = inspectorBounds.withTrimmedTop(30).reduced(12, 10);
         constexpr int kInspectorDialGap = 6;
-        constexpr int kSmallDialWidth = 60;
+        constexpr int kCompactRowHeight = 52;
+        constexpr int kSmallDialWidth = 52;
 
-        auto row1 = outputInner.removeFromTop(70);
+        auto row1 = outputInner.removeFromTop(kCompactRowHeight);
         fadeInDial_.setBounds(row1.removeFromLeft(kSmallDialWidth));
         row1.removeFromLeft(kInspectorDialGap);
         fadeOutDial_.setBounds(row1.removeFromLeft(kSmallDialWidth));
         row1.removeFromLeft(kInspectorDialGap);
         preloadDial_.setBounds(row1);
 
-        outputInner.removeFromTop(8);
-        auto row2 = outputInner.removeFromTop(70);
+        outputInner.removeFromTop(6);
+        auto row2 = outputInner.removeFromTop(kCompactRowHeight);
         masterVolumeDial_.setBounds(row2.removeFromLeft(kSmallDialWidth));
         row2.removeFromLeft(kInspectorDialGap);
         panDial_.setBounds(row2.removeFromLeft(kSmallDialWidth));
         row2.removeFromLeft(kInspectorDialGap);
-        outputLevelMeter_.setBounds(row2.reduced(0, 10));
+        outputLevelMeter_.setBounds(row2.reduced(0, 6));
 
-        outputInner.removeFromTop(8);
+        outputInner.removeFromTop(6);
         qualityLabel_.setBounds({});
-        auto qualityRow = outputInner.removeFromTop(24);
+        auto qualityRow = outputInner.removeFromTop(20);
         const int qualityButtonWidth = (qualityRow.getWidth() - kInspectorDialGap * 2) / 3;
         qualityCpuButton_.setBounds(qualityRow.removeFromLeft(qualityButtonWidth));
         qualityRow.removeFromLeft(kInspectorDialGap);
@@ -8511,6 +8529,40 @@ void AudiocityAudioProcessorEditor::resized()
         saturationModeCombo_.setBounds({});
     };
 
+    const auto clearOutputInspectorControls = [&]()
+    {
+        fadeInDial_.setBounds({});
+        fadeOutDial_.setBounds({});
+        preloadDial_.setBounds({});
+        masterVolumeDial_.setBounds({});
+        panDial_.setBounds({});
+        outputLevelMeter_.setBounds({});
+        qualityLabel_.setBounds({});
+        qualityCpuButton_.setBounds({});
+        qualityFidelityButton_.setBounds({});
+        qualityUltraButton_.setBounds({});
+    };
+
+    const auto layoutOutputInspectorCard = [&](juce::Rectangle<int>& inspectorArea)
+    {
+        if (!useOutputInspector)
+        {
+            clearOutputInspectorControls();
+            return;
+        }
+
+        inspectorArea.removeFromTop(kGrpGap);
+        const int outputCardHeight = juce::jmin(kSampleOutputInspectorCardHeight, inspectorArea.getHeight());
+        if (outputCardHeight <= 0)
+        {
+            clearOutputInspectorControls();
+            return;
+        }
+
+        sampleInspectorOutputBounds_ = inspectorArea.removeFromTop(outputCardHeight);
+        layoutOutputInspector(sampleInspectorOutputBounds_);
+    };
+
     const auto clearFilterModInspectorControls = [&]()
     {
         filterAttackDial_.setBounds({});
@@ -8549,16 +8601,7 @@ void AudiocityAudioProcessorEditor::resized()
                 : juce::jmax(148, juce::jmin(214, inspectorArea.getHeight()));
             sampleInspectorProgramMapBounds_ = inspectorArea.removeFromTop(programMapHeight);
             programMapText_.setBounds(sampleInspectorProgramMapBounds_.withTrimmedTop(30).reduced(12, 10));
-            fadeInDial_.setBounds({});
-            fadeOutDial_.setBounds({});
-            preloadDial_.setBounds({});
-            masterVolumeDial_.setBounds({});
-            panDial_.setBounds({});
-            outputLevelMeter_.setBounds({});
-            qualityLabel_.setBounds({});
-            qualityCpuButton_.setBounds({});
-            qualityFidelityButton_.setBounds({});
-            qualityUltraButton_.setBounds({});
+            layoutOutputInspectorCard(inspectorArea);
 
             if (useEffectsInspector)
             {
@@ -8593,6 +8636,7 @@ void AudiocityAudioProcessorEditor::resized()
         else
         {
             programMapText_.setBounds({});
+            layoutOutputInspectorCard(inspectorArea);
 
             if (useEffectsInspector)
             {
@@ -8623,32 +8667,12 @@ void AudiocityAudioProcessorEditor::resized()
                 else
                     clearFilterModInspectorControls();
             }
-
-            if (useOutputInspector)
-            {
-                inspectorArea.removeFromTop(kGrpGap);
-                const int outputCardHeight = juce::jmin(224, inspectorArea.getHeight());
-                sampleInspectorOutputBounds_ = inspectorArea.removeFromTop(outputCardHeight);
-                layoutOutputInspector(sampleInspectorOutputBounds_);
-            }
-            else
-            {
-                fadeInDial_.setBounds({});
-                fadeOutDial_.setBounds({});
-                preloadDial_.setBounds({});
-                masterVolumeDial_.setBounds({});
-                panDial_.setBounds({});
-                outputLevelMeter_.setBounds({});
-                qualityLabel_.setBounds({});
-                qualityCpuButton_.setBounds({});
-                qualityFidelityButton_.setBounds({});
-                qualityUltraButton_.setBounds({});
-            }
         }
     }
     else
     {
         programMapText_.setBounds({});
+        clearOutputInspectorControls();
     }
 
     const auto waveformHeight = juce::jlimit(180, 320, workspaceArea.getHeight() / 3);

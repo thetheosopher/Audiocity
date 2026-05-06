@@ -1055,7 +1055,7 @@ private:
     [[nodiscard]] bool shouldShowSampleInspectorRail() const noexcept;
     [[nodiscard]] bool shouldShowWideSampleInspectorMode() const noexcept;
     [[nodiscard]] bool shouldShowSampleProgramMapInspector() const noexcept;
-    [[nodiscard]] int getAvailableSampleAdvancedInspectorHeight() const noexcept;
+    [[nodiscard]] int getAvailableSampleAdvancedInspectorHeight(bool reserveProgramMap) const noexcept;
     [[nodiscard]] bool shouldShowSampleFilterModInspector() const noexcept;
     [[nodiscard]] bool shouldShowSampleEffectsInspector() const noexcept;
     void layoutSampleBrowserArea(juce::Rectangle<int> area, bool compactLayout);
