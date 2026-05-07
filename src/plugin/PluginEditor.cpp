@@ -1916,19 +1916,21 @@ void AudiocityAudioProcessorEditor::WaveformView::paint(juce::Graphics& g)
         auto badge = juce::Rectangle<float>(bounds.getRight() - static_cast<float>(badgeWidth) - 8.0f,
             bounds.getY() + 6.0f, static_cast<float>(badgeWidth), 16.0f);
 
-        auto badgeColour = juce::Colour(0xff4b6b2a);
+        auto badgeColour = juce::Colour(0xff8fbf5e);
         if (loopFormatBadge_ == "Apple Loop")
-            badgeColour = juce::Colour(0xff5b4b8a);
+            badgeColour = juce::Colour(0xffa593e8);
         else if (loopFormatBadge_ == "REX")
-            badgeColour = juce::Colour(0xff2b5f93);
+            badgeColour = juce::Colour(0xff7eb6e0);
         else if (loopFormatBadge_ == "SFZ")
-            badgeColour = juce::Colour(0xff6c5ce7);
+            badgeColour = juce::Colour(0xffb3a5ff);
         else if (loopFormatBadge_ == "SLICE")
-            badgeColour = juce::Colour(0xff1f7a8c);
-        g.setColour(badgeColour);
+            badgeColour = juce::Colour(0xff78d7ff);
+        g.setColour(badgeColour.withAlpha(0.16f));
         g.fillRoundedRectangle(badge, 4.0f);
-        g.setColour(juce::Colour(0xffdfe6ff));
-        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.setColour(badgeColour.withAlpha(0.55f));
+        g.drawRoundedRectangle(badge.reduced(0.5f), 4.0f, 1.0f);
+        g.setColour(badgeColour.brighter(0.45f));
+        g.setFont(juce::Font(juce::FontOptions(10.0f)).boldened());
         g.drawText(loopFormatBadge_, badge, juce::Justification::centred, false);
     }
 }
@@ -2775,21 +2777,23 @@ void PlayerModulationPanel::paint(juce::Graphics& g)
         auto inner = bounds.reduced(10, 8);
         auto header = inner.removeFromTop(28);
         auto titleRow = header.removeFromTop(14);
-        g.setColour(juce::Colour(0xffe5e5ef));
-        g.setFont(juce::Font(juce::FontOptions(10.0f)).boldened());
-        g.drawText(title, titleRow.removeFromLeft(juce::jmax(70, titleRow.getWidth() - 86)), juce::Justification::centredLeft, false);
-
+        const int activeWidth = juce::jmin(58, titleRow.getWidth() / 3);
+        auto activeArea = titleRow.removeFromRight(activeWidth);
         g.setColour(juce::Colour(0xff8fb7ff));
         g.setFont(juce::Font(juce::FontOptions(9.0f)));
-        g.drawText(juce::String(countActiveRoutes()) + " active", titleRow, juce::Justification::centredRight, false);
+        g.drawText(juce::String(countActiveRoutes()) + " active", activeArea, juce::Justification::centredRight, false);
+
+        g.setColour(juce::Colour(0xffe5e5ef));
+        g.setFont(juce::Font(juce::FontOptions(10.0f)).boldened());
+        g.drawFittedText(title, titleRow, juce::Justification::centredLeft, 1);
 
         auto focusRow = header.removeFromTop(10);
         g.setColour(focusState.magnitude > 0.0f ? focusState.colour : juce::Colour(0xff7f8aa6));
         g.setFont(juce::Font(juce::FontOptions(8.0f)).boldened());
-        g.drawText(focusState.magnitude > 0.0f ? juce::String("Focus ") + focusState.text : juce::String("Focus idle"),
-                   focusRow,
-                   juce::Justification::centredLeft,
-                   false);
+        g.drawFittedText(focusState.magnitude > 0.0f ? juce::String("Focus ") + focusState.text : juce::String("Focus idle"),
+                         focusRow,
+                         juce::Justification::centredLeft,
+                         1);
 
         inner.removeFromTop(2);
 
@@ -2872,8 +2876,8 @@ void PlayerModulationPanel::paint(juce::Graphics& g)
     summaryGroups.removeFromTop(kGrpGap);
     auto macroBody = summaryGroups.removeFromTop(kRowH).withTrimmedTop(kGrpHdr).reduced(kGrpPadH, kGrpPadV);
 
-    paintDestinationMatrix(computeSummaryArea(expressiveBody, 3, 3), "Destination Focus", expressiveSummarySources);
-    paintDestinationMatrix(computeSummaryArea(macroBody, 2, 4), "Macro Destinations", macroSummarySources);
+    paintDestinationMatrix(computeSummaryArea(expressiveBody, 3, 3), "Destinations", expressiveSummarySources);
+    paintDestinationMatrix(computeSummaryArea(macroBody, 2, 4), "Macro Routes", macroSummarySources);
 }
 
 void PlayerModulationPanel::resized()
@@ -4920,6 +4924,9 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     const bool showBrowserCancelButton = showBrowserSurface && sampleScanInProgress_.load(std::memory_order_relaxed);
     const int browserRowHeight = showBrowserRail ? 54 : 66;
     const bool showFilterModSurface = showSampleTab && (useFilterModInspector || isSampleGroupExpanded("filterMod"));
+
+    if (!showSampleTab)
+        clearSampleInformationComponentBounds();
 
     if (sampleBrowserListBox_.getRowHeight() != browserRowHeight)
         sampleBrowserListBox_.setRowHeight(browserRowHeight);
@@ -7578,7 +7585,9 @@ void AudiocityAudioProcessorEditor::layoutPlayerPerformanceArea(juce::Rectangle<
     const int kPadRows = (kPlayerPadCount + kPadCols - 1) / kPadCols;
     const int padGap = 8;
     const int padCellWidth = juce::jmax(80, (padsPanel.getWidth() - (kPadCols - 1) * padGap) / kPadCols);
-    const int padCellHeight = juce::jmax(90, (padsPanel.getHeight() - (kPadRows - 1) * padGap) / kPadRows);
+    constexpr int kPreferredPadHeight = 96;
+    const int availablePadHeight = (padsPanel.getHeight() - (kPadRows - 1) * padGap) / kPadRows;
+    const int padCellHeight = juce::jlimit(72, kPreferredPadHeight, availablePadHeight);
 
     for (int i = 0; i < kPlayerPadCount; ++i)
     {
@@ -7977,9 +7986,9 @@ void AudiocityAudioProcessorEditor::resized()
         genArea.removeFromTop(12);
 
         auto waveButtons = genArea.removeFromTop(32);
-        constexpr int kBtnW = 88;
-        constexpr int kBtnGap = 8;
-        generateLoadAsSampleButton_.setBounds(waveButtons.removeFromRight(160));
+        constexpr int kBtnW = 64;
+        constexpr int kBtnGap = 6;
+        generateLoadAsSampleButton_.setBounds(waveButtons.removeFromRight(140));
         waveButtons.removeFromRight(kBtnGap);
         generateSineButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
         waveButtons.removeFromLeft(kBtnGap);
@@ -7997,17 +8006,17 @@ void AudiocityAudioProcessorEditor::resized()
 
         genArea.removeFromTop(10);
         auto settingsRow = genArea.removeFromTop(32);
-        generateSamplesLabel_.setBounds(settingsRow.removeFromLeft(64));
+        generateSamplesLabel_.setBounds(settingsRow.removeFromLeft(58));
         generateSamplesCombo_.setBounds(settingsRow.removeFromLeft(98));
-        settingsRow.removeFromLeft(16);
-        generateBitDepthLabel_.setBounds(settingsRow.removeFromLeft(72));
+        settingsRow.removeFromLeft(14);
+        generateBitDepthLabel_.setBounds(settingsRow.removeFromLeft(34));
         generateBitDepthCombo_.setBounds(settingsRow.removeFromLeft(96));
-        settingsRow.removeFromLeft(16);
-        generateSketchSmoothingLabel_.setBounds(settingsRow.removeFromLeft(58));
-        generateSketchSmoothingCombo_.setBounds(settingsRow.removeFromLeft(100));
-        settingsRow.removeFromLeft(16);
-        generatePulseWidthLabel_.setBounds(settingsRow.removeFromLeft(86));
-        generatePulseWidthSlider_.setBounds(settingsRow.removeFromLeft(172));
+        settingsRow.removeFromLeft(14);
+        generateSketchSmoothingLabel_.setBounds(settingsRow.removeFromLeft(54));
+        generateSketchSmoothingCombo_.setBounds(settingsRow.removeFromLeft(96));
+        settingsRow.removeFromLeft(14);
+        generatePulseWidthLabel_.setBounds(settingsRow.removeFromLeft(36));
+        generatePulseWidthSlider_.setBounds(settingsRow);
 
         genArea.removeFromTop(10);
         auto actionsRow = genArea.removeFromTop(32);
@@ -8045,17 +8054,19 @@ void AudiocityAudioProcessorEditor::resized()
         captureNormalizeButton_.setBounds(controlsRow.removeFromLeft(100));
 
         captureArea.removeFromTop(10);
+        auto sourceRow = captureArea.removeFromTop(20);
+        captureSourceLabel_.setBounds(sourceRow);
+
+        captureArea.removeFromTop(6);
         auto settingsRow = captureArea.removeFromTop(30);
-        captureSourceLabel_.setBounds(settingsRow.removeFromLeft(250));
-        settingsRow.removeFromLeft(12);
-        captureSampleRateLabel_.setBounds(settingsRow.removeFromLeft(78));
-        captureSampleRateCombo_.setBounds(settingsRow.removeFromLeft(100));
+        captureSampleRateLabel_.setBounds(settingsRow.removeFromLeft(28));
+        captureSampleRateCombo_.setBounds(settingsRow.removeFromLeft(96));
         settingsRow.removeFromLeft(10);
-        captureChannelLabel_.setBounds(settingsRow.removeFromLeft(58));
-        captureChannelCombo_.setBounds(settingsRow.removeFromLeft(120));
+        captureChannelLabel_.setBounds(settingsRow.removeFromLeft(28));
+        captureChannelCombo_.setBounds(settingsRow.removeFromLeft(118));
         settingsRow.removeFromLeft(10);
-        captureBitDepthLabel_.setBounds(settingsRow.removeFromLeft(66));
-        captureBitDepthCombo_.setBounds(settingsRow.removeFromLeft(110));
+        captureBitDepthLabel_.setBounds(settingsRow.removeFromLeft(34));
+        captureBitDepthCombo_.setBounds(settingsRow.removeFromLeft(96));
 
         captureArea.removeFromTop(8);
         auto levelRow = captureArea.removeFromTop(40);
@@ -9010,10 +9021,11 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
 
     constexpr int kMargin = 14;
 
+    // Soft top chrome: a thin raised band with a single 1px accent hairline.
     g.setColour(uiPanelRaisedColour());
-    g.fillRect(0, 0, getWidth(), 9);
-    g.setColour(uiAccentColour().withAlpha(0.72f));
-    g.fillRect(0, 9, getWidth(), 2);
+    g.fillRect(0, 0, getWidth(), 6);
+    g.setColour(uiAccentColour().withAlpha(0.32f));
+    g.fillRect(0, 6, getWidth(), 1);
 
     auto content = getLocalBounds().reduced(kMargin);
     content.removeFromTop(30);
@@ -9277,6 +9289,30 @@ void AudiocityAudioProcessorEditor::setSampleRailSnapshotState(const bool browse
     sampleBrowserRailToggleButton_.setToggleState(sampleBrowserRailEnabled_, juce::dontSendNotification);
     sampleInspectorRailToggleButton_.setToggleState(sampleInspectorRailEnabled_, juce::dontSendNotification);
     updateTabVisibility();
+}
+
+void AudiocityAudioProcessorEditor::setSnapshotTabIndex(const int tabIndex)
+{
+    const auto selectedTab = juce::jlimit(0, tabBar_.getNumTabs() - 1, tabIndex);
+    tabBar_.setCurrentTabIndex(selectedTab);
+    currentTabIndex_ = selectedTab;
+    processor_.setEditorTabIndex(currentTabIndex_);
+    updateTabVisibility();
+    resized();
+    repaint();
+
+    if (currentTabIndex_ == 1)
+        sampleBrowserListBox_.grabKeyboardFocus();
+    else if (currentTabIndex_ == 2)
+    {
+        refreshMappingZoneRows();
+        mappingZoneListBox_.grabKeyboardFocus();
+    }
+    else if (currentTabIndex_ == 5)
+    {
+        refreshCaptureWaveform(true);
+        updateCaptureUiState();
+    }
 }
 
 void AudiocityAudioProcessorEditor::setSampleInspectorCardSnapshotState(const bool filterModExpanded,
@@ -9744,7 +9780,7 @@ void AudiocityAudioProcessorEditor::updateGeneratePreviewButtonText()
     const auto hasCapturedAudio = processor_.getCapturedInputSamples() > 0;
     const auto samplePreviewPlaying = processor_.isSamplePreviewPlaying();
     capturePlayButton_.setEnabled(hasCapturedAudio || samplePreviewPlaying);
-    capturePlayButton_.setButtonText(samplePreviewPlaying ? "Stop Capture" : "Play Capture");
+    capturePlayButton_.setButtonText(samplePreviewPlaying ? "Stop" : "Play");
 }
 
 void AudiocityAudioProcessorEditor::refreshCaptureWaveform(const bool force)
@@ -10171,14 +10207,6 @@ void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const
         g.setColour(group.expanded ? uiTextStrongColour() : uiTextMutedColour().brighter(0.08f));
         g.setFont(juce::Font(juce::FontOptions(10.5f)).boldened());
         g.drawText(group.expanded ? "- Hide" : "+ Show", toggleBounds, juce::Justification::centredRight, false);
-
-        if (!group.expanded)
-        {
-            auto messageBounds = group.bounds.reduced(12, 0).withTrimmedTop(28).removeFromTop(14);
-            g.setColour(uiTextMutedColour().withAlpha(0.9f));
-            g.setFont(juce::Font(juce::FontOptions(10.5f)));
-            g.drawText("Click header to reveal advanced controls", messageBounds, juce::Justification::centredLeft, false);
-        }
     }
 }
 
@@ -10989,17 +11017,17 @@ void AudiocityAudioProcessorEditor::updateSampleInformationDisplay()
 
     if (loopBadge.isNotEmpty())
     {
-        juce::Colour badgeColour(0xff3a3a52);
+        juce::Colour badgeColour(0xff9ba7b9);
         if (loopBadge == "Apple Loop")
-            badgeColour = juce::Colour(0xff5b4b8a);
+            badgeColour = juce::Colour(0xffa593e8);
         else if (loopBadge == "Acidized")
-            badgeColour = juce::Colour(0xff4b6b2a);
+            badgeColour = juce::Colour(0xff8fbf5e);
         else if (loopBadge == "REX")
-            badgeColour = juce::Colour(0xff2b5f93);
+            badgeColour = juce::Colour(0xff7eb6e0);
         else if (loopBadge == "SFZ")
-            badgeColour = juce::Colour(0xff6c5ce7);
+            badgeColour = juce::Colour(0xffb3a5ff);
         else if (loopBadge == "SLICE")
-            badgeColour = juce::Colour(0xff1f7a8c);
+            badgeColour = juce::Colour(0xff78d7ff);
         sampleInfoBadge_.setBadge(loopBadge, badgeColour);
     }
     else

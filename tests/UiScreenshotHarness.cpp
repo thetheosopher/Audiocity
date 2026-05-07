@@ -34,6 +34,7 @@ struct SnapshotScenario
     bool sampleEffectsInspectorExpanded = true;
     bool overridePresetSearchState = false;
     const char* presetSearchText = nullptr;
+    int switchToTabIndex = -1;
 };
 
 enum SnapshotStateFlags : unsigned int
@@ -320,6 +321,9 @@ juce::Result renderScenario(AudiocityAudioProcessor& processor,
     editor->setBounds(0, 0, editorWidth, editorHeight);
     editor->resized();
 
+    if (scenario.switchToTabIndex >= 0)
+        audiocityEditor->setSnapshotTabIndex(scenario.switchToTabIndex);
+
     if (scenario.viewportScrollY > 0
         && !setFirstVisibleVerticalViewportScroll(*editor, scenario.viewportScrollY))
     {
@@ -400,7 +404,7 @@ int main(int argc, char* argv[])
         { "sample_wide_cards_collapsed", 0, snapshotStateSliceProgram, 0, 1240, 1100, false, true, true, true, false, false },
         { "sample_wide_tall", 0, snapshotStateSliceProgram, 0, 1240, 1600 },
         { "sample_wide_focus", 0, snapshotStateSliceProgram, 0, 1240, 1100, true, false, false },
-        { "library", 1, snapshotStateBaseline, 0 },
+        { "library", 0, snapshotStateBaseline, 0, 0, 0, false, true, true, false, true, true, false, nullptr, 1 },
         { "mapping", 2, snapshotStateSliceProgram, 0 },
         { "player", 3, snapshotStateBaseline, 0 },
         { "generate", 4, snapshotStateBaseline, 0 },

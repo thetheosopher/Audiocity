@@ -167,6 +167,7 @@ public:
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
+    void setSnapshotTabIndex(int tabIndex);
     void setSampleRailSnapshotState(bool browserRailEnabled, bool inspectorRailEnabled);
     void setSampleInspectorCardSnapshotState(bool filterModExpanded, bool effectsExpanded);
     void setPresetSearchSnapshotState(const juce::StringArray& presetNames, const juce::String& filterText);
@@ -287,10 +288,13 @@ private:
             if (text_.isEmpty())
                 return;
 
-            auto area = getLocalBounds().toFloat();
-            g.setColour(colour_);
+            auto area = getLocalBounds().toFloat().reduced(0.5f);
+            const auto fill = colour_.withAlpha(0.16f);
+            g.setColour(fill);
             g.fillRoundedRectangle(area, 4.0f);
-            g.setColour(juce::Colour(0xffdfe6ff));
+            g.setColour(colour_.withAlpha(0.55f));
+            g.drawRoundedRectangle(area, 4.0f, 1.0f);
+            g.setColour(colour_.brighter(0.45f));
             g.setFont(juce::Font(juce::FontOptions(10.0f)).boldened());
             g.drawText(text_, getLocalBounds(), juce::Justification::centred, false);
         }
@@ -751,13 +755,13 @@ private:
     juce::TextButton generateTriangleButton_{ "Triangle" };
     juce::TextButton generatePulseButton_{ "Pulse" };
     juce::TextButton generateRandomButton_{ "Random" };
-    juce::Label generateSamplesLabel_{ {}, "Samples" };
+    juce::Label generateSamplesLabel_{ {}, "Length" };
     juce::ComboBox generateSamplesCombo_;
-    juce::Label generateBitDepthLabel_{ {}, "Bit Depth" };
+    juce::Label generateBitDepthLabel_{ {}, "Bits" };
     juce::ComboBox generateBitDepthCombo_;
     juce::Label generateSketchSmoothingLabel_{ {}, "Sketch" };
     juce::ComboBox generateSketchSmoothingCombo_;
-    juce::Label generatePulseWidthLabel_{ {}, "Pulse Width" };
+    juce::Label generatePulseWidthLabel_{ {}, "PW" };
     juce::Slider generatePulseWidthSlider_{ juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::TextButton generatePreviewButton_{ "Play" };
     juce::Label generateFrequencyLabel_{ {}, "Frequency" };
@@ -829,15 +833,15 @@ private:
     juce::TextButton captureClearButton_{ "Clear" };
     juce::TextButton captureCutButton_{ "Cut Selection" };
     juce::TextButton captureTrimButton_{ "Trim Selection" };
-    juce::TextButton capturePlayButton_{ "Play Capture" };
+    juce::TextButton capturePlayButton_{ "Play" };
     juce::TextButton captureNormalizeButton_{ "Normalize" };
     juce::TextButton captureLoadAsSampleButton_{ "Load as Sample" };
     juce::Label captureSourceLabel_{ {}, "Source: Plugin Input (host-routed)" };
-    juce::Label captureSampleRateLabel_{ {}, "Sample Rate" };
+    juce::Label captureSampleRateLabel_{ {}, "SR" };
     juce::ComboBox captureSampleRateCombo_;
-    juce::Label captureChannelLabel_{ {}, "Channel" };
+    juce::Label captureChannelLabel_{ {}, "Ch" };
     juce::ComboBox captureChannelCombo_;
-    juce::Label captureBitDepthLabel_{ {}, "Bit Depth" };
+    juce::Label captureBitDepthLabel_{ {}, "Bits" };
     juce::ComboBox captureBitDepthCombo_;
     juce::Label captureRootNoteLabel_{ {}, "Root Note" };
     juce::ComboBox captureRootNoteCombo_;
