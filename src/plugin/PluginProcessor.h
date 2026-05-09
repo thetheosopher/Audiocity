@@ -59,6 +59,7 @@ public:
 
     bool loadSampleFromFile(const juce::File& file);
     bool importLegacyNkiProgram(const juce::File& file);
+    bool importLegacyNkiProgramWithSearchFolder(const juce::File& file, const juce::File& searchFolder);
     bool probeLegacyNkiProgram(const juce::File& file);
     bool importSfzProgram(const juce::File& file);
     bool importRexSliceProgram(const juce::File& file);

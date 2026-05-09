@@ -79,7 +79,7 @@
 		},
 		{
 			"label": "Build UI Snapshot Harness Debug",
-			"type": "shell",
+			"type": "process",
 			"command": "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/MSBuild/Current/Bin/MSBuild.exe",
 			"args": [
 				"C:/Projects/Applications/Audiocity/build/tests/audiocity_ui_snapshot_harness.vcxproj",

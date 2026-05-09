@@ -721,6 +721,11 @@ ProbeResult probeFile(const juce::File& file)
 
 ImportResult importFile(const juce::File& file)
 {
+    return importFile(file, juce::File{});
+}
+
+ImportResult importFile(const juce::File& file, const juce::File& extraSearchFolder)
+{
     ImportResult result;
     result.probe = probeFile(file);
     result.program.name = result.probe.instrumentName.toStdString();
@@ -747,7 +752,34 @@ ImportResult importFile(const juce::File& file)
         if (zoneMetadata.sampleReference.isEmpty())
             continue;
 
-        const auto sampleFile = resolveSampleReference(file, zoneMetadata.sampleReference);
+        auto sampleFile = resolveSampleReference(file, zoneMetadata.sampleReference);
+
+        if (!sampleFile.existsAsFile() && extraSearchFolder.isDirectory())
+        {
+            const auto sampleName = juce::File(
+                zoneMetadata.sampleReference.replaceCharacter('\\', '/')).getFileName();
+            if (sampleName.isNotEmpty())
+            {
+                const auto directCandidate = extraSearchFolder.getChildFile(sampleName);
+                if (directCandidate.existsAsFile())
+                {
+                    sampleFile = directCandidate;
+                }
+                else
+                {
+                    for (const auto& item : juce::RangedDirectoryIterator(
+                             extraSearchFolder, true, "*", juce::File::findFiles))
+                    {
+                        if (item.getFile().getFileName().equalsIgnoreCase(sampleName))
+                        {
+                            sampleFile = item.getFile();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         if (!sampleFile.existsAsFile())
         {
             addDiagnostic(result.probe,

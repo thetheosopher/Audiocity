@@ -5,6 +5,7 @@
 #include "PeakPreviewCache.h"
 #include "PluginProcessor.h"
 #include "ProgramMappingModel.h"
+#include "../engine/LegacyNkiProbe.h"
 #include <BinaryData.h>
 
 #include <algorithm>
@@ -280,7 +281,7 @@ void paintSampleInspectorCardToggle(juce::Graphics& g,
     if (bounds.isEmpty())
         return;
 
-    auto toggleBounds = getSampleInspectorCardToggleBounds(bounds);
+    auto toggleBounds = getSampleInspectorCardToggleBounds(bounds).withTrimmedRight(8);
     g.setColour(expanded ? uiTextStrongColour() : uiTextMutedColour().brighter(0.08f));
     g.setFont(juce::Font(juce::FontOptions(10.5f)).boldened());
     g.drawText(expanded ? "- Hide" : "+ Show", toggleBounds, juce::Justification::centredRight, false);
@@ -2584,7 +2585,7 @@ void PlayerModulationPanel::paint(juce::Graphics& g)
     constexpr int kGrpPadH = 12;
     constexpr int kGrpPadV = 8;
     constexpr int kGrpHdr = 22;
-    constexpr int kRowH = 134;
+    constexpr int kRowH = 154;
     constexpr int kGrpGap = 10;
     constexpr int kDialGap = 4;
 
@@ -2896,12 +2897,16 @@ void PlayerModulationPanel::resized()
     constexpr int kGrpHdr = 22;
     constexpr int kGrpGap = 10;
     constexpr int kDialGap = 4;
-    constexpr int kRowH = 134;
+    constexpr int kRowH = 154;
+    constexpr int kFeedbackH = 14;
+    constexpr int kFeedbackGap = 4;
 
     auto area = getLocalBounds();
     auto expressiveInner = area.removeFromTop(kRowH).withTrimmedTop(kGrpHdr).reduced(kGrpPadH, kGrpPadV);
+    expressiveInner.removeFromBottom(kFeedbackGap + kFeedbackH);
     area.removeFromTop(kGrpGap);
     auto macroInner = area.removeFromTop(kRowH).withTrimmedTop(kGrpHdr).reduced(kGrpPadH, kGrpPadV);
+    macroInner.removeFromBottom(kFeedbackGap + kFeedbackH);
 
     const auto routes = routeDialSets();
     for (int index = 0; index < 3; ++index)
@@ -3586,7 +3591,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     {
         addAndMakeVisible(slider);
         slider.setSliderStyle(juce::Slider::LinearHorizontal);
-        slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, textBoxWidth, 20);
+        slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, textBoxWidth, 16);
         slider.setRange(minimum, maximum, interval);
         slider.setColour(juce::Slider::trackColourId, juce::Colour(0xff61d9ff));
         slider.setColour(juce::Slider::thumbColourId, juce::Colour(0xfff4f6ff));
@@ -3780,10 +3785,20 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(sampleBrowserRailToggleButton_);
     sampleBrowserRailToggleButton_.setClickingTogglesState(true);
     sampleBrowserRailToggleButton_.setToggleState(sampleBrowserRailEnabled_, juce::dontSendNotification);
-    sampleBrowserRailToggleButton_.setTooltip("Show the browser rail on wide Sample layouts.");
+    sampleBrowserRailToggleButton_.setTooltip("Show the browser rail. At medium Sample widths it replaces the inspector.");
     sampleBrowserRailToggleButton_.onClick = [this]
     {
         sampleBrowserRailEnabled_ = sampleBrowserRailToggleButton_.getToggleState();
+
+        const auto sampleLayoutMode = resolveSampleLayoutModeForWidth(computeResponsiveContentWidth(getWidth()));
+        if (currentTabIndex_ == 0
+            && sampleLayoutMode == SampleLayoutMode::workspaceInspector
+            && sampleBrowserRailEnabled_)
+        {
+            sampleInspectorRailEnabled_ = false;
+        }
+
+        sampleInspectorRailToggleButton_.setToggleState(sampleInspectorRailEnabled_, juce::dontSendNotification);
         updateTabVisibility();
         resized();
         repaint();
@@ -3792,10 +3807,20 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(sampleInspectorRailToggleButton_);
     sampleInspectorRailToggleButton_.setClickingTogglesState(true);
     sampleInspectorRailToggleButton_.setToggleState(sampleInspectorRailEnabled_, juce::dontSendNotification);
-    sampleInspectorRailToggleButton_.setTooltip("Show the right-side inspector when the Sample layout has enough width.");
+    sampleInspectorRailToggleButton_.setTooltip("Show the right-side inspector. At medium Sample widths it replaces the browser rail.");
     sampleInspectorRailToggleButton_.onClick = [this]
     {
         sampleInspectorRailEnabled_ = sampleInspectorRailToggleButton_.getToggleState();
+
+        const auto sampleLayoutMode = resolveSampleLayoutModeForWidth(computeResponsiveContentWidth(getWidth()));
+        if (currentTabIndex_ == 0
+            && sampleLayoutMode == SampleLayoutMode::workspaceInspector
+            && sampleInspectorRailEnabled_)
+        {
+            sampleBrowserRailEnabled_ = false;
+        }
+
+        sampleBrowserRailToggleButton_.setToggleState(sampleBrowserRailEnabled_, juce::dontSendNotification);
         updateTabVisibility();
         resized();
         repaint();
@@ -5020,6 +5045,11 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     loadButton_.setVisible(showSampleTab);
     sampleBrowserRailToggleButton_.setVisible(showSampleTab);
     sampleInspectorRailToggleButton_.setVisible(showSampleTab);
+    if (showSampleTab)
+    {
+        sampleBrowserRailToggleButton_.setToggleState(showBrowserRail, juce::dontSendNotification);
+        sampleInspectorRailToggleButton_.setToggleState(shouldShowSampleInspectorRail(), juce::dontSendNotification);
+    }
     diagnosticsToggleButton_.setVisible(showSampleTab);
     waveformResetRangesButton_.setVisible(showSampleTab);
     waveformInteractionSummaryLabel_.setVisible(showSampleTab);
@@ -6641,6 +6671,13 @@ bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file)
     else
     {
         updateDiagnosticsStatusText();
+
+        if (file.getFileExtension().equalsIgnoreCase(".nki"))
+        {
+            const auto probe = audiocity::engine::nki::probeFile(file);
+            if (!probe.missingSampleReferences.isEmpty())
+                promptForNkiSampleFolder(file);
+        }
     }
 
     return loaded;
@@ -6740,6 +6777,37 @@ void AudiocityAudioProcessorEditor::chooseSampleRootFolder()
             return;
 
         scanSampleRootFolder(selected);
+    });
+}
+
+void AudiocityAudioProcessorEditor::promptForNkiSampleFolder(const juce::File& nkiFile)
+{
+    fileChooser_ = std::make_unique<juce::FileChooser>(
+        "Locate Samples — choose the folder containing the NKI's sample files",
+        nkiFile.getParentDirectory());
+
+    const auto chooserFlags = juce::FileBrowserComponent::openMode
+                              | juce::FileBrowserComponent::canSelectDirectories;
+    fileChooser_->launchAsync(chooserFlags, [this, nkiFile](const juce::FileChooser& chooser)
+    {
+        const auto selected = chooser.getResult();
+        if (!selected.isDirectory())
+            return;
+
+        processor_.panicAllAudio();
+        updateGeneratePreviewButtonText();
+
+        if (processor_.importLegacyNkiProgramWithSearchFolder(nkiFile, selected))
+        {
+            editorUndoHistory_.clear();
+            mappingUndoProgramPath_ = processor_.getImportedProgramPath();
+            lastSettingsSnapshot_ = captureSettingsSnapshot();
+            processor_.markLibraryRecent(nkiFile.getFullPathName());
+            refreshBrowserEntryLibraryFlags();
+            rebuildVisibleSampleList();
+        }
+
+        updateDiagnosticsStatusText();
     });
 }
 
@@ -7295,8 +7363,13 @@ bool AudiocityAudioProcessorEditor::shouldShowPersistentBrowserRail() const noex
     if (currentTabIndex_ == 0)
     {
         const auto sampleLayoutMode = resolveSampleLayoutModeForWidth(computeResponsiveContentWidth(getWidth()));
-        return sampleBrowserRailEnabled_
-            && sampleLayoutMode == SampleLayoutMode::browserWorkspaceInspector;
+        if (!sampleBrowserRailEnabled_ || sampleLayoutMode == SampleLayoutMode::inlineStack)
+            return false;
+
+        if (sampleLayoutMode == SampleLayoutMode::browserWorkspaceInspector)
+            return true;
+
+        return !sampleInspectorRailEnabled_;
     }
 
     return true;
@@ -7308,7 +7381,9 @@ bool AudiocityAudioProcessorEditor::shouldShowSampleInspectorRail() const noexce
         return false;
 
     const auto sampleLayoutMode = resolveSampleLayoutModeForWidth(computeResponsiveContentWidth(getWidth()));
-    return sampleLayoutMode != SampleLayoutMode::inlineStack;
+    return sampleLayoutMode != SampleLayoutMode::inlineStack
+        && (sampleLayoutMode == SampleLayoutMode::browserWorkspaceInspector
+            || !sampleBrowserRailEnabled_);
 }
 
 bool AudiocityAudioProcessorEditor::shouldShowWideSampleInspectorMode() const noexcept
@@ -7907,44 +7982,44 @@ void AudiocityAudioProcessorEditor::resized()
         header.removeFromRight(8);
         mappingSummaryLabel_.setBounds(header);
 
-        mappingArea.removeFromTop(8);
+        mappingArea.removeFromTop(4);
         mappingOverview_.setBounds(mappingArea.removeFromTop(150));
-        mappingArea.removeFromTop(8);
+        mappingArea.removeFromTop(4);
 
         const auto detailWidth = juce::jlimit(220, 360, mappingArea.getWidth() / 3);
         auto details = mappingArea.removeFromRight(detailWidth);
         mappingArea.removeFromRight(10);
         mappingZoneListBox_.setBounds(mappingArea);
 
-        auto editPanel = details.removeFromTop(580);
+        auto editPanel = details.removeFromTop(details.getHeight());
         auto layoutEditRow = [](juce::Rectangle<int>& panel, juce::Label& label, juce::Slider& slider)
         {
-            auto row = panel.removeFromTop(26);
+            auto row = panel.removeFromTop(18);
             label.setBounds(row.removeFromLeft(72));
             row.removeFromLeft(6);
             slider.setBounds(row);
-            panel.removeFromTop(3);
+            panel.removeFromTop(2);
         };
         auto layoutPairedEditRow = [](juce::Rectangle<int>& panel,
                                       juce::Label& label,
                                       juce::Slider& leftSlider,
                                       juce::Slider& rightSlider)
         {
-            auto row = panel.removeFromTop(26);
+            auto row = panel.removeFromTop(18);
             label.setBounds(row.removeFromLeft(72));
             row.removeFromLeft(6);
             auto left = row.removeFromLeft(row.getWidth() / 2);
             rightSlider.setBounds(row.withTrimmedLeft(4));
             leftSlider.setBounds(left.withTrimmedRight(4));
-            panel.removeFromTop(3);
+            panel.removeFromTop(2);
         };
         auto layoutEditComboRow = [](juce::Rectangle<int>& panel, juce::Label& label, juce::ComboBox& combo)
         {
-            auto row = panel.removeFromTop(26);
+            auto row = panel.removeFromTop(18);
             label.setBounds(row.removeFromLeft(72));
             row.removeFromLeft(6);
             combo.setBounds(row);
-            panel.removeFromTop(3);
+            panel.removeFromTop(2);
         };
 
         layoutEditRow(editPanel, mappingEditKeyLowLabel_, mappingEditKeyLowSlider_);
@@ -7967,12 +8042,12 @@ void AudiocityAudioProcessorEditor::resized()
         layoutEditComboRow(editPanel, mappingEditTriggerLabel_, mappingEditTriggerCombo_);
         layoutEditComboRow(editPanel, mappingEditLoopLabel_, mappingEditLoopCombo_);
 
-        auto applyRow = editPanel.removeFromTop(28);
+        auto applyRow = editPanel.removeFromTop(24);
         mappingEditApplyButton_.setBounds(applyRow.removeFromLeft(110));
         applyRow.removeFromLeft(8);
         mappingEditStatusLabel_.setBounds(applyRow);
 
-        details.removeFromTop(8);
+        details.removeFromTop(4);
         mappingDetailsText_.setBounds(details);
         if (showPerformanceStrip)
             layoutPlayerPerformanceArea(performanceStripArea, true);

@@ -93,5 +93,6 @@ struct ImportResult
 
 [[nodiscard]] ProbeResult probeFile(const juce::File& file);
 [[nodiscard]] ImportResult importFile(const juce::File& file);
+[[nodiscard]] ImportResult importFile(const juce::File& nkiFile, const juce::File& extraSearchFolder);
 [[nodiscard]] juce::String buildProbeSummary(const ProbeResult& result);
 } // namespace audiocity::engine::nki

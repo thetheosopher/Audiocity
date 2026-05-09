@@ -28,7 +28,7 @@ class PlayerModulationPanel final : public juce::Component
 public:
     explicit PlayerModulationPanel(AudiocityAudioProcessor& processor);
 
-    static constexpr int preferredHeight() noexcept { return 278; }
+    static constexpr int preferredHeight() noexcept { return 318; }
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -1008,6 +1008,7 @@ private:
     void chooseSampleRootFolder();
     void cancelSampleRootScan();
     void scanSampleRootFolder(const juce::File& rootFolder);
+    void promptForNkiSampleFolder(const juce::File& nkiFile);
     void refreshSampleBrowserBookmarks();
     void refreshSampleBrowserTagFilter();
     void scanSelectedSampleBrowserBookmark();

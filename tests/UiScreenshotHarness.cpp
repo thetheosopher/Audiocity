@@ -395,6 +395,7 @@ int main(int argc, char* argv[])
 
     constexpr SnapshotScenario scenarios[] = {
         { "sample", 0, snapshotStateSliceProgram, 0 },
+        { "sample_browser_only", 0, snapshotStateSliceProgram, 0, 0, 0, true, true, false },
         { "sample_preset_search", 0, snapshotStateSliceProgram, 0, 0, 0, false, true, true, false, true, true, true, "bass" },
         { "sample_modulation", 0, snapshotStateModulation, 320 },
         { "sample_wide", 0, snapshotStateSliceProgram, 0, 1240, 1100 },
