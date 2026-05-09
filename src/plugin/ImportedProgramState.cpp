@@ -33,6 +33,10 @@ juce::String formatImportedProgramFormat(const ImportedProgramFormat format)
             return "sampleSlices";
         case ImportedProgramFormat::nki:
             return "nki";
+        case ImportedProgramFormat::sf2:
+            return "sf2";
+        case ImportedProgramFormat::decentSampler:
+            return "decentSampler";
         case ImportedProgramFormat::unknown:
         default:
             return {};
@@ -52,6 +56,12 @@ ImportedProgramFormat parseImportedProgramFormat(const juce::String& formatText)
 
     if (formatText.equalsIgnoreCase("nki"))
         return ImportedProgramFormat::nki;
+
+    if (formatText.equalsIgnoreCase("sf2"))
+        return ImportedProgramFormat::sf2;
+
+    if (formatText.equalsIgnoreCase("decentSampler") || formatText.equalsIgnoreCase("dspreset"))
+        return ImportedProgramFormat::decentSampler;
 
     return ImportedProgramFormat::unknown;
 }
@@ -154,6 +164,12 @@ ImportedProgramFormat detectImportedProgramFormat(const juce::String& programPat
     if (extension.equalsIgnoreCase(".nki"))
         return ImportedProgramFormat::nki;
 
+    if (extension.equalsIgnoreCase(".sf2"))
+        return ImportedProgramFormat::sf2;
+
+    if (extension.equalsIgnoreCase(".dspreset"))
+        return ImportedProgramFormat::decentSampler;
+
     return ImportedProgramFormat::unknown;
 }
 
@@ -183,6 +199,10 @@ juce::String importedProgramFormatBadge(const ImportedProgramFormat format)
             return "SLICE";
         case ImportedProgramFormat::nki:
             return "NKI";
+        case ImportedProgramFormat::sf2:
+            return "SF2";
+        case ImportedProgramFormat::decentSampler:
+            return "DSPRESET";
         case ImportedProgramFormat::unknown:
         default:
             return "PROGRAM";

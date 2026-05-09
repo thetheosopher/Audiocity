@@ -64,6 +64,8 @@ public:
     bool importSfzProgram(const juce::File& file);
     bool importRexSliceProgram(const juce::File& file);
     bool importTransientSliceProgram(const juce::File& file);
+    bool importSf2Program(const juce::File& file);
+    bool importDecentSamplerProgram(const juce::File& file);
     [[nodiscard]] bool hasImportedProgram() const noexcept
     {
         return importedProgramLoaded_.load(std::memory_order_relaxed);

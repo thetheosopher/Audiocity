@@ -10,6 +10,8 @@
 #include "../src/engine/SettingsUndoHistory.h"
 #include "../src/engine/TransientSliceProgram.h"
 #include "../src/engine/SfzImporter.h"
+#include "../src/engine/Sf2Importer.h"
+#include "../src/engine/DecentSamplerImporter.h"
 #include "../src/plugin/CcLearnDial.h"
 #include "../src/plugin/LibraryFileIndex.h"
 #include "../src/plugin/LibraryMetadata.h"
@@ -2815,6 +2817,265 @@ bool runSfzImporterDiagnosticsTest()
     {
         return false;
     }
+
+    return true;
+}
+
+bool runDecentSamplerImporterTest()
+{
+    namespace ds = audiocity::engine::dspreset;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_dspreset_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto wavFile = tempDirectory.getChildFile("tone.wav");
+    constexpr int sampleRate = 44100;
+    constexpr int sampleLength = 2048;
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(wavFile.createOutputStream());
+        if (output == nullptr) { tempDirectory.deleteRecursively(); return false; }
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr) { tempDirectory.deleteRecursively(); return false; }
+        output.release();
+
+        juce::AudioBuffer<float> buf(1, sampleLength);
+        for (int i = 0; i < sampleLength; ++i)
+            buf.setSample(0, i, 0.25f * std::sin(static_cast<float>(2.0 * juce::MathConstants<double>::pi * i * 220.0 / sampleRate)));
+        if (!writer->writeFromAudioSampleBuffer(buf, 0, sampleLength))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    const auto presetFile = tempDirectory.getChildFile("Preset.dspreset");
+    const juce::String xml =
+        R"(<?xml version="1.0" encoding="UTF-8"?>
+<DecentSampler>
+  <groups>
+    <group volume="-6dB" pan="0">
+      <sample path="tone.wav" rootNote="60" loNote="48" hiNote="72" loVel="0" hiVel="127" volume="0dB" pan="-50" />
+      <sample path="tone.wav" rootNote="72" loNote="73" hiNote="84" loopStart="100" loopEnd="900" loopEnabled="true" trigger="release" />
+    </group>
+  </groups>
+</DecentSampler>
+)";
+    if (!presetFile.replaceWithText(xml))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto result = ds::importFile(presetFile);
+    tempDirectory.deleteRecursively();
+
+    if (result.hasErrors() || !result.hasPlayableProgram())
+        return false;
+    if (result.program.zones.size() != 2 || result.program.sampleAssets.size() != 1)
+        return false;
+
+    const auto& z0 = result.program.zones[0];
+    if (z0.keyRange.low != 48 || z0.keyRange.high != 72 || z0.rootMidiNote != 60)
+        return false;
+    // Sample-level pan -50 (percent) overlaid on group pan 0 -> -0.5.
+    if (std::abs(z0.pan + 0.5f) > 0.05f)
+        return false;
+    // Group volume -6 dB overlaid on sample volume 0 -> -6 dB.
+    if (std::abs(z0.gainDb + 6.0f) > 0.5f)
+        return false;
+
+    const auto& z1 = result.program.zones[1];
+    if (z1.loopMode != audiocity::engine::ZoneLoopMode::continuous
+        || z1.loopStart != 100 || z1.loopEndExclusive != 900)
+        return false;
+    if (z1.triggerMode != audiocity::engine::ZoneTriggerMode::release)
+        return false;
+
+    return true;
+}
+
+namespace
+{
+void appendU16LE(juce::MemoryOutputStream& os, juce::uint16 v)
+{
+    const juce::uint8 b[2] = { static_cast<juce::uint8>(v & 0xFF), static_cast<juce::uint8>((v >> 8) & 0xFF) };
+    os.write(b, 2);
+}
+void appendS16LE(juce::MemoryOutputStream& os, juce::int16 v)
+{
+    appendU16LE(os, static_cast<juce::uint16>(v));
+}
+void appendU32LE(juce::MemoryOutputStream& os, juce::uint32 v)
+{
+    const juce::uint8 b[4] = {
+        static_cast<juce::uint8>(v & 0xFF), static_cast<juce::uint8>((v >> 8) & 0xFF),
+        static_cast<juce::uint8>((v >> 16) & 0xFF), static_cast<juce::uint8>((v >> 24) & 0xFF) };
+    os.write(b, 4);
+}
+void appendFourcc(juce::MemoryOutputStream& os, const char* tag)
+{
+    os.write(tag, 4);
+}
+void appendName20(juce::MemoryOutputStream& os, const char* text)
+{
+    char buf[20] = {};
+    const auto len = std::min<std::size_t>(std::strlen(text), 19);
+    std::memcpy(buf, text, len);
+    os.write(buf, 20);
+}
+juce::MemoryBlock buildMinimalSf2()
+{
+    // Build a one-preset / one-instrument / one-zone / one-sample SF2 around a 256-sample sine.
+    constexpr int sampleCount = 256;
+    juce::MemoryOutputStream smpl;
+    for (int i = 0; i < sampleCount; ++i)
+    {
+        const double phase = 2.0 * juce::MathConstants<double>::pi * i * 8.0 / sampleCount;
+        const auto value = static_cast<juce::int16>(std::round(std::sin(phase) * 16000.0));
+        appendS16LE(smpl, value);
+    }
+
+    // pdta arrays.
+    juce::MemoryOutputStream phdr;
+    // Preset 0 "Tone", bank 0, program 0, bagIdx 0
+    appendName20(phdr, "Tone"); appendU16LE(phdr, 0); appendU16LE(phdr, 0); appendU16LE(phdr, 0);
+    appendU32LE(phdr, 0); appendU32LE(phdr, 0); appendU32LE(phdr, 0);
+    // Terminal "EOP"
+    appendName20(phdr, "EOP"); appendU16LE(phdr, 0); appendU16LE(phdr, 0); appendU16LE(phdr, 1);
+    appendU32LE(phdr, 0); appendU32LE(phdr, 0); appendU32LE(phdr, 0);
+
+    juce::MemoryOutputStream pbag;
+    // Zone 0 -> pgen[0..1], pmod[0]
+    appendU16LE(pbag, 0); appendU16LE(pbag, 0);
+    // Terminal -> pgen[1], pmod[0]
+    appendU16LE(pbag, 1); appendU16LE(pbag, 0);
+
+    juce::MemoryOutputStream pmod;
+    // single terminal zero record (10 bytes)
+    for (int i = 0; i < 10; ++i) { const juce::uint8 z = 0; pmod.write(&z, 1); }
+
+    juce::MemoryOutputStream pgen;
+    // pgen[0]: instrument(41) = 0
+    appendU16LE(pgen, 41); appendU16LE(pgen, 0);
+    // pgen[1]: terminal
+    appendU16LE(pgen, 0); appendU16LE(pgen, 0);
+
+    juce::MemoryOutputStream inst;
+    appendName20(inst, "Inst"); appendU16LE(inst, 0);
+    appendName20(inst, "EOI"); appendU16LE(inst, 1);
+
+    juce::MemoryOutputStream ibag;
+    appendU16LE(ibag, 0); appendU16LE(ibag, 0);
+    appendU16LE(ibag, 4); appendU16LE(ibag, 0);
+
+    juce::MemoryOutputStream imod;
+    for (int i = 0; i < 10; ++i) { const juce::uint8 z = 0; imod.write(&z, 1); }
+
+    juce::MemoryOutputStream igen;
+    // igen[0]: keyRange 48..72
+    appendU16LE(igen, 43); appendU16LE(igen, static_cast<juce::uint16>(48 | (72 << 8)));
+    // igen[1]: velRange 0..127
+    appendU16LE(igen, 44); appendU16LE(igen, static_cast<juce::uint16>(0 | (127 << 8)));
+    // igen[2]: overridingRootKey = 60
+    appendU16LE(igen, 58); appendU16LE(igen, 60);
+    // igen[3]: sampleID = 0 (terminator generator for instrument zone)
+    appendU16LE(igen, 53); appendU16LE(igen, 0);
+    // igen[4]: terminal
+    appendU16LE(igen, 0); appendU16LE(igen, 0);
+
+    juce::MemoryOutputStream shdr;
+    // Sample 0
+    appendName20(shdr, "Sample"); appendU32LE(shdr, 0); appendU32LE(shdr, sampleCount);
+    appendU32LE(shdr, 0); appendU32LE(shdr, sampleCount);
+    appendU32LE(shdr, 44100); { const juce::uint8 root = 60; shdr.write(&root, 1); }
+    { const juce::int8 corr = 0; shdr.write(&corr, 1); }
+    appendU16LE(shdr, 0); appendU16LE(shdr, 1); // sampleType=monoSample
+    // Terminal EOS
+    appendName20(shdr, "EOS"); appendU32LE(shdr, 0); appendU32LE(shdr, 0);
+    appendU32LE(shdr, 0); appendU32LE(shdr, 0);
+    appendU32LE(shdr, 0); { const juce::uint8 root = 0; shdr.write(&root, 1); }
+    { const juce::int8 corr = 0; shdr.write(&corr, 1); }
+    appendU16LE(shdr, 0); appendU16LE(shdr, 0);
+
+    auto writeListChunk = [](juce::MemoryOutputStream& dst, const char* listType,
+                             const std::vector<std::pair<const char*, juce::MemoryBlock>>& subs)
+    {
+        juce::MemoryOutputStream payload;
+        appendFourcc(payload, listType);
+        for (const auto& [tag, blk] : subs)
+        {
+            appendFourcc(payload, tag);
+            appendU32LE(payload, static_cast<juce::uint32>(blk.getSize()));
+            payload.write(blk.getData(), blk.getSize());
+            if (blk.getSize() & 1u) { const juce::uint8 z = 0; payload.write(&z, 1); }
+        }
+        appendFourcc(dst, "LIST");
+        appendU32LE(dst, static_cast<juce::uint32>(payload.getDataSize()));
+        dst.write(payload.getData(), payload.getDataSize());
+    };
+
+    juce::MemoryOutputStream ifil;
+    appendU16LE(ifil, 2); appendU16LE(ifil, 4);
+
+    juce::MemoryOutputStream out;
+    juce::MemoryOutputStream body;
+    appendFourcc(body, "sfbk");
+
+    writeListChunk(body, "INFO", {
+        { "ifil", juce::MemoryBlock(ifil.getData(), ifil.getDataSize()) },
+    });
+    writeListChunk(body, "sdta", {
+        { "smpl", juce::MemoryBlock(smpl.getData(), smpl.getDataSize()) },
+    });
+    writeListChunk(body, "pdta", {
+        { "phdr", juce::MemoryBlock(phdr.getData(), phdr.getDataSize()) },
+        { "pbag", juce::MemoryBlock(pbag.getData(), pbag.getDataSize()) },
+        { "pmod", juce::MemoryBlock(pmod.getData(), pmod.getDataSize()) },
+        { "pgen", juce::MemoryBlock(pgen.getData(), pgen.getDataSize()) },
+        { "inst", juce::MemoryBlock(inst.getData(), inst.getDataSize()) },
+        { "ibag", juce::MemoryBlock(ibag.getData(), ibag.getDataSize()) },
+        { "imod", juce::MemoryBlock(imod.getData(), imod.getDataSize()) },
+        { "igen", juce::MemoryBlock(igen.getData(), igen.getDataSize()) },
+        { "shdr", juce::MemoryBlock(shdr.getData(), shdr.getDataSize()) },
+    });
+
+    appendFourcc(out, "RIFF");
+    appendU32LE(out, static_cast<juce::uint32>(body.getDataSize()));
+    out.write(body.getData(), body.getDataSize());
+    return juce::MemoryBlock(out.getData(), out.getDataSize());
+}
+} // namespace
+
+bool runSf2ImporterMinimalTest()
+{
+    namespace sf = audiocity::engine::sf2;
+
+    const auto tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_sf2_test", ".sf2");
+
+    const auto blob = buildMinimalSf2();
+    if (!tempFile.replaceWithData(blob.getData(), blob.getSize()))
+        return false;
+
+    const auto result = sf::importFile(tempFile);
+    tempFile.deleteFile();
+
+    if (result.hasErrors() || !result.hasPlayableProgram())
+        return false;
+    if (result.availablePresets.size() != 1)
+        return false;
+    if (result.program.zones.size() != 1 || result.program.sampleAssets.size() != 1)
+        return false;
+
+    const auto& z = result.program.zones[0];
+    if (z.keyRange.low != 48 || z.keyRange.high != 72 || z.rootMidiNote != 60)
+        return false;
+    if (result.sampleDataByAsset[0].getNumSamples() != 256)
+        return false;
 
     return true;
 }
@@ -10444,6 +10705,8 @@ int main()
         AUDIOCITY_TEST(runSfzImportChokeGroupPlaybackTest, 135),
         AUDIOCITY_TEST(runSfzImportVelocityCrossfadePlaybackTest, 127),
         AUDIOCITY_TEST(runSfzImporterDiagnosticsTest, 89),
+        AUDIOCITY_TEST(runDecentSamplerImporterTest, 136),
+        AUDIOCITY_TEST(runSf2ImporterMinimalTest, 137),
         AUDIOCITY_TEST(runLegacyNkiProbeDetectsDiscreteSampleReferencesTest, 122),
         AUDIOCITY_TEST(runLegacyNkiProbeRejectsContainerFormatsTest, 123),
         AUDIOCITY_TEST(runLegacyNkiProbeResolvesParentSamplesFolderTest, 124),

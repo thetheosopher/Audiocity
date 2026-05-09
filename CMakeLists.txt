@@ -115,6 +115,8 @@ target_sources(Audiocity
         src/engine/LegacyNkiProbe.cpp
         src/engine/RexLoader.cpp
         src/engine/SfzImporter.cpp
+        src/engine/Sf2Importer.cpp
+        src/engine/DecentSamplerImporter.cpp
         src/engine/VoicePool.cpp)
 
 target_include_directories(Audiocity

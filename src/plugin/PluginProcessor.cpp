@@ -6,6 +6,8 @@
 #include "../engine/LegacyNkiProbe.h"
 #include "../engine/RexSliceProgram.h"
 #include "../engine/SfzImporter.h"
+#include "../engine/Sf2Importer.h"
+#include "../engine/DecentSamplerImporter.h"
 #include "../engine/TransientSliceProgram.h"
 
 #include <algorithm>
@@ -1452,6 +1454,12 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
             case audiocity::plugin::ImportedProgramFormat::nki:
                 restoredSample = importLegacyNkiProgram(importedProgramFile);
                 break;
+            case audiocity::plugin::ImportedProgramFormat::sf2:
+                restoredSample = importSf2Program(importedProgramFile);
+                break;
+            case audiocity::plugin::ImportedProgramFormat::decentSampler:
+                restoredSample = importDecentSamplerProgram(importedProgramFile);
+                break;
             case audiocity::plugin::ImportedProgramFormat::unknown:
             default:
                 restoredSample = false;
@@ -2534,6 +2542,154 @@ bool AudiocityAudioProcessor::importSfzProgram(const juce::File& file)
 
     setImportedProgramMetadata(file,
                                audiocity::plugin::ImportedProgramFormat::sfz,
+                               result.program,
+                               result.sampleDataByAsset,
+                               summary,
+                               static_cast<int>(result.program.zones.size()));
+    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
+    syncSampleDerivedParametersFromEngine();
+    setWaveformViewRange(0, engine_.getLoadedSampleLength());
+    return true;
+}
+
+bool AudiocityAudioProcessor::importSf2Program(const juce::File& file)
+{
+    if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".sf2"))
+    {
+        setLastImportDiagnosticSummary("SF2 import failed: file not found or unsupported extension");
+        return false;
+    }
+
+    auto result = audiocity::engine::sf2::importFile(file);
+    const auto hasPlayableProgram = result.hasPlayableProgram();
+    const auto imported = !result.hasErrors() && hasPlayableProgram;
+    auto summary = audiocity::engine::sf2::buildImportSummary(result, imported);
+    if (!hasPlayableProgram && !result.hasErrors())
+        summary = "SF2 import failed: no playable zones in chosen preset";
+
+    if (!imported)
+    {
+        setLastImportDiagnosticSummary(summary);
+        return false;
+    }
+
+    int displayAssetIndex = -1;
+    for (std::size_t i = 0; i < result.sampleDataByAsset.size(); ++i)
+    {
+        if (result.sampleDataByAsset[i].getNumChannels() > 0
+            && result.sampleDataByAsset[i].getNumSamples() > 0)
+        {
+            displayAssetIndex = static_cast<int>(i);
+            break;
+        }
+    }
+    if (displayAssetIndex < 0)
+    {
+        setLastImportDiagnosticSummary("SF2 import failed: decoded samples were empty");
+        return false;
+    }
+
+    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
+    stopGeneratedWaveformPreview();
+    engine_.panic();
+
+    const auto& displaySample = result.sampleDataByAsset[static_cast<std::size_t>(displayAssetIndex)];
+    const auto& displayAsset = result.program.sampleAssets[static_cast<std::size_t>(displayAssetIndex)];
+    const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
+    engine_.setSampleData(displaySample, displaySampleRate, displayAsset.rootMidiNote);
+    engine_.clearSamplePath();
+    engine_.setProgram(result.program, result.sampleDataByAsset);
+
+    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+        generatedWaveformState_.clear();
+        capturedSampleState_.clear();
+        capturedSampleRateState_ = 44100.0;
+        embeddedSampleState_.clear();
+        embeddedSampleNameState_.clear();
+        embeddedSampleRateState_ = 44100.0;
+        embeddedSampleRootMidiNoteState_ = 60;
+    }
+
+    setImportedProgramMetadata(file,
+                               audiocity::plugin::ImportedProgramFormat::sf2,
+                               result.program,
+                               result.sampleDataByAsset,
+                               summary,
+                               static_cast<int>(result.program.zones.size()));
+    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
+    syncSampleDerivedParametersFromEngine();
+    setWaveformViewRange(0, engine_.getLoadedSampleLength());
+    return true;
+}
+
+bool AudiocityAudioProcessor::importDecentSamplerProgram(const juce::File& file)
+{
+    if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".dspreset"))
+    {
+        setLastImportDiagnosticSummary("DecentSampler import failed: file not found or unsupported extension");
+        return false;
+    }
+
+    auto result = audiocity::engine::dspreset::importFile(file);
+    const auto hasPlayableProgram = result.hasPlayableProgram();
+    const auto imported = !result.hasErrors() && hasPlayableProgram;
+    auto summary = audiocity::engine::dspreset::buildImportSummary(result, imported);
+    if (!hasPlayableProgram && !result.hasErrors())
+        summary = "DecentSampler import failed: no playable zones";
+
+    if (!imported)
+    {
+        setLastImportDiagnosticSummary(summary);
+        return false;
+    }
+
+    int displayAssetIndex = -1;
+    for (std::size_t i = 0; i < result.sampleDataByAsset.size(); ++i)
+    {
+        if (result.sampleDataByAsset[i].getNumChannels() > 0
+            && result.sampleDataByAsset[i].getNumSamples() > 0)
+        {
+            displayAssetIndex = static_cast<int>(i);
+            break;
+        }
+    }
+    if (displayAssetIndex < 0)
+    {
+        setLastImportDiagnosticSummary("DecentSampler import failed: decoded samples were empty");
+        return false;
+    }
+
+    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
+    stopGeneratedWaveformPreview();
+    engine_.panic();
+
+    const auto& displaySample = result.sampleDataByAsset[static_cast<std::size_t>(displayAssetIndex)];
+    const auto& displayAsset = result.program.sampleAssets[static_cast<std::size_t>(displayAssetIndex)];
+    const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
+    engine_.setSampleData(displaySample, displaySampleRate, displayAsset.rootMidiNote);
+    engine_.clearSamplePath();
+    engine_.setProgram(result.program, result.sampleDataByAsset);
+
+    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+        generatedWaveformState_.clear();
+        capturedSampleState_.clear();
+        capturedSampleRateState_ = 44100.0;
+        embeddedSampleState_.clear();
+        embeddedSampleNameState_.clear();
+        embeddedSampleRateState_ = 44100.0;
+        embeddedSampleRootMidiNoteState_ = 60;
+    }
+
+    setImportedProgramMetadata(file,
+                               audiocity::plugin::ImportedProgramFormat::decentSampler,
                                result.program,
                                result.sampleDataByAsset,
                                summary,

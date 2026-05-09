@@ -6,7 +6,8 @@ bool LibraryFileIndex::isSupportedExtension(const juce::String& extensionLower, 
 {
     const auto extension = extensionLower.toLowerCase();
     if (extension == ".wav" || extension == ".aif" || extension == ".aiff"
-        || extension == ".sfz" || extension == ".nki")
+        || extension == ".sfz" || extension == ".nki"
+        || extension == ".sf2" || extension == ".dspreset")
         return true;
 
     return includeRex && (extension == ".rex" || extension == ".rx2");
@@ -31,7 +32,8 @@ std::optional<LibraryFileIndexEntry> LibraryFileIndex::createEntryForFile(
     entry.fileName = file.getFileName();
     entry.extensionLower = file.getFileExtension().toLowerCase();
     entry.sizeBytes = file.getSize();
-    entry.isInstrument = entry.extensionLower == ".sfz" || entry.extensionLower == ".nki";
+    entry.isInstrument = entry.extensionLower == ".sfz" || entry.extensionLower == ".nki"
+        || entry.extensionLower == ".sf2" || entry.extensionLower == ".dspreset";
     return entry;
 }
 

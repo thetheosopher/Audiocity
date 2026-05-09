@@ -6653,6 +6653,10 @@ bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file)
                 return processor_.importSfzProgram(file);
             case audiocity::plugin::ImportedProgramFormat::rex:
                 return processor_.importRexSliceProgram(file);
+            case audiocity::plugin::ImportedProgramFormat::sf2:
+                return processor_.importSf2Program(file);
+            case audiocity::plugin::ImportedProgramFormat::decentSampler:
+                return processor_.importDecentSamplerProgram(file);
             case audiocity::plugin::ImportedProgramFormat::unknown:
             default:
                 return processor_.loadSampleFromFile(file);
