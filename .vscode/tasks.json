@@ -25,11 +25,11 @@
 				"-ExecutionPolicy",
 				"Bypass",
 				"-Command",
-				"$cmake = 'C:/Program Files/Microsoft Visual Studio/2022/Enterprise/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe'; & $cmake --preset release-selfcontained; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & $cmake --build --preset release-selfcontained; exit $LASTEXITCODE"
+				"$cmake = 'C:/Program Files/Microsoft Visual Studio/2022/Enterprise/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe'; & $cmake --preset release-selfcontained-asio; if ($LASTEXITCODE -ne 0) { Write-Host 'Retrying configure after deleting stale release-selfcontained-asio files.'; foreach ($path in @('build/release-selfcontained-asio/CMakeCache.txt', 'build/release-selfcontained-asio/CMakeFiles', 'build/release-selfcontained-asio/_deps/juce-build', 'build/release-selfcontained-asio/_deps/juce-subbuild')) { if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force } }; & $cmake --preset release-selfcontained-asio; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }; & $cmake --build --preset release-selfcontained-asio; exit $LASTEXITCODE"
 			],
 			"group": "build",
 			"problemMatcher": "$msCompile",
-			"detail": "Build Standalone + VST3 in self-contained Release mode"
+			"detail": "Build Standalone + VST3 in self-contained Release mode with ASIO"
 		},
 		{
 			"label": "Release: Build Artifacts",

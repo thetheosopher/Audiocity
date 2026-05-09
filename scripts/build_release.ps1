@@ -1,5 +1,6 @@
 param(
     [switch]$EnableAsio,
+    [switch]$DisableAsio,
     [switch]$SkipTests,
     [switch]$SkipInstaller,
     [switch]$SkipPortableZip,
@@ -26,6 +27,35 @@ function Invoke-External {
     & $FilePath @Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "Command failed with exit code ${LASTEXITCODE}: $FilePath $($Arguments -join ' ')"
+    }
+}
+
+function Invoke-CMakeConfigureWithRetry {
+    param(
+        [string]$Preset,
+        [string]$BuildRoot
+    )
+
+    & 'cmake' '--preset' $Preset
+    if ($LASTEXITCODE -eq 0) {
+        return
+    }
+
+    Write-Step "Retrying configure after deleting stale $Preset files"
+    foreach ($path in @(
+        (Join-Path $BuildRoot 'CMakeCache.txt'),
+        (Join-Path $BuildRoot 'CMakeFiles'),
+        (Join-Path $BuildRoot '_deps\juce-build'),
+        (Join-Path $BuildRoot '_deps\juce-subbuild')
+    )) {
+        if (Test-Path -LiteralPath $path) {
+            Remove-Item -LiteralPath $path -Recurse -Force
+        }
+    }
+
+    & 'cmake' '--preset' $Preset
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed with exit code ${LASTEXITCODE}: cmake --preset $Preset"
     }
 }
 
@@ -96,6 +126,10 @@ if ($SkipInstaller -and $SkipPortableZip) {
     throw 'At least one artifact must be enabled. Remove -SkipInstaller or -SkipPortableZip.'
 }
 
+if ($EnableAsio -and $DisableAsio) {
+    throw 'Use only one of -EnableAsio or -DisableAsio.'
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $outputRoot = Join-Path $repoRoot 'output'
 $stageRoot = Join-Path $outputRoot 'release-stage'
@@ -108,8 +142,10 @@ $portableArtifact = Join-Path $outputRoot "Audiocity-$appVersion-windows-x64-por
 $licensePath = Join-Path $repoRoot 'LICENSE'
 $portableInstructionsPath = Join-Path $repoRoot 'installer\PortableInstall.txt'
 $innoScriptPath = Join-Path $repoRoot 'installer\AudiocityInstaller.iss'
-$configurePreset = if ($EnableAsio) { 'release-selfcontained-asio' } else { 'release-selfcontained' }
+$releaseWithAsio = $EnableAsio -or -not $DisableAsio
+$configurePreset = if ($releaseWithAsio) { 'release-selfcontained-asio' } else { 'release-selfcontained' }
 $buildPreset = $configurePreset
+$defaultBuildRoot = Join-Path $repoRoot 'build'
 $releaseBuildRoot = Join-Path $repoRoot (Join-Path 'build' $buildPreset)
 $standaloneSourceDir = Join-Path $releaseBuildRoot 'Audiocity_artefacts\Release\Standalone'
 $vst3SourceDir = Join-Path $releaseBuildRoot 'Audiocity_artefacts\Release\VST3\Audiocity.vst3'
@@ -118,7 +154,7 @@ Ensure-Directory $outputRoot
 
 if (-not $SkipTests) {
     Write-Step 'Configure debug test build'
-    Invoke-External 'cmake' @('--preset', 'default')
+    Invoke-CMakeConfigureWithRetry -Preset 'default' -BuildRoot $defaultBuildRoot
 
     Write-Step 'Build offline tests'
     Invoke-External 'cmake' @('--build', '--preset', 'default', '--config', 'Debug', '--target', 'audiocity_offline_tests')
@@ -128,7 +164,7 @@ if (-not $SkipTests) {
 }
 
 Write-Step "Configure $configurePreset"
-Invoke-External 'cmake' @('--preset', $configurePreset)
+Invoke-CMakeConfigureWithRetry -Preset $configurePreset -BuildRoot $releaseBuildRoot
 
 Write-Step 'Build self-contained release binaries'
 Invoke-External 'cmake' @('--build', '--preset', $buildPreset)
@@ -159,6 +195,21 @@ Ensure-Directory $portableVst3Stage
 Copy-Item -LiteralPath $vst3SourceDir -Destination (Join-Path $portableVst3Stage 'Audiocity.vst3') -Recurse -Force
 Copy-Item -LiteralPath $licensePath -Destination (Join-Path $portablePackageRoot 'LICENSE') -Force
 Copy-Item -LiteralPath $portableInstructionsPath -Destination (Join-Path $portablePackageRoot 'PortableInstall.txt') -Force
+
+# Stage factory presets so the installer + portable bundle ship the stock bank
+$factoryPresetsSource = Join-Path $repoRoot 'assets\factory_presets'
+if (Test-Path -LiteralPath $factoryPresetsSource) {
+    $portableFactoryDir = Join-Path $portablePackageRoot 'FactoryPresets'
+    Ensure-Directory $portableFactoryDir
+    Copy-Item -Path (Join-Path $factoryPresetsSource '*') -Destination $portableFactoryDir -Recurse -Force
+
+    $portableVst3FactoryDir = Join-Path $portableVst3Stage 'Audiocity.vst3\Contents\Resources\FactoryPresets'
+    Ensure-Directory $portableVst3FactoryDir
+    Copy-Item -Path (Join-Path $factoryPresetsSource '*') -Destination $portableVst3FactoryDir -Recurse -Force
+}
+else {
+    Write-Warning "Factory presets not found at '$factoryPresetsSource'; bank will not be bundled."
+}
 
 if (-not $SkipInstaller) {
     $resolvedInnoCompiler = Resolve-InnoCompiler $InnoSetupCompiler

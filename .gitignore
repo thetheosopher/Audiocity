@@ -56,5 +56,4 @@ Testing/
 *.log
 
 # Release packaging outputs
-/output/release-stage/portable/
-/output/*-portable.zip
+/output/

@@ -128,8 +128,8 @@ Release artifacts are built from a dedicated self-contained preset. The release 
 Configure and build the self-contained release binaries only:
 
 ```bash
-cmake --preset release-selfcontained
-cmake --build --preset release-selfcontained
+cmake --preset release-selfcontained-asio
+cmake --build --preset release-selfcontained-asio
 ```
 
 Build the complete release package set:
@@ -138,10 +138,10 @@ Build the complete release package set:
 ./scripts/build_release.ps1
 ```
 
-Optional ASIO-enabled release build:
+Build the release package set without ASIO:
 
 ```powershell
-./scripts/build_release.ps1 -EnableAsio
+./scripts/build_release.ps1 -DisableAsio
 ```
 
 The release script produces two artifacts in `output/`:

@@ -44,6 +44,11 @@ constexpr auto kZoneLoopMode = "loopMode";
 constexpr auto kGeneratedWaveformData = "generatedWaveformData";
 constexpr auto kCapturedSampleData = "capturedSampleData";
 constexpr auto kCapturedSampleRate = "capturedSampleRate";
+constexpr auto kEmbeddedSampleData = "embeddedSampleData";
+constexpr auto kEmbeddedSampleRate = "embeddedSampleRate";
+constexpr auto kEmbeddedSampleRootMidiNote = "embeddedSampleRootMidiNote";
+constexpr auto kEmbeddedSampleName = "embeddedSampleName";
+constexpr auto kEmbeddedSampleChannels = "embeddedSampleChannels";
 constexpr auto kSampleBrowserRootFolder = "sampleBrowserRootFolder";
 constexpr auto kRootMidiNote = "rootMidiNote";
 constexpr auto kCoarseTuneSemitones = "coarseTuneSemitones";
@@ -1228,6 +1233,18 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
             state.setProperty(kCapturedSampleData, juce::var(capturedBytes), nullptr);
             state.setProperty(kCapturedSampleRate, capturedSampleRateState_, nullptr);
         }
+
+        if (embeddedSampleLoaded_.load(std::memory_order_relaxed) && !embeddedSampleState_.empty())
+        {
+            juce::MemoryBlock embeddedBytes(embeddedSampleState_.size() * sizeof(float));
+            std::memcpy(embeddedBytes.getData(), embeddedSampleState_.data(), embeddedBytes.getSize());
+            state.setProperty(kEmbeddedSampleData, juce::var(embeddedBytes), nullptr);
+            state.setProperty(kEmbeddedSampleRate, embeddedSampleRateState_, nullptr);
+            state.setProperty(kEmbeddedSampleRootMidiNote, embeddedSampleRootMidiNoteState_, nullptr);
+            state.setProperty(kEmbeddedSampleChannels, 1, nullptr);
+            if (embeddedSampleNameState_.isNotEmpty())
+                state.setProperty(kEmbeddedSampleName, embeddedSampleNameState_, nullptr);
+        }
     }
     state.setProperty(kSampleBrowserRootFolder, sampleBrowserRootFolderPath_, nullptr);
     {
@@ -1396,7 +1413,29 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
 
     bool restoredSample = false;
     int restoredSampleSource = 0;
-    if (importedProgramPath.isNotEmpty())
+
+    if (const auto* embeddedData = state.getProperty(kEmbeddedSampleData).getBinaryData(); embeddedData != nullptr)
+    {
+        const auto totalBytes = embeddedData->getSize();
+        if (totalBytes >= sizeof(float) && (totalBytes % sizeof(float)) == 0)
+        {
+            const auto sampleCount = static_cast<int>(totalBytes / sizeof(float));
+            const auto storedSampleRate = juce::jmax(1.0,
+                static_cast<double>(state.getProperty(kEmbeddedSampleRate, 44100.0)));
+            const auto embeddedRoot = juce::jlimit(0, 127,
+                static_cast<int>(state.getProperty(kEmbeddedSampleRootMidiNote, storedRootMidiNote)));
+            const auto embeddedName = state.getProperty(kEmbeddedSampleName, juce::var{}).toString();
+
+            juce::AudioBuffer<float> restoredBuffer(1, sampleCount);
+            std::memcpy(restoredBuffer.getWritePointer(0), embeddedData->getData(), totalBytes);
+
+            loadEmbeddedSampleAsSample(restoredBuffer, storedSampleRate, embeddedRoot, embeddedName);
+            restoredSample = true;
+            restoredSampleSource = 5;
+        }
+    }
+
+    if (!restoredSample && importedProgramPath.isNotEmpty())
     {
         const juce::File importedProgramFile(importedProgramPath);
         switch (audiocity::plugin::readImportedProgramStateFormat(state))
@@ -1499,6 +1538,7 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
 
                 generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
                 capturedAudioLoaded_.store(true, std::memory_order_relaxed);
+                embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
                 {
                     std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
                     generatedWaveformState_.clear();
@@ -1519,10 +1559,15 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     {
         generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
         capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+        embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
         generatedWaveformState_.clear();
         capturedSampleState_.clear();
         capturedSampleRateState_ = 44100.0;
+        embeddedSampleState_.clear();
+        embeddedSampleNameState_.clear();
+        embeddedSampleRateState_ = 44100.0;
+        embeddedSampleRootMidiNoteState_ = 60;
     }
 
     lastStateRestoreSource_.store(restoredSampleSource, std::memory_order_relaxed);
@@ -1814,6 +1859,7 @@ juce::String AudiocityAudioProcessor::getLastStateRestoreSourceLabel() const
         case 2: return "generated";
         case 3: return "captured";
         case 4: return "program";
+        case 5: return "embedded";
         default: return "none";
     }
 }
@@ -2394,11 +2440,16 @@ bool AudiocityAudioProcessor::loadSampleFromFile(const juce::File& file)
     clearImportedProgramMetadata();
     generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
     capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
         generatedWaveformState_.clear();
         capturedSampleState_.clear();
         capturedSampleRateState_ = 44100.0;
+        embeddedSampleState_.clear();
+        embeddedSampleNameState_.clear();
+        embeddedSampleRateState_ = 44100.0;
+        embeddedSampleRootMidiNoteState_ = 60;
     }
 
     suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
@@ -2469,11 +2520,16 @@ bool AudiocityAudioProcessor::importSfzProgram(const juce::File& file)
 
     generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
     capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
         generatedWaveformState_.clear();
         capturedSampleState_.clear();
         capturedSampleRateState_ = 44100.0;
+        embeddedSampleState_.clear();
+        embeddedSampleNameState_.clear();
+        embeddedSampleRateState_ = 44100.0;
+        embeddedSampleRootMidiNoteState_ = 60;
     }
 
     setImportedProgramMetadata(file,
@@ -2542,11 +2598,16 @@ bool AudiocityAudioProcessor::importLegacyNkiProgram(const juce::File& file)
 
     generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
     capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
         generatedWaveformState_.clear();
         capturedSampleState_.clear();
         capturedSampleRateState_ = 44100.0;
+        embeddedSampleState_.clear();
+        embeddedSampleNameState_.clear();
+        embeddedSampleRateState_ = 44100.0;
+        embeddedSampleRootMidiNoteState_ = 60;
     }
 
     setImportedProgramMetadata(file,
@@ -2605,11 +2666,16 @@ bool AudiocityAudioProcessor::importRexSliceProgram(const juce::File& file)
 
     generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
     capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
         generatedWaveformState_.clear();
         capturedSampleState_.clear();
         capturedSampleRateState_ = 44100.0;
+        embeddedSampleState_.clear();
+        embeddedSampleNameState_.clear();
+        embeddedSampleRateState_ = 44100.0;
+        embeddedSampleRootMidiNoteState_ = 60;
     }
 
     setImportedProgramMetadata(file,
@@ -2655,11 +2721,16 @@ bool AudiocityAudioProcessor::importTransientSliceProgram(const juce::File& file
 
     generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
     capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
         generatedWaveformState_.clear();
         capturedSampleState_.clear();
         capturedSampleRateState_ = 44100.0;
+        embeddedSampleState_.clear();
+        embeddedSampleNameState_.clear();
+        embeddedSampleRateState_ = 44100.0;
+        embeddedSampleRootMidiNoteState_ = 60;
     }
 
     setImportedProgramMetadata(file,
@@ -2697,16 +2768,87 @@ void AudiocityAudioProcessor::loadGeneratedWaveformAsSample(const std::vector<fl
         setPlaybackMode(PlaybackMode::loop);
     generatedWaveformLoaded_.store(true, std::memory_order_relaxed);
     capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
         generatedWaveformState_ = waveform;
         capturedSampleState_.clear();
         capturedSampleRateState_ = 44100.0;
+        embeddedSampleState_.clear();
+        embeddedSampleNameState_.clear();
+        embeddedSampleRateState_ = 44100.0;
+        embeddedSampleRootMidiNoteState_ = 60;
     }
     stopGeneratedWaveformPreview();
     suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
     syncSampleDerivedParametersFromEngine();
     setWaveformViewRange(0, engine_.getLoadedSampleLength());
+}
+
+void AudiocityAudioProcessor::loadEmbeddedSampleAsSample(const juce::AudioBuffer<float>& buffer,
+                                                         const double sampleRate,
+                                                         const int rootMidiNote,
+                                                         const juce::String& displayName)
+{
+    if (buffer.getNumChannels() <= 0 || buffer.getNumSamples() <= 0)
+        return;
+
+    const auto clampedRoot = juce::jlimit(0, 127, rootMidiNote);
+    const auto safeRate = juce::jmax(1.0, sampleRate);
+
+    juce::AudioBuffer<float> monoBuffer(1, buffer.getNumSamples());
+    auto* dest = monoBuffer.getWritePointer(0);
+    if (buffer.getNumChannels() == 1)
+    {
+        std::memcpy(dest, buffer.getReadPointer(0),
+            static_cast<std::size_t>(buffer.getNumSamples()) * sizeof(float));
+    }
+    else
+    {
+        const auto* left = buffer.getReadPointer(0);
+        const auto* right = buffer.getReadPointer(1);
+        const auto inv = 0.5f;
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+            dest[i] = (left[i] + right[i]) * inv;
+    }
+
+    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
+    stopGeneratedWaveformPreview();
+    engine_.panic();
+
+    engine_.setSampleData(monoBuffer, safeRate, clampedRoot);
+    engine_.setRootMidiNote(clampedRoot);
+    engine_.clearSamplePath();
+    engine_.clearProgram();
+    clearImportedProgramMetadata();
+
+    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+    embeddedSampleLoaded_.store(true, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+        generatedWaveformState_.clear();
+        capturedSampleState_.clear();
+        capturedSampleRateState_ = 44100.0;
+        embeddedSampleState_.clear();
+        embeddedSampleNameState_.clear();
+        embeddedSampleRateState_ = 44100.0;
+        embeddedSampleRootMidiNoteState_ = 60;
+        embeddedSampleState_.assign(dest, dest + monoBuffer.getNumSamples());
+        embeddedSampleRateState_ = safeRate;
+        embeddedSampleRootMidiNoteState_ = clampedRoot;
+        embeddedSampleNameState_ = displayName;
+    }
+
+    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
+    syncSampleDerivedParametersFromEngine();
+    setWaveformViewRange(0, engine_.getLoadedSampleLength());
+}
+
+juce::String AudiocityAudioProcessor::getEmbeddedSampleName() const
+{
+    std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+    return embeddedSampleNameState_;
 }
 
 juce::String AudiocityAudioProcessor::getLoadedSamplePath() const
@@ -3336,12 +3478,17 @@ bool AudiocityAudioProcessor::loadCapturedAudioAsSample(int startSample, int end
 
     generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
     capturedAudioLoaded_.store(true, std::memory_order_relaxed);
+    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
     engine_.clearProgram();
     clearImportedProgramMetadata();
     {
         std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
         if (capturedSampleState_.empty())
             capturedSampleRateState_ = 44100.0;
+            embeddedSampleState_.clear();
+            embeddedSampleNameState_.clear();
+            embeddedSampleRateState_ = 44100.0;
+            embeddedSampleRootMidiNoteState_ = 60;
     }
 
     engine_.clearSamplePath();

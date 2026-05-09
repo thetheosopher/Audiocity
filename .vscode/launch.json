@@ -30,7 +30,7 @@
       "name": "Release: Audiocity Standalone",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/build/release-selfcontained/Audiocity_artefacts/Release/Standalone/Audiocity.exe",
+      "program": "${workspaceFolder}/build/release-selfcontained-asio/Audiocity_artefacts/Release/Standalone/Audiocity.exe",
       "args": [],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",

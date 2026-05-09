@@ -10077,6 +10077,312 @@ bool runPeakPreviewCacheResetClearsFileTest()
     return loaded.libraryRootPath.isEmpty() && loaded.entries.empty();
 }
 
+// --- Factory / embedded-sample preset tests --------------------------------
+
+namespace factory
+{
+constexpr auto kPatchRoot = "AudiocityPatch";
+constexpr auto kEmbeddedSampleData = "embeddedSampleData";
+constexpr auto kEmbeddedSampleRate = "embeddedSampleRate";
+constexpr auto kEmbeddedSampleRootMidiNote = "embeddedSampleRootMidiNote";
+constexpr auto kEmbeddedSampleName = "embeddedSampleName";
+constexpr auto kEmbeddedSampleChannels = "embeddedSampleChannels";
+constexpr auto kPlaybackMode = "playbackMode";
+constexpr auto kLoopStart = "loopStart";
+constexpr auto kLoopEnd = "loopEnd";
+constexpr auto kLoopCrossfadeSamples = "loopCrossfadeSamples";
+constexpr auto kFilterMode = "filterMode";
+constexpr auto kFilterLfoRate = "filterLfoRate";
+constexpr auto kFilterLfoAmount = "filterLfoAmount";
+constexpr auto kFilterLfoTempoSync = "filterLfoTempoSync";
+constexpr auto kAmpLfoRate = "ampLfoRate";
+constexpr auto kAmpLfoDepth = "ampLfoDepth";
+constexpr auto kPitchLfoRate = "pitchLfoRate";
+constexpr auto kPitchLfoDepth = "pitchLfoDepth";
+constexpr auto kDelayTempoSync = "delayTempoSync";
+constexpr auto kAutopanDepth = "autopanDepth";
+constexpr auto kSaturationDrive = "saturationDrive";
+constexpr auto kSaturationMode = "saturationMode";
+constexpr auto kQualityTier = "qualityTier";
+constexpr auto kMacro1ToFilter = "macro1ToFilter";
+constexpr auto kMacro2ToPitch = "macro2ToPitch";
+constexpr auto kMacro2ToFilter = "macro2ToFilter";
+constexpr auto kMacro2ToAmp = "macro2ToAmp";
+constexpr auto kAftertouchToPitch = "aftertouchToPitch";
+constexpr auto kAftertouchToFilter = "aftertouchToFilter";
+constexpr auto kAftertouchToAmp = "aftertouchToAmp";
+constexpr auto kVelocityToFilter = "velocityToFilter";
+constexpr auto kVelocityToAmp = "velocityToAmp";
+}
+
+bool runEmbeddedSamplePresetRoundTripTest()
+{
+    constexpr int sampleCount = 256;
+    std::vector<float> waveform(sampleCount);
+    for (int i = 0; i < sampleCount; ++i)
+    {
+        const float t = static_cast<float>(i) / static_cast<float>(sampleCount);
+        waveform[static_cast<std::size_t>(i)] = std::sin(juce::MathConstants<float>::twoPi * t);
+    }
+
+    juce::ValueTree state(factory::kPatchRoot);
+    juce::MemoryBlock bytes(waveform.size() * sizeof(float));
+    std::memcpy(bytes.getData(), waveform.data(), bytes.getSize());
+    state.setProperty(factory::kEmbeddedSampleData, juce::var(bytes), nullptr);
+    state.setProperty(factory::kEmbeddedSampleRate, 44100.0, nullptr);
+    state.setProperty(factory::kEmbeddedSampleRootMidiNote, 60, nullptr);
+    state.setProperty(factory::kEmbeddedSampleChannels, 1, nullptr);
+    state.setProperty(factory::kEmbeddedSampleName, juce::String("Round Trip"), nullptr);
+
+    const auto xml = audiocity::plugin::encodePresetXml(state);
+    if (xml.isEmpty())
+        return false;
+
+    juce::ValueTree decoded;
+    juce::String error;
+    if (!audiocity::plugin::decodePresetXml(xml, decoded, error))
+        return false;
+
+    if (!decoded.hasType(factory::kPatchRoot))
+        return false;
+
+    const auto* decodedBytes = decoded.getProperty(factory::kEmbeddedSampleData).getBinaryData();
+    if (decodedBytes == nullptr || decodedBytes->getSize() != bytes.getSize())
+        return false;
+
+    if (std::memcmp(decodedBytes->getData(), bytes.getData(), bytes.getSize()) != 0)
+        return false;
+
+    if (static_cast<int>(decoded.getProperty(factory::kEmbeddedSampleRootMidiNote, -1)) != 60)
+        return false;
+
+    return decoded.getProperty(factory::kEmbeddedSampleName).toString() == "Round Trip";
+}
+
+bool runFactoryPresetBankDiscoveryTest()
+{
+    const auto factoryDir = juce::File(AUDIOCITY_SOURCE_DIR)
+        .getChildFile("assets")
+        .getChildFile("factory_presets");
+
+    if (!factoryDir.isDirectory())
+    {
+        std::fprintf(stderr, "Factory preset directory missing: %s\n",
+            factoryDir.getFullPathName().toRawUTF8());
+        return false;
+    }
+
+    juce::Array<juce::File> presetFiles;
+    factoryDir.findChildFiles(presetFiles, juce::File::TypesOfFileToFind::findFiles, false, "*.acp");
+
+    if (presetFiles.size() < 128)
+    {
+        std::fprintf(stderr, "Factory bank has %d presets; expected >= 128\n", presetFiles.size());
+        return false;
+    }
+
+    int withEmbedded = 0;
+    int sustainedFamilyPresets = 0;
+    int longLoopingPresets = 0;
+    int longEvolvingSources = 0;
+    int filterLfoPresets = 0;
+    int tempoSyncedFilterLfoPresets = 0;
+    int ampLfoPresets = 0;
+    int pitchLfoPresets = 0;
+    int tempoSyncedDelayPresets = 0;
+    int autopanPresets = 0;
+    int saturatedPresets = 0;
+    int nonDefaultSaturationPresets = 0;
+    int ultraQualityPresets = 0;
+    int expressiveMacroPresets = 0;
+    int aftertouchPresets = 0;
+    int velocitySensitivePresets = 0;
+    std::set<int> filterModes;
+    juce::int64 totalBytes = 0;
+    for (const auto& file : presetFiles)
+    {
+        totalBytes += file.getSize();
+        const auto xml = file.loadFileAsString();
+        if (xml.isEmpty())
+            continue;
+        juce::ValueTree state;
+        juce::String err;
+        if (!audiocity::plugin::decodePresetXml(xml, state, err))
+            continue;
+        if (!state.hasType(factory::kPatchRoot))
+            continue;
+        const auto* embeddedData = state.getProperty(factory::kEmbeddedSampleData).getBinaryData();
+        if (embeddedData != nullptr && embeddedData->getSize() >= sizeof(float))
+        {
+            ++withEmbedded;
+
+            const auto embeddedChannels = juce::jmax(1,
+                static_cast<int>(state.getProperty(factory::kEmbeddedSampleChannels, 1)));
+            const auto embeddedSampleFrames = static_cast<int>(embeddedData->getSize() / sizeof(float)) / embeddedChannels;
+            const auto playbackMode = static_cast<int>(state.getProperty(factory::kPlaybackMode, 0));
+
+            filterModes.insert(static_cast<int>(state.getProperty(factory::kFilterMode, 0)));
+            const auto filterLfoRate = static_cast<float>(state.getProperty(factory::kFilterLfoRate, 0.0f));
+            const auto filterLfoAmount = static_cast<float>(state.getProperty(factory::kFilterLfoAmount, 0.0f));
+            if (filterLfoRate > 0.0f && std::abs(filterLfoAmount) > 1.0f)
+                ++filterLfoPresets;
+            if (filterLfoRate > 0.0f && static_cast<int>(state.getProperty(factory::kFilterLfoTempoSync, 0)) == 1)
+                ++tempoSyncedFilterLfoPresets;
+
+            const auto ampLfoRate = static_cast<float>(state.getProperty(factory::kAmpLfoRate, 0.0f));
+            const auto ampLfoDepth = static_cast<float>(state.getProperty(factory::kAmpLfoDepth, 0.0f));
+            if (ampLfoRate > 0.0f && ampLfoDepth > 0.0f)
+                ++ampLfoPresets;
+
+            const auto pitchLfoRate = static_cast<float>(state.getProperty(factory::kPitchLfoRate, 0.0f));
+            const auto pitchLfoDepth = static_cast<float>(state.getProperty(factory::kPitchLfoDepth, 0.0f));
+            if (pitchLfoRate > 0.0f && pitchLfoDepth > 0.0f)
+                ++pitchLfoPresets;
+
+            if (static_cast<int>(state.getProperty(factory::kDelayTempoSync, 0)) == 1)
+                ++tempoSyncedDelayPresets;
+            if (static_cast<float>(state.getProperty(factory::kAutopanDepth, 0.0f)) > 0.0f)
+                ++autopanPresets;
+            if (static_cast<float>(state.getProperty(factory::kSaturationDrive, 0.0f)) > 0.15f)
+                ++saturatedPresets;
+            if (static_cast<int>(state.getProperty(factory::kSaturationMode, 0)) != 0)
+                ++nonDefaultSaturationPresets;
+            if (static_cast<int>(state.getProperty(factory::kQualityTier, 1)) == 2)
+                ++ultraQualityPresets;
+
+            const auto macro2Motion = std::abs(static_cast<float>(state.getProperty(factory::kMacro2ToPitch, 0.0f)))
+                + std::abs(static_cast<float>(state.getProperty(factory::kMacro2ToFilter, 0.0f)))
+                + std::abs(static_cast<float>(state.getProperty(factory::kMacro2ToAmp, 0.0f)));
+            if (std::abs(static_cast<float>(state.getProperty(factory::kMacro1ToFilter, 0.0f))) > 1.0f
+                && macro2Motion > 1.0f)
+                ++expressiveMacroPresets;
+
+            const auto aftertouchMotion = std::abs(static_cast<float>(state.getProperty(factory::kAftertouchToPitch, 0.0f)))
+                + std::abs(static_cast<float>(state.getProperty(factory::kAftertouchToFilter, 0.0f)))
+                + std::abs(static_cast<float>(state.getProperty(factory::kAftertouchToAmp, 0.0f)));
+            if (aftertouchMotion > 0.0f)
+                ++aftertouchPresets;
+
+            if (std::abs(static_cast<float>(state.getProperty(factory::kVelocityToFilter, 0.0f))) > 1.0f
+                && std::abs(static_cast<float>(state.getProperty(factory::kVelocityToAmp, 0.0f))) > 0.0f)
+                ++velocitySensitivePresets;
+
+            if (embeddedSampleFrames >= 2 * 44100)
+                ++longEvolvingSources;
+
+            const auto fileName = file.getFileName();
+            const auto expectsSustainLoop = fileName.contains(" - Bass - ")
+                || fileName.contains(" - Lead - ")
+                || fileName.contains(" - Pad - ")
+                || fileName.contains(" - Ensemble - ")
+                || fileName.contains(" - FX - ");
+
+            if (expectsSustainLoop)
+            {
+                ++sustainedFamilyPresets;
+
+                if (playbackMode != 2)
+                {
+                    std::fprintf(stderr,
+                        "Factory preset is not authored in loop mode: %s (playbackMode=%d)\n",
+                        fileName.toRawUTF8(),
+                        playbackMode);
+                    return false;
+                }
+            }
+
+            if (playbackMode == 2 && embeddedSampleFrames > 4096)
+            {
+                ++longLoopingPresets;
+
+                const auto loopStart = static_cast<int>(state.getProperty(factory::kLoopStart, -1));
+                const auto loopEnd = static_cast<int>(state.getProperty(factory::kLoopEnd, -1));
+                const auto loopCrossfadeSamples = static_cast<int>(state.getProperty(factory::kLoopCrossfadeSamples, -1));
+                const auto loopLength = loopEnd - loopStart + 1;
+
+                if (loopStart <= 0
+                    || loopEnd >= embeddedSampleFrames - 1
+                    || loopEnd <= loopStart
+                    || loopCrossfadeSamples <= 0
+                    || loopCrossfadeSamples > loopLength / 2)
+                {
+                    std::fprintf(stderr,
+                        "Factory preset has invalid sustain loop window: %s (frames=%d, loop=%d-%d, xfade=%d)\n",
+                        file.getFileName().toRawUTF8(),
+                        embeddedSampleFrames,
+                        loopStart,
+                        loopEnd,
+                        loopCrossfadeSamples);
+                    return false;
+                }
+            }
+        }
+    }
+
+    if (withEmbedded < 128)
+    {
+        std::fprintf(stderr, "Factory bank: only %d/%d presets carry embedded audio\n",
+            withEmbedded, presetFiles.size());
+        return false;
+    }
+
+    constexpr juce::int64 kBudgetBytes = 64 * 1024 * 1024; // 64 MB
+    if (totalBytes > kBudgetBytes)
+    {
+        std::fprintf(stderr, "Factory bank exceeds size budget: %lld bytes (limit %lld)\n",
+            static_cast<long long>(totalBytes), static_cast<long long>(kBudgetBytes));
+        return false;
+    }
+
+    if (longLoopingPresets == 0)
+    {
+        std::fprintf(stderr, "Factory bank does not contain any long loop-mode embedded presets\n");
+        return false;
+    }
+
+    if (sustainedFamilyPresets == 0)
+    {
+        std::fprintf(stderr, "Factory bank does not contain any sustained-family presets\n");
+        return false;
+    }
+
+    if (filterModes.size() < 4
+        || filterLfoPresets < 40
+        || ampLfoPresets < 8
+        || pitchLfoPresets < 10
+        || tempoSyncedFilterLfoPresets < 10
+        || tempoSyncedDelayPresets < 36
+        || autopanPresets < 36
+        || saturatedPresets < 32
+        || nonDefaultSaturationPresets < 12
+        || ultraQualityPresets < 64
+        || expressiveMacroPresets < 96
+        || aftertouchPresets < 64
+        || velocitySensitivePresets < 96
+        || longEvolvingSources < 40)
+    {
+        std::fprintf(stderr,
+            "Factory bank underuses engine design surface: modes=%zu filterLfo=%d ampLfo=%d pitchLfo=%d syncedFilterLfo=%d syncedDelay=%d autopan=%d saturated=%d satModes=%d ultra=%d macros=%d aftertouch=%d velocity=%d longSources=%d\n",
+            filterModes.size(),
+            filterLfoPresets,
+            ampLfoPresets,
+            pitchLfoPresets,
+            tempoSyncedFilterLfoPresets,
+            tempoSyncedDelayPresets,
+            autopanPresets,
+            saturatedPresets,
+            nonDefaultSaturationPresets,
+            ultraQualityPresets,
+            expressiveMacroPresets,
+            aftertouchPresets,
+            velocitySensitivePresets,
+            longEvolvingSources);
+        return false;
+    }
+
+    return true;
+}
+
 struct OfflineTestCase
 {
     const char* name = nullptr;
@@ -10213,6 +10519,8 @@ int main()
         AUDIOCITY_TEST(runSettingsUndoHistoryTracksCaptureSettingsTest, 66),
         AUDIOCITY_TEST(runPresetXmlRoundTripWithEmbeddedSampleDataTest, 67),
         AUDIOCITY_TEST(runPresetXmlRejectsInvalidPayloadTest, 68),
+        AUDIOCITY_TEST(runEmbeddedSamplePresetRoundTripTest, 220),
+        AUDIOCITY_TEST(runFactoryPresetBankDiscoveryTest, 221),
         AUDIOCITY_TEST(runLibraryMetadataFavoritesAndRecentsTest, 93),
         AUDIOCITY_TEST(runLibraryMetadataValueTreeRoundTripTest, 94),
         AUDIOCITY_TEST(runLibraryMetadataBookmarksTest, 95),

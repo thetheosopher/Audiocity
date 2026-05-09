@@ -18,8 +18,10 @@ AppId={{7A0C79C3-8AB4-4FD7-9B3C-B00FC2D98EB4}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
-AppPublisher=Audiocity
+AppPublisher=Michael A. McCloskey
 AppCopyright=Copyright (c) 2026 Michael A. McCloskey
+VersionInfoCompany=Michael A. McCloskey
+VersionInfoCopyright=Copyright (c) 2026 Michael A. McCloskey
 AppPublisherURL=https://github.com/thetheosopher/Audiocity
 AppSupportURL=https://github.com/thetheosopher/Audiocity
 AppUpdatesURL=https://github.com/thetheosopher/Audiocity
@@ -56,6 +58,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Files]
 Source: "{#SourceRoot}\standalone\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: standalone
 Source: "{#SourceRoot}\VST3\Audiocity.vst3\*"; DestDir: "{code:GetVst3InstallDir}\Audiocity.vst3"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: vst3
+Source: "..\assets\factory_presets\*"; DestDir: "{app}\FactoryPresets"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: standalone
+Source: "..\assets\factory_presets\*"; DestDir: "{code:GetVst3InstallDir}\Audiocity.vst3\Contents\Resources\FactoryPresets"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: vst3
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion; Components: standalone
 
 [Icons]

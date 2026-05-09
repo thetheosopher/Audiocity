@@ -1,0 +1,49 @@
+Preset CMake variables:
+
+  AUDIOCITY_ASIO_SDK_DIR="C:/Projects/Applications/Audiocity/third_party/asiosdk"
+  AUDIOCITY_ENABLE_ASIO="ON"
+  AUDIOCITY_SELF_CONTAINED_RUNTIME="ON"
+
+-- Selecting Windows SDK version 10.0.26100.0 to target Windows 10.0.19045.
+-- The C compiler identification is MSVC 19.44.35226.0
+-- The CXX compiler identification is MSVC 19.44.35226.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Configuring juceaide
+-- Building juceaide
+-- Exporting juceaide
+-- Testing juceaide
+-- Finished setting up juceaide
+CMake Warning (dev) at build/release-selfcontained-asio/_deps/juce-src/extras/Build/CMake/JUCEUtils.cmake:883 (add_custom_command):
+  The following keywords are not supported when using
+  add_custom_command(TARGET): DEPENDS.
+
+  Policy CMP0175 is not set: add_custom_command() rejects invalid arguments.
+  Run "cmake --help-policy CMP0175" for policy details.  Use the cmake_policy
+  command to set the policy and suppress this warning.
+Call Stack (most recent call first):
+  build/release-selfcontained-asio/_deps/juce-src/extras/Build/CMake/JUCEUtils.cmake:1218 (_juce_create_windows_package)
+  build/release-selfcontained-asio/_deps/juce-src/extras/Build/CMake/JUCEUtils.cmake:1460 (_juce_set_plugin_target_properties)
+  build/release-selfcontained-asio/_deps/juce-src/extras/Build/CMake/JUCEUtils.cmake:1597 (_juce_link_plugin_wrapper)
+  build/release-selfcontained-asio/_deps/juce-src/extras/Build/CMake/JUCEUtils.cmake:2190 (_juce_configure_plugin_targets)
+  CMakeLists.txt:61 (juce_add_plugin)
+This warning is for project developers.  Use -Wno-dev to suppress it.
+
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Failed
+-- Looking for pthread_create in pthreads
+-- Looking for pthread_create in pthreads - not found
+-- Looking for pthread_create in pthread
+-- Looking for pthread_create in pthread - not found
+-- Found Threads: TRUE
+-- Configuring done (133.2s)
+-- Generating done (0.5s)
+-- Build files have been written to: C:/Projects/Applications/Audiocity/build/release-selfcontained-asio

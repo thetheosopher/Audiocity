@@ -5,6 +5,7 @@ else ()
 endif ()
 
 file(READ "${_audiocity_source_dir}/CMakePresets.json" _audiocity_presets)
+file(READ "${_audiocity_source_dir}/CMakeLists.txt" _audiocity_root_cmake)
 file(READ "${_audiocity_source_dir}/installer/AudiocityInstaller.iss" _audiocity_installer_iss)
 file(READ "${_audiocity_source_dir}/scripts/build_release.ps1" _audiocity_build_release)
 file(READ "${_audiocity_source_dir}/installer/PortableInstall.txt" _audiocity_portable_install)
@@ -69,8 +70,12 @@ if (NOT _audiocity_build_release MATCHES "Invoke-External 'cmake' @")
     message(FATAL_ERROR "build_release.ps1 must invoke CMake through Invoke-External.")
 endif ()
 
-if (NOT _audiocity_build_release MATCHES "'--preset', \\$configurePreset")
-    message(FATAL_ERROR "build_release.ps1 must configure CMake using the selected self-contained preset.")
+if (NOT _audiocity_build_release MATCHES "Invoke-CMakeConfigureWithRetry -Preset \\$configurePreset")
+    message(FATAL_ERROR "build_release.ps1 must configure CMake through the retry helper using the selected self-contained preset.")
+endif ()
+
+if (NOT _audiocity_root_cmake MATCHES "TARGET_FILE_DIR:Audiocity_VST3>/\.\./Resources/FactoryPresets")
+    message(FATAL_ERROR "CMakeLists.txt must copy factory presets into the VST3 bundle's Contents/Resources directory.")
 endif ()
 
 if (NOT _audiocity_build_release MATCHES "Compress-Archive")

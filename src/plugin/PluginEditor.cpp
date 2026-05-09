@@ -2058,7 +2058,12 @@ void AudiocityAudioProcessorEditor::WaveformView::mouseDrag(const juce::MouseEve
 {
     if (dragMode_ == DragMode::pan)
     {
-        panByPixels(static_cast<float>(event.getDistanceFromDragStartX()));
+        const auto samplesPerPixel = static_cast<double>(juce::jmax(1, viewSampleCount_))
+            / static_cast<double>(juce::jmax(1, getWidth()));
+        viewStartSample_ = dragAnchorViewStart_
+            - static_cast<int>(std::round(static_cast<double>(event.getDistanceFromDragStartX()) * samplesPerPixel));
+        clampView();
+        repaint();
         return;
     }
 
@@ -2194,15 +2199,18 @@ void AudiocityAudioProcessorEditor::WaveformView::mouseDoubleClick(const juce::M
 void AudiocityAudioProcessorEditor::WaveformView::mouseWheelMove(
     const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
 {
-    if (event.mods.isCommandDown())
+    const auto panAmount = (wheel.deltaX != 0.0f ? wheel.deltaX : wheel.deltaY) * 120.0f;
+    if (event.mods.isShiftDown() || wheel.deltaX != 0.0f)
     {
-        const auto zoomFactor = wheel.deltaY > 0.0f ? 0.85f : 1.2f;
-        zoomAround(event.position.x, zoomFactor);
+        panByPixels(-panAmount);
         return;
     }
 
-    const auto panAmount = (wheel.deltaX != 0.0f ? wheel.deltaX : wheel.deltaY) * 120.0f;
-    panByPixels(-panAmount);
+    if (wheel.deltaY != 0.0f)
+    {
+        const auto zoomFactor = wheel.deltaY > 0.0f ? 0.85f : 1.2f;
+        zoomAround(event.position.x, zoomFactor);
+    }
 }
 
 void MappingOverviewComponent::setRows(std::vector<audiocity::plugin::ProgramZoneListRow> rows)
@@ -9370,6 +9378,59 @@ juce::File AudiocityAudioProcessorEditor::getPresetDirectory() const
         .getChildFile("Presets");
 }
 
+juce::Array<juce::File> AudiocityAudioProcessorEditor::getFactoryPresetDirectories() const
+{
+    juce::Array<juce::File> dirs;
+
+    auto addIfExists = [&dirs](const juce::File& candidate)
+    {
+        if (candidate.isDirectory())
+        {
+            for (const auto& existing : dirs)
+                if (existing.getFullPathName().equalsIgnoreCase(candidate.getFullPathName()))
+                    return;
+            dirs.add(candidate);
+        }
+    };
+
+    const auto exeFile = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
+    auto exeDir = exeFile.getParentDirectory();
+    for (int up = 0; up < 4 && exeDir.exists(); ++up)
+    {
+        addIfExists(exeDir.getChildFile("FactoryPresets"));
+        exeDir = exeDir.getParentDirectory();
+    }
+
+    const auto appFile = juce::File::getSpecialLocation(juce::File::currentApplicationFile);
+    auto appDir = appFile.getParentDirectory();
+    for (int up = 0; up < 6 && appDir.exists(); ++up)
+    {
+        addIfExists(appDir.getChildFile("FactoryPresets"));
+        addIfExists(appDir.getChildFile("Contents").getChildFile("Resources").getChildFile("FactoryPresets"));
+        appDir = appDir.getParentDirectory();
+    }
+
+#if defined(AUDIOCITY_SOURCE_DIR)
+    addIfExists(juce::File(AUDIOCITY_SOURCE_DIR).getChildFile("assets").getChildFile("factory_presets"));
+#endif
+
+    return dirs;
+}
+
+bool AudiocityAudioProcessorEditor::isFactoryPresetFile(const juce::File& file) const
+{
+    if (!file.existsAsFile())
+        return false;
+
+    const auto candidate = file.getFullPathName();
+    for (const auto& dir : getFactoryPresetDirectories())
+    {
+        if (candidate.startsWithIgnoreCase(dir.getFullPathName()))
+            return true;
+    }
+    return false;
+}
+
 juce::String AudiocityAudioProcessorEditor::sanitizePresetName(const juce::String& rawName)
 {
     auto name = rawName.trim();
@@ -9405,11 +9466,12 @@ void AudiocityAudioProcessorEditor::updatePresetActionButtons()
 {
     const auto selectedFile = getSelectedPresetFile();
     const auto hasSelection = selectedFile.existsAsFile();
+    const auto isFactory = hasSelection && isFactoryPresetFile(selectedFile);
     const auto hasLoadedSample = processor_.getLoadedSampleLength() > 0;
 
     presetSaveButton_.setEnabled(hasLoadedSample);
-    presetRenameButton_.setEnabled(hasSelection);
-    presetDeleteButton_.setEnabled(hasSelection);
+    presetRenameButton_.setEnabled(hasSelection && !isFactory);
+    presetDeleteButton_.setEnabled(hasSelection && !isFactory);
 }
 
 void AudiocityAudioProcessorEditor::refreshPresetList(const juce::String& preferredPresetName)
@@ -9433,8 +9495,29 @@ void AudiocityAudioProcessorEditor::refreshPresetList(const juce::String& prefer
             presetDirectory.createDirectory();
 
         juce::Array<juce::File> presetFiles;
-        presetDirectory.findChildFiles(presetFiles, juce::File::TypesOfFileToFind::findFiles, false,
+
+        for (const auto& factoryDir : getFactoryPresetDirectories())
+        {
+            juce::Array<juce::File> factoryFiles;
+            factoryDir.findChildFiles(factoryFiles, juce::File::TypesOfFileToFind::findFiles, true,
+                juce::String("*") + kPresetFileExtension);
+            for (const auto& f : factoryFiles)
+                presetFiles.add(f);
+        }
+
+        juce::Array<juce::File> userFiles;
+        presetDirectory.findChildFiles(userFiles, juce::File::TypesOfFileToFind::findFiles, false,
             juce::String("*") + kPresetFileExtension);
+
+        juce::StringArray seenNames;
+        for (const auto& f : presetFiles)
+            seenNames.add(f.getFileNameWithoutExtension().toLowerCase());
+
+        for (const auto& f : userFiles)
+        {
+            if (!seenNames.contains(f.getFileNameWithoutExtension().toLowerCase()))
+                presetFiles.add(f);
+        }
 
         std::sort(presetFiles.begin(), presetFiles.end(), [](const juce::File& a, const juce::File& b)
         {

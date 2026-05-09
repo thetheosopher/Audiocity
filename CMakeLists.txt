@@ -59,7 +59,8 @@ else ()
 endif ()
 
 juce_add_plugin(Audiocity
-    COMPANY_NAME "Audiocity"
+        COMPANY_NAME "Michael A. McCloskey"
+        COMPANY_COPYRIGHT "Copyright (c) 2026 Michael A. McCloskey"
     BUNDLE_ID "com.audiocity.plugin"
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
@@ -166,7 +167,52 @@ if (EXISTS "${AUDIOCITY_REX_DEPLOY_DLL}")
     endforeach ()
 endif ()
 
+# Copy the stock factory preset bank next to the freshly-built binaries so
+# developers can browse them without running the installer first.
+set(AUDIOCITY_FACTORY_PRESETS_DIR "${CMAKE_SOURCE_DIR}/assets/factory_presets")
+if (EXISTS "${AUDIOCITY_FACTORY_PRESETS_DIR}")
+    if (TARGET Audiocity_Standalone)
+        add_custom_command(TARGET Audiocity_Standalone POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${AUDIOCITY_FACTORY_PRESETS_DIR}"
+                "$<TARGET_FILE_DIR:Audiocity_Standalone>/FactoryPresets")
+    endif ()
+    if (TARGET Audiocity_VST3)
+        add_custom_command(TARGET Audiocity_VST3 POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${AUDIOCITY_FACTORY_PRESETS_DIR}"
+                "$<TARGET_FILE_DIR:Audiocity_VST3>/../Resources/FactoryPresets")
+    endif ()
+endif ()
+
 include(CTest)
 if (BUILD_TESTING)
     add_subdirectory(tests)
+endif ()
+
+# ---- Stock preset authoring tool -------------------------------------------
+# Standalone offline executable that synthesizes embedded-sample factory
+# presets and writes them to the assets/factory_presets directory.
+add_executable(audiocity_preset_author
+    tools/PresetAuthor.cpp
+    src/plugin/PresetJson.cpp)
+
+target_include_directories(audiocity_preset_author PRIVATE src)
+
+target_compile_definitions(audiocity_preset_author
+    PRIVATE
+        AUDIOCITY_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0)
+
+target_link_libraries(audiocity_preset_author
+    PRIVATE
+        juce::juce_core
+        juce::juce_data_structures
+        juce::juce_audio_basics
+        juce::juce_audio_formats
+        juce::juce_recommended_config_flags)
+
+if (MSVC)
+    target_compile_options(audiocity_preset_author PRIVATE /W4 /permissive-)
 endif ()

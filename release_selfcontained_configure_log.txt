@@ -1,0 +1,20 @@
+Preset CMake variables:
+
+  AUDIOCITY_ASIO_SDK_DIR="C:/Projects/Applications/Audiocity/third_party/asiosdk"
+  AUDIOCITY_ENABLE_ASIO="ON"
+  AUDIOCITY_SELF_CONTAINED_RUNTIME="ON"
+
+CMake Error at CMakeLists.txt:3 (project):
+  Generator
+
+    Visual Studio 17 2022
+
+  could not find specified instance of Visual Studio:
+
+    C:/Program Files/Microsoft Visual Studio/18/Enterprise
+
+  The directory exists, but the instance is not known to the Visual Studio
+  Installer, and no 'version=' field was given.
+
+
+-- Configuring incomplete, errors occurred!

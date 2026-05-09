@@ -991,6 +991,8 @@ private:
     void setupTooltips();
     void saveStateToFile();
     [[nodiscard]] juce::File getPresetDirectory() const;
+    [[nodiscard]] juce::Array<juce::File> getFactoryPresetDirectories() const;
+    [[nodiscard]] bool isFactoryPresetFile(const juce::File& file) const;
     [[nodiscard]] static juce::String sanitizePresetName(const juce::String& rawName);
     [[nodiscard]] juce::File presetFileForName(const juce::String& presetName) const;
     [[nodiscard]] juce::File getSelectedPresetFile() const;

@@ -107,6 +107,15 @@ public:
     {
         return capturedAudioLoaded_.load(std::memory_order_relaxed);
     }
+    [[nodiscard]] bool isEmbeddedSampleLoaded() const noexcept
+    {
+        return embeddedSampleLoaded_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] juce::String getEmbeddedSampleName() const;
+    void loadEmbeddedSampleAsSample(const juce::AudioBuffer<float>& buffer,
+                                    double sampleRate,
+                                    int rootMidiNote,
+                                    const juce::String& displayName);
     void setSampleBrowserRootFolder(const juce::String& folderPath) { sampleBrowserRootFolderPath_ = folderPath; }
     [[nodiscard]] juce::String getSampleBrowserRootFolder() const { return sampleBrowserRootFolderPath_; }
     void setLibraryFavorite(const juce::String& filePath, bool shouldBeFavorite);
@@ -424,13 +433,18 @@ private:
     std::atomic<float> hostBpm_{ 120.0f };
     std::atomic<bool> generatedWaveformLoaded_{ false };
     std::atomic<bool> capturedAudioLoaded_{ false };
+    std::atomic<bool> embeddedSampleLoaded_{ false };
     std::atomic<bool> importedProgramLoaded_{ false };
     std::atomic<int> importedProgramZoneCount_{ 0 };
-    std::atomic<int> lastStateRestoreSource_{ 0 }; // 0=none, 1=file, 2=generated, 3=captured, 4=imported-program
+    std::atomic<int> lastStateRestoreSource_{ 0 }; // 0=none, 1=file, 2=generated, 3=captured, 4=imported-program, 5=embedded-sample
     mutable std::mutex generatedWaveformStateMutex_;
     mutable std::mutex importedProgramStateMutex_;
     std::vector<float> generatedWaveformState_;
     std::vector<float> capturedSampleState_;
+    std::vector<float> embeddedSampleState_;
+    double embeddedSampleRateState_ = 44100.0;
+    int embeddedSampleRootMidiNoteState_ = 60;
+    juce::String embeddedSampleNameState_;
     juce::String importedProgramPath_;
     audiocity::plugin::ImportedProgramFormat importedProgramFormat_ = audiocity::plugin::ImportedProgramFormat::unknown;
     juce::String importedProgramName_;
