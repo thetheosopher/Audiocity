@@ -8189,6 +8189,15 @@ void AudiocityAudioProcessorEditor::resized()
     if (currentTabIndex_ == 2)
     {
         auto mappingArea = area.reduced(8, 6);
+        constexpr int kMappingOverviewPreferredHeight = 150;
+        constexpr int kMappingOverviewMinimumHeight = 72;
+        constexpr int kMappingEditRowHeight = 18;
+        constexpr int kMappingEditRowGap = 2;
+        constexpr int kMappingEditRowCount = 19;
+        constexpr int kMappingEditApplyRowHeight = 24;
+        constexpr int kMappingOverviewGap = 4;
+        const int kMappingEditRequiredHeight =
+            (kMappingEditRowCount * (kMappingEditRowHeight + kMappingEditRowGap)) + kMappingEditApplyRowHeight;
 
         auto header = mappingArea.removeFromTop(30);
         mappingRefreshButton_.setBounds(header.removeFromRight(86));
@@ -8204,8 +8213,12 @@ void AudiocityAudioProcessorEditor::resized()
         mappingSummaryLabel_.setBounds(header);
 
         mappingArea.removeFromTop(4);
-        mappingOverview_.setBounds(mappingArea.removeFromTop(150));
-        mappingArea.removeFromTop(4);
+        const auto mappingOverviewHeight = juce::jlimit(
+            kMappingOverviewMinimumHeight,
+            kMappingOverviewPreferredHeight,
+            juce::jmax(kMappingOverviewMinimumHeight, mappingArea.getHeight() - kMappingEditRequiredHeight - kMappingOverviewGap));
+        mappingOverview_.setBounds(mappingArea.removeFromTop(mappingOverviewHeight));
+        mappingArea.removeFromTop(kMappingOverviewGap);
 
         const auto detailWidth = juce::jlimit(220, 360, mappingArea.getWidth() / 3);
         auto details = mappingArea.removeFromRight(detailWidth);
