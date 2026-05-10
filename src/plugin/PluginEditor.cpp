@@ -57,7 +57,7 @@ public:
     void drawTabButton(juce::TabBarButton& button, juce::Graphics& g,
                        bool isMouseOver, bool isMouseDown) override
     {
-        auto area = button.getActiveArea().toFloat().reduced(4.0f, 5.0f);
+        auto area = button.getActiveArea().toFloat().reduced(5.0f, 3.0f);
         const bool isFront = button.isFrontTab();
 
         if (isFront)
@@ -118,6 +118,11 @@ TabTextLookAndFeel& getTabTextLookAndFeel()
     static TabTextLookAndFeel lookAndFeel;
     return lookAndFeel;
 }
+
+constexpr int kEditorTabBarHeight = 34;
+constexpr int kEditorTabBarGap = 8;
+constexpr int kSamplePresetBarHeight = 32;
+constexpr int kSamplePresetControlHeight = 28;
 
 constexpr auto kPresetFileExtension = ".acp";
 
@@ -257,6 +262,8 @@ constexpr int kCollapsedSampleInspectorCardHeight = 36;
 constexpr int kSampleOutputInspectorCardHeight = 186;
 constexpr int kExpandedSampleFilterModInspectorCardHeight = 282;
 constexpr int kExpandedSampleEffectsInspectorCardHeight = 230;
+constexpr int kSectionCardToggleWidth = 60;
+constexpr int kSectionCardToggleRightPadding = 18;
 
 int getSampleInspectorCardHeight(const bool expanded, const int expandedHeight) noexcept
 {
@@ -269,10 +276,11 @@ juce::Rectangle<int> getSampleInspectorCardHeaderBounds(juce::Rectangle<int> bou
     return bounds;
 }
 
-juce::Rectangle<int> getSampleInspectorCardToggleBounds(juce::Rectangle<int> bounds)
+juce::Rectangle<int> getSectionCardToggleBounds(juce::Rectangle<int> bounds)
 {
     auto headerBounds = getSampleInspectorCardHeaderBounds(bounds);
-    return headerBounds.removeFromRight(54);
+    auto toggleBounds = headerBounds.removeFromRight(kSectionCardToggleWidth + kSectionCardToggleRightPadding);
+    return toggleBounds.withTrimmedRight(kSectionCardToggleRightPadding);
 }
 
 void paintSampleInspectorCardToggle(juce::Graphics& g,
@@ -282,10 +290,9 @@ void paintSampleInspectorCardToggle(juce::Graphics& g,
     if (bounds.isEmpty())
         return;
 
-    auto toggleBounds = getSampleInspectorCardToggleBounds(bounds).withTrimmedRight(8);
     g.setColour(expanded ? uiTextStrongColour() : uiTextMutedColour().brighter(0.08f));
     g.setFont(juce::Font(juce::FontOptions(10.5f)).boldened());
-    g.drawText(expanded ? "- Hide" : "+ Show", toggleBounds, juce::Justification::centredRight, false);
+    g.drawText(expanded ? "- Hide" : "+ Show", getSectionCardToggleBounds(bounds), juce::Justification::centredRight, false);
 }
 
 enum class SampleLayoutMode
@@ -3164,7 +3171,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 
     addAndMakeVisible(tabBar_);
     tabBar_.setLookAndFeel(&getTabTextLookAndFeel());
-    tabBar_.setTabBarDepth(34);
+    tabBar_.setTabBarDepth(kEditorTabBarHeight);
     tabBar_.setColour(juce::TabbedButtonBar::frontTextColourId, uiTextStrongColour());
     tabBar_.setColour(juce::TabbedButtonBar::tabTextColourId, uiTextMutedColour());
     tabBar_.addTab("Sample", uiPanelColour(), &tabSamplePage_, false);
@@ -3873,6 +3880,8 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 
     addAndMakeVisible(presetFilterEditor_);
     presetFilterEditor_.setTextToShowWhenEmpty("Find preset...", juce::Colours::grey);
+    presetFilterEditor_.applyFontToAllText(juce::Font(juce::FontOptions(13.0f)));
+    presetFilterEditor_.setIndents(10, 4);
     presetFilterEditor_.onTextChange = [this]
     {
         refreshPresetList(currentPresetName_);
@@ -7638,15 +7647,14 @@ int AudiocityAudioProcessorEditor::getAvailableSampleAdvancedInspectorHeight(con
 {
     constexpr int kSampleInfoCardHeight = 278;
     constexpr int kSampleProgramMapCardHeight = 188;
-    constexpr int kTopBarH = 36;
     constexpr int kTopGap = 10;
     constexpr int kMargin = 14;
 
-    int availableHeight = getHeight() - (kMargin * 2) - 30 - 8;
+    int availableHeight = getHeight() - (kMargin * 2) - kEditorTabBarHeight - kEditorTabBarGap;
     if (shouldShowPersistentPerformanceStrip())
         availableHeight -= computePersistentPerformanceStripHeight(availableHeight) + kTopGap;
 
-    availableHeight -= kTopBarH + kTopGap;
+    availableHeight -= kSamplePresetBarHeight + kTopGap;
     availableHeight -= kSampleInfoCardHeight + kTopGap;
     if (reserveProgramMap)
         availableHeight -= kSampleProgramMapCardHeight + kTopGap;
@@ -8121,13 +8129,12 @@ void AudiocityAudioProcessorEditor::resized()
     constexpr int kStackGap = 2;
     constexpr int kStackColGap = kDialGap + 8;
     constexpr int kRowH     = kGrpHdr + kGrpPadV + kDialH + kGrpPadV;  // 134
-    constexpr int kTopBarH  = 36;
 
     updateTabVisibility();
 
     auto content = getLocalBounds().reduced(kMargin);
-    tabBar_.setBounds(content.removeFromTop(30));
-    content.removeFromTop(8);
+    tabBar_.setBounds(content.removeFromTop(kEditorTabBarHeight));
+    content.removeFromTop(kEditorTabBarGap);
     auto area = content;
     juce::Rectangle<int> browserRailArea;
     juce::Rectangle<int> performanceStripArea;
@@ -8402,28 +8409,29 @@ void AudiocityAudioProcessorEditor::resized()
 
     // ── Top bar: load + presets + diagnostics toggle ──
     {
-        auto topRow = area.removeFromTop(kTopBarH);
-        loadButton_.setBounds(topRow.removeFromLeft(74));
-        topRow.removeFromLeft(10);
+        auto topRow = area.removeFromTop(kSamplePresetBarHeight);
+        auto controlRow = topRow.withSizeKeepingCentre(topRow.getWidth(), kSamplePresetControlHeight);
+        loadButton_.setBounds(controlRow.removeFromLeft(74));
+        controlRow.removeFromLeft(10);
 
-        diagnosticsToggleButton_.setBounds(topRow.removeFromRight(58));
-        topRow.removeFromRight(6);
-        sampleInspectorRailToggleButton_.setBounds(topRow.removeFromRight(60));
-        topRow.removeFromRight(6);
-        sampleBrowserRailToggleButton_.setBounds(topRow.removeFromRight(60));
-        topRow.removeFromRight(8);
-        presetDeleteButton_.setBounds(topRow.removeFromRight(68));
-        topRow.removeFromRight(6);
-        presetRenameButton_.setBounds(topRow.removeFromRight(76));
-        topRow.removeFromRight(6);
-        presetSaveButton_.setBounds(topRow.removeFromRight(60));
-        topRow.removeFromRight(10);
-        const auto presetComboWidth = juce::jmin(190, juce::jmax(160, topRow.getWidth() / 3));
-        presetCombo_.setBounds(topRow.removeFromRight(presetComboWidth));
-        topRow.removeFromRight(8);
-        presetCountLabel_.setBounds(topRow.removeFromRight(96));
-        topRow.removeFromRight(8);
-        presetFilterEditor_.setBounds(topRow);
+        diagnosticsToggleButton_.setBounds(controlRow.removeFromRight(58));
+        controlRow.removeFromRight(6);
+        sampleInspectorRailToggleButton_.setBounds(controlRow.removeFromRight(60));
+        controlRow.removeFromRight(6);
+        sampleBrowserRailToggleButton_.setBounds(controlRow.removeFromRight(60));
+        controlRow.removeFromRight(8);
+        presetDeleteButton_.setBounds(controlRow.removeFromRight(68));
+        controlRow.removeFromRight(6);
+        presetRenameButton_.setBounds(controlRow.removeFromRight(76));
+        controlRow.removeFromRight(6);
+        presetSaveButton_.setBounds(controlRow.removeFromRight(60));
+        controlRow.removeFromRight(10);
+        const auto presetComboWidth = juce::jmin(190, juce::jmax(160, controlRow.getWidth() / 3));
+        presetCombo_.setBounds(controlRow.removeFromRight(presetComboWidth));
+        controlRow.removeFromRight(8);
+        presetCountLabel_.setBounds(controlRow.removeFromRight(96));
+        controlRow.removeFromRight(8);
+        presetFilterEditor_.setBounds(controlRow);
     }
 
     area.removeFromTop(kGrpGap);
@@ -9325,8 +9333,8 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
     g.fillRect(0, 6, getWidth(), 1);
 
     auto content = getLocalBounds().reduced(kMargin);
-    content.removeFromTop(30);
-    content.removeFromTop(8);
+    content.removeFromTop(kEditorTabBarHeight);
+    content.removeFromTop(kEditorTabBarGap);
     juce::Rectangle<int> browserRailArea;
     juce::Rectangle<int> performanceStripArea;
     const bool showBrowserRail = shouldShowPersistentBrowserRail();
@@ -10573,12 +10581,9 @@ void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const
         if (!group.collapsible)
             continue;
 
-        auto headerBounds = group.bounds;
-        headerBounds.setHeight(24);
-        auto toggleBounds = headerBounds.removeFromRight(54);
         g.setColour(group.expanded ? uiTextStrongColour() : uiTextMutedColour().brighter(0.08f));
         g.setFont(juce::Font(juce::FontOptions(10.5f)).boldened());
-        g.drawText(group.expanded ? "- Hide" : "+ Show", toggleBounds, juce::Justification::centredRight, false);
+        g.drawText(group.expanded ? "- Hide" : "+ Show", getSectionCardToggleBounds(group.bounds), juce::Justification::centredRight, false);
     }
 }
 

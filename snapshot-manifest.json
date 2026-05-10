@@ -38,14 +38,14 @@
     {
         "fileName":  "sample.png",
         "relativePath":  "sample.png",
-        "sizeBytes":  77987,
-        "sha256":  "654befe5bab63e68e84052893e6a3f1ab56167cfde4734280e2dfd9676b0d6f0"
+        "sizeBytes":  77983,
+        "sha256":  "b6c6bb9c6976e87fdd9bb8c990a7aab031ac5a1e502592d6054f4fb73b275bb7"
     },
     {
         "fileName":  "sample_browser_only.png",
         "relativePath":  "sample_browser_only.png",
-        "sizeBytes":  82915,
-        "sha256":  "87592e9273eca6d3b1e46eabbe32cddb05ae64d6ba91f1fb02c7f3cf022b7afe"
+        "sizeBytes":  82914,
+        "sha256":  "deec3b8a57e9fa0a96ca957d142343d55c0e81c1e1a7e2825d676012d4303b8a"
     },
     {
         "fileName":  "sample_modulation.png",
@@ -56,49 +56,49 @@
     {
         "fileName":  "sample_preset_search.png",
         "relativePath":  "sample_preset_search.png",
-        "sizeBytes":  77440,
-        "sha256":  "ebab0b13354260533e9dbac394349c97670b8e742a327f458feae5bc65febbc6"
+        "sizeBytes":  77436,
+        "sha256":  "87a4ce29244419883a02bf74ec0b8a0b9e540219ce35c029d6f61cf7b0524c95"
     },
     {
         "fileName":  "sample_wide.png",
         "relativePath":  "sample_wide.png",
-        "sizeBytes":  144300,
-        "sha256":  "2f0f96fbd0d47bb1ccdd1314dba32f4aa6395e0ace1658390204656c1f176228"
+        "sizeBytes":  144303,
+        "sha256":  "ae3f9cc4cef7c5ce817a3818df805423ffc64888d4ef4e6554360767c48a1355"
     },
     {
         "fileName":  "sample_wide_browser_only.png",
         "relativePath":  "sample_wide_browser_only.png",
-        "sizeBytes":  113211,
-        "sha256":  "626085d527036392e08775f9b9e2b9aae1b8771e25e242d52ce550c1796e8463"
+        "sizeBytes":  113210,
+        "sha256":  "f0be75782ce5f931dd00b538ee042470c52d8295b660eca4ca7a6443bd9ff535"
     },
     {
         "fileName":  "sample_wide_cards_collapsed.png",
         "relativePath":  "sample_wide_cards_collapsed.png",
-        "sizeBytes":  130538,
-        "sha256":  "25db606390d450be298e855c27923ef6147f742ed6cbae2d822007e8f3e8ac8c"
+        "sizeBytes":  130537,
+        "sha256":  "374a3a9540868eb2fbdaf68dac06e6f993bde5e1766870d2b642d8c3d57ee9f2"
     },
     {
         "fileName":  "sample_wide_focus.png",
         "relativePath":  "sample_wide_focus.png",
-        "sizeBytes":  103617,
-        "sha256":  "6b7eae6507c2d3136479f3a2a8c8c1071bbc28b7619034c795da74ce88fb2277"
+        "sizeBytes":  103614,
+        "sha256":  "64541b8e9dc948996a7f4f81d50bd494032493f4ec7828a19992be262a45176e"
     },
     {
         "fileName":  "sample_wide_inspector_only.png",
         "relativePath":  "sample_wide_inspector_only.png",
-        "sizeBytes":  138659,
-        "sha256":  "3dbddf35fb6f66b8a418fe752b67aa53b7fdc310baa5e7c1eaf1061ef41a666a"
+        "sizeBytes":  138660,
+        "sha256":  "f9db4a08a5bce4fd7d20943a81c46bb8840f4ba9d01e55c5a9ab2746aceb0e78"
     },
     {
         "fileName":  "sample_wide_medium.png",
         "relativePath":  "sample_wide_medium.png",
-        "sizeBytes":  139731,
-        "sha256":  "5756c87da47271c95ebb31b610b72dc173967e315ad0b267da2ee06f3d0733b5"
+        "sizeBytes":  139732,
+        "sha256":  "3ee8fe32dcaab13b98a2f78acc2e9109c2de651f62b20f38ccd2adfd07ef62b4"
     },
     {
         "fileName":  "sample_wide_tall.png",
         "relativePath":  "sample_wide_tall.png",
-        "sizeBytes":  209724,
-        "sha256":  "18c1a518877dc89ed76a125b6e2afe8e145b7714566660a9656d88d5be0a485d"
+        "sizeBytes":  209723,
+        "sha256":  "19d886162a0823bebddb188f81d65a4cdc0aae3adbf69468675f7fdda064d47d"
     }
 ]
