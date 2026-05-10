@@ -3,11 +3,15 @@
 #include "ImportedProgramState.h"
 #include "PluginEditor.h"
 #include "PresetJson.h"
+#include "../engine/AudioFileSupport.h"
 #include "../engine/LegacyNkiProbe.h"
 #include "../engine/RexSliceProgram.h"
 #include "../engine/SfzImporter.h"
 #include "../engine/Sf2Importer.h"
 #include "../engine/DecentSamplerImporter.h"
+#include "../engine/BitwigMultisampleImporter.h"
+#include "../engine/XmlMultisampleImporters.h"
+#include "../engine/BinaryMultisampleImporters.h"
 #include "../engine/TransientSliceProgram.h"
 
 #include <algorithm>
@@ -413,9 +417,10 @@ bool readAudioFileToBuffer(const juce::File& file,
         return false;
 
     juce::AudioFormatManager formatManager;
-    formatManager.registerBasicFormats();
+    audiocity::engine::audio_file::registerAudioFormats(formatManager);
 
-    std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
+    auto openResult = audiocity::engine::audio_file::openReaderForFile(formatManager, file);
+    auto reader = std::move(openResult.reader);
     if (reader == nullptr || reader->lengthInSamples <= 0)
         return false;
 
@@ -1209,15 +1214,20 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     if (importedProgramPath.isNotEmpty())
     {
         juce::ValueTree mappingEdits;
+        auto importedProgramFormat = audiocity::plugin::ImportedProgramFormat::unknown;
+        auto importedProgramSelectionIndex = -1;
         {
             std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
             mappingEdits = audiocity::plugin::createProgramZoneMappingState(importedProgram_);
+            importedProgramFormat = importedProgramFormat_;
+            importedProgramSelectionIndex = importedProgramSelectionIndex_;
         }
 
         audiocity::plugin::appendImportedProgramState(state,
                                   importedProgramPath,
                                   mappingEdits,
-                                  getImportedProgramFormat());
+                                  importedProgramFormat,
+                                  importedProgramSelectionIndex);
     }
     {
         std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
@@ -1410,6 +1420,8 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
         return;
 
     const auto importedProgramPath = audiocity::plugin::readImportedProgramStatePath(state);
+    const auto importedProgramSelectionIndex =
+        audiocity::plugin::readImportedProgramStateSelectionIndex(state);
     const auto samplePath = state.getProperty(kSamplePath).toString();
     const auto storedRootMidiNote = static_cast<int>(state.getProperty(kRootMidiNote, engine_.getRootMidiNote()));
 
@@ -1455,10 +1467,46 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
                 restoredSample = importLegacyNkiProgram(importedProgramFile);
                 break;
             case audiocity::plugin::ImportedProgramFormat::sf2:
-                restoredSample = importSf2Program(importedProgramFile);
+                restoredSample = importSf2Program(importedProgramFile,
+                                                  importedProgramSelectionIndex >= 0
+                                                      ? importedProgramSelectionIndex
+                                                      : 0);
                 break;
             case audiocity::plugin::ImportedProgramFormat::decentSampler:
                 restoredSample = importDecentSamplerProgram(importedProgramFile);
+                break;
+            case audiocity::plugin::ImportedProgramFormat::bitwigMultisample:
+                restoredSample = importBitwigMultisampleProgram(importedProgramFile);
+                break;
+            case audiocity::plugin::ImportedProgramFormat::mpcKeygroup:
+                restoredSample = importMpcKeygroupProgram(importedProgramFile);
+                break;
+            case audiocity::plugin::ImportedProgramFormat::bento1010:
+                restoredSample = import1010MusicPresetProgram(importedProgramFile);
+                break;
+            case audiocity::plugin::ImportedProgramFormat::talSampler:
+                restoredSample = importTalSamplerProgram(importedProgramFile);
+                break;
+            case audiocity::plugin::ImportedProgramFormat::tx16wx:
+                restoredSample = importTx16WxProgram(importedProgramFile);
+                break;
+            case audiocity::plugin::ImportedProgramFormat::korgMultisample:
+                restoredSample = importKorgMultisampleProgram(importedProgramFile);
+                break;
+            case audiocity::plugin::ImportedProgramFormat::abletonSampler:
+                restoredSample = importAbletonSamplerProgram(importedProgramFile);
+                break;
+            case audiocity::plugin::ImportedProgramFormat::distingExPreset:
+                restoredSample = importDistingExPresetProgram(importedProgramFile);
+                break;
+            case audiocity::plugin::ImportedProgramFormat::korgKmp:
+                restoredSample = importKorgKmpProgram(importedProgramFile);
+                break;
+            case audiocity::plugin::ImportedProgramFormat::logicExs24:
+                restoredSample = importLogicExs24Program(importedProgramFile);
+                break;
+            case audiocity::plugin::ImportedProgramFormat::nnxt:
+                restoredSample = importNnxtProgram(importedProgramFile);
                 break;
             case audiocity::plugin::ImportedProgramFormat::unknown:
             default:
@@ -1922,6 +1970,7 @@ void AudiocityAudioProcessor::clearImportedProgramMetadata()
     std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
     importedProgramPath_.clear();
     importedProgramFormat_ = audiocity::plugin::ImportedProgramFormat::unknown;
+    importedProgramSelectionIndex_ = -1;
     importedProgramName_.clear();
     importedProgramMapSummary_.clear();
     importedProgram_ = {};
@@ -1935,12 +1984,14 @@ void AudiocityAudioProcessor::setImportedProgramMetadata(const juce::File& file,
                                                          const audiocity::engine::Program& program,
                                                          const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset,
                                                          const juce::String& diagnosticSummary,
-                                                         const int zoneCount)
+                                                         const int zoneCount,
+                                                         const int selectionIndex)
 {
     {
         std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
         importedProgramPath_ = file.getFullPathName();
         importedProgramFormat_ = format;
+        importedProgramSelectionIndex_ = selectionIndex;
         importedProgramName_ = juce::String::fromUTF8(program.name.c_str());
         const auto derivedState = audiocity::plugin::buildImportedProgramDerivedState(program);
         importedProgramMapSummary_ = derivedState.mapSummary;
@@ -2552,7 +2603,7 @@ bool AudiocityAudioProcessor::importSfzProgram(const juce::File& file)
     return true;
 }
 
-bool AudiocityAudioProcessor::importSf2Program(const juce::File& file)
+bool AudiocityAudioProcessor::importSf2Program(const juce::File& file, const int presetIndex)
 {
     if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".sf2"))
     {
@@ -2560,7 +2611,7 @@ bool AudiocityAudioProcessor::importSf2Program(const juce::File& file)
         return false;
     }
 
-    auto result = audiocity::engine::sf2::importFile(file);
+    auto result = audiocity::engine::sf2::importFilePreset(file, presetIndex);
     const auto hasPlayableProgram = result.hasPlayableProgram();
     const auto imported = !result.hasErrors() && hasPlayableProgram;
     auto summary = audiocity::engine::sf2::buildImportSummary(result, imported);
@@ -2619,7 +2670,8 @@ bool AudiocityAudioProcessor::importSf2Program(const juce::File& file)
                                result.program,
                                result.sampleDataByAsset,
                                summary,
-                               static_cast<int>(result.program.zones.size()));
+                               static_cast<int>(result.program.zones.size()),
+                               result.chosenPresetIndex);
     suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
     syncSampleDerivedParametersFromEngine();
     setWaveformViewRange(0, engine_.getLoadedSampleLength());
@@ -2698,6 +2750,300 @@ bool AudiocityAudioProcessor::importDecentSamplerProgram(const juce::File& file)
     syncSampleDerivedParametersFromEngine();
     setWaveformViewRange(0, engine_.getLoadedSampleLength());
     return true;
+}
+
+bool AudiocityAudioProcessor::importBitwigMultisampleProgram(const juce::File& file)
+{
+    if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".multisample"))
+    {
+        setLastImportDiagnosticSummary("Bitwig multisample import failed: file not found or unsupported extension");
+        return false;
+    }
+
+    auto result = audiocity::engine::bitwig::importFile(file);
+    const auto hasPlayableProgram = result.hasPlayableProgram();
+    const auto imported = !result.hasErrors() && hasPlayableProgram;
+    auto summary = audiocity::engine::bitwig::buildImportSummary(result, imported);
+    if (!hasPlayableProgram && !result.hasErrors())
+        summary = "Bitwig multisample import failed: no playable zones";
+
+    if (!imported)
+    {
+        setLastImportDiagnosticSummary(summary);
+        return false;
+    }
+
+    int displayAssetIndex = -1;
+    for (std::size_t i = 0; i < result.sampleDataByAsset.size(); ++i)
+    {
+        if (result.sampleDataByAsset[i].getNumChannels() > 0
+            && result.sampleDataByAsset[i].getNumSamples() > 0)
+        {
+            displayAssetIndex = static_cast<int>(i);
+            break;
+        }
+    }
+    if (displayAssetIndex < 0)
+    {
+        setLastImportDiagnosticSummary("Bitwig multisample import failed: decoded samples were empty");
+        return false;
+    }
+
+    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
+    stopGeneratedWaveformPreview();
+    engine_.panic();
+
+    const auto& displaySample = result.sampleDataByAsset[static_cast<std::size_t>(displayAssetIndex)];
+    const auto& displayAsset = result.program.sampleAssets[static_cast<std::size_t>(displayAssetIndex)];
+    const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
+    engine_.setSampleData(displaySample, displaySampleRate, displayAsset.rootMidiNote);
+    engine_.clearSamplePath();
+    engine_.setProgram(result.program, result.sampleDataByAsset);
+
+    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+        generatedWaveformState_.clear();
+        capturedSampleState_.clear();
+        capturedSampleRateState_ = 44100.0;
+        embeddedSampleState_.clear();
+        embeddedSampleNameState_.clear();
+        embeddedSampleRateState_ = 44100.0;
+        embeddedSampleRootMidiNoteState_ = 60;
+    }
+
+    setImportedProgramMetadata(file,
+                               audiocity::plugin::ImportedProgramFormat::bitwigMultisample,
+                               result.program,
+                               result.sampleDataByAsset,
+                               summary,
+                               static_cast<int>(result.program.zones.size()));
+    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
+    syncSampleDerivedParametersFromEngine();
+    setWaveformViewRange(0, engine_.getLoadedSampleLength());
+    return true;
+}
+
+namespace
+{
+struct PreparedImport
+{
+    audiocity::engine::Program program;
+    std::vector<juce::AudioBuffer<float>> sampleData;
+    juce::String summary;
+    int displayAssetIndex = -1;
+    bool ok = false;
+};
+
+template <typename ResultT>
+PreparedImport prepareXmlMultisampleImport(ResultT&& result,
+                                            juce::String summary,
+                                            const juce::String& failurePrefix)
+{
+    PreparedImport prepared;
+    const auto hasPlayable = result.hasPlayableProgram();
+    const auto imported = !result.hasErrors() && hasPlayable;
+    if (!hasPlayable && !result.hasErrors())
+        summary = failurePrefix + " import failed: no playable zones";
+
+    if (!imported)
+    {
+        prepared.summary = std::move(summary);
+        return prepared;
+    }
+    int idx = -1;
+    for (std::size_t i = 0; i < result.sampleDataByAsset.size(); ++i)
+    {
+        if (result.sampleDataByAsset[i].getNumChannels() > 0
+            && result.sampleDataByAsset[i].getNumSamples() > 0)
+        { idx = static_cast<int>(i); break; }
+    }
+    if (idx < 0)
+    {
+        prepared.summary = failurePrefix + " import failed: decoded samples were empty";
+        return prepared;
+    }
+    prepared.program = std::move(result.program);
+    prepared.sampleData = std::move(result.sampleDataByAsset);
+    prepared.summary = std::move(summary);
+    prepared.displayAssetIndex = idx;
+    prepared.ok = true;
+    return prepared;
+}
+} // namespace
+
+bool AudiocityAudioProcessor::publishXmlMultisampleImport(
+    const juce::File& file,
+    const audiocity::plugin::ImportedProgramFormat formatTag,
+    audiocity::engine::Program program,
+    std::vector<juce::AudioBuffer<float>> sampleData,
+    const juce::String& summary,
+    const int displayAssetIndex)
+{
+    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
+    stopGeneratedWaveformPreview();
+    engine_.panic();
+
+    const auto& displaySample = sampleData[static_cast<std::size_t>(displayAssetIndex)];
+    const auto& displayAsset = program.sampleAssets[static_cast<std::size_t>(displayAssetIndex)];
+    const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
+    engine_.setSampleData(displaySample, displaySampleRate, displayAsset.rootMidiNote);
+    engine_.clearSamplePath();
+    engine_.setProgram(program, sampleData);
+
+    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+        generatedWaveformState_.clear();
+        capturedSampleState_.clear();
+        capturedSampleRateState_ = 44100.0;
+        embeddedSampleState_.clear();
+        embeddedSampleNameState_.clear();
+        embeddedSampleRateState_ = 44100.0;
+        embeddedSampleRootMidiNoteState_ = 60;
+    }
+
+    setImportedProgramMetadata(file, formatTag, program, sampleData, summary,
+                               static_cast<int>(program.zones.size()));
+    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
+    syncSampleDerivedParametersFromEngine();
+    setWaveformViewRange(0, engine_.getLoadedSampleLength());
+    return true;
+}
+
+bool AudiocityAudioProcessor::importMpcKeygroupProgram(const juce::File& file)
+{
+    if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".xpm"))
+    { setLastImportDiagnosticSummary("MPC keygroup import failed: file not found or unsupported extension"); return false; }
+    auto r = audiocity::engine::mpc::importFile(file);
+    auto s = audiocity::engine::mpc::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+    auto prep = prepareXmlMultisampleImport(std::move(r), std::move(s), "MPC keygroup");
+    if (!prep.ok) { setLastImportDiagnosticSummary(prep.summary); return false; }
+    return publishXmlMultisampleImport(file, audiocity::plugin::ImportedProgramFormat::mpcKeygroup,
+                                       std::move(prep.program), std::move(prep.sampleData),
+                                       prep.summary, prep.displayAssetIndex);
+}
+
+bool AudiocityAudioProcessor::import1010MusicPresetProgram(const juce::File& file)
+{
+    if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".xml"))
+    { setLastImportDiagnosticSummary("1010music preset import failed: file not found or unsupported extension"); return false; }
+    auto r = audiocity::engine::bento::importFile(file);
+    auto s = audiocity::engine::bento::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+    auto prep = prepareXmlMultisampleImport(std::move(r), std::move(s), "1010music preset");
+    if (!prep.ok) { setLastImportDiagnosticSummary(prep.summary); return false; }
+    return publishXmlMultisampleImport(file, audiocity::plugin::ImportedProgramFormat::bento1010,
+                                       std::move(prep.program), std::move(prep.sampleData),
+                                       prep.summary, prep.displayAssetIndex);
+}
+
+bool AudiocityAudioProcessor::importTalSamplerProgram(const juce::File& file)
+{
+    if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".talsmpl"))
+    { setLastImportDiagnosticSummary("TAL Sampler import failed: file not found or unsupported extension"); return false; }
+    auto r = audiocity::engine::talsmpl::importFile(file);
+    auto s = audiocity::engine::talsmpl::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+    auto prep = prepareXmlMultisampleImport(std::move(r), std::move(s), "TAL Sampler");
+    if (!prep.ok) { setLastImportDiagnosticSummary(prep.summary); return false; }
+    return publishXmlMultisampleImport(file, audiocity::plugin::ImportedProgramFormat::talSampler,
+                                       std::move(prep.program), std::move(prep.sampleData),
+                                       prep.summary, prep.displayAssetIndex);
+}
+
+bool AudiocityAudioProcessor::importTx16WxProgram(const juce::File& file)
+{
+    if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".txprog"))
+    { setLastImportDiagnosticSummary("TX16Wx import failed: file not found or unsupported extension"); return false; }
+    auto r = audiocity::engine::tx16wx::importFile(file);
+    auto s = audiocity::engine::tx16wx::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+    auto prep = prepareXmlMultisampleImport(std::move(r), std::move(s), "TX16Wx");
+    if (!prep.ok) { setLastImportDiagnosticSummary(prep.summary); return false; }
+    return publishXmlMultisampleImport(file, audiocity::plugin::ImportedProgramFormat::tx16wx,
+                                       std::move(prep.program), std::move(prep.sampleData),
+                                       prep.summary, prep.displayAssetIndex);
+}
+
+bool AudiocityAudioProcessor::importKorgMultisampleProgram(const juce::File& file)
+{
+    if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".korgmultisample"))
+    { setLastImportDiagnosticSummary("Korg multisample import failed: file not found or unsupported extension"); return false; }
+    auto r = audiocity::engine::korgmulti::importFile(file);
+    auto s = audiocity::engine::korgmulti::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+    auto prep = prepareXmlMultisampleImport(std::move(r), std::move(s), "Korg multisample");
+    if (!prep.ok) { setLastImportDiagnosticSummary(prep.summary); return false; }
+    return publishXmlMultisampleImport(file, audiocity::plugin::ImportedProgramFormat::korgMultisample,
+                                       std::move(prep.program), std::move(prep.sampleData),
+                                       prep.summary, prep.displayAssetIndex);
+}
+
+bool AudiocityAudioProcessor::importAbletonSamplerProgram(const juce::File& file)
+{
+    const auto ext = file.getFileExtension();
+    if (!file.existsAsFile() || (!ext.equalsIgnoreCase(".adv") && !ext.equalsIgnoreCase(".adg")))
+    { setLastImportDiagnosticSummary("Ableton sampler import failed: file not found or unsupported extension"); return false; }
+    auto r = audiocity::engine::ableton::importFile(file);
+    auto s = audiocity::engine::ableton::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+    auto prep = prepareXmlMultisampleImport(std::move(r), std::move(s), "Ableton sampler");
+    if (!prep.ok) { setLastImportDiagnosticSummary(prep.summary); return false; }
+    return publishXmlMultisampleImport(file, audiocity::plugin::ImportedProgramFormat::abletonSampler,
+                                       std::move(prep.program), std::move(prep.sampleData),
+                                       prep.summary, prep.displayAssetIndex);
+}
+
+bool AudiocityAudioProcessor::importDistingExPresetProgram(const juce::File& file)
+{
+    if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".dexpreset"))
+    { setLastImportDiagnosticSummary("disting EX import failed: file not found or unsupported extension"); return false; }
+    auto r = audiocity::engine::distingex::importFile(file);
+    auto s = audiocity::engine::distingex::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+    auto prep = prepareXmlMultisampleImport(std::move(r), std::move(s), "disting EX preset");
+    if (!prep.ok) { setLastImportDiagnosticSummary(prep.summary); return false; }
+    return publishXmlMultisampleImport(file, audiocity::plugin::ImportedProgramFormat::distingExPreset,
+                                       std::move(prep.program), std::move(prep.sampleData),
+                                       prep.summary, prep.displayAssetIndex);
+}
+
+bool AudiocityAudioProcessor::importKorgKmpProgram(const juce::File& file)
+{
+    if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".kmp"))
+    { setLastImportDiagnosticSummary("Korg KMP import failed: file not found or unsupported extension"); return false; }
+    auto r = audiocity::engine::korgkmp::importFile(file);
+    auto s = audiocity::engine::korgkmp::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+    auto prep = prepareXmlMultisampleImport(std::move(r), std::move(s), "Korg KMP");
+    if (!prep.ok) { setLastImportDiagnosticSummary(prep.summary); return false; }
+    return publishXmlMultisampleImport(file, audiocity::plugin::ImportedProgramFormat::korgKmp,
+                                       std::move(prep.program), std::move(prep.sampleData),
+                                       prep.summary, prep.displayAssetIndex);
+}
+
+bool AudiocityAudioProcessor::importLogicExs24Program(const juce::File& file)
+{
+    if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".exs"))
+    { setLastImportDiagnosticSummary("EXS24 import failed: file not found or unsupported extension"); return false; }
+    auto r = audiocity::engine::exs24::importFile(file);
+    auto s = audiocity::engine::exs24::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+    auto prep = prepareXmlMultisampleImport(std::move(r), std::move(s), "Logic EXS24");
+    if (!prep.ok) { setLastImportDiagnosticSummary(prep.summary); return false; }
+    return publishXmlMultisampleImport(file, audiocity::plugin::ImportedProgramFormat::logicExs24,
+                                       std::move(prep.program), std::move(prep.sampleData),
+                                       prep.summary, prep.displayAssetIndex);
+}
+
+bool AudiocityAudioProcessor::importNnxtProgram(const juce::File& file)
+{
+    if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".sxt"))
+    { setLastImportDiagnosticSummary("NN-XT import failed: file not found or unsupported extension"); return false; }
+    auto r = audiocity::engine::nnxt::importFile(file);
+    auto s = audiocity::engine::nnxt::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+    auto prep = prepareXmlMultisampleImport(std::move(r), std::move(s), "Reason NN-XT");
+    if (!prep.ok) { setLastImportDiagnosticSummary(prep.summary); return false; }
+    return publishXmlMultisampleImport(file, audiocity::plugin::ImportedProgramFormat::nnxt,
+                                       std::move(prep.program), std::move(prep.sampleData),
+                                       prep.summary, prep.displayAssetIndex);
 }
 
 bool AudiocityAudioProcessor::importLegacyNkiProgram(const juce::File& file)
@@ -3818,9 +4164,10 @@ bool AudiocityAudioProcessor::previewSampleFromFile(const juce::File& file)
         return false;
 
     juce::AudioFormatManager formatManager;
-    formatManager.registerBasicFormats();
+    audiocity::engine::audio_file::registerAudioFormats(formatManager);
 
-    std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
+    auto openResult = audiocity::engine::audio_file::openReaderForFile(formatManager, file);
+    auto reader = std::move(openResult.reader);
     if (reader == nullptr || reader->lengthInSamples <= 0)
         return false;
 

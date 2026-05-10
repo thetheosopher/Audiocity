@@ -1,5 +1,7 @@
 #include "LegacyNkiProbe.h"
 
+#include "AudioFileSupport.h"
+
 #include <juce_audio_formats/juce_audio_formats.h>
 
 #include <cctype>
@@ -532,12 +534,15 @@ int getOrAddSampleAsset(ImportResult& result,
     if (const auto found = sampleIndices.find(normalizedPath); found != sampleIndices.end())
         return found->second;
 
-    std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(sampleFile));
+    auto openResult = audio_file::openReaderForFile(formatManager, sampleFile);
+    auto reader = std::move(openResult.reader);
     if (reader == nullptr)
     {
         addDiagnostic(result.probe,
             DiagnosticSeverity::warning,
-            "NKI import: unsupported or unreadable sample " + sampleFile.getFullPathName());
+            openResult.errorMessage.isNotEmpty() ? openResult.errorMessage
+                                                 : ("NKI import: unsupported or unreadable sample "
+                                                    + sampleFile.getFullPathName()));
         return -1;
     }
 
@@ -561,7 +566,7 @@ int getOrAddSampleAsset(ImportResult& result,
     }
 
     SampleAsset asset;
-    asset.sourcePath = normalizedPath;
+    asset.sourcePath = openResult.readableFile.getFullPathName().replaceCharacter('\\', '/').toStdString();
     asset.displayName = sampleFile.getFileName().toStdString();
     asset.lengthSamples = sampleLength;
     asset.numChannels = static_cast<int>(reader->numChannels);
@@ -618,8 +623,8 @@ ProbeResult probeFile(const juce::File& file)
     if (fileData.getSize() < minimumSignatureBytes)
         addDiagnostic(result, DiagnosticSeverity::warning, "NKI probe: file is very small and may be truncated");
 
-    const juce::StringArray sampleExtensions{ ".aiff", ".aif", ".wav" };
-    const juce::StringArray containerExtensions{ ".nkx", ".nks", ".ncw" };
+    const juce::StringArray sampleExtensions{ ".aiff", ".aif", ".wav", ".ncw" };
+    const juce::StringArray containerExtensions{ ".nkx", ".nks" };
 
     for (const auto& printable : printableStrings)
     {
@@ -706,7 +711,7 @@ ProbeResult probeFile(const juce::File& file)
     {
         addDiagnostic(result,
             DiagnosticSeverity::warning,
-            "NKI probe: detected container/compressed sample references (.nkx/.nks/.ncw)");
+            "NKI probe: detected Kontakt container references (.nkx/.nks)");
     }
 
     if (!result.sampleReferences.isEmpty())
@@ -715,6 +720,59 @@ ProbeResult probeFile(const juce::File& file)
         result.status = ProbeStatus::unsupportedContainerReference;
     else
         result.status = ProbeStatus::unsupportedOrUnrecognized;
+
+    // Encrypted/protected heuristic: monolithic Kontakt 4.2+ patches typically have a
+    // BPatchHeader binary header followed by FastLZ- or AES-encrypted segments. They
+    // expose almost no printable strings and contain no readable WAV/AIFF/NKX file
+    // references. We surface this as an explicit unsupported-import diagnostic so
+    // callers can show an actionable badge rather than a generic "unknown" result.
+    if (result.status == ProbeStatus::unsupportedOrUnrecognized
+        && fileData.getSize() >= 1024
+        && result.sampleReferences.isEmpty()
+        && result.containerReferences.isEmpty())
+    {
+        // Look for known Kontakt monolithic-container ASCII tags. These are stable
+        // markers in publicly-documented Kontakt headers (BPatchHeader, NICnt segment
+        // marker, hsin/Kontakt tag) and only ever appear in container/protected files,
+        // never in the legacy discrete-sample NKIs we already handle above.
+        static const char* kKontaktContainerTags[] = {
+            "NICnt", "Kontakt", "BPatchHeader", "hsin", "NKBNI", " NI FC MTD "
+        };
+
+        const auto* haystack = static_cast<const char*>(fileData.getData());
+        const auto haystackLen = fileData.getSize();
+
+        auto containsTag = [haystack, haystackLen](const char* needle) noexcept
+        {
+            const auto needleLen = std::strlen(needle);
+            if (needleLen == 0 || haystackLen < needleLen)
+                return false;
+            for (size_t i = 0; i + needleLen <= haystackLen; ++i)
+                if (std::memcmp(haystack + i, needle, needleLen) == 0)
+                    return true;
+            return false;
+        };
+
+        bool matchedTag = false;
+        for (const auto* tag : kKontaktContainerTags)
+        {
+            if (containsTag(tag))
+            {
+                matchedTag = true;
+                break;
+            }
+        }
+
+        if (matchedTag)
+        {
+            result.likelyEncryptedOrProtected = true;
+            addDiagnostic(result, DiagnosticSeverity::error,
+                "NKI probe: file appears to be a modern monolithic Kontakt patch "
+                "(possibly encrypted/protected). Audiocity does not implement Kontakt "
+                "DRM removal. If you legitimately own this library, use Native Access / "
+                "the Native Instruments license recovery tool to restore activation.");
+        }
+    }
 
     return result;
 }
@@ -742,7 +800,7 @@ ImportResult importFile(const juce::File& file, const juce::File& extraSearchFol
     }
 
     juce::AudioFormatManager formatManager;
-    formatManager.registerBasicFormats();
+    audio_file::registerAudioFormats(formatManager);
 
     std::map<std::string, int> groupIndices;
     std::map<std::string, int> sampleIndices;
@@ -859,6 +917,8 @@ juce::String buildProbeSummary(const ProbeResult& result)
             return "NKI probe: container-based or newer format detected";
 
         case ProbeStatus::unsupportedOrUnrecognized:
+            if (result.likelyEncryptedOrProtected)
+                return "NKI probe: encrypted/protected Kontakt patch - import not supported";
             return "NKI probe: no legacy external sample references detected";
 
         case ProbeStatus::invalidFile:

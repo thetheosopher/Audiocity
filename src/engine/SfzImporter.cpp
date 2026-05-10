@@ -1,5 +1,7 @@
 #include "SfzImporter.h"
 
+#include "AudioFileSupport.h"
+
 #include <juce_audio_formats/juce_audio_formats.h>
 
 #include <algorithm>
@@ -571,17 +573,22 @@ struct ParserState
 
     [[nodiscard]] int getOrAddSampleAsset(const juce::File& sampleFile, const int rootMidiNote, const PreprocessedLine& line)
     {
-        const auto path = sampleFile.getFullPathName().toStdString();
+        auto openResult = audio_file::openReaderForFile(formatManager, sampleFile);
+        auto reader = std::move(openResult.reader);
+        const auto path = openResult.readableFile.existsAsFile()
+            ? openResult.readableFile.getFullPathName().toStdString()
+            : sampleFile.getFullPathName().toStdString();
         const auto found = sampleAssetIndices.find(path);
         if (found != sampleAssetIndices.end())
             return found->second;
 
-        std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(sampleFile));
         if (reader == nullptr)
         {
             addDiagnostic(diagnostics,
                 SfzDiagnostic::Severity::error,
-                "Unsupported or unreadable SFZ sample " + sampleFile.getFullPathName(),
+                openResult.errorMessage.isNotEmpty() ? openResult.errorMessage
+                                                     : ("Unsupported or unreadable SFZ sample "
+                                                        + sampleFile.getFullPathName()),
                 line.file,
                 line.line);
             return -1;
@@ -930,7 +937,7 @@ SfzImportResult SfzImporter::importFile(const juce::File& sfzFile) const
     preprocessFile(sfzFile, rootDirectory, defines, includeStack, preprocessedLines, result.diagnostics);
 
     juce::AudioFormatManager formatManager;
-    formatManager.registerBasicFormats();
+    audio_file::registerAudioFormats(formatManager);
 
     ParserState state{ result.program, result.sampleDataByAsset, {}, {}, {}, {}, {}, {}, result.diagnostics, formatManager, rootDirectory };
     parsePreprocessedLines(state, preprocessedLines);

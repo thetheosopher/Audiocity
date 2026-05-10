@@ -31,29 +31,30 @@ The matrix below classifies the formats published on the ConvertWithMoss site.
 Triage reflects what is reasonable to port into Audiocity's permissive C++
 codebase first.
 
-### Tier 1 - Implement now (this delivery)
+### Tier 1 - Implemented
 
-| Format                       | Extension(s)            | Why first                                                                          |
+| Format                       | Extension(s)            | Status                                                                             |
 |------------------------------|-------------------------|------------------------------------------------------------------------------------|
-| SoundFont 2                  | `.sf2`                  | Public spec, RIFF binary, embedded 16-bit PCM samples, single self-contained file. |
-| DecentSampler                | `.dspreset`             | Plain XML, references external WAVs, simple zone model.                            |
+| SoundFont 2                  | `.sf2`                  | Shipped in `src/engine/Sf2Importer.*`. Offline test 137.                           |
+| DecentSampler                | `.dspreset`             | Shipped in `src/engine/DecentSamplerImporter.*`. Offline test 136.                 |
+| Bitwig / Studio One Multisample | `.multisample`       | Shipped in `src/engine/BitwigMultisampleImporter.*`. Offline test 138.            |
+| Akai MPC Keygroup            | `.xpm`                  | Shipped in `src/engine/XmlMultisampleImporters.cpp` (`mpc::`). Offline test 140.   |
+| 1010music Bento / blackbox   | `preset.xml`            | Shipped in `src/engine/XmlMultisampleImporters.cpp` (`bento::`). Offline test 141. |
+| TAL Sampler                  | `.talsmpl`              | Shipped in `src/engine/XmlMultisampleImporters.cpp` (`talsmpl::`). Offline test 142.|
+| CWITEC TX16Wx                | `.txprog`               | Shipped in `src/engine/XmlMultisampleImporters.cpp` (`tx16wx::`). Offline test 143. |
+| Korg wavestate / modwave     | `.korgmultisample`      | Shipped in `src/engine/XmlMultisampleImporters.cpp` (`korgmulti::`). Offline test 144.|
+| Ableton Sampler              | `.adv`, `.adg`          | Shipped in `src/engine/XmlMultisampleImporters.cpp` (`ableton::`); gzip XML, walks `MultiSamplePart`. Offline test 145. |
+| Expert Sleepers disting EX   | `.dexpreset`            | Shipped in `src/engine/BinaryMultisampleImporters.cpp` (`distingex::`). Offline test 146. |
+| Korg KMP                     | `.kmp`                  | Shipped in `src/engine/BinaryMultisampleImporters.cpp` (`korgkmp::`); chunked binary, falls back to sibling WAV when KSF cannot be decoded. Offline test 147. |
+| Logic EXS24                  | `.exs`                  | Shipped in `src/engine/BinaryMultisampleImporters.cpp` (`exs24::`); little-endian chunk parser for header/sample/zone records. Offline test 148. |
+| Propellerhead Reason NN-XT   | `.sxt`                  | Recognised in `src/engine/BinaryMultisampleImporters.cpp` (`nnxt::`); surfaces an actionable diagnostic until a verified parser lands. Offline test 149. |
+| NCW (Native Instruments compressed) | `.ncw`            | Shipped via `src/engine/AudioFileSupport.cpp`; resolves `.ncw` through a user-supplied `AUDIOCITY_NCW_CONVERTER_COMMAND` that converts to cached WAV off the audio thread. Offline tests 222 and 223. |
 
 ### Tier 2 - Next phases (planned)
 
 | Format                                | Extension(s)                | Notes                                                                                                          |
 |---------------------------------------|-----------------------------|----------------------------------------------------------------------------------------------------------------|
-| Bitwig / Studio One Multisample       | `.multisample`              | ZIP container with `multisample.xml` plus WAV files. Reuse JUCE's ZipFile + a small XML reader.                |
-| Logic EXS24                           | `.exs`                      | Documented binary chunk format; samples sit in a sibling `Sampler Files` directory.                            |
-| Akai MPC Keygroups                    | `.xpm`                      | XML preset, references WAV samples next to it.                                                                 |
-| Korg KMP / KSF                        | `.KMP`, `.KSF`              | Small fixed-record binary; KMP describes a multi-zone instrument that points at sibling KSF samples.           |
-| Propellerhead Reason NN-XT            | `.sxt`                      | Documented binary, references external samples in the Reason refill / file system.                             |
-| 1010music Bento / blackbox            | `preset.xml`                | Plain XML referencing WAV samples in the same folder.                                                          |
-| TAL Sampler                           | `.talsmpl`                  | XML descriptor referencing external samples.                                                                   |
-| Ableton Sampler                       | `.adv`, `.adg`              | gzip-wrapped XML.                                                                                              |
-| CWITEC TX16Wx                         | `.txprog`                   | XML preset with referenced samples.                                                                            |
-| Korg wavestate / modwave              | `.korgmultisample`          | ZIP + XML.                                                                                                     |
-| Expert Sleepers disting EX            | `.dexpreset`                | Small text/INI-like preset.                                                                                    |
-| NCW (Native Instruments compressed)   | `.ncw`                      | Compressed PCM container; needed to load full "discrete sample" Kontakt libraries that ship NCW instead of WAV. |
+| Korg KSF as native sample asset       | `.KSF`                      | Read native KSF audio (today the KMP importer only resolves WAV/AIFF siblings).                                |
 
 ### Tier 3 - Probe-only or deferred (out of scope for first port)
 
@@ -75,11 +76,15 @@ extends it as follows:
 
 1. **Phase A (already shipped).** Probe + first playable subset for legacy
    discrete-sample `.nki`.
-2. **Phase B (next).** When a `.nki` file references NCW samples (Native
-   Instruments Compressed Wave) instead of WAV/AIFF, decode NCW into PCM
-   through a new `NcwReader` that follows the published NCW container layout
-   and either uses ZLIB (already pulled in by JUCE) for the compressed payload
-   or falls back to "missing" diagnostics when the variant is unsupported.
+2. **Phase B (shipped via converter seam).** When a `.nki` file references
+  NCW samples (Native Instruments Compressed Wave) instead of WAV/AIFF,
+  Audiocity now resolves them through `src/engine/AudioFileSupport.cpp`.
+  The shared sample reader first tries JUCE's normal readers, then, for
+  `.ncw`, invokes a user-supplied `AUDIOCITY_NCW_CONVERTER_COMMAND` to
+  convert the source file to a deterministic cached WAV off the audio thread.
+  Callers then import/play the cached PCM through the existing JUCE path. An
+  internal `NcwReader` can replace this seam later without changing importers
+  or engine call sites.
 3. **Phase C (best-effort).** Detect newer monolithic / "Kontakt 5+"
    container `.nki` files that embed a serialized Kontakt instrument tree.
    Audiocity will continue to *probe* these (already implemented) and report
@@ -92,6 +97,25 @@ extends it as follows:
 4. **Phase D (optional).** Implement an NKM bank reader that lists the
    instruments inside an NKM and round-trips the user back to per-instrument
    import for NKI variants we can already read.
+
+### Encrypted / protected Kontakt - current behavior
+
+`LegacyNkiProbe` now flags suspected modern monolithic / protected Kontakt
+patches explicitly. When a `.nki` contains no resolvable WAV/AIFF/NKX
+references and exposes a known Kontakt container marker (`NICnt`,
+`BPatchHeader`, `hsin`, `Kontakt`, `NKBNI`, ` NI FC MTD `), the probe sets
+`ProbeResult::likelyEncryptedOrProtected = true` and emits an actionable
+diagnostic that names Native Access / NI license recovery as the legitimate
+remediation. `buildProbeSummary` surfaces "encrypted/protected Kontakt patch -
+import not supported" so the editor's diagnostics line distinguishes
+"unknown legacy" from "legitimately blocked because we will not ship DRM
+removal." Offline test 139 exercises this signature path.
+
+This is deliberately *detection only*. Audiocity does not, and will not, ship
+code that derives or applies per-library Kontakt decryption keys. The
+detection seam is the place a future user-supplied `KontaktKeyProvider`
+interface would plug in, if a legitimate per-library key recovery path ever
+materializes.
 
 ## Architecture
 
@@ -148,9 +172,12 @@ Sample decoding:
 - Sample loop from `shdr.startLoop/endLoop` unless overridden by gens 2/3.
 
 Preset selection:
-- v1 imports the *first* preset (lowest `bank` then `program` ordering).
-  Diagnostics enumerate all detected presets so users can see what was
-  available; future versions will allow preset selection in the UI.
+- When multiple presets are present, Audiocity now prompts the user to choose
+  which preset to import. The chooser is populated from the sorted
+  `bank`/`program` list exposed by `Sf2Importer`.
+- The selected preset index is persisted with the imported-program state so
+  patch restore re-imports the same SF2 preset instead of falling back to the
+  first preset.
 
 ### DecentSampler (`.dspreset`)
 

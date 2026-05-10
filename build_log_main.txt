@@ -12,27 +12,10 @@ MSBuild version 17.14.40+3e7442088 for .NET Framework
   LegacyNkiProbe.cpp
   Sf2Importer.cpp
   DecentSamplerImporter.cpp
+  BitwigMultisampleImporter.cpp
   Audiocity.vcxproj -> C:\Projects\Applications\Audiocity\build\Audiocity_artefacts\Debug\Audiocity_SharedCode.lib
-  juce_VST3ManifestHelper.cpp
   juce_vst3_helper.vcxproj -> C:\Projects\Applications\Audiocity\build\Debug\juce_vst3_helper.exe
-  juce_audio_plugin_client_AAX.cpp
-  juce_audio_plugin_client_AAX_utils.cpp
-  juce_audio_plugin_client_ARA.cpp
-  juce_audio_plugin_client_LV2.cpp
-  juce_audio_plugin_client_Standalone.cpp
-  juce_audio_plugin_client_Unity.cpp
-  juce_audio_plugin_client_VST2.cpp
-  juce_audio_plugin_client_VST3.cpp
-     Creating library C:/Projects/Applications/Audiocity/build/Audiocity_artefacts/Debug/VST3/Audiocity.lib and object C:/Projects/Applications/Audiocity/build/Audiocity_artefacts/Debug/VST3/Audiocity.exp
   Audiocity_VST3.vcxproj -> C:\Projects\Applications\Audiocity\build\Audiocity_artefacts\Debug\VST3\Audiocity.vst3\Contents\x86_64-win\Audiocity.vst3
   removing moduleinfo.json
   creating C:/Projects/Applications/Audiocity/build/Audiocity_artefacts/Debug/VST3/Audiocity.vst3/Contents/Resources/moduleinfo.json
-  juce_audio_plugin_client_AAX.cpp
-  juce_audio_plugin_client_AAX_utils.cpp
-  juce_audio_plugin_client_ARA.cpp
-  juce_audio_plugin_client_LV2.cpp
-  juce_audio_plugin_client_Standalone.cpp
-  juce_audio_plugin_client_Unity.cpp
-  juce_audio_plugin_client_VST2.cpp
-  juce_audio_plugin_client_VST3.cpp
   Audiocity_Standalone.vcxproj -> C:\Projects\Applications\Audiocity\build\Audiocity_artefacts\Debug\Standalone\Audiocity.exe

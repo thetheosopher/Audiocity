@@ -65,6 +65,7 @@ struct ProbeResult
     juce::StringArray containerReferences;
     std::vector<ProbeZoneMetadata> zoneMetadata;
     std::vector<ProbeDiagnostic> diagnostics;
+    bool likelyEncryptedOrProtected = false;
 
     [[nodiscard]] bool isLegacyDiscreteSampleCandidate() const noexcept
     {

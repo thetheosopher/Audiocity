@@ -64,8 +64,19 @@ public:
     bool importSfzProgram(const juce::File& file);
     bool importRexSliceProgram(const juce::File& file);
     bool importTransientSliceProgram(const juce::File& file);
-    bool importSf2Program(const juce::File& file);
+    bool importSf2Program(const juce::File& file, int presetIndex = 0);
     bool importDecentSamplerProgram(const juce::File& file);
+    bool importBitwigMultisampleProgram(const juce::File& file);
+    bool importMpcKeygroupProgram(const juce::File& file);
+    bool import1010MusicPresetProgram(const juce::File& file);
+    bool importTalSamplerProgram(const juce::File& file);
+    bool importTx16WxProgram(const juce::File& file);
+    bool importKorgMultisampleProgram(const juce::File& file);
+    bool importAbletonSamplerProgram(const juce::File& file);
+    bool importDistingExPresetProgram(const juce::File& file);
+    bool importKorgKmpProgram(const juce::File& file);
+    bool importLogicExs24Program(const juce::File& file);
+    bool importNnxtProgram(const juce::File& file);
     [[nodiscard]] bool hasImportedProgram() const noexcept
     {
         return importedProgramLoaded_.load(std::memory_order_relaxed);
@@ -376,6 +387,12 @@ private:
     void syncEngineFromAutomatableParameters() noexcept;
     void updateParameterFromPlainValue(const juce::String& parameterId, float plainValue) noexcept;
     void updateHostTempoFromPlayHead() noexcept;
+    bool publishXmlMultisampleImport(const juce::File& file,
+                                     audiocity::plugin::ImportedProgramFormat formatTag,
+                                     audiocity::engine::Program program,
+                                     std::vector<juce::AudioBuffer<float>> sampleData,
+                                     const juce::String& summary,
+                                     int displayAssetIndex);
     [[nodiscard]] float lfoRateHzFromTempoSync(int divisionIndex) const noexcept;
     void syncSampleDerivedParametersFromEngine() noexcept;
     void renderGeneratedWavePreview(juce::AudioBuffer<float>& buffer) noexcept;
@@ -395,7 +412,8 @@ private:
                                     const audiocity::engine::Program& program,
                                     const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset,
                                     const juce::String& diagnosticSummary,
-                                    int zoneCount);
+                                    int zoneCount,
+                                    int selectionIndex = -1);
     void setLastImportDiagnosticSummary(const juce::String& diagnosticSummary);
     void refreshImportedProgramDerivedStateLocked(const juce::String& diagnosticSummary);
     void captureImportedProgramSnapshotLocked(audiocity::engine::Program& programToPublish,
@@ -450,6 +468,7 @@ private:
     juce::String embeddedSampleNameState_;
     juce::String importedProgramPath_;
     audiocity::plugin::ImportedProgramFormat importedProgramFormat_ = audiocity::plugin::ImportedProgramFormat::unknown;
+    int importedProgramSelectionIndex_ = -1;
     juce::String importedProgramName_;
     juce::String importedProgramMapSummary_;
     audiocity::engine::Program importedProgram_;

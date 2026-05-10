@@ -10,6 +10,14 @@
 
 namespace audiocity::engine::sf2
 {
+bool ProbeResult::hasErrors() const noexcept
+{
+    for (const auto& d : diagnostics)
+        if (d.severity == ImportDiagnostic::Severity::error)
+            return true;
+    return false;
+}
+
 bool ImportResult::hasErrors() const noexcept
 {
     for (const auto& d : diagnostics)
@@ -117,6 +125,34 @@ struct Sf2File
     size_t n = 0;
     while (n < maxLen && p[n] != 0) ++n;
     return juce::String::fromUTF8(p, static_cast<int>(n)).trim();
+}
+
+bool parseSf2Container(const juce::uint8* base, const size_t size, Sf2File& file,
+                       std::vector<ImportDiagnostic>& diagnostics);
+
+bool loadSf2File(const juce::File& sf2File,
+                 juce::MemoryBlock& blob,
+                 Sf2File& parsed,
+                 std::vector<ImportDiagnostic>& diagnostics)
+{
+    if (!sf2File.existsAsFile())
+    {
+        addDiagnostic(diagnostics, ImportDiagnostic::Severity::error,
+                      "SoundFont 2 file not found: " + sf2File.getFullPathName());
+        return false;
+    }
+
+    if (!sf2File.loadFileAsData(blob))
+    {
+        addDiagnostic(diagnostics, ImportDiagnostic::Severity::error,
+                      "Could not read SoundFont 2 file: " + sf2File.getFullPathName());
+        return false;
+    }
+
+    return parseSf2Container(reinterpret_cast<const juce::uint8*>(blob.getData()),
+                             blob.getSize(),
+                             parsed,
+                             diagnostics);
 }
 
 bool parseSf2Container(const juce::uint8* base, const size_t size, Sf2File& file,
@@ -574,28 +610,32 @@ ImportResult importFile(const juce::File& sf2File)
     return importFilePreset(sf2File, 0);
 }
 
+ProbeResult probeFile(const juce::File& sf2File)
+{
+    ProbeResult result;
+
+    juce::MemoryBlock blob;
+    Sf2File parsed;
+    if (!loadSf2File(sf2File, blob, parsed, result.diagnostics))
+        return result;
+
+    enumeratePresets(parsed, result.availablePresets);
+    if (result.availablePresets.empty())
+    {
+        addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error,
+                      "SoundFont 2 file has no presets");
+    }
+
+    return result;
+}
+
 ImportResult importFilePreset(const juce::File& sf2File, const int presetIndex)
 {
     ImportResult result;
 
-    if (!sf2File.existsAsFile())
-    {
-        addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error,
-                      "SoundFont 2 file not found: " + sf2File.getFullPathName());
-        return result;
-    }
-
     juce::MemoryBlock blob;
-    if (!sf2File.loadFileAsData(blob))
-    {
-        addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error,
-                      "Could not read SoundFont 2 file: " + sf2File.getFullPathName());
-        return result;
-    }
-
     Sf2File parsed;
-    if (!parseSf2Container(reinterpret_cast<const juce::uint8*>(blob.getData()), blob.getSize(),
-                           parsed, result.diagnostics))
+    if (!loadSf2File(sf2File, blob, parsed, result.diagnostics))
         return result;
 
     enumeratePresets(parsed, result.availablePresets);

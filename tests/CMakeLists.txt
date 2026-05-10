@@ -8,12 +8,17 @@ add_executable(audiocity_offline_tests
     ../src/plugin/PlayerPadState.cpp
     ../src/plugin/LibraryFileIndex.cpp
     ../src/plugin/LibraryMetadata.cpp
+    ../src/engine/AudioFileSupport.cpp
     ../src/engine/EngineCore.cpp
     ../src/engine/LegacyNkiProbe.cpp
     ../src/engine/RexLoader.cpp
     ../src/engine/SfzImporter.cpp
     ../src/engine/Sf2Importer.cpp
     ../src/engine/DecentSamplerImporter.cpp
+    ../src/engine/BitwigMultisampleImporter.cpp
+    ../src/engine/XmlMultisampleImporterUtils.cpp
+    ../src/engine/XmlMultisampleImporters.cpp
+    ../src/engine/BinaryMultisampleImporters.cpp
     ../src/engine/VoicePool.cpp)
 
 target_include_directories(audiocity_offline_tests
@@ -168,12 +173,17 @@ set(AUDIOCITY_UI_SNAPSHOT_SHARED_SOURCES
     ../src/plugin/CcLearnDial.cpp
     ../src/plugin/LibraryFileIndex.cpp
     ../src/plugin/LibraryMetadata.cpp
+    ../src/engine/AudioFileSupport.cpp
     ../src/engine/EngineCore.cpp
     ../src/engine/LegacyNkiProbe.cpp
     ../src/engine/RexLoader.cpp
     ../src/engine/SfzImporter.cpp
     ../src/engine/Sf2Importer.cpp
     ../src/engine/DecentSamplerImporter.cpp
+    ../src/engine/BitwigMultisampleImporter.cpp
+    ../src/engine/XmlMultisampleImporterUtils.cpp
+    ../src/engine/XmlMultisampleImporters.cpp
+    ../src/engine/BinaryMultisampleImporters.cpp
     ../src/engine/VoicePool.cpp)
 
 add_executable(audiocity_ui_snapshot_harness

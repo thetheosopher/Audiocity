@@ -29,6 +29,14 @@ struct PresetInfo
     int program = 0;
 };
 
+struct ProbeResult
+{
+    std::vector<ImportDiagnostic> diagnostics;
+    std::vector<PresetInfo> availablePresets;
+
+    [[nodiscard]] bool hasErrors() const noexcept;
+};
+
 struct ImportResult
 {
     Program program;
@@ -47,6 +55,10 @@ struct ImportResult
 
 // importFile imports the first preset (lowest bank, then preset number) of the SF2 file.
 [[nodiscard]] ImportResult importFile(const juce::File& sf2File);
+
+// probeFile parses the SoundFont container and enumerates available presets
+// without decoding sample payloads.
+[[nodiscard]] ProbeResult probeFile(const juce::File& sf2File);
 
 // importFilePreset imports the preset selected by zero-based index into the
 // availablePresets list of a previous probe; returns errors if out of range.

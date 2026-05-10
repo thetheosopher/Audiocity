@@ -1,5 +1,7 @@
 #include "EngineCore.h"
 
+#include "AudioFileSupport.h"
+
 #include "RexLoader.h"
 
 #include <array>
@@ -947,9 +949,10 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
     }
 
     juce::AudioFormatManager formatManager;
-    formatManager.registerBasicFormats();
+    audio_file::registerAudioFormats(formatManager);
 
-    std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
+    auto openResult = audio_file::openReaderForFile(formatManager, file);
+    auto reader = std::move(openResult.reader);
     if (reader == nullptr)
         return false;
 
@@ -984,7 +987,7 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
     const auto parsedTempoBpm = findEmbeddedTempoBpm(metadata);
     loadedMetadataTempoBpm_ = parsedTempoBpm.has_value() ? *parsedTempoBpm : 0.0;
 
-    setSampleDataInternal(mono, reader->sampleRate, embeddedRootNote, file);
+    setSampleDataInternal(mono, reader->sampleRate, embeddedRootNote, openResult.readableFile);
     setAmpEnvelope(defaultAmpEnvelopeForLoadedSample());
     setAmpLfoSettings(defaultAmpLfoSettingsForLoadedSample());
     setPitchLfoSettings(defaultPitchLfoSettingsForLoadedSample());

@@ -6,8 +6,13 @@ bool LibraryFileIndex::isSupportedExtension(const juce::String& extensionLower, 
 {
     const auto extension = extensionLower.toLowerCase();
     if (extension == ".wav" || extension == ".aif" || extension == ".aiff"
+        || extension == ".ncw"
         || extension == ".sfz" || extension == ".nki"
-        || extension == ".sf2" || extension == ".dspreset")
+        || extension == ".sf2" || extension == ".dspreset" || extension == ".multisample"
+        || extension == ".xpm" || extension == ".talsmpl" || extension == ".txprog"
+        || extension == ".korgmultisample"
+        || extension == ".adv" || extension == ".adg" || extension == ".dexpreset"
+        || extension == ".kmp" || extension == ".exs" || extension == ".sxt")
         return true;
 
     return includeRex && (extension == ".rex" || extension == ".rx2");
@@ -33,7 +38,13 @@ std::optional<LibraryFileIndexEntry> LibraryFileIndex::createEntryForFile(
     entry.extensionLower = file.getFileExtension().toLowerCase();
     entry.sizeBytes = file.getSize();
     entry.isInstrument = entry.extensionLower == ".sfz" || entry.extensionLower == ".nki"
-        || entry.extensionLower == ".sf2" || entry.extensionLower == ".dspreset";
+        || entry.extensionLower == ".sf2" || entry.extensionLower == ".dspreset"
+        || entry.extensionLower == ".multisample"
+        || entry.extensionLower == ".xpm" || entry.extensionLower == ".talsmpl"
+        || entry.extensionLower == ".txprog" || entry.extensionLower == ".korgmultisample"
+        || entry.extensionLower == ".adv" || entry.extensionLower == ".adg"
+        || entry.extensionLower == ".dexpreset" || entry.extensionLower == ".kmp"
+        || entry.extensionLower == ".exs" || entry.extensionLower == ".sxt";
     return entry;
 }
 

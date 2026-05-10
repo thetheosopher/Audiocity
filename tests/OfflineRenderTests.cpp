@@ -12,6 +12,9 @@
 #include "../src/engine/SfzImporter.h"
 #include "../src/engine/Sf2Importer.h"
 #include "../src/engine/DecentSamplerImporter.h"
+#include "../src/engine/BitwigMultisampleImporter.h"
+#include "../src/engine/XmlMultisampleImporters.h"
+#include "../src/engine/BinaryMultisampleImporters.h"
 #include "../src/plugin/CcLearnDial.h"
 #include "../src/plugin/LibraryFileIndex.h"
 #include "../src/plugin/LibraryMetadata.h"
@@ -24,6 +27,7 @@
 
 #include <cmath>
 #include <array>
+#include <cstdlib>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -37,6 +41,39 @@ juce::File fixtureFile(const juce::String& relativePath)
 {
     return juce::File(AUDIOCITY_SOURCE_DIR).getChildFile(relativePath);
 }
+
+bool setEnvironmentVariableForTest(const juce::String& name, const juce::String& value)
+{
+#if JUCE_WINDOWS
+    return _wputenv_s(name.toWideCharPointer(), value.toWideCharPointer()) == 0;
+#else
+    if (value.isEmpty())
+        return unsetenv(name.toRawUTF8()) == 0;
+
+    return setenv(name.toRawUTF8(), value.toRawUTF8(), 1) == 0;
+#endif
+}
+
+struct ScopedEnvironmentVariable
+{
+    explicit ScopedEnvironmentVariable(juce::String variableName, juce::String variableValue)
+        : name(std::move(variableName)),
+          priorValue(juce::SystemStats::getEnvironmentVariable(name, {})),
+          hadPriorValue(priorValue.isNotEmpty()),
+          valid(setEnvironmentVariableForTest(name, variableValue))
+    {
+    }
+
+    ~ScopedEnvironmentVariable()
+    {
+        setEnvironmentVariableForTest(name, hadPriorValue ? priorValue : juce::String{});
+    }
+
+    juce::String name;
+    juce::String priorValue;
+    bool hadPriorValue = false;
+    bool valid = false;
+};
 
 bool buffersAreEqual(const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b, const float tolerance)
 {
@@ -1455,11 +1492,29 @@ bool runImportedProgramStateSubtreeRoundTripTest()
         return false;
     }
 
+    juce::ValueTree sf2PatchState("patch");
+    const juce::String sf2ProgramPath = "C:/Library/Banks/Legacy.sf2";
+    audiocity::plugin::appendImportedProgramState(sf2PatchState,
+                                                  sf2ProgramPath,
+                                                  mappingState,
+                                                  audiocity::plugin::ImportedProgramFormat::sf2,
+                                                  1);
+    if (audiocity::plugin::readImportedProgramStatePath(sf2PatchState) != sf2ProgramPath
+        || audiocity::plugin::readImportedProgramStateFormat(sf2PatchState)
+            != audiocity::plugin::ImportedProgramFormat::sf2
+        || audiocity::plugin::readImportedProgramStateSelectionIndex(sf2PatchState) != 1
+        || audiocity::plugin::importedProgramFormatBadge(audiocity::plugin::ImportedProgramFormat::sf2)
+            != "SF2")
+    {
+        return false;
+    }
+
     juce::ValueTree legacyPatchState("patch");
     legacyPatchState.setProperty("sfzProgramPath", "C:/Library/Kits/LegacyImport.sfz", nullptr);
     if (audiocity::plugin::readImportedProgramStatePath(legacyPatchState) != "C:/Library/Kits/LegacyImport.sfz"
         || audiocity::plugin::readImportedProgramStateFormat(legacyPatchState)
-            != audiocity::plugin::ImportedProgramFormat::sfz)
+            != audiocity::plugin::ImportedProgramFormat::sfz
+        || audiocity::plugin::readImportedProgramStateSelectionIndex(legacyPatchState) != -1)
     {
         return false;
     }
@@ -3048,6 +3103,133 @@ juce::MemoryBlock buildMinimalSf2()
     out.write(body.getData(), body.getDataSize());
     return juce::MemoryBlock(out.getData(), out.getDataSize());
 }
+
+juce::MemoryBlock buildDualPresetSf2()
+{
+    constexpr int sampleCount = 256;
+    juce::MemoryOutputStream smpl;
+    for (int i = 0; i < sampleCount; ++i)
+    {
+        const double phase = 2.0 * juce::MathConstants<double>::pi * i * 8.0 / sampleCount;
+        const auto value = static_cast<juce::int16>(std::round(std::sin(phase) * 16000.0));
+        appendS16LE(smpl, value);
+    }
+    for (int i = 0; i < sampleCount; ++i)
+    {
+        const double phase = 2.0 * juce::MathConstants<double>::pi * i * 5.0 / sampleCount;
+        const auto value = static_cast<juce::int16>(std::round(std::cos(phase) * 12000.0));
+        appendS16LE(smpl, value);
+    }
+
+    juce::MemoryOutputStream phdr;
+    appendName20(phdr, "Tone A"); appendU16LE(phdr, 0); appendU16LE(phdr, 0); appendU16LE(phdr, 0);
+    appendU32LE(phdr, 0); appendU32LE(phdr, 0); appendU32LE(phdr, 0);
+    appendName20(phdr, "Tone B"); appendU16LE(phdr, 1); appendU16LE(phdr, 0); appendU16LE(phdr, 1);
+    appendU32LE(phdr, 0); appendU32LE(phdr, 0); appendU32LE(phdr, 0);
+    appendName20(phdr, "EOP"); appendU16LE(phdr, 0); appendU16LE(phdr, 0); appendU16LE(phdr, 2);
+    appendU32LE(phdr, 0); appendU32LE(phdr, 0); appendU32LE(phdr, 0);
+
+    juce::MemoryOutputStream pbag;
+    appendU16LE(pbag, 0); appendU16LE(pbag, 0);
+    appendU16LE(pbag, 1); appendU16LE(pbag, 0);
+    appendU16LE(pbag, 2); appendU16LE(pbag, 0);
+
+    juce::MemoryOutputStream pmod;
+    for (int i = 0; i < 10; ++i) { const juce::uint8 z = 0; pmod.write(&z, 1); }
+
+    juce::MemoryOutputStream pgen;
+    appendU16LE(pgen, 41); appendU16LE(pgen, 0);
+    appendU16LE(pgen, 41); appendU16LE(pgen, 1);
+    appendU16LE(pgen, 0); appendU16LE(pgen, 0);
+
+    juce::MemoryOutputStream inst;
+    appendName20(inst, "Inst A"); appendU16LE(inst, 0);
+    appendName20(inst, "Inst B"); appendU16LE(inst, 1);
+    appendName20(inst, "EOI"); appendU16LE(inst, 2);
+
+    juce::MemoryOutputStream ibag;
+    appendU16LE(ibag, 0); appendU16LE(ibag, 0);
+    appendU16LE(ibag, 4); appendU16LE(ibag, 0);
+    appendU16LE(ibag, 8); appendU16LE(ibag, 0);
+
+    juce::MemoryOutputStream imod;
+    for (int i = 0; i < 10; ++i) { const juce::uint8 z = 0; imod.write(&z, 1); }
+
+    juce::MemoryOutputStream igen;
+    appendU16LE(igen, 43); appendU16LE(igen, static_cast<juce::uint16>(48 | (60 << 8)));
+    appendU16LE(igen, 44); appendU16LE(igen, static_cast<juce::uint16>(0 | (127 << 8)));
+    appendU16LE(igen, 58); appendU16LE(igen, 60);
+    appendU16LE(igen, 53); appendU16LE(igen, 0);
+    appendU16LE(igen, 43); appendU16LE(igen, static_cast<juce::uint16>(61 | (72 << 8)));
+    appendU16LE(igen, 44); appendU16LE(igen, static_cast<juce::uint16>(0 | (127 << 8)));
+    appendU16LE(igen, 58); appendU16LE(igen, 72);
+    appendU16LE(igen, 53); appendU16LE(igen, 1);
+    appendU16LE(igen, 0); appendU16LE(igen, 0);
+
+    juce::MemoryOutputStream shdr;
+    appendName20(shdr, "SampleA"); appendU32LE(shdr, 0); appendU32LE(shdr, sampleCount);
+    appendU32LE(shdr, 0); appendU32LE(shdr, sampleCount);
+    appendU32LE(shdr, 44100); { const juce::uint8 root = 60; shdr.write(&root, 1); }
+    { const juce::int8 corr = 0; shdr.write(&corr, 1); }
+    appendU16LE(shdr, 0); appendU16LE(shdr, 1);
+    appendName20(shdr, "SampleB"); appendU32LE(shdr, sampleCount); appendU32LE(shdr, sampleCount * 2);
+    appendU32LE(shdr, sampleCount); appendU32LE(shdr, sampleCount * 2);
+    appendU32LE(shdr, 44100); { const juce::uint8 root = 72; shdr.write(&root, 1); }
+    { const juce::int8 corr = 0; shdr.write(&corr, 1); }
+    appendU16LE(shdr, 0); appendU16LE(shdr, 1);
+    appendName20(shdr, "EOS"); appendU32LE(shdr, 0); appendU32LE(shdr, 0);
+    appendU32LE(shdr, 0); appendU32LE(shdr, 0);
+    appendU32LE(shdr, 0); { const juce::uint8 root = 0; shdr.write(&root, 1); }
+    { const juce::int8 corr = 0; shdr.write(&corr, 1); }
+    appendU16LE(shdr, 0); appendU16LE(shdr, 0);
+
+    auto writeListChunk = [](juce::MemoryOutputStream& dst, const char* listType,
+                             const std::vector<std::pair<const char*, juce::MemoryBlock>>& subs)
+    {
+        juce::MemoryOutputStream payload;
+        appendFourcc(payload, listType);
+        for (const auto& [tag, blk] : subs)
+        {
+            appendFourcc(payload, tag);
+            appendU32LE(payload, static_cast<juce::uint32>(blk.getSize()));
+            payload.write(blk.getData(), blk.getSize());
+            if (blk.getSize() & 1u) { const juce::uint8 z = 0; payload.write(&z, 1); }
+        }
+        appendFourcc(dst, "LIST");
+        appendU32LE(dst, static_cast<juce::uint32>(payload.getDataSize()));
+        dst.write(payload.getData(), payload.getDataSize());
+    };
+
+    juce::MemoryOutputStream ifil;
+    appendU16LE(ifil, 2); appendU16LE(ifil, 4);
+
+    juce::MemoryOutputStream out;
+    juce::MemoryOutputStream body;
+    appendFourcc(body, "sfbk");
+
+    writeListChunk(body, "INFO", {
+        { "ifil", juce::MemoryBlock(ifil.getData(), ifil.getDataSize()) },
+    });
+    writeListChunk(body, "sdta", {
+        { "smpl", juce::MemoryBlock(smpl.getData(), smpl.getDataSize()) },
+    });
+    writeListChunk(body, "pdta", {
+        { "phdr", juce::MemoryBlock(phdr.getData(), phdr.getDataSize()) },
+        { "pbag", juce::MemoryBlock(pbag.getData(), pbag.getDataSize()) },
+        { "pmod", juce::MemoryBlock(pmod.getData(), pmod.getDataSize()) },
+        { "pgen", juce::MemoryBlock(pgen.getData(), pgen.getDataSize()) },
+        { "inst", juce::MemoryBlock(inst.getData(), inst.getDataSize()) },
+        { "ibag", juce::MemoryBlock(ibag.getData(), ibag.getDataSize()) },
+        { "imod", juce::MemoryBlock(imod.getData(), imod.getDataSize()) },
+        { "igen", juce::MemoryBlock(igen.getData(), igen.getDataSize()) },
+        { "shdr", juce::MemoryBlock(shdr.getData(), shdr.getDataSize()) },
+    });
+
+    appendFourcc(out, "RIFF");
+    appendU32LE(out, static_cast<juce::uint32>(body.getDataSize()));
+    out.write(body.getData(), body.getDataSize());
+    return juce::MemoryBlock(out.getData(), out.getDataSize());
+}
 } // namespace
 
 bool runSf2ImporterMinimalTest()
@@ -3077,6 +3259,704 @@ bool runSf2ImporterMinimalTest()
     if (result.sampleDataByAsset[0].getNumSamples() != 256)
         return false;
 
+    return true;
+}
+
+bool runSf2ImporterPresetSelectionTest()
+{
+    namespace sf = audiocity::engine::sf2;
+
+    const auto tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_sf2_preset_test", ".sf2");
+
+    const auto blob = buildDualPresetSf2();
+    if (!tempFile.replaceWithData(blob.getData(), blob.getSize()))
+        return false;
+
+    const auto choiceProbe = audiocity::plugin::probeImportedProgramChoices(tempFile);
+    if (choiceProbe.format != audiocity::plugin::ImportedProgramFormat::sf2
+        || !choiceProbe.hasMultipleChoices()
+        || choiceProbe.choices.size() != 2
+        || choiceProbe.choices[1].choiceIndex != 1
+        || choiceProbe.choices[1].label != "Tone B"
+        || choiceProbe.choices[1].detail != "Bank 0, Program 1")
+    {
+        tempFile.deleteFile();
+        return false;
+    }
+
+    const auto result = sf::importFilePreset(tempFile, 1);
+    tempFile.deleteFile();
+
+    if (result.hasErrors() || !result.hasPlayableProgram())
+        return false;
+    if (result.availablePresets.size() != 2 || result.chosenPresetIndex != 1)
+        return false;
+    if (result.program.name != "Tone B")
+        return false;
+    if (result.program.zones.size() != 1 || result.program.sampleAssets.size() != 1)
+        return false;
+
+    const auto& zone = result.program.zones[0];
+    return zone.keyRange.low == 61 && zone.keyRange.high == 72 && zone.rootMidiNote == 72;
+}
+
+bool runBitwigMultisampleImporterTest()
+{
+    namespace bw = audiocity::engine::bitwig;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_bitwig_multisample_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto wavFile = tempDirectory.getChildFile("tone.wav");
+    constexpr int sampleRate = 44100;
+    constexpr int sampleLength = 1024;
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> out(wavFile.createOutputStream());
+        if (out == nullptr) { tempDirectory.deleteRecursively(); return false; }
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(out.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr) { tempDirectory.deleteRecursively(); return false; }
+        out.release();
+        juce::AudioBuffer<float> buf(1, sampleLength);
+        for (int i = 0; i < sampleLength; ++i)
+            buf.setSample(0, i, 0.2f * std::sin(static_cast<float>(2.0 * juce::MathConstants<double>::pi * i * 220.0 / sampleRate)));
+        if (!writer->writeFromAudioSampleBuffer(buf, 0, sampleLength))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    const juce::String manifestXml =
+        R"(<?xml version="1.0" encoding="UTF-8"?>
+<multisample name="Test">
+  <generator>Audiocity</generator>
+  <category>Pad</category>
+  <layer name="Default">
+    <sample file="tone.wav" sample-start="0.0" sample-stop="1024.0" gain="0.0" tune="0.0">
+      <key root="60" low="48" high="72"/>
+      <velocity low="0" high="127"/>
+      <loop mode="loop" start="100.0" stop="900.0"/>
+    </sample>
+  </layer>
+</multisample>
+)";
+    const auto manifestFile = tempDirectory.getChildFile("multisample.xml");
+    if (!manifestFile.replaceWithText(manifestXml))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto multisampleFile = tempDirectory.getChildFile("Test.multisample");
+    {
+        juce::ZipFile::Builder builder;
+        builder.addFile(manifestFile, /*compression*/ 9, "multisample.xml");
+        builder.addFile(wavFile, /*compression*/ 0, "tone.wav");
+        std::unique_ptr<juce::FileOutputStream> out(multisampleFile.createOutputStream());
+        if (out == nullptr) { tempDirectory.deleteRecursively(); return false; }
+        if (!builder.writeToStream(*out, nullptr))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    const auto result = bw::importFile(multisampleFile);
+    tempDirectory.deleteRecursively();
+
+    if (result.hasErrors() || !result.hasPlayableProgram())
+        return false;
+    if (result.program.zones.size() != 1 || result.program.sampleAssets.size() != 1)
+        return false;
+
+    const auto& z = result.program.zones[0];
+    if (z.keyRange.low != 48 || z.keyRange.high != 72 || z.rootMidiNote != 60)
+        return false;
+    if (z.loopMode != audiocity::engine::ZoneLoopMode::continuous
+        || z.loopStart != 100 || z.loopEndExclusive != 900)
+        return false;
+    if (result.sampleDataByAsset[0].getNumSamples() != sampleLength)
+        return false;
+
+    return true;
+}
+
+namespace
+{
+// Helper for the new XML multisample importer tests.
+bool writeMonoToneWav(const juce::File& wavFile, int sampleRate, int sampleLength, double freq = 220.0)
+{
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::FileOutputStream> out(wavFile.createOutputStream());
+    if (out == nullptr) return false;
+    std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(out.get(), sampleRate, 1, 16, {}, 0));
+    if (writer == nullptr) return false;
+    out.release();
+    juce::AudioBuffer<float> buf(1, sampleLength);
+    for (int i = 0; i < sampleLength; ++i)
+        buf.setSample(0, i, 0.2f * std::sin(static_cast<float>(2.0 * juce::MathConstants<double>::pi * i * freq / sampleRate)));
+    return writer->writeFromAudioSampleBuffer(buf, 0, sampleLength);
+}
+} // namespace
+
+bool runMpcKeygroupImporterTest()
+{
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_mpc_xpm_test", "");
+    if (!dir.createDirectory()) return false;
+
+    const auto wav = dir.getChildFile("kick.wav");
+    if (!writeMonoToneWav(wav, 44100, 512)) { dir.deleteRecursively(); return false; }
+
+    const auto xpm = dir.getChildFile("Kit.xpm");
+    const juce::String xml =
+        R"(<?xml version="1.0" encoding="UTF-8"?>
+<MPCVObject>
+  <Program type="Keygroup">
+    <ProgramName>Kit</ProgramName>
+    <Instruments>
+      <Instrument number="1">
+        <LowNote>36</LowNote><HighNote>48</HighNote>
+        <Layers>
+          <Layer number="1">
+            <SampleFile>kick.wav</SampleFile>
+            <RootNote>40</RootNote>
+            <VelStart>0</VelStart><VelEnd>127</VelEnd>
+            <Volume>1.0</Volume><Pan>0.5</Pan>
+            <SampleStart>0</SampleStart><SampleEnd>512</SampleEnd>
+          </Layer>
+        </Layers>
+      </Instrument>
+    </Instruments>
+  </Program>
+</MPCVObject>)";
+    if (!xpm.replaceWithText(xml)) { dir.deleteRecursively(); return false; }
+
+    const auto r = audiocity::engine::mpc::importFile(xpm);
+    dir.deleteRecursively();
+    if (r.hasErrors() || !r.hasPlayableProgram()) return false;
+    if (r.program.zones.size() != 1 || r.program.sampleAssets.size() != 1) return false;
+    const auto& z = r.program.zones[0];
+    return z.keyRange.low == 36 && z.keyRange.high == 48 && z.rootMidiNote == 40;
+}
+
+bool run1010MusicPresetImporterTest()
+{
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_1010_test", "");
+    if (!dir.createDirectory()) return false;
+
+    const auto wav = dir.getChildFile("snare.wav");
+    if (!writeMonoToneWav(wav, 44100, 1024)) { dir.deleteRecursively(); return false; }
+
+    const auto preset = dir.getChildFile("preset.xml");
+    const juce::String xml =
+        R"(<?xml version="1.0" encoding="UTF-8"?>
+<document>
+  <session>
+    <cell type="sample" filename="snare.wav" rootnote="62" lonote="60" hinote="64"
+          lovel="0" hivel="127" samstart="0" samend="1024"
+          playmode="loop" loopstart="100" loopend="900" gaindb="0" pan="0"/>
+  </session>
+</document>)";
+    if (!preset.replaceWithText(xml)) { dir.deleteRecursively(); return false; }
+
+    const auto r = audiocity::engine::bento::importFile(preset);
+    dir.deleteRecursively();
+    if (r.hasErrors() || !r.hasPlayableProgram()) return false;
+    const auto& z = r.program.zones[0];
+    return z.keyRange.low == 60 && z.keyRange.high == 64 && z.rootMidiNote == 62
+        && z.loopMode == audiocity::engine::ZoneLoopMode::continuous
+        && z.loopStart == 100 && z.loopEndExclusive == 900;
+}
+
+bool runTalSamplerImporterTest()
+{
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_tal_test", "");
+    if (!dir.createDirectory()) return false;
+
+    const auto wav = dir.getChildFile("pad.wav");
+    if (!writeMonoToneWav(wav, 44100, 2048)) { dir.deleteRecursively(); return false; }
+
+    const auto preset = dir.getChildFile("Pad.talsmpl");
+    const juce::String xml =
+        R"(<?xml version="1.0" encoding="UTF-8"?>
+<tal>
+  <programs>
+    <program programname="Pad">
+      <multisample>
+        <sample url="pad.wav" rootkey="60" startnote="48" endnote="72"
+                startvelocity="0" endvelocity="127"
+                startsample="0" endsample="2048"
+                loopactive="1" loopstart="200" loopend="2000"
+                volume="1.0" pan="0.5" finetune="5" tune="0"/>
+      </multisample>
+    </program>
+  </programs>
+</tal>)";
+    if (!preset.replaceWithText(xml)) { dir.deleteRecursively(); return false; }
+
+    const auto r = audiocity::engine::talsmpl::importFile(preset);
+    dir.deleteRecursively();
+    if (r.hasErrors() || !r.hasPlayableProgram()) return false;
+    const auto& z = r.program.zones[0];
+    return z.keyRange.low == 48 && z.keyRange.high == 72 && z.rootMidiNote == 60
+        && z.loopMode == audiocity::engine::ZoneLoopMode::continuous
+        && z.loopStart == 200 && z.loopEndExclusive == 2000;
+}
+
+bool runTx16WxImporterTest()
+{
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_tx16wx_test", "");
+    if (!dir.createDirectory()) return false;
+
+    const auto wav = dir.getChildFile("lead.wav");
+    if (!writeMonoToneWav(wav, 44100, 1024)) { dir.deleteRecursively(); return false; }
+
+    const auto preset = dir.getChildFile("Lead.txprog");
+    const juce::String xml =
+        R"(<?xml version="1.0" encoding="UTF-8"?>
+<program name="Lead">
+  <group name="g1">
+    <region sample="lead.wav" rootkey="64" lokey="60" hikey="72"
+            lovel="0" hivel="127" start="0" end="1024"
+            loop="forward" loopstart="50" loopend="950" volume="0" pan="0" tune="0"/>
+  </group>
+</program>)";
+    if (!preset.replaceWithText(xml)) { dir.deleteRecursively(); return false; }
+
+    const auto r = audiocity::engine::tx16wx::importFile(preset);
+    dir.deleteRecursively();
+    if (r.hasErrors() || !r.hasPlayableProgram()) return false;
+    const auto& z = r.program.zones[0];
+    return z.keyRange.low == 60 && z.keyRange.high == 72 && z.rootMidiNote == 64
+        && z.loopMode == audiocity::engine::ZoneLoopMode::continuous;
+}
+
+bool runKorgMultisampleImporterTest()
+{
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_korg_test", "");
+    if (!dir.createDirectory()) return false;
+
+    const auto wav = dir.getChildFile("bell.wav");
+    if (!writeMonoToneWav(wav, 44100, 1024)) { dir.deleteRecursively(); return false; }
+
+    const auto manifest = dir.getChildFile("multisample.xml");
+    const juce::String xml =
+        R"(<?xml version="1.0" encoding="UTF-8"?>
+<KorgMultiSample name="Bell">
+  <sample file="bell.wav" rootkey="72" lokey="60" hikey="84" lovel="0" hivel="127"
+          start="0" end="1024" loop="loop" loopstart="100" loopend="900"/>
+</KorgMultiSample>)";
+    if (!manifest.replaceWithText(xml)) { dir.deleteRecursively(); return false; }
+
+    const auto archive = dir.getChildFile("Bell.korgmultisample");
+    {
+        juce::ZipFile::Builder b;
+        b.addFile(manifest, 9, "multisample.xml");
+        b.addFile(wav, 0, "bell.wav");
+        std::unique_ptr<juce::FileOutputStream> out(archive.createOutputStream());
+        if (out == nullptr || !b.writeToStream(*out, nullptr)) { dir.deleteRecursively(); return false; }
+    }
+
+    const auto r = audiocity::engine::korgmulti::importFile(archive);
+    dir.deleteRecursively();
+    if (r.hasErrors() || !r.hasPlayableProgram()) return false;
+    const auto& z = r.program.zones[0];
+    return z.keyRange.low == 60 && z.keyRange.high == 84 && z.rootMidiNote == 72
+        && z.loopMode == audiocity::engine::ZoneLoopMode::continuous;
+}
+
+bool runAbletonAdvImporterTest()
+{
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_ableton_test", "");
+    if (!dir.createDirectory()) return false;
+
+    const auto wav = dir.getChildFile("pad.wav");
+    if (!writeMonoToneWav(wav, 44100, 4096)) { dir.deleteRecursively(); return false; }
+
+    const auto plain = dir.getChildFile("Pad.adv.xml");
+    const juce::String xml =
+        R"(<?xml version="1.0" encoding="UTF-8"?>
+<Ableton>
+  <MultiSampler>
+    <Player>
+      <MultiSampleMap>
+        <SampleParts>
+          <MultiSamplePart>
+            <Name Value="Pad"/>
+            <KeyRange><Min Value="48"/><Max Value="72"/></KeyRange>
+            <VelocityRange><Min Value="1"/><Max Value="127"/></VelocityRange>
+            <RootKey Value="60"/>
+            <SampleStart Value="0"/><SampleEnd Value="4096"/>
+            <SustainLoop>
+              <Mode Value="1"/><Start Value="200"/><End Value="3500"/>
+            </SustainLoop>
+            <Volume Value="1.0"/>
+            <Panorama Value="0.0"/>
+            <Detune Value="0"/>
+            <SampleRef>
+              <FileRef>
+                <Path Value=")" + wav.getFullPathName().replace("\\", "/") + R"("/>
+                <Name Value="pad.wav"/>
+              </FileRef>
+            </SampleRef>
+          </MultiSamplePart>
+        </SampleParts>
+      </MultiSampleMap>
+    </Player>
+  </MultiSampler>
+</Ableton>)";
+
+    const auto adv = dir.getChildFile("Pad.adv");
+    {
+        std::unique_ptr<juce::FileOutputStream> raw(adv.createOutputStream());
+        if (raw == nullptr) { dir.deleteRecursively(); return false; }
+        juce::GZIPCompressorOutputStream gz(raw.get(), 9, false, juce::GZIPCompressorOutputStream::windowBitsGZIP);
+        const auto utf8 = xml.toUTF8();
+        gz.write(utf8.getAddress(), (size_t) std::strlen(utf8));
+        gz.flush();
+    }
+
+    const auto r = audiocity::engine::ableton::importFile(adv);
+    dir.deleteRecursively();
+    if (r.hasErrors() || !r.hasPlayableProgram()) return false;
+    const auto& z = r.program.zones[0];
+    return z.keyRange.low == 48 && z.keyRange.high == 72 && z.rootMidiNote == 60
+        && z.loopMode == audiocity::engine::ZoneLoopMode::continuous
+        && z.loopStart == 200 && z.loopEndExclusive == 3500;
+}
+
+bool runDistingExPresetImporterTest()
+{
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_dex_test", "");
+    if (!dir.createDirectory()) return false;
+
+    const auto wav = dir.getChildFile("clip.wav");
+    if (!writeMonoToneWav(wav, 44100, 1024)) { dir.deleteRecursively(); return false; }
+
+    const auto preset = dir.getChildFile("Pad.dexpreset");
+    const juce::String text =
+        "Name: Pad\n"
+        "[Sample 1]\n"
+        "file=clip.wav\n"
+        "root=60\n"
+        "lokey=48\n"
+        "hikey=72\n"
+        "lovel=1\n"
+        "hivel=127\n"
+        "gain=0\n"
+        "pan=0\n";
+    if (!preset.replaceWithText(text)) { dir.deleteRecursively(); return false; }
+
+    const auto r = audiocity::engine::distingex::importFile(preset);
+    dir.deleteRecursively();
+    if (r.hasErrors() || !r.hasPlayableProgram()) return false;
+    const auto& z = r.program.zones[0];
+    return z.keyRange.low == 48 && z.keyRange.high == 72 && z.rootMidiNote == 60;
+}
+
+bool runKorgKmpImporterTest()
+{
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_kmp_test", "");
+    if (!dir.createDirectory()) return false;
+
+    // Sample is "Bell.wav"; KMP RLP1 entry references "Bell.KSF" (we resolve .wav fallback)
+    const auto wav = dir.getChildFile("Bell.wav");
+    if (!writeMonoToneWav(wav, 44100, 1024)) { dir.deleteRecursively(); return false; }
+
+    const auto kmp = dir.getChildFile("Bell.kmp");
+    juce::MemoryBlock blob;
+    auto appendChunk = [&](const char id[4], const std::vector<juce::uint8>& payload)
+    {
+        juce::uint8 hdr[8];
+        std::memcpy(hdr, id, 4);
+        juce::uint32 sz = (juce::uint32) payload.size();
+        hdr[4] = (juce::uint8)((sz >> 24) & 0xFF);
+        hdr[5] = (juce::uint8)((sz >> 16) & 0xFF);
+        hdr[6] = (juce::uint8)((sz >> 8) & 0xFF);
+        hdr[7] = (juce::uint8)( sz        & 0xFF);
+        blob.append(hdr, 8);
+        blob.append(payload.data(), payload.size());
+    };
+
+    {
+        std::vector<juce::uint8> msp1(18, 0);
+        const char* name = "Bell";
+        std::memcpy(msp1.data(), name, std::strlen(name));
+        msp1[16] = 1; // numSamples
+        appendChunk("MSP1", msp1);
+    }
+    {
+        std::vector<juce::uint8> rlp1(18, 0);
+        rlp1[0] = 84;   // topKey
+        rlp1[1] = 72;   // rootKey
+        rlp1[2] = 0;    // tune cents
+        rlp1[3] = 0;    // level dB
+        rlp1[4] = 0;    // pan
+        const char* fname = "Bell.KSF";
+        std::memcpy(rlp1.data() + 6, fname, std::strlen(fname));
+        appendChunk("RLP1", rlp1);
+    }
+    if (!kmp.replaceWithData(blob.getData(), blob.getSize())) { dir.deleteRecursively(); return false; }
+
+    const auto r = audiocity::engine::korgkmp::importFile(kmp);
+    dir.deleteRecursively();
+    if (r.hasErrors() || !r.hasPlayableProgram()) return false;
+    const auto& z = r.program.zones[0];
+    return z.rootMidiNote == 72 && z.keyRange.low == 0 && z.keyRange.high == 84;
+}
+
+bool runLogicExs24ImporterTest()
+{
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_exs_test", "");
+    if (!dir.createDirectory()) return false;
+
+    const auto wav = dir.getChildFile("piano.wav");
+    if (!writeMonoToneWav(wav, 44100, 4096)) { dir.deleteRecursively(); return false; }
+
+    const auto exs = dir.getChildFile("Piano.exs");
+
+    auto writeChunk = [](juce::MemoryBlock& blob, juce::uint32 type, juce::uint32 payloadSize,
+                         const juce::String& name, const std::vector<juce::uint8>& payload)
+    {
+        juce::uint8 hdr[84] = {};
+        // sig (we leave 0 - parser ignores it)
+        hdr[4] = (juce::uint8)( payloadSize        & 0xFF);
+        hdr[5] = (juce::uint8)((payloadSize >> 8)  & 0xFF);
+        hdr[6] = (juce::uint8)((payloadSize >> 16) & 0xFF);
+        hdr[7] = (juce::uint8)((payloadSize >> 24) & 0xFF);
+        hdr[8]  = (juce::uint8)( type        & 0xFF);
+        hdr[9]  = (juce::uint8)((type >> 8)  & 0xFF);
+        hdr[10] = (juce::uint8)((type >> 16) & 0xFF);
+        hdr[11] = (juce::uint8)((type >> 24) & 0xFF);
+        const auto utf8 = name.toUTF8();
+        const auto nameLen = (int) std::strlen(utf8);
+        std::memcpy(hdr + 20, utf8.getAddress(), (size_t) juce::jmin(nameLen, 64));
+        blob.append(hdr, 84);
+        blob.append(payload.data(), payload.size());
+    };
+
+    juce::MemoryBlock blob;
+    // Header chunk with program name
+    writeChunk(blob, 0x01000101u, 84, "Piano", std::vector<juce::uint8>(84, 0));
+
+    // Sample chunk - filename in first 64 bytes of payload
+    {
+        std::vector<juce::uint8> sample(64 + 256, 0);
+        const char* fname = "piano.wav";
+        std::memcpy(sample.data(), fname, std::strlen(fname));
+        writeChunk(blob, 0x01000104u, (juce::uint32) sample.size(), "piano", sample);
+    }
+
+    // Zone chunk
+    {
+        std::vector<juce::uint8> zone(184, 0);
+        zone[1] = 0x00; // loop off
+        zone[5] = 60;   // root
+        zone[6] = 48;   // lo key
+        zone[7] = 72;   // hi key
+        zone[10] = 1;   // lo vel
+        zone[11] = 127; // hi vel
+        // sample start
+        zone[12] = 0; zone[13] = 0; zone[14] = 0; zone[15] = 0;
+        // sample end = 4096
+        zone[16] = 0x00; zone[17] = 0x10; zone[18] = 0; zone[19] = 0;
+        // sample index = 0
+        zone[180] = 0; zone[181] = 0; zone[182] = 0; zone[183] = 0;
+        writeChunk(blob, 0x01000102u, (juce::uint32) zone.size(), "z1", zone);
+    }
+
+    if (!exs.replaceWithData(blob.getData(), blob.getSize())) { dir.deleteRecursively(); return false; }
+
+    const auto r = audiocity::engine::exs24::importFile(exs);
+    dir.deleteRecursively();
+    if (r.hasErrors() || !r.hasPlayableProgram()) return false;
+    const auto& z = r.program.zones[0];
+    return z.rootMidiNote == 60 && z.keyRange.low == 48 && z.keyRange.high == 72;
+}
+
+bool runNnxtImporterDiagnosticTest()
+{
+    // NN-XT is recognised but not yet supported - the importer must surface an error.
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_nnxt_test", "");
+    if (!dir.createDirectory()) return false;
+
+    const auto sxt = dir.getChildFile("Patch.sxt");
+    juce::MemoryBlock blob;
+    blob.setSize(64, true);
+    auto* bytes = static_cast<juce::uint8*>(blob.getData());
+    const char* tag = "CAT NN-XT";
+    std::memcpy(bytes, tag, std::strlen(tag));
+    if (!sxt.replaceWithData(blob.getData(), blob.getSize())) { dir.deleteRecursively(); return false; }
+
+    const auto r = audiocity::engine::nnxt::importFile(sxt);
+    dir.deleteRecursively();
+    return r.hasErrors() && !r.hasPlayableProgram();
+}
+
+bool runLegacyNkiImportNcwViaConverterTest()
+{
+    using namespace audiocity::engine::nki;
+
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 512;
+    constexpr int blockSize = 64;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_nki_import_ncw_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto sampleDirectory = tempDirectory.getChildFile("Samples");
+    if (!sampleDirectory.createDirectory())
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto sampleFile = sampleDirectory.getChildFile("Piano.ncw");
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(sampleFile.createOutputStream());
+        if (output == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        output.release();
+        auto sample = createTestSample(sampleLength);
+        sample.applyGain(0.45f);
+        if (!writer->writeFromAudioSampleBuffer(sample, 0, sampleLength))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    const auto nkiFile = tempDirectory.getChildFile("LegacyPiano.nki");
+    juce::MemoryOutputStream payload;
+    auto writeAscii = [&payload](const char* text)
+    {
+        payload.write(text, std::strlen(text));
+        payload.writeByte(0);
+    };
+
+    payload.write("NKI\0", 4);
+    payload.writeByte(0x44);
+    payload.writeByte(0x02);
+    writeAscii("group_name=Keys");
+    writeAscii("zone_name=Piano");
+    writeAscii("lowkey=60");
+    writeAscii("highkey=72");
+    writeAscii("rootkey=60");
+    writeAscii("lowvel=1");
+    writeAscii("highvel=127");
+    writeAscii("Samples/Piano.ncw");
+    if (!nkiFile.replaceWithData(payload.getData(), payload.getDataSize()))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    ScopedEnvironmentVariable converterCommand(
+        "AUDIOCITY_NCW_CONVERTER_COMMAND",
+        "cmd.exe /c copy /y {input} {output} >nul");
+    if (!converterCommand.valid)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto result = importFile(nkiFile);
+    if (result.hasErrors()
+        || !result.hasPlayableProgram()
+        || result.program.sampleAssets.size() != 1
+        || result.program.zones.size() != 1
+        || result.program.sampleAssets[0].displayName != "Piano.ncw"
+        || !juce::String(result.program.sampleAssets[0].sourcePath).endsWithIgnoreCase(".wav")
+        || result.program.zones[0].rootMidiNote != 60
+        || result.program.zones[0].keyRange.low != 60
+        || result.program.zones[0].keyRange.high != 72)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    using namespace audiocity::engine;
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, 2);
+    engine.setProgram(result.program, result.sampleDataByAsset);
+
+    juce::AudioBuffer<float> block(2, blockSize);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+    engine.render(block, midi);
+    float energy = 0.0f;
+    for (int channel = 0; channel < block.getNumChannels(); ++channel)
+        for (int sample = 0; sample < block.getNumSamples(); ++sample)
+            energy += std::abs(block.getSample(channel, sample));
+
+    tempDirectory.deleteRecursively();
+    return energy > 0.01f;
+}
+
+bool runLegacyNkiProbeDetectsEncryptedPatchTest()
+{
+    namespace nki = audiocity::engine::nki;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_nki_encrypted_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto file = tempDirectory.getChildFile("Protected.nki");
+    juce::MemoryBlock blob;
+    blob.setSize(8192, true);
+    juce::Random rng(0xC0FFEEu);
+    auto* bytes = static_cast<juce::uint8*>(blob.getData());
+    for (size_t i = 0; i < blob.getSize(); ++i)
+        bytes[i] = static_cast<juce::uint8>(rng.nextInt(256));
+    // Stamp a recognisable Kontakt monolithic-container tag near the header so the
+    // probe's signature heuristic identifies this fixture as protected content.
+    const char* tag = "NICnt";
+    std::memcpy(bytes + 16, tag, std::strlen(tag));
+    if (!file.replaceWithData(blob.getData(), blob.getSize()))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto result = nki::probeFile(file);
+    tempDirectory.deleteRecursively();
+
+    if (!result.likelyEncryptedOrProtected)
+        return false;
+    if (result.status != nki::ProbeStatus::unsupportedOrUnrecognized)
+        return false;
+    const auto summary = nki::buildProbeSummary(result);
+    if (!summary.containsIgnoreCase("encrypted") && !summary.containsIgnoreCase("protected"))
+        return false;
     return true;
 }
 
@@ -3827,7 +4707,7 @@ bool runLegacyNkiProbeRejectsContainerFormatsTest()
     payload.writeByte(0x02);
     payload.writeByte(0x03);
     writeAscii("Samples/Archive.nkx");
-    writeAscii("Compressed/Layer.ncw");
+    writeAscii("Compressed/Layer.nks");
     if (!nkiFile.replaceWithData(payload.getData(), payload.getDataSize()))
     {
         tempDirectory.deleteRecursively();
@@ -5850,6 +6730,74 @@ bool runLoadSampleResetsEnvelopeAndFilterDefaultsTest()
         && !filter.lfoTempoSync
         && std::abs(pitchLfo.rateHz - 0.0f) <= 1.0e-6f
         && std::abs(pitchLfo.depthCents - 0.0f) <= 1.0e-6f;
+}
+
+bool runLoadNcwSampleViaConverterTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 512;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_load_ncw_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto tempFile = tempDirectory.getChildFile("Converted.ncw");
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(tempFile.createOutputStream());
+        if (output == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        output.release();
+
+        juce::AudioBuffer<float> buffer(1, sampleLength);
+        for (int i = 0; i < sampleLength; ++i)
+        {
+            const float phase = static_cast<float>(2.0 * juce::MathConstants<double>::pi * i * 440.0 / sampleRate);
+            buffer.setSample(0, i, 0.35f * std::sin(phase));
+        }
+
+        if (!writer->writeFromAudioSampleBuffer(buffer, 0, sampleLength))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    ScopedEnvironmentVariable converterCommand(
+        "AUDIOCITY_NCW_CONVERTER_COMMAND",
+        "cmd.exe /c copy /y {input} {output} >nul");
+    if (!converterCommand.valid)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+
+    const auto loaded = engine.loadSampleFromFile(tempFile);
+    const auto ok = loaded
+        && engine.getLoadedSampleLength() == sampleLength
+        && engine.getSamplePath() == tempFile.getFullPathName();
+
+    tempDirectory.deleteRecursively();
+    return ok;
 }
 
 bool runFilterModulationAmountsAreBipolarTest()
@@ -10196,6 +11144,7 @@ bool runLibraryFileIndexScanTest()
     const auto nested = tempRoot.getChildFile("Nested");
     if (!nested.createDirectory()
         || !tempRoot.getChildFile("Kick.WAV").replaceWithText("")
+        || !tempRoot.getChildFile("Layer.ncw").replaceWithText("")
         || !tempRoot.getChildFile("Patch.sfz").replaceWithText("<region> sample=Kick.WAV\n")
         || !tempRoot.getChildFile("LegacyKit.nki").replaceWithText("probe-only")
         || !tempRoot.getChildFile("Loop.rx2").replaceWithText("")
@@ -10209,6 +11158,7 @@ bool runLibraryFileIndexScanTest()
     if (!LibraryFileIndex::isSupportedExtension(".RX2", true)
         || LibraryFileIndex::isSupportedExtension(".RX2", false)
         || !LibraryFileIndex::isSupportedExtension(".NKI", false)
+        || !LibraryFileIndex::isSupportedExtension(".NCW", false)
         || LibraryFileIndex::isSupportedExtension(".txt", true))
     {
         tempRoot.deleteRecursively();
@@ -10246,8 +11196,9 @@ bool runLibraryFileIndexScanTest()
         return sawSfz && sawNki;
     };
 
-    const auto ok = withoutRex.size() == 4
-        && withRex.size() == 5
+    const auto ok = withoutRex.size() == 5
+        && withRex.size() == 6
+        && hasRelativePath(withoutRex, "Layer.ncw")
         && hasRelativePath(withoutRex, "Nested/Snare.aif")
         && hasRelativePath(withoutRex, "LegacyKit.nki")
         && !hasRelativePath(withoutRex, "Loop.rx2")
@@ -10707,6 +11658,20 @@ int main()
         AUDIOCITY_TEST(runSfzImporterDiagnosticsTest, 89),
         AUDIOCITY_TEST(runDecentSamplerImporterTest, 136),
         AUDIOCITY_TEST(runSf2ImporterMinimalTest, 137),
+        AUDIOCITY_TEST(runSf2ImporterPresetSelectionTest, 224),
+        AUDIOCITY_TEST(runBitwigMultisampleImporterTest, 138),
+        AUDIOCITY_TEST(runMpcKeygroupImporterTest, 140),
+        AUDIOCITY_TEST(run1010MusicPresetImporterTest, 141),
+        AUDIOCITY_TEST(runTalSamplerImporterTest, 142),
+        AUDIOCITY_TEST(runTx16WxImporterTest, 143),
+        AUDIOCITY_TEST(runKorgMultisampleImporterTest, 144),
+        AUDIOCITY_TEST(runAbletonAdvImporterTest, 145),
+        AUDIOCITY_TEST(runDistingExPresetImporterTest, 146),
+        AUDIOCITY_TEST(runKorgKmpImporterTest, 147),
+        AUDIOCITY_TEST(runLogicExs24ImporterTest, 148),
+        AUDIOCITY_TEST(runNnxtImporterDiagnosticTest, 149),
+        AUDIOCITY_TEST(runLegacyNkiImportNcwViaConverterTest, 222),
+        AUDIOCITY_TEST(runLegacyNkiProbeDetectsEncryptedPatchTest, 139),
         AUDIOCITY_TEST(runLegacyNkiProbeDetectsDiscreteSampleReferencesTest, 122),
         AUDIOCITY_TEST(runLegacyNkiProbeRejectsContainerFormatsTest, 123),
         AUDIOCITY_TEST(runLegacyNkiProbeResolvesParentSamplesFolderTest, 124),
@@ -10736,6 +11701,7 @@ int main()
         AUDIOCITY_TEST(runLoadSampleResetsPlaybackAndLoopRangesTest, 44),
         AUDIOCITY_TEST(runLoadSampleClearsProgramSnapshotTest, 92),
         AUDIOCITY_TEST(runLoadSampleResetsEnvelopeAndFilterDefaultsTest, 45),
+        AUDIOCITY_TEST(runLoadNcwSampleViaConverterTest, 223),
         AUDIOCITY_TEST(runFilterModulationAmountsAreBipolarTest, 70),
         AUDIOCITY_TEST(runEmbeddedLoopMetadataLoadsWithoutRootNoteTest, 64),
         AUDIOCITY_TEST(runRexRuntimeFallbackSmokeTest, 62),

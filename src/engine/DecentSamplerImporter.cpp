@@ -1,5 +1,7 @@
 #include "DecentSamplerImporter.h"
 
+#include "AudioFileSupport.h"
+
 #include <juce_audio_formats/juce_audio_formats.h>
 
 #include <algorithm>
@@ -277,16 +279,21 @@ private:
 
     [[nodiscard]] int getOrAddSampleAsset(const juce::File& sampleFile, const int rootMidiNote, ImportResult& result)
     {
-        const auto path = sampleFile.getFullPathName().toStdString();
+        auto openResult = audio_file::openReaderForFile(formatManager, sampleFile);
+        auto reader = std::move(openResult.reader);
+        const auto path = openResult.readableFile.existsAsFile()
+            ? openResult.readableFile.getFullPathName().toStdString()
+            : sampleFile.getFullPathName().toStdString();
         const auto found = sampleAssetIndices.find(path);
         if (found != sampleAssetIndices.end())
             return found->second;
 
-        std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(sampleFile));
         if (reader == nullptr)
         {
             addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error,
-                          "Unsupported or unreadable DecentSampler sample " + sampleFile.getFullPathName());
+                          openResult.errorMessage.isNotEmpty() ? openResult.errorMessage
+                                                               : ("Unsupported or unreadable DecentSampler sample "
+                                                                  + sampleFile.getFullPathName()));
             return -1;
         }
 
@@ -355,7 +362,7 @@ ImportResult importFile(const juce::File& dspresetFile)
     }
 
     juce::AudioFormatManager fm;
-    fm.registerBasicFormats();
+    audio_file::registerAudioFormats(fm);
 
     Importer importer(fm, dspresetFile);
     importer.run(*xml, result);

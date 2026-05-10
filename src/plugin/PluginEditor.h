@@ -16,12 +16,18 @@
 #include "../engine/SettingsUndoHistory.h"
 #include "CcLearnDial.h"
 #include "DialLookAndFeel.h"
+#include "ImportedProgramState.h"
 #include "PlayerPadState.h"
 #include "ProgramMappingModel.h"
 #include "ProgramMappingUndoHistory.h"
 #include "../engine/VoicePool.h"
 
 class AudiocityAudioProcessor;
+
+namespace audiocity::plugin
+{
+enum class ImportedProgramFormat;
+}
 
 class PlayerModulationPanel final : public juce::Component
 {
@@ -1048,7 +1054,15 @@ private:
     void toggleSelectedBrowserFavorite();
     void applySelectedBrowserTags();
     void rebuildVisibleSampleList();
-    bool loadFileAsInstrument(const juce::File& file);
+    bool loadFileAsInstrument(const juce::File& file,
+                              std::function<void(bool)> completion = {});
+    bool importInstrumentFileByFormat(const juce::File& file,
+                                      audiocity::plugin::ImportedProgramFormat format,
+                                      int selectedChoiceIndex);
+    void completeInstrumentLoad(const juce::File& file,
+                                bool loaded,
+                                bool cancelledByUser,
+                                const std::function<void(bool)>& completion);
     void autoSliceLoadedSample();
     void mergeLoadedSliceAtBoundary(int boundarySample);
     void splitLoadedSliceAtSample(int sampleIndex);

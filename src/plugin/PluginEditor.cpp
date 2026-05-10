@@ -5,6 +5,7 @@
 #include "PeakPreviewCache.h"
 #include "PluginProcessor.h"
 #include "ProgramMappingModel.h"
+#include "../engine/AudioFileSupport.h"
 #include "../engine/LegacyNkiProbe.h"
 #include <BinaryData.h>
 
@@ -447,6 +448,138 @@ private:
     std::function<void(int, int)> onAccepted_;
 };
 
+class ImportedProgramChoiceDialogContent final : public juce::Component
+{
+public:
+    ImportedProgramChoiceDialogContent(const juce::String& fileName,
+                                      const std::vector<audiocity::plugin::ImportedProgramChoice>& choices,
+                                                                            std::function<void(int)> onAccepted,
+                                                                            std::function<void()> onCancelled)
+                : choices_(choices),
+                    onAccepted_(std::move(onAccepted)),
+                    onCancelled_(std::move(onCancelled))
+    {
+        addAndMakeVisible(messageLabel_);
+        addAndMakeVisible(choiceLabel_);
+        addAndMakeVisible(choiceCombo_);
+        addAndMakeVisible(detailLabel_);
+        addAndMakeVisible(cancelButton_);
+        addAndMakeVisible(importButton_);
+
+        messageLabel_.setText("Select the embedded preset to import from " + fileName + ".",
+                              juce::dontSendNotification);
+        messageLabel_.setJustificationType(juce::Justification::centredLeft);
+
+        choiceLabel_.setText("Preset", juce::dontSendNotification);
+        choiceLabel_.setJustificationType(juce::Justification::centredLeft);
+
+        detailLabel_.setJustificationType(juce::Justification::centredLeft);
+        detailLabel_.setColour(juce::Label::textColourId, uiTextMutedColour());
+
+        for (std::size_t index = 0; index < choices_.size(); ++index)
+            choiceCombo_.addItem(choices_[index].label, static_cast<int>(index) + 1);
+
+        choiceCombo_.onChange = [this]
+        {
+            const auto selectedIndex = choiceCombo_.getSelectedItemIndex();
+            if (juce::isPositiveAndBelow(selectedIndex, static_cast<int>(choices_.size())))
+            {
+                detailLabel_.setText(choices_[static_cast<std::size_t>(selectedIndex)].detail,
+                                     juce::dontSendNotification);
+            }
+        };
+
+        if (!choices_.empty())
+            choiceCombo_.setSelectedId(1, juce::sendNotificationSync);
+
+        cancelButton_.setButtonText("Cancel");
+        importButton_.setButtonText("Import");
+
+        cancelButton_.onClick = [this]
+        {
+            if (onCancelled_)
+                onCancelled_();
+            if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
+                dw->exitModalState(0);
+        };
+
+        importButton_.onClick = [this]
+        {
+            const auto selectedIndex = choiceCombo_.getSelectedItemIndex();
+            if (juce::isPositiveAndBelow(selectedIndex, static_cast<int>(choices_.size())) && onAccepted_)
+                onAccepted_(choices_[static_cast<std::size_t>(selectedIndex)].choiceIndex);
+
+            if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
+                dw->exitModalState(1);
+        };
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced(12);
+        messageLabel_.setBounds(area.removeFromTop(22));
+        area.removeFromTop(8);
+        choiceLabel_.setBounds(area.removeFromTop(18));
+        choiceCombo_.setBounds(area.removeFromTop(26));
+        area.removeFromTop(8);
+        detailLabel_.setBounds(area.removeFromTop(20));
+        area.removeFromTop(12);
+
+        auto buttons = area.removeFromTop(26);
+        importButton_.setBounds(buttons.removeFromRight(78));
+        buttons.removeFromRight(6);
+        cancelButton_.setBounds(buttons.removeFromRight(78));
+    }
+
+private:
+    std::vector<audiocity::plugin::ImportedProgramChoice> choices_;
+    juce::Label messageLabel_;
+    juce::Label choiceLabel_;
+    juce::ComboBox choiceCombo_;
+    juce::Label detailLabel_;
+    juce::TextButton cancelButton_;
+    juce::TextButton importButton_;
+    std::function<void(int)> onAccepted_;
+    std::function<void()> onCancelled_;
+};
+
+void showImportedProgramChoiceDialog(juce::Component* owner,
+                                     const juce::File& file,
+                                     const audiocity::plugin::ImportedProgramChoiceProbe& probe,
+                                     std::function<void(std::optional<int>)> onCompleted)
+{
+    if (!probe.hasMultipleChoices())
+    {
+        if (onCompleted)
+            onCompleted(std::nullopt);
+        return;
+    }
+
+    auto content = std::make_unique<ImportedProgramChoiceDialogContent>(file.getFileName(),
+                                                                        probe.choices,
+                                                                        [onCompleted](const int choiceIndex)
+                                                                        {
+                                                                            if (onCompleted)
+                                                                                onCompleted(choiceIndex);
+                                                                        },
+                                                                        [onCompleted]()
+                                                                        {
+                                                                            if (onCompleted)
+                                                                                onCompleted(std::nullopt);
+                                                                        });
+    content->setSize(460, 150);
+
+    juce::DialogWindow::LaunchOptions options;
+    options.dialogTitle = "Import " + audiocity::plugin::importedProgramFormatBadge(probe.format) + " Preset";
+    options.content.setOwned(content.release());
+    options.componentToCentreAround = owner;
+    options.dialogBackgroundColour = juce::Colour(0xff252538);
+    options.escapeKeyTriggersCloseButton = false;
+    options.useNativeTitleBar = true;
+    options.resizable = false;
+    options.launchAsync();
+}
+
 struct SamplePreviewData
 {
     std::vector<float> peaks;
@@ -554,8 +687,9 @@ auto buildPreviewAndMetadata(const juce::File& file) -> SamplePreviewData
         out.peaks.assign(static_cast<std::size_t>(kPeakCount), 0.0f);
 
         juce::AudioFormatManager formatManager;
-        formatManager.registerBasicFormats();
-        std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(sampleFile));
+        audiocity::engine::audio_file::registerAudioFormats(formatManager);
+        auto openResult = audiocity::engine::audio_file::openReaderForFile(formatManager, sampleFile);
+        auto reader = std::move(openResult.reader);
         if (reader == nullptr || reader->lengthInSamples <= 0)
         {
             out.metadataLine = "SR: --  Ch: --  Bit Depth: --  Duration: --  Samples: --";
@@ -4698,16 +4832,19 @@ void AudiocityAudioProcessorEditor::timerCallback()
             if (isSupportedSampleFile(dropped))
             {
                 DBG("[DnD]   loading instrument...");
-                if (loadFileAsInstrument(dropped))
+                loadFileAsInstrument(dropped, [this](const bool loaded)
                 {
-                    DBG("[DnD]   load succeeded, refreshing UI");
-                    clearSelectedPresetAfterSourceLoad();
-                    refreshUI(true);
-                }
-                else
-                {
-                    DBG("[DnD]   load FAILED");
-                }
+                    if (loaded)
+                    {
+                        DBG("[DnD]   load succeeded, refreshing UI");
+                        clearSelectedPresetAfterSourceLoad();
+                        refreshUI(true);
+                    }
+                    else
+                    {
+                        DBG("[DnD]   load FAILED");
+                    }
+                });
                 break;
             }
         }
@@ -6637,32 +6774,57 @@ bool AudiocityAudioProcessorEditor::isSupportedSampleFile(const juce::File& file
     return audiocity::plugin::LibraryFileIndex::isSupportedFile(file, processor_.isRexRuntimeAvailable());
 }
 
-bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file)
+bool AudiocityAudioProcessorEditor::importInstrumentFileByFormat(
+    const juce::File& file,
+    const audiocity::plugin::ImportedProgramFormat format,
+    const int selectedChoiceIndex)
 {
-    processor_.panicAllAudio();
-    updateGeneratePreviewButtonText();
+    if (file.getFileExtension().equalsIgnoreCase(".nki"))
+        return processor_.importLegacyNkiProgram(file);
 
-    const auto loaded = [&]()
+    switch (format)
     {
-        if (file.getFileExtension().equalsIgnoreCase(".nki"))
-            return processor_.importLegacyNkiProgram(file);
+        case audiocity::plugin::ImportedProgramFormat::sfz:
+            return processor_.importSfzProgram(file);
+        case audiocity::plugin::ImportedProgramFormat::rex:
+            return processor_.importRexSliceProgram(file);
+        case audiocity::plugin::ImportedProgramFormat::sf2:
+            return processor_.importSf2Program(file, selectedChoiceIndex >= 0 ? selectedChoiceIndex : 0);
+        case audiocity::plugin::ImportedProgramFormat::decentSampler:
+            return processor_.importDecentSamplerProgram(file);
+        case audiocity::plugin::ImportedProgramFormat::bitwigMultisample:
+            return processor_.importBitwigMultisampleProgram(file);
+        case audiocity::plugin::ImportedProgramFormat::mpcKeygroup:
+            return processor_.importMpcKeygroupProgram(file);
+        case audiocity::plugin::ImportedProgramFormat::bento1010:
+            return processor_.import1010MusicPresetProgram(file);
+        case audiocity::plugin::ImportedProgramFormat::talSampler:
+            return processor_.importTalSamplerProgram(file);
+        case audiocity::plugin::ImportedProgramFormat::tx16wx:
+            return processor_.importTx16WxProgram(file);
+        case audiocity::plugin::ImportedProgramFormat::korgMultisample:
+            return processor_.importKorgMultisampleProgram(file);
+        case audiocity::plugin::ImportedProgramFormat::abletonSampler:
+            return processor_.importAbletonSamplerProgram(file);
+        case audiocity::plugin::ImportedProgramFormat::distingExPreset:
+            return processor_.importDistingExPresetProgram(file);
+        case audiocity::plugin::ImportedProgramFormat::korgKmp:
+            return processor_.importKorgKmpProgram(file);
+        case audiocity::plugin::ImportedProgramFormat::logicExs24:
+            return processor_.importLogicExs24Program(file);
+        case audiocity::plugin::ImportedProgramFormat::nnxt:
+            return processor_.importNnxtProgram(file);
+        case audiocity::plugin::ImportedProgramFormat::unknown:
+        default:
+            return processor_.loadSampleFromFile(file);
+    }
+}
 
-        switch (audiocity::plugin::detectImportedProgramFormat(file.getFullPathName()))
-        {
-            case audiocity::plugin::ImportedProgramFormat::sfz:
-                return processor_.importSfzProgram(file);
-            case audiocity::plugin::ImportedProgramFormat::rex:
-                return processor_.importRexSliceProgram(file);
-            case audiocity::plugin::ImportedProgramFormat::sf2:
-                return processor_.importSf2Program(file);
-            case audiocity::plugin::ImportedProgramFormat::decentSampler:
-                return processor_.importDecentSamplerProgram(file);
-            case audiocity::plugin::ImportedProgramFormat::unknown:
-            default:
-                return processor_.loadSampleFromFile(file);
-        }
-    }();
-
+void AudiocityAudioProcessorEditor::completeInstrumentLoad(const juce::File& file,
+                                                          const bool loaded,
+                                                          const bool cancelledByUser,
+                                                          const std::function<void(bool)>& completion)
+{
     if (loaded)
     {
         editorUndoHistory_.clear();
@@ -6672,7 +6834,7 @@ bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file)
         refreshBrowserEntryLibraryFlags();
         rebuildVisibleSampleList();
     }
-    else
+    else if (!cancelledByUser)
     {
         updateDiagnosticsStatusText();
 
@@ -6684,6 +6846,51 @@ bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file)
         }
     }
 
+    if (completion)
+        completion(loaded);
+}
+
+bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file,
+                                                         std::function<void(bool)> completion)
+{
+    processor_.panicAllAudio();
+    updateGeneratePreviewButtonText();
+
+    const auto choiceProbe = audiocity::plugin::probeImportedProgramChoices(file);
+    const auto detectedFormat = choiceProbe.format != audiocity::plugin::ImportedProgramFormat::unknown
+        ? choiceProbe.format
+        : audiocity::plugin::detectImportedProgramFormat(file.getFullPathName());
+    if (choiceProbe.hasMultipleChoices())
+    {
+        auto safeThis = juce::Component::SafePointer<AudiocityAudioProcessorEditor>(this);
+        showImportedProgramChoiceDialog(this,
+                                        file,
+                                        choiceProbe,
+                                        [safeThis,
+                                         file,
+                                         detectedFormat,
+                                         completion = std::move(completion)](std::optional<int> choiceIndex) mutable
+                                        {
+                                            if (safeThis == nullptr)
+                                                return;
+
+                                            if (!choiceIndex.has_value())
+                                            {
+                                                safeThis->completeInstrumentLoad(file, false, true, completion);
+                                                return;
+                                            }
+
+                                            const auto loaded = safeThis->importInstrumentFileByFormat(file,
+                                                                                                       detectedFormat,
+                                                                                                       *choiceIndex);
+                                            safeThis->completeInstrumentLoad(file, loaded, false, completion);
+                                        });
+
+        return false;
+    }
+
+    const auto loaded = importInstrumentFileByFormat(file, detectedFormat, -1);
+    completeInstrumentLoad(file, loaded, false, completion);
     return loaded;
 }
 
@@ -7293,8 +7500,11 @@ void AudiocityAudioProcessorEditor::loadSampleFromBrowserRow(const int row)
     lastPreviewedBrowserSourceIndex_ = sourceIndex;
 
     const auto& file = allSampleEntries_[static_cast<std::size_t>(sourceIndex)].file;
-    if (loadFileAsInstrument(file))
+    loadFileAsInstrument(file, [this](const bool loaded)
     {
+        if (!loaded)
+            return;
+
         clearSelectedPresetAfterSourceLoad();
         tabBar_.setCurrentTabIndex(0);
         currentTabIndex_ = 0;
@@ -7303,7 +7513,7 @@ void AudiocityAudioProcessorEditor::loadSampleFromBrowserRow(const int row)
         resized();
         repaint();
         refreshUI(true);
-    }
+    });
 }
 
 void AudiocityAudioProcessorEditor::previewSampleFromBrowserRow(const int row, const bool forceRestart)
@@ -10755,11 +10965,14 @@ void AudiocityAudioProcessorEditor::openSampleChooser()
         if (selected == juce::File{})
             return;
 
-        if (loadFileAsInstrument(selected))
+        loadFileAsInstrument(selected, [this](const bool loaded)
         {
+            if (!loaded)
+                return;
+
             clearSelectedPresetAfterSourceLoad();
             refreshUI(true);
-        }
+        });
     });
 }
 

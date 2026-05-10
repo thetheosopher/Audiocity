@@ -1,5 +1,6 @@
 #include "ImportedProgramState.h"
 
+#include "../engine/Sf2Importer.h"
 #include "ProgramMappingModel.h"
 
 namespace audiocity::plugin
@@ -15,10 +16,12 @@ namespace
 
 AUDIOCITY_IMPORTED_PROGRAM_IDENTIFIER(kImportedProgramPathStateProperty, "importedProgramPath")
 AUDIOCITY_IMPORTED_PROGRAM_IDENTIFIER(kImportedProgramFormatStateProperty, "importedProgramFormat")
+AUDIOCITY_IMPORTED_PROGRAM_IDENTIFIER(kImportedProgramSelectionIndexStateProperty, "importedProgramSelectionIndex")
 AUDIOCITY_IMPORTED_PROGRAM_IDENTIFIER(kLegacyImportedProgramPathStateProperty, "sfzProgramPath")
 
 #define kImportedProgramPathStateProperty kImportedProgramPathStatePropertyIdentifier()
 #define kImportedProgramFormatStateProperty kImportedProgramFormatStatePropertyIdentifier()
+#define kImportedProgramSelectionIndexStateProperty kImportedProgramSelectionIndexStatePropertyIdentifier()
 #define kLegacyImportedProgramPathStateProperty kLegacyImportedProgramPathStatePropertyIdentifier()
 
 juce::String formatImportedProgramFormat(const ImportedProgramFormat format)
@@ -37,6 +40,28 @@ juce::String formatImportedProgramFormat(const ImportedProgramFormat format)
             return "sf2";
         case ImportedProgramFormat::decentSampler:
             return "decentSampler";
+        case ImportedProgramFormat::bitwigMultisample:
+            return "bitwigMultisample";
+        case ImportedProgramFormat::mpcKeygroup:
+            return "mpcKeygroup";
+        case ImportedProgramFormat::bento1010:
+            return "bento1010";
+        case ImportedProgramFormat::talSampler:
+            return "talSampler";
+        case ImportedProgramFormat::tx16wx:
+            return "tx16wx";
+        case ImportedProgramFormat::korgMultisample:
+            return "korgMultisample";
+        case ImportedProgramFormat::abletonSampler:
+            return "abletonSampler";
+        case ImportedProgramFormat::distingExPreset:
+            return "distingExPreset";
+        case ImportedProgramFormat::korgKmp:
+            return "korgKmp";
+        case ImportedProgramFormat::logicExs24:
+            return "logicExs24";
+        case ImportedProgramFormat::nnxt:
+            return "nnxt";
         case ImportedProgramFormat::unknown:
         default:
             return {};
@@ -62,6 +87,39 @@ ImportedProgramFormat parseImportedProgramFormat(const juce::String& formatText)
 
     if (formatText.equalsIgnoreCase("decentSampler") || formatText.equalsIgnoreCase("dspreset"))
         return ImportedProgramFormat::decentSampler;
+
+    if (formatText.equalsIgnoreCase("bitwigMultisample") || formatText.equalsIgnoreCase("multisample"))
+        return ImportedProgramFormat::bitwigMultisample;
+
+    if (formatText.equalsIgnoreCase("mpcKeygroup") || formatText.equalsIgnoreCase("xpm"))
+        return ImportedProgramFormat::mpcKeygroup;
+
+    if (formatText.equalsIgnoreCase("bento1010") || formatText.equalsIgnoreCase("1010music"))
+        return ImportedProgramFormat::bento1010;
+
+    if (formatText.equalsIgnoreCase("talSampler") || formatText.equalsIgnoreCase("talsmpl"))
+        return ImportedProgramFormat::talSampler;
+
+    if (formatText.equalsIgnoreCase("tx16wx") || formatText.equalsIgnoreCase("txprog"))
+        return ImportedProgramFormat::tx16wx;
+
+    if (formatText.equalsIgnoreCase("korgMultisample") || formatText.equalsIgnoreCase("korgmultisample"))
+        return ImportedProgramFormat::korgMultisample;
+
+    if (formatText.equalsIgnoreCase("abletonSampler") || formatText.equalsIgnoreCase("adv") || formatText.equalsIgnoreCase("adg"))
+        return ImportedProgramFormat::abletonSampler;
+
+    if (formatText.equalsIgnoreCase("distingExPreset") || formatText.equalsIgnoreCase("dexpreset"))
+        return ImportedProgramFormat::distingExPreset;
+
+    if (formatText.equalsIgnoreCase("korgKmp") || formatText.equalsIgnoreCase("kmp"))
+        return ImportedProgramFormat::korgKmp;
+
+    if (formatText.equalsIgnoreCase("logicExs24") || formatText.equalsIgnoreCase("exs") || formatText.equalsIgnoreCase("exs24"))
+        return ImportedProgramFormat::logicExs24;
+
+    if (formatText.equalsIgnoreCase("nnxt") || formatText.equalsIgnoreCase("sxt"))
+        return ImportedProgramFormat::nnxt;
 
     return ImportedProgramFormat::unknown;
 }
@@ -100,6 +158,20 @@ juce::String formatTriggerMode(const audiocity::engine::ZoneTriggerMode mode)
         default:
             return "gate";
     }
+}
+
+juce::String buildImportedProgramChoiceLabel(const audiocity::engine::sf2::PresetInfo& preset,
+                                            const int fallbackIndex)
+{
+    if (preset.name.isNotEmpty())
+        return preset.name;
+
+    return "Preset " + juce::String(fallbackIndex + 1);
+}
+
+juce::String buildImportedProgramChoiceDetail(const audiocity::engine::sf2::PresetInfo& preset)
+{
+    return "Bank " + juce::String(preset.bank) + ", Program " + juce::String(preset.program);
 }
 
 juce::String buildImportedProgramMapSummary(const audiocity::engine::Program& program)
@@ -170,6 +242,41 @@ ImportedProgramFormat detectImportedProgramFormat(const juce::String& programPat
     if (extension.equalsIgnoreCase(".dspreset"))
         return ImportedProgramFormat::decentSampler;
 
+    if (extension.equalsIgnoreCase(".multisample"))
+        return ImportedProgramFormat::bitwigMultisample;
+
+    if (extension.equalsIgnoreCase(".xpm"))
+        return ImportedProgramFormat::mpcKeygroup;
+
+    if (extension.equalsIgnoreCase(".talsmpl"))
+        return ImportedProgramFormat::talSampler;
+
+    if (extension.equalsIgnoreCase(".txprog"))
+        return ImportedProgramFormat::tx16wx;
+
+    if (extension.equalsIgnoreCase(".korgmultisample"))
+        return ImportedProgramFormat::korgMultisample;
+
+    if (extension.equalsIgnoreCase(".adv") || extension.equalsIgnoreCase(".adg"))
+        return ImportedProgramFormat::abletonSampler;
+
+    if (extension.equalsIgnoreCase(".dexpreset"))
+        return ImportedProgramFormat::distingExPreset;
+
+    if (extension.equalsIgnoreCase(".kmp"))
+        return ImportedProgramFormat::korgKmp;
+
+    if (extension.equalsIgnoreCase(".exs"))
+        return ImportedProgramFormat::logicExs24;
+
+    if (extension.equalsIgnoreCase(".sxt"))
+        return ImportedProgramFormat::nnxt;
+
+    // 1010music presets are conventionally named preset.xml
+    if (extension.equalsIgnoreCase(".xml")
+        && juce::File(programPath).getFileNameWithoutExtension().equalsIgnoreCase("preset"))
+        return ImportedProgramFormat::bento1010;
+
     return ImportedProgramFormat::unknown;
 }
 
@@ -203,6 +310,28 @@ juce::String importedProgramFormatBadge(const ImportedProgramFormat format)
             return "SF2";
         case ImportedProgramFormat::decentSampler:
             return "DSPRESET";
+        case ImportedProgramFormat::bitwigMultisample:
+            return "MULTI";
+        case ImportedProgramFormat::mpcKeygroup:
+            return "XPM";
+        case ImportedProgramFormat::bento1010:
+            return "BENTO";
+        case ImportedProgramFormat::talSampler:
+            return "TALS";
+        case ImportedProgramFormat::tx16wx:
+            return "TX16W";
+        case ImportedProgramFormat::korgMultisample:
+            return "KORG";
+        case ImportedProgramFormat::abletonSampler:
+            return "ADV";
+        case ImportedProgramFormat::distingExPreset:
+            return "DEX";
+        case ImportedProgramFormat::korgKmp:
+            return "KMP";
+        case ImportedProgramFormat::logicExs24:
+            return "EXS";
+        case ImportedProgramFormat::nnxt:
+            return "NNXT";
         case ImportedProgramFormat::unknown:
         default:
             return "PROGRAM";
@@ -214,10 +343,57 @@ juce::String importedProgramFormatBadge(const juce::String& programPath)
     return importedProgramFormatBadge(detectImportedProgramFormat(programPath));
 }
 
+ImportedProgramChoiceProbe probeImportedProgramChoices(const juce::File& programFile)
+{
+    ImportedProgramChoiceProbe probe;
+    probe.format = detectImportedProgramFormat(programFile.getFullPathName());
+
+    switch (probe.format)
+    {
+        case ImportedProgramFormat::sf2:
+        {
+            const auto sf2Probe = audiocity::engine::sf2::probeFile(programFile);
+            for (std::size_t index = 0; index < sf2Probe.availablePresets.size(); ++index)
+            {
+                const auto& preset = sf2Probe.availablePresets[index];
+                ImportedProgramChoice choice;
+                choice.choiceIndex = static_cast<int>(index);
+                choice.label = buildImportedProgramChoiceLabel(preset, static_cast<int>(index));
+                choice.detail = buildImportedProgramChoiceDetail(preset);
+                probe.choices.push_back(std::move(choice));
+            }
+            break;
+        }
+
+        case ImportedProgramFormat::unknown:
+        case ImportedProgramFormat::sfz:
+        case ImportedProgramFormat::rex:
+        case ImportedProgramFormat::sampleSlices:
+        case ImportedProgramFormat::nki:
+        case ImportedProgramFormat::decentSampler:
+        case ImportedProgramFormat::bitwigMultisample:
+        case ImportedProgramFormat::mpcKeygroup:
+        case ImportedProgramFormat::bento1010:
+        case ImportedProgramFormat::talSampler:
+        case ImportedProgramFormat::tx16wx:
+        case ImportedProgramFormat::korgMultisample:
+        case ImportedProgramFormat::abletonSampler:
+        case ImportedProgramFormat::distingExPreset:
+        case ImportedProgramFormat::korgKmp:
+        case ImportedProgramFormat::logicExs24:
+        case ImportedProgramFormat::nnxt:
+        default:
+            break;
+    }
+
+    return probe;
+}
+
 void appendImportedProgramState(juce::ValueTree& state,
                                 const juce::String& programPath,
                                 const juce::ValueTree& mappingState,
-                                const ImportedProgramFormat format)
+                                const ImportedProgramFormat format,
+                                const int selectionIndex)
 {
     if (!state.isValid() || programPath.isEmpty())
         return;
@@ -230,6 +406,9 @@ void appendImportedProgramState(juce::ValueTree& state,
     {
         state.setProperty(kImportedProgramFormatStateProperty, formatText, nullptr);
     }
+
+    if (selectionIndex >= 0)
+        state.setProperty(kImportedProgramSelectionIndexStateProperty, selectionIndex, nullptr);
 
     if (mappingState.isValid() && mappingState.hasType(programZoneMappingStateType()))
         state.appendChild(mappingState.createCopy(), nullptr);
@@ -245,6 +424,15 @@ juce::String readImportedProgramStatePath(const juce::ValueTree& state)
         programPath = state.getProperty(kLegacyImportedProgramPathStateProperty).toString();
 
     return programPath;
+}
+
+int readImportedProgramStateSelectionIndex(const juce::ValueTree& state)
+{
+    if (!state.isValid())
+        return -1;
+
+    return juce::jmax(-1,
+                      static_cast<int>(state.getProperty(kImportedProgramSelectionIndexStateProperty, -1)));
 }
 
 juce::ValueTree readImportedProgramMappingState(const juce::ValueTree& state)
