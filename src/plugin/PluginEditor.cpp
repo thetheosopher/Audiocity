@@ -236,15 +236,6 @@ juce::String formatPlayerPadButtonLabel(const int padIndex,
         + "  Vel " + juce::String(assignment.velocity);
 }
 
-juce::String formatCompactPeakDb(const float peak)
-{
-    const auto db = juce::Decibels::gainToDecibels(peak, -100.0f);
-    if (db <= -99.0f)
-        return "-inf";
-
-    return juce::String(std::round(db), 0);
-}
-
 int computePersistentPerformanceStripHeight(const int availableHeight)
 {
     return juce::jlimit(156, 196, availableHeight / 4);
@@ -259,7 +250,7 @@ constexpr int kResponsiveEditorHorizontalMargin = 28;
 constexpr int kSampleInspectorMinContentWidth = 900;
 constexpr int kSampleTriColumnMinContentWidth = 1120;
 constexpr int kCollapsedSampleInspectorCardHeight = 36;
-constexpr int kSampleOutputInspectorCardHeight = 186;
+constexpr int kSampleOutputInspectorCardHeight = 220;
 constexpr int kExpandedSampleFilterModInspectorCardHeight = 282;
 constexpr int kExpandedSampleEffectsInspectorCardHeight = 230;
 constexpr int kSectionCardToggleWidth = 60;
@@ -1515,6 +1506,234 @@ void AudiocityAudioProcessorEditor::StereoPeakMeter::paint(juce::Graphics& g)
     drawRow(rightRow, "R", rightLevel_);
 }
 
+void PerformanceStripStatusDisplay::paint(juce::Graphics& g)
+{
+    const auto bounds = getLocalBounds();
+    if (bounds.isEmpty())
+        return;
+
+    const bool expandedLayout = bounds.getHeight() >= 28;
+    const auto cornerRadius = expandedLayout ? 5.0f : 4.0f;
+
+    g.setColour(uiChromeColour().brighter(0.02f));
+    g.fillRoundedRectangle(bounds.toFloat(), cornerRadius);
+    g.setColour(uiBorderColour().withAlpha(0.95f));
+    g.drawRoundedRectangle(bounds.toFloat().reduced(0.5f), cornerRadius, 1.0f);
+
+    auto content = bounds.reduced(expandedLayout ? 7 : 6, expandedLayout ? 3 : 2);
+    static constexpr float kLedAspectRatio = 3.15f;
+    const auto voiceAreaWidth = juce::jlimit(expandedLayout ? 58 : 44,
+                                             expandedLayout ? 74 : 58,
+                                             static_cast<int>(std::round((content.getHeight() - 1) * kLedAspectRatio))
+                                                 + (expandedLayout ? 8 : 6));
+    const auto stateAreaWidth = juce::jlimit(expandedLayout ? 52 : 40,
+                                             expandedLayout ? 76 : 60,
+                                             content.getWidth() / 5);
+
+    auto stateArea = content.removeFromLeft(stateAreaWidth);
+    content.removeFromLeft(expandedLayout ? 8 : 6);
+    auto voiceArea = content.removeFromRight(voiceAreaWidth);
+    content.removeFromRight(expandedLayout ? 6 : 4);
+    auto meterArea = content;
+
+    auto stateColour = uiTextMutedColour().brighter(0.08f);
+    if (stateText_.equalsIgnoreCase("Preview"))
+        stateColour = uiAccentAmberColour().brighter(0.18f);
+    else if (stateText_.equalsIgnoreCase("Live"))
+        stateColour = uiAccentColour().brighter(0.12f);
+
+    g.setColour(stateColour);
+    g.setFont(juce::Font(juce::FontOptions(expandedLayout ? 12.0f : 11.0f)).boldened());
+    g.drawText(stateText_, stateArea, juce::Justification::centredLeft, false);
+
+    auto drawMiniMeter = [&](juce::Rectangle<int> area, const juce::String& label, const float level)
+    {
+        auto meterBounds = area;
+        if (meterBounds.getWidth() <= 0 || meterBounds.getHeight() <= 0)
+            return;
+
+        const auto labelWidth = juce::jmin(expandedLayout ? 11 : 9,
+                                           juce::jmax(0, meterBounds.getWidth() - 1));
+        auto labelArea = meterBounds.removeFromLeft(labelWidth);
+        g.setColour(uiTextMutedColour().withAlpha(0.86f));
+        g.setFont(juce::Font(juce::FontOptions(expandedLayout ? 9.5f : 9.0f)).boldened());
+        g.drawText(label, labelArea, juce::Justification::centredLeft, false);
+
+        auto barArea = meterBounds.reduced(0, expandedLayout ? 1 : 2);
+        if (barArea.getWidth() <= 0 || barArea.getHeight() <= 0)
+            return;
+
+        g.setColour(uiBackgroundColour());
+        g.fillRoundedRectangle(barArea.toFloat(), 2.0f);
+        g.setColour(uiBorderColour().withAlpha(0.95f));
+        g.drawRoundedRectangle(barArea.toFloat(), 2.0f, 1.0f);
+
+        constexpr int segmentCount = 10;
+        for (int segment = 1; segment < segmentCount; ++segment)
+        {
+            const auto x = barArea.getX()
+                + static_cast<int>(std::round((barArea.getWidth() * segment) / static_cast<float>(segmentCount)));
+            g.setColour(uiTextStrongColour().withAlpha(segment % 5 == 0 ? 0.16f : 0.08f));
+            g.drawVerticalLine(x, static_cast<float>(barArea.getY() + 1), static_cast<float>(barArea.getBottom() - 1));
+        }
+
+        auto fillArea = barArea;
+        fillArea.setWidth(static_cast<int>(std::round(barArea.getWidth() * juce::jlimit(0.0f, 1.0f, level))));
+        if (fillArea.getWidth() <= 0)
+            return;
+
+        auto gradient = juce::ColourGradient(juce::Colour(0xff62d59d),
+                                             static_cast<float>(barArea.getX()),
+                                             static_cast<float>(barArea.getCentreY()),
+                                             juce::Colour(0xffef7f73),
+                                             static_cast<float>(barArea.getRight()),
+                                             static_cast<float>(barArea.getCentreY()),
+                                             false);
+        gradient.addColour(0.72, uiAccentAmberColour());
+        g.setGradientFill(gradient);
+        g.fillRoundedRectangle(fillArea.toFloat(), 2.0f);
+
+        const auto peakX = juce::jlimit(barArea.getX(), barArea.getRight() - 1, fillArea.getRight() - 1);
+        g.setColour(uiTextStrongColour().withAlpha(0.72f));
+        g.drawVerticalLine(peakX, static_cast<float>(barArea.getY()), static_cast<float>(barArea.getBottom()));
+    };
+
+    const auto meterGap = juce::jmin(8, juce::jmax(0, meterArea.getWidth() / 12));
+    const auto meterWidth = juce::jmax(0, (meterArea.getWidth() - meterGap) / 2);
+    auto leftMeter = meterArea.removeFromLeft(meterWidth);
+    meterArea.removeFromLeft(meterGap);
+    auto rightMeter = meterArea;
+
+    drawMiniMeter(leftMeter, "L", leftLevel_);
+    drawMiniMeter(rightMeter, "R", rightLevel_);
+
+    auto ledFrame = voiceArea.toFloat();
+    const auto ledHeight = juce::jmin(ledFrame.getHeight() - 1.0f,
+                                      (ledFrame.getWidth() - 2.0f) / kLedAspectRatio);
+    const auto ledWidth = juce::jmin(ledFrame.getWidth() - 1.0f, ledHeight * kLedAspectRatio);
+    auto ledBounds = juce::Rectangle<float>(0.0f, 0.0f, ledWidth, ledHeight).withCentre(ledFrame.getCentre());
+
+    g.setColour(juce::Colour(0xff160303));
+    g.fillRoundedRectangle(ledBounds, 4.0f);
+    g.setColour(juce::Colour(0xff4d1412));
+    g.drawRoundedRectangle(ledBounds.reduced(0.5f), 4.0f, 1.0f);
+    g.setColour(juce::Colour(0x24ff8b73));
+    g.fillRoundedRectangle(ledBounds.reduced(1.0f, 1.0f).removeFromTop(ledBounds.getHeight() * 0.35f), 3.0f);
+
+    const auto digits = juce::String(activeVoices_).paddedLeft('0', 2);
+    auto digitsArea = ledBounds.reduced(expandedLayout ? 4.0f : 3.0f, expandedLayout ? 2.5f : 2.0f);
+    const auto digitGap = expandedLayout ? 5 : 3;
+    const auto digitWidth = juce::jmax(expandedLayout ? 11.0f : 8.0f, (digitsArea.getWidth() - digitGap) * 0.5f);
+
+    auto drawSevenSegmentDigit = [&](juce::Rectangle<float> area, const int digit)
+    {
+        static constexpr std::array<std::array<bool, 7>, 10> kSegments {{
+            {{ true, true, true, true, true, true, false }},
+            {{ false, true, true, false, false, false, false }},
+            {{ true, true, false, true, true, false, true }},
+            {{ true, true, true, true, false, false, true }},
+            {{ false, true, true, false, false, true, true }},
+            {{ true, false, true, true, false, true, true }},
+            {{ true, false, true, true, true, true, true }},
+            {{ true, true, true, false, false, false, false }},
+            {{ true, true, true, true, true, true, true }},
+            {{ true, true, true, true, false, true, true }}
+        }};
+
+        auto digitBounds = area.reduced(expandedLayout ? 0.8f : 0.5f, expandedLayout ? 0.6f : 0.35f);
+        const auto horizontalThickness = juce::jlimit(1.2f,
+                                                      expandedLayout ? 2.2f : 1.8f,
+                                                      juce::jmin(digitBounds.getWidth(), digitBounds.getHeight()) * 0.22f);
+        const auto verticalThickness = juce::jlimit(horizontalThickness,
+                                                    expandedLayout ? 2.8f : 2.2f,
+                                                    horizontalThickness * 1.28f);
+        const auto horizontalInset = juce::jmax(verticalThickness * 0.78f, horizontalThickness * 0.9f);
+        const auto horizontalLength = juce::jmax(2.0f, digitBounds.getWidth() - (horizontalInset * 2.0f));
+        const auto verticalLength = juce::jmax(2.0f,
+                                               (digitBounds.getHeight() - horizontalThickness * 3.05f) / 2.0f);
+        const auto x = digitBounds.getX();
+        const auto y = digitBounds.getY();
+        const auto horizontalBevel = horizontalThickness * 0.72f;
+        const auto verticalBevel = verticalThickness * 0.58f;
+
+        auto makeHorizontalSegment = [&](juce::Rectangle<float> segmentArea)
+        {
+            juce::Path path;
+            const auto centreY = segmentArea.getCentreY();
+            path.startNewSubPath(segmentArea.getX() + horizontalBevel, segmentArea.getY());
+            path.lineTo(segmentArea.getRight() - horizontalBevel, segmentArea.getY());
+            path.lineTo(segmentArea.getRight(), centreY);
+            path.lineTo(segmentArea.getRight() - horizontalBevel, segmentArea.getBottom());
+            path.lineTo(segmentArea.getX() + horizontalBevel, segmentArea.getBottom());
+            path.lineTo(segmentArea.getX(), centreY);
+            path.closeSubPath();
+            return path;
+        };
+
+        auto makeVerticalSegment = [&](juce::Rectangle<float> segmentArea)
+        {
+            juce::Path path;
+            const auto centreX = segmentArea.getCentreX();
+            path.startNewSubPath(segmentArea.getX(), segmentArea.getY() + verticalBevel);
+            path.lineTo(centreX, segmentArea.getY());
+            path.lineTo(segmentArea.getRight(), segmentArea.getY() + verticalBevel);
+            path.lineTo(segmentArea.getRight(), segmentArea.getBottom() - verticalBevel);
+            path.lineTo(centreX, segmentArea.getBottom());
+            path.lineTo(segmentArea.getX(), segmentArea.getBottom() - verticalBevel);
+            path.closeSubPath();
+            return path;
+        };
+
+        const auto digitWidth = digitBounds.getWidth();
+        const auto digitHeight = digitBounds.getHeight();
+        const auto upperVerticalY = y + horizontalThickness * 0.8f;
+        const auto lowerVerticalY = y + horizontalThickness * 1.9f + verticalLength;
+
+        std::array<juce::Path, 7> segments {
+            makeHorizontalSegment({ x + horizontalInset, y, horizontalLength, horizontalThickness }),
+            makeVerticalSegment({ x + digitWidth - verticalThickness, upperVerticalY, verticalThickness, verticalLength }),
+            makeVerticalSegment({ x + digitWidth - verticalThickness, lowerVerticalY, verticalThickness, verticalLength }),
+            makeHorizontalSegment({ x + horizontalInset, y + digitHeight - horizontalThickness, horizontalLength, horizontalThickness }),
+            makeVerticalSegment({ x, lowerVerticalY, verticalThickness, verticalLength }),
+            makeVerticalSegment({ x, upperVerticalY, verticalThickness, verticalLength }),
+            makeHorizontalSegment({ x + horizontalInset, y + horizontalThickness * 0.95f + verticalLength, horizontalLength, horizontalThickness })
+        };
+
+        const auto litCore = juce::Colour(0xffff4032);
+        const auto litGlow = juce::Colour(0x55ff2a1f);
+        const auto litHotspot = juce::Colour(0xffffc7a4);
+        const auto unlitColour = juce::Colour(0xff371110);
+
+        for (int segmentIndex = 0; segmentIndex < static_cast<int>(segments.size()); ++segmentIndex)
+        {
+            const bool lit = digit >= 0 && digit < 10 && kSegments[static_cast<std::size_t>(digit)][static_cast<std::size_t>(segmentIndex)];
+            const auto& segmentPath = segments[static_cast<std::size_t>(segmentIndex)];
+            if (lit)
+            {
+                g.setColour(litGlow);
+                g.fillPath(segmentPath,
+                           juce::AffineTransform::scale(1.05f, 1.05f, digitBounds.getCentreX(), digitBounds.getCentreY()));
+                g.setColour(litCore);
+                g.fillPath(segmentPath);
+                g.setColour(litHotspot.withAlpha(0.70f));
+                g.strokePath(segmentPath, juce::PathStrokeType(expandedLayout ? 0.9f : 0.7f));
+            }
+            else
+            {
+                g.setColour(unlitColour);
+                g.fillPath(segmentPath);
+            }
+        }
+    };
+
+    auto firstDigitArea = digitsArea.removeFromLeft(digitWidth);
+    digitsArea.removeFromLeft(static_cast<float>(digitGap));
+    auto secondDigitArea = digitsArea;
+
+    drawSevenSegmentDigit(firstDigitArea, juce::jlimit(0, 9, static_cast<int>(digits[0] - '0')));
+    drawSevenSegmentDigit(secondDigitArea, juce::jlimit(0, 9, static_cast<int>(digits[1] - '0')));
+}
+
 // ─── WaveformView ──────────────────────────────────────────────────────────────
 
 void AudiocityAudioProcessorEditor::WaveformView::setState(
@@ -2362,6 +2581,15 @@ void MappingOverviewComponent::setRows(std::vector<audiocity::plugin::ProgramZon
     repaint();
 }
 
+void MappingOverviewComponent::setHighlightedMidiNotes(std::bitset<128> highlightedMidiNotes)
+{
+    if (highlightedMidiNotes_ == highlightedMidiNotes)
+        return;
+
+    highlightedMidiNotes_ = highlightedMidiNotes;
+    repaint();
+}
+
 void MappingOverviewComponent::setSelectedZoneIndex(const int zoneIndex)
 {
     if (selectedZoneIndex_ == zoneIndex)
@@ -2596,6 +2824,12 @@ void MappingOverviewComponent::paint(juce::Graphics& g)
         const auto isBlackKey = note == 1 || note == 3 || note == 6 || note == 8 || note == 10;
         g.setColour(isBlackKey ? juce::Colour(0xff11111e) : juce::Colour(0xffd7dce8));
         g.fillRect(x, layout.keyboard.getY(), juce::jmax(1, nextX - x), layout.keyboard.getHeight());
+
+        if (highlightedMidiNotes_.test(static_cast<std::size_t>(key)))
+        {
+            g.setColour(juce::Colour(0xff61d9ff).withAlpha(isBlackKey ? 0.74f : 0.48f));
+            g.fillRect(x, layout.keyboard.getY(), juce::jmax(1, nextX - x), layout.keyboard.getHeight());
+        }
     }
     g.setColour(juce::Colour(0xff3a3a52));
     g.drawRect(layout.keyboard);
@@ -3197,9 +3431,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(playerKeyboardLabel_);
     playerKeyboardLabel_.setJustificationType(juce::Justification::centredLeft);
 
-    addAndMakeVisible(playerStatusLabel_);
-    playerStatusLabel_.setJustificationType(juce::Justification::centredLeft);
-    playerStatusLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8fb7ff));
+    addAndMakeVisible(playerStatusDisplay_);
 
     addAndMakeVisible(playerOpenButton_);
     playerOpenButton_.onClick = [this]
@@ -4771,7 +5003,9 @@ void AudiocityAudioProcessorEditor::handleNoteOn(juce::MidiKeyboardState* source
                                                  const int midiNoteNumber,
                                                  const float velocity)
 {
-    juce::ignoreUnused(source, midiChannel);
+    if (source == &playerKeyboardState_ && midiChannel == kExternalKeyboardDisplayMidiChannel)
+        return;
+
     processor_.enqueueUiMidiNoteOn(midiNoteNumber,
         juce::jlimit(1, 127, static_cast<int>(std::round(velocity * 127.0f))));
 }
@@ -4781,8 +5015,74 @@ void AudiocityAudioProcessorEditor::handleNoteOff(juce::MidiKeyboardState* sourc
                                                   const int midiNoteNumber,
                                                   const float velocity)
 {
-    juce::ignoreUnused(source, midiChannel, velocity);
+    juce::ignoreUnused(velocity);
+
+    if (source == &playerKeyboardState_ && midiChannel == kExternalKeyboardDisplayMidiChannel)
+        return;
+
     processor_.enqueueUiMidiNoteOff(midiNoteNumber);
+}
+
+void AudiocityAudioProcessorEditor::syncExternalMidiDisplayNotes(const std::bitset<128>& nextNotes,
+                                                                 const float noteOnVelocity)
+{
+    if (nextNotes == externalMidiDisplayNotes_)
+        return;
+
+    const auto clampedVelocity = juce::jlimit(0.0f, 1.0f, noteOnVelocity);
+    for (int noteNumber = 0; noteNumber < 128; ++noteNumber)
+    {
+        const auto noteIndex = static_cast<std::size_t>(noteNumber);
+        const auto wasActive = externalMidiDisplayNotes_.test(noteIndex);
+        const auto isActive = nextNotes.test(noteIndex);
+        if (wasActive == isActive)
+            continue;
+
+        if (isActive)
+            playerKeyboardState_.noteOn(kExternalKeyboardDisplayMidiChannel, noteNumber, clampedVelocity);
+        else
+            playerKeyboardState_.noteOff(kExternalKeyboardDisplayMidiChannel, noteNumber, 0.0f);
+    }
+
+    externalMidiDisplayNotes_ = nextNotes;
+    mappingOverview_.setHighlightedMidiNotes(externalMidiDisplayNotes_);
+}
+
+void AudiocityAudioProcessorEditor::consumeExternalMidiDisplayEvents()
+{
+    std::bitset<128> nextNotes = externalMidiDisplayNotes_;
+    auto noteOnVelocity = 1.0f;
+    auto changed = false;
+
+    int noteNumber = 0;
+    int velocity = 0;
+    bool isNoteOn = false;
+    while (processor_.consumeExternalMidiDisplayEvent(noteNumber, velocity, isNoteOn))
+    {
+        const auto clampedNoteNumber = juce::jlimit(0, 127, noteNumber);
+        const auto noteIndex = static_cast<std::size_t>(clampedNoteNumber);
+        auto& noteCount = externalMidiDisplayNoteCounts_[noteIndex];
+
+        if (isNoteOn)
+        {
+            ++noteCount;
+            noteOnVelocity = juce::jlimit(0.0f, 1.0f, static_cast<float>(velocity) / 127.0f);
+        }
+        else if (noteCount > 0)
+        {
+            --noteCount;
+        }
+
+        const auto shouldBeActive = noteCount > 0;
+        if (nextNotes.test(noteIndex) != shouldBeActive)
+        {
+            nextNotes.set(noteIndex, shouldBeActive);
+            changed = true;
+        }
+    }
+
+    if (changed)
+        syncExternalMidiDisplayNotes(nextNotes, noteOnVelocity);
 }
 
 // ─── Timer: poll CC FIFO ───────────────────────────────────────────────────────
@@ -4790,6 +5090,7 @@ void AudiocityAudioProcessorEditor::handleNoteOff(juce::MidiKeyboardState* sourc
 void AudiocityAudioProcessorEditor::timerCallback()
 {
     updateGeneratePreviewButtonText();
+    consumeExternalMidiDisplayEvents();
 
     processor_.setWaveformViewRange(waveformView_.getViewStartSample(), waveformView_.getViewSampleCount());
 
@@ -5290,7 +5591,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     diagnosticsLabel_.setVisible(showSampleTab && showDiagnosticsPanel_);
 
     playerKeyboardLabel_.setVisible(showPlayerTab || showPerformanceStrip);
-    playerStatusLabel_.setVisible(showPerformanceStrip);
+    playerStatusDisplay_.setVisible(showPlayerTab || showPerformanceStrip);
     playerOpenButton_.setVisible(showPerformanceStrip);
     playerKeyboardViewport_.setVisible(showPlayerTab || showPerformanceStrip);
     playerPadsLabel_.setVisible(showPlayerTab || showPerformanceStrip);
@@ -7564,13 +7865,7 @@ void AudiocityAudioProcessorEditor::updatePerformanceStripStatus(const float out
     const auto stateText = previewPlaying ? juce::String("Preview")
                                           : (activeVoices > 0 ? juce::String("Live") : juce::String("Ready"));
 
-    playerStatusLabel_.setText(
-        stateText
-            + "  V" + juce::String(activeVoices)
-            + "  Out " + formatCompactPeakDb(outputLeftPeak)
-            + " / " + formatCompactPeakDb(outputRightPeak)
-            + " dB",
-        juce::dontSendNotification);
+    playerStatusDisplay_.setState(stateText, activeVoices, outputLeftPeak, outputRightPeak);
 }
 
 bool AudiocityAudioProcessorEditor::shouldShowPersistentPerformanceStrip() const noexcept
@@ -7833,12 +8128,12 @@ void AudiocityAudioProcessorEditor::layoutPlayerPerformanceArea(juce::Rectangle<
 
         const int keyboardPanelHeight = juce::jlimit(78, 116, (area.getHeight() * 53) / 100);
         auto keyboardPanel = area.removeFromTop(keyboardPanelHeight).reduced(8, 8);
-        auto keyboardHeader = keyboardPanel.removeFromTop(34);
+        auto keyboardHeader = keyboardPanel.removeFromTop(38);
         auto keyboardTitleRow = keyboardHeader.removeFromTop(16);
         playerOpenButton_.setBounds(keyboardTitleRow.removeFromRight(92));
         playerKeyboardLabel_.setBounds(keyboardTitleRow);
         keyboardHeader.removeFromTop(2);
-        playerStatusLabel_.setBounds(keyboardHeader.removeFromTop(14));
+        playerStatusDisplay_.setBounds(keyboardHeader.removeFromTop(20));
         keyboardPanel.removeFromTop(4);
         playerKeyboardViewport_.setBounds(keyboardPanel);
         updatePlayerKeyboardSizing();
@@ -7867,17 +8162,19 @@ void AudiocityAudioProcessorEditor::layoutPlayerPerformanceArea(juce::Rectangle<
     }
 
     playerKeyboardLabel_.setText("Piano", juce::dontSendNotification);
-    playerStatusLabel_.setBounds({});
     playerPadsLabel_.setText("Drum Pads", juce::dontSendNotification);
     playerOpenButton_.setBounds({});
 
-    auto keyboardPanel = area.removeFromTop(computePlayerKeyboardPanelHeight(area.getWidth()));
+    auto keyboardPanel = area.removeFromTop(computePlayerKeyboardPanelHeight(area.getWidth()) + 52);
     keyboardPanel.reduce(10, 10);
 
-    auto keyboardHeader = keyboardPanel.removeFromTop(26);
-    playerKeyboardLabel_.setBounds(keyboardHeader);
+    auto keyboardHeader = keyboardPanel.removeFromTop(64);
+    auto keyboardTitleRow = keyboardHeader.removeFromTop(18);
+    playerKeyboardLabel_.setBounds(keyboardTitleRow);
+    keyboardHeader.removeFromTop(6);
+    playerStatusDisplay_.setBounds(keyboardHeader.removeFromTop(36));
 
-    keyboardPanel.removeFromTop(6);
+    keyboardPanel.removeFromTop(8);
     playerKeyboardViewport_.setBounds(keyboardPanel);
     updatePlayerKeyboardSizing();
 
@@ -7971,27 +8268,27 @@ void AudiocityAudioProcessorEditor::paintAboutPane(juce::Graphics& g, juce::Rect
     };
 
     constexpr std::array<AboutRow, 9> featureRows{{
-        { "Loading", "Import WAV, AIFF, REX and RX2 samples" },
-        { "Modulation", "Shape pitch, amp and filter motion with LFOs" },
-        { "Effects", "Use reverb, delay, autopan and saturation" },
-        { "Synthesis", "Sketch sine, saw, square, triangle and pulse waves" },
-        { "Capture", "Record, cut, trim and normalize live audio" },
-        { "Browser", "Search and preview the sample library quickly" },
-        { "Performance", "Play from piano keys and assignable drum pads" },
-        { "Presets", "Save, rename and delete reusable patches" },
-        { "MIDI", "Map hardware controls with MIDI CC learn" }
+        { "Import", "Load WAV and AIFF plus SFZ, SoundFont, DecentSampler, Bitwig, XPM, TAL, TX16Wx, Korg, Ableton, EXS24, NKI, REX, RX2, and NCW" },
+        { "Preset Strip", "Multi-preset imports open a chooser, and the Sample header keeps a searchable preset strip in view" },
+        { "Browser Rail", "Persistent browser and preview controls stay visible on Sample, Mapping, Generate, and Capture" },
+        { "Mapping", "Batch edit, create, duplicate, split, merge, chromatic remap, key spread, and root-note tools" },
+        { "Slicing", "Transient slice imports, waveform overlays, and direct split or merge gestures for slice programs" },
+        { "Modulation", "Route mod wheel, aftertouch, velocity, Macro 1, and Macro 2 to pitch, filter, and amp" },
+        { "Performance", "Compact performance strip, external MIDI highlights, stereo output bars, and LED voice count" },
+        { "Quality", "CPU, Fidelity, and Ultra modes with disk streaming, preload control, and live diagnostics" },
+        { "Create", "Generate custom waves or capture audio while keeping the same browser and performance tools" }
     }};
 
-    constexpr std::array<AboutRow, 9> shortcutRows{{
-        { "1-7", "Switch between the seven top-level tabs" },
-        { "Ctrl+O", "Open a sample file" },
-        { "Ctrl+S", "Save the current state to disk" },
-        { "Ctrl+Shift+S", "Save the current preset" },
-        { "Ctrl+Alt+D", "Toggle the Sample-page diagnostics panel" },
-        { "Ctrl+Z / Y", "Undo or redo sample, parameter, or mapping edits" },
-        { "Space", "Play or stop generated waveform preview" },
-        { "Enter / Esc", "Load selected browser row or panic audio" },
-        { "Mapping", "Ctrl+N creates a zone, Ctrl+A selects all zones, Ctrl+D duplicates, Ctrl+Shift+D splits, Delete removes selected zones" }
+    constexpr std::array<AboutRow, 9> workflowRows{{
+        { "Open Files", "Press Ctrl+O or drag a file in; multi-preset formats prompt for a preset before loading" },
+        { "NCW", "Set AUDIOCITY_NCW_CONVERTER_COMMAND before loading NCW-backed libraries" },
+        { "Preset Search", "Use the Sample top-bar search to filter preset names without leaving the current workflow" },
+        { "Browser", "Use the preview buttons, Enter to load the selected row, and Esc to panic audio" },
+        { "Mapping", "Ctrl+N creates a zone, Ctrl+A selects all, Ctrl+D duplicates, Ctrl+Shift+D splits, Delete removes" },
+        { "Waveform", "Double-click slice boundaries to split; waveform menus expose merge and chromatic actions" },
+        { "Performance", "Keys 1-7 switch tabs; Sample, Mapping, Generate, and Capture keep the compact keyboard visible" },
+        { "Undo", "Ctrl+Z and Ctrl+Y walk one shared history across sample, settings, and mapping edits" },
+        { "Inspect", "Wide Sample layouts show browser and inspector rails; Inspect mode enlarges the Output dials" }
     }};
 
     const int iconY = area.getY() + 20;
@@ -8012,7 +8309,7 @@ void AudiocityAudioProcessorEditor::paintAboutPane(juce::Graphics& g, juce::Rect
 
     g.setColour(juce::Colour(0xffaab0cc));
     g.setFont(juce::Font(juce::FontOptions(15.0f)));
-    g.drawText("A high-performance sampler instrument", area.getX(), textY, area.getWidth(), 22,
+    g.drawText("A hybrid sampler for import, slicing, modulation, and performance", area.getX(), textY, area.getWidth(), 22,
                juce::Justification::centredTop);
     textY += 28;
 
@@ -8103,7 +8400,7 @@ void AudiocityAudioProcessorEditor::paintAboutPane(juce::Graphics& g, juce::Rect
     auto shortcutsArea = lowerArea;
 
     drawTable(featuresArea, "Key Features", "Area", "Details", kFeatureLabelWidth, featureRows);
-    drawTable(shortcutsArea, "Keyboard Shortcuts", "Keys", "Action", kShortcutLabelWidth, shortcutRows);
+    drawTable(shortcutsArea, "Workflow Tips", "Task", "How", kShortcutLabelWidth, workflowRows);
 
     g.setColour(juce::Colour(0xffdfe6ff));
     g.setFont(juce::Font(juce::FontOptions(14.0f)).boldened());
@@ -8729,8 +9026,8 @@ void AudiocityAudioProcessorEditor::resized()
     {
         auto outputInner = inspectorBounds.withTrimmedTop(30).reduced(12, 10);
         constexpr int kInspectorDialGap = 6;
-        constexpr int kCompactRowHeight = 52;
-        constexpr int kSmallDialWidth = 52;
+        constexpr int kCompactRowHeight = 68;
+        constexpr int kSmallDialWidth = 68;
 
         auto row1 = outputInner.removeFromTop(kCompactRowHeight);
         fadeInDial_.setBounds(row1.removeFromLeft(kSmallDialWidth));
@@ -8745,11 +9042,11 @@ void AudiocityAudioProcessorEditor::resized()
         row2.removeFromLeft(kInspectorDialGap);
         panDial_.setBounds(row2.removeFromLeft(kSmallDialWidth));
         row2.removeFromLeft(kInspectorDialGap);
-        outputLevelMeter_.setBounds(row2.reduced(0, 6));
+        outputLevelMeter_.setBounds(row2.reduced(0, 10));
 
-        outputInner.removeFromTop(6);
+        outputInner.removeFromTop(8);
         qualityLabel_.setBounds({});
-        auto qualityRow = outputInner.removeFromTop(20);
+        auto qualityRow = outputInner.removeFromTop(24);
         const int qualityButtonWidth = (qualityRow.getWidth() - kInspectorDialGap * 2) / 3;
         qualityCpuButton_.setBounds(qualityRow.removeFromLeft(qualityButtonWidth));
         qualityRow.removeFromLeft(kInspectorDialGap);
@@ -9650,6 +9947,27 @@ void AudiocityAudioProcessorEditor::setPresetSearchSnapshotState(const juce::Str
     presetCombo_.setSelectedId(0, juce::dontSendNotification);
     suppressPresetComboChange_ = false;
     refreshPresetList();
+}
+
+void AudiocityAudioProcessorEditor::setSnapshotActiveMidiNotes(const std::vector<int>& noteNumbers)
+{
+    externalMidiDisplayNoteCounts_.fill(0);
+
+    const auto snapshotVoiceCount = juce::jlimit(0, 99, static_cast<int>(noteNumbers.size()));
+    if (snapshotVoiceCount > 0)
+        playerStatusDisplay_.setState("Live", snapshotVoiceCount, 0.72f, 0.58f);
+    else
+        playerStatusDisplay_.setState("Ready", 0, 0.0f, 0.0f);
+
+    std::bitset<128> nextNotes;
+    for (const auto noteNumber : noteNumbers)
+    {
+        const auto clampedNoteNumber = juce::jlimit(0, 127, noteNumber);
+        nextNotes.set(static_cast<std::size_t>(clampedNoteNumber));
+        externalMidiDisplayNoteCounts_[static_cast<std::size_t>(clampedNoteNumber)] = 1;
+    }
+
+    syncExternalMidiDisplayNotes(nextNotes);
 }
 
 void AudiocityAudioProcessorEditor::saveStateToFile()
@@ -11006,8 +11324,9 @@ void AudiocityAudioProcessorEditor::updatePlayerKeyboardSizing()
         juce::jmin(18.0f, static_cast<float>(viewportBounds.getWidth()) / static_cast<float>(whiteKeyCount)));
 
     const auto preferredKeyLength = static_cast<int>(std::round(whiteKeyWidth * kWhiteKeyLengthRatio));
-    const auto minKeyboardHeight = juce::jmin(64, juce::jmax(40, viewportBounds.getHeight()));
-    const auto keyboardHeight = juce::jlimit(minKeyboardHeight, viewportBounds.getHeight(), preferredKeyLength);
+    const auto maxKeyboardHeight = juce::jmin(64, viewportBounds.getHeight());
+    const auto minKeyboardHeight = juce::jmin(40, maxKeyboardHeight);
+    const auto keyboardHeight = juce::jlimit(minKeyboardHeight, maxKeyboardHeight, preferredKeyLength);
 
     playerKeyboard_.setKeyWidth(whiteKeyWidth);
     playerKeyboard_.setSize(static_cast<int>(std::ceil(whiteKeyWidth * static_cast<float>(whiteKeyCount))),

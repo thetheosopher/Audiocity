@@ -35,6 +35,7 @@ struct SnapshotScenario
     bool overridePresetSearchState = false;
     const char* presetSearchText = nullptr;
     int switchToTabIndex = -1;
+    int snapshotActiveMidiNoteCount = -1;
 };
 
 enum SnapshotStateFlags : unsigned int
@@ -324,6 +325,26 @@ juce::Result renderScenario(AudiocityAudioProcessor& processor,
     if (scenario.switchToTabIndex >= 0)
         audiocityEditor->setSnapshotTabIndex(scenario.switchToTabIndex);
 
+    const auto targetTabIndex = scenario.switchToTabIndex >= 0 ? scenario.switchToTabIndex : scenario.tabIndex;
+    if (targetTabIndex == 0 || targetTabIndex == 2 || targetTabIndex == 3 || targetTabIndex == 4 || targetTabIndex == 5)
+    {
+        static constexpr std::array<int, 4> kSnapshotMidiNotes { 36, 48, 60, 67 };
+        const auto noteCount = scenario.snapshotActiveMidiNoteCount >= 0
+            ? juce::jlimit(0, static_cast<int>(kSnapshotMidiNotes.size()), scenario.snapshotActiveMidiNoteCount)
+            : static_cast<int>(kSnapshotMidiNotes.size());
+
+        std::vector<int> activeNotes;
+        activeNotes.reserve(static_cast<std::size_t>(noteCount));
+        for (int index = 0; index < noteCount; ++index)
+            activeNotes.push_back(kSnapshotMidiNotes[static_cast<std::size_t>(index)]);
+
+        audiocityEditor->setSnapshotActiveMidiNotes(activeNotes);
+    }
+    else
+    {
+        audiocityEditor->setSnapshotActiveMidiNotes({});
+    }
+
     if (scenario.viewportScrollY > 0
         && !setFirstVisibleVerticalViewportScroll(*editor, scenario.viewportScrollY))
     {
@@ -395,6 +416,7 @@ int main(int argc, char* argv[])
 
     constexpr SnapshotScenario scenarios[] = {
         { "sample", 0, snapshotStateSliceProgram, 0 },
+        { "sample_single_voice", 0, snapshotStateSliceProgram, 0, 0, 0, false, true, true, false, true, true, false, nullptr, -1, 1 },
         { "sample_browser_only", 0, snapshotStateSliceProgram, 0, 0, 0, true, true, false },
         { "sample_preset_search", 0, snapshotStateSliceProgram, 0, 0, 0, false, true, true, false, true, true, true, "bass" },
         { "sample_modulation", 0, snapshotStateModulation, 320 },
@@ -408,6 +430,7 @@ int main(int argc, char* argv[])
         { "library", 0, snapshotStateBaseline, 0, 0, 0, false, true, true, false, true, true, false, nullptr, 1 },
         { "mapping", 2, snapshotStateSliceProgram, 0 },
         { "player", 3, snapshotStateBaseline, 0 },
+        { "player_single_voice", 3, snapshotStateBaseline, 0, 0, 0, false, true, true, false, true, true, false, nullptr, -1, 1 },
         { "generate", 4, snapshotStateBaseline, 0 },
         { "capture", 5, snapshotStateBaseline, 0 },
         { "about", 6, snapshotStateBaseline, 0 }

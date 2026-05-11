@@ -108,7 +108,7 @@ target_compile_definitions(audiocity_ui_snapshot_smoke
         JUCE_USE_CURL=0
         JUCE_ASIO=${AUDIOCITY_JUCE_ASIO}
         JucePlugin_Name="Audiocity"
-        JucePlugin_VersionString="1.0.0")
+        JucePlugin_VersionString="${PROJECT_VERSION}")
 
 target_compile_definitions(audiocity_ui_snapshot_header_smoke
     PRIVATE
@@ -121,7 +121,7 @@ target_compile_definitions(audiocity_ui_snapshot_header_smoke
         JUCE_USE_CURL=0
         JUCE_ASIO=${AUDIOCITY_JUCE_ASIO}
         JucePlugin_Name="Audiocity"
-        JucePlugin_VersionString="1.0.0")
+        JucePlugin_VersionString="${PROJECT_VERSION}")
 
 target_link_libraries(audiocity_ui_snapshot_smoke
     PRIVATE
@@ -215,7 +215,7 @@ target_compile_definitions(audiocity_ui_snapshot_harness
         JUCE_USE_CURL=0
         JUCE_ASIO=${AUDIOCITY_JUCE_ASIO}
         JucePlugin_Name="Audiocity"
-        JucePlugin_VersionString="1.0.0")
+        JucePlugin_VersionString="${PROJECT_VERSION}")
 
 target_link_libraries(audiocity_ui_snapshot_harness
     PRIVATE

@@ -1,5 +1,8 @@
 #define MyAppName "Audiocity"
-#define MyAppVersion "1.0.0"
+
+#ifndef MyAppVersion
+  #define MyAppVersion "1.2.0"
+#endif
 
 #ifndef SourceRoot
   #error SourceRoot must point at the staged release files.
@@ -10,7 +13,7 @@
 #endif
 
 #ifndef OutputBaseFilename
-  #define OutputBaseFilename "Audiocity-1.0.0-windows-x64-setup"
+  #define OutputBaseFilename "Audiocity-{#MyAppVersion}-windows-x64-setup"
 #endif
 
 [Setup]
@@ -22,6 +25,7 @@ AppPublisher=Michael A. McCloskey
 AppCopyright=Copyright (c) 2026 Michael A. McCloskey
 VersionInfoCompany=Michael A. McCloskey
 VersionInfoCopyright=Copyright (c) 2026 Michael A. McCloskey
+VersionInfoVersion={#MyAppVersion}
 AppPublisherURL=https://github.com/thetheosopher/Audiocity
 AppSupportURL=https://github.com/thetheosopher/Audiocity
 AppUpdatesURL=https://github.com/thetheosopher/Audiocity

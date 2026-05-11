@@ -151,6 +151,7 @@ public:
 
     void enqueueUiMidiNoteOn(int noteNumber, int velocity) noexcept;
     void enqueueUiMidiNoteOff(int noteNumber) noexcept;
+    [[nodiscard]] bool consumeExternalMidiDisplayEvent(int& noteNumber, int& velocity, bool& isNoteOn) noexcept;
     void setGeneratedWaveformPreview(const std::vector<float>& waveform) noexcept;
     void setGeneratedWaveformPreviewMidiNote(int midiNote) noexcept;
     void startGeneratedWaveformPreview() noexcept;
@@ -426,7 +427,15 @@ private:
         bool isNoteOn = false;
     };
 
+    struct ExternalMidiDisplayEvent
+    {
+        int noteNumber = 0;
+        int velocity = 0;
+        bool isNoteOn = false;
+    };
+
     static constexpr int kUiMidiFifoSize = 256;
+    static constexpr int kExternalMidiDisplayFifoSize = 256;
 
     audiocity::engine::EngineCore engine_;
     juce::AudioProcessorValueTreeState apvts_;
@@ -450,6 +459,9 @@ private:
     std::array<UiMidiEvent, kUiMidiFifoSize> uiMidiFifo_{};
     std::atomic<int> uiMidiWritePos_{ 0 };
     std::atomic<int> uiMidiReadPos_{ 0 };
+    std::array<ExternalMidiDisplayEvent, kExternalMidiDisplayFifoSize> externalMidiDisplayFifo_{};
+    std::atomic<int> externalMidiDisplayWritePos_{ 0 };
+    std::atomic<int> externalMidiDisplayReadPos_{ 0 };
     std::atomic<int> suspendParamSyncBlocks_{ 0 };
     std::atomic<float> hostBpm_{ 120.0f };
     std::atomic<bool> generatedWaveformLoaded_{ false };
@@ -523,6 +535,8 @@ private:
     std::atomic<float> captureInputPeakRight_{ 0.0f };
     void pushUiMidiEvent(int noteNumber, int velocity, bool isNoteOn) noexcept;
     [[nodiscard]] bool popUiMidiEvent(UiMidiEvent& out) noexcept;
+    void pushExternalMidiDisplayEvent(int noteNumber, int velocity, bool isNoteOn) noexcept;
+    [[nodiscard]] bool popExternalMidiDisplayEvent(ExternalMidiDisplayEvent& out) noexcept;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudiocityAudioProcessor)
 };

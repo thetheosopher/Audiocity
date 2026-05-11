@@ -18,6 +18,15 @@ file(READ "${_audiocity_source_dir}/tests/RunUiSnapshotHarness.cmake" _audiocity
 file(READ "${_audiocity_source_dir}/LICENSE" _audiocity_license)
 file(GLOB _audiocity_ui_snapshot_baselines "${_audiocity_source_dir}/tests/ui-snapshot-baselines/current/*.png")
 
+string(REGEX MATCH "project[^\n\r]*Audiocity[ \t]+VERSION[ \t]+([0-9]+\.[0-9]+\.[0-9]+)"
+    _audiocity_version_match
+    "${_audiocity_root_cmake}")
+set(_audiocity_version "${CMAKE_MATCH_1}")
+
+if (_audiocity_version STREQUAL "")
+    message(FATAL_ERROR "CMakeLists.txt must declare an Audiocity project version.")
+endif ()
+
 if (NOT _audiocity_presets MATCHES "\"name\"[^\r\n]*\"release-selfcontained\"")
     message(FATAL_ERROR "CMakePresets.json must define a release-selfcontained configure/build preset.")
 endif ()
@@ -30,8 +39,8 @@ if (NOT _audiocity_presets MATCHES "build/release-selfcontained")
     message(FATAL_ERROR "CMakePresets.json must isolate the self-contained release build in build/release-selfcontained.")
 endif ()
 
-if (NOT _audiocity_installer_iss MATCHES "#define MyAppVersion \"1\\.0\\.0\"")
-    message(FATAL_ERROR "AudiocityInstaller.iss must define MyAppVersion as 1.0.0.")
+if (NOT _audiocity_installer_iss MATCHES "#define MyAppVersion \"${_audiocity_version}\"")
+    message(FATAL_ERROR "AudiocityInstaller.iss must define MyAppVersion as ${_audiocity_version}.")
 endif ()
 
 if (NOT _audiocity_installer_iss MATCHES "AppVersion=\\{#MyAppVersion\\}")
@@ -86,8 +95,12 @@ if (NOT _audiocity_build_release MATCHES "ISCC\\.exe")
     message(FATAL_ERROR "build_release.ps1 must discover or use the Inno Setup compiler (ISCC.exe).")
 endif ()
 
-if (NOT _audiocity_build_release MATCHES "\\$appVersion = '1\\.0\\.0'")
-    message(FATAL_ERROR "build_release.ps1 must set appVersion to 1.0.0.")
+if (NOT _audiocity_build_release MATCHES "function Get-AppVersion")
+    message(FATAL_ERROR "build_release.ps1 must derive appVersion through Get-AppVersion.")
+endif ()
+
+if (NOT _audiocity_build_release MATCHES "\\/DMyAppVersion=\\$appVersion")
+    message(FATAL_ERROR "build_release.ps1 must pass MyAppVersion through to the installer build.")
 endif ()
 
 if (NOT _audiocity_build_release MATCHES "windows-x64-setup\\.exe")

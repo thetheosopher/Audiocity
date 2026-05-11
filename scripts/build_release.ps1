@@ -10,12 +10,25 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$appVersion = '1.0.0'
-
 function Write-Step {
     param([string]$Message)
 
     Write-Host "==> $Message"
+}
+
+function Get-AppVersion {
+    param([string]$RepoRoot)
+
+    $cmakeListsPath = Join-Path $RepoRoot 'CMakeLists.txt'
+    $cmakeListsContent = Get-Content -LiteralPath $cmakeListsPath -Raw
+    $match = [regex]::Match($cmakeListsContent, 'project\s*\(\s*Audiocity\s+VERSION\s+([0-9]+(?:\.[0-9]+){1,3})',
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+
+    if (-not $match.Success) {
+        throw "Could not determine Audiocity version from '$cmakeListsPath'."
+    }
+
+    return $match.Groups[1].Value
 }
 
 function Invoke-External {
@@ -131,6 +144,7 @@ if ($EnableAsio -and $DisableAsio) {
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$appVersion = Get-AppVersion -RepoRoot $repoRoot
 $outputRoot = Join-Path $repoRoot 'output'
 $stageRoot = Join-Path $outputRoot 'release-stage'
 $installerStageRoot = Join-Path $stageRoot 'installer'
@@ -220,6 +234,7 @@ if (-not $SkipInstaller) {
 
     Write-Step 'Build Inno Setup installer'
     Invoke-External $resolvedInnoCompiler @(
+        "/DMyAppVersion=$appVersion",
         "/DSourceRoot=$installerStageRoot",
         "/DOutputDir=$outputRoot",
         "/DOutputBaseFilename=Audiocity-$appVersion-windows-x64-setup",

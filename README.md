@@ -2,9 +2,9 @@
 
 ![Audiocity](assets/icons/audiocity_icon_256.png)
 
-A high-performance hybrid sampler built with JUCE and C++20, shipped as a Standalone Windows app and a VST3 instrument plugin.
+A Windows-focused hybrid sampler built with JUCE and C++20, delivered as a standalone application and a VST3 instrument plugin.
 
-![Version 1.0.0](https://img.shields.io/badge/version-1.0.0-blue)
+![Version 1.2.0](https://img.shields.io/badge/version-1.2.0-blue)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue?logo=cplusplus)
 ![JUCE 8.0.4](https://img.shields.io/badge/JUCE-8.0.4-orange)
 ![Windows x64](https://img.shields.io/badge/platform-Windows%20x64-lightgrey?logo=windows)
@@ -12,79 +12,75 @@ A high-performance hybrid sampler built with JUCE and C++20, shipped as a Standa
 
 ## Overview
 
-Audiocity is a Windows-focused sampler that runs from a single JUCE `AudioProcessor` implementation and is delivered in two forms:
+Audiocity 1.2 expands the sampler from a single-sample workflow into a broader instrument workstation with multisample import, transient slicing, richer modulation, modernized page layouts, and better live feedback.
 
-- a standalone desktop application
-- a VST3 instrument plugin
+The engine and UI are still driven by one JUCE `AudioProcessor`, with deterministic offline tests, snapshot-based UI validation, and shared behavior across the plugin and standalone targets.
 
-The engine and UI are developed against a spec-first architecture with explicit real-time safety rules, deterministic offline testing, and shared behavior across plugin and standalone targets.
+## New in 1.2
+
+- Broader import coverage for SFZ, SoundFont 2, DecentSampler, Bitwig multisample, MPC XPM, 1010music Bento, TAL Sampler, TX16Wx, Korg multisample, Korg KMP, Ableton Sampler, EXS24, legacy NKI, REX/RX2, and NCW-backed content.
+- A multi-preset chooser for libraries that expose more than one patch, plus a searchable preset strip on the Sample page.
+- Persistent browser and performance rails on Sample, Mapping, Generate, and Capture so browsing and auditioning stay visible while editing.
+- Mapping productivity tools for batch edit, create, duplicate, split, merge, chromatic remap, key-range spread, and root-note derivation.
+- Transient slice import and editing workflows with waveform overlays and direct split or merge gestures.
+- Expanded modulation with mod wheel, aftertouch, velocity, and Macro 1 or Macro 2 routing to pitch, filter, and amp.
+- Better live feedback through external MIDI key highlighting, stereo output meters, and a two-digit LED voice counter.
+- Quality and streaming upgrades with CPU, Fidelity, and Ultra render modes, preload control, and streaming diagnostics.
 
 ## Screenshots
 
-### Main Window
+The screenshots below come from the deterministic UI snapshot harness used in the test suite, so they match the current application state.
+
+### Sample Workspace
 
 <p align="center">
-	<img src="docs/MainWindow1.png" alt="Audiocity main window showing waveform editing and sample controls" width="32%" />
-	<img src="docs/MainWindow2.png" alt="Audiocity main window showing envelope and filter sections" width="32%" />
-	<img src="docs/MainWindow3.png" alt="Audiocity main window showing effects, output, and diagnostics sections" width="32%" />
+	<img src="tests/ui-snapshot-baselines/current/sample_wide.png" alt="Audiocity Sample page with wide browser and inspector rails" width="49%" />
+	<img src="tests/ui-snapshot-baselines/current/sample_preset_search.png" alt="Audiocity Sample page showing searchable preset strip" width="49%" />
 </p>
 
-- Screenshot 1: sample preset controls, waveform display, and sample information
-- Screenshot 2: amp/filter envelopes, modulation controls, and filter response views
-- Screenshot 3: effects, output metering, and diagnostics
+<p align="center">
+	<img src="tests/ui-snapshot-baselines/current/sample_modulation.png" alt="Audiocity Sample page showing modulation routing feedback" width="49%" />
+	<img src="tests/ui-snapshot-baselines/current/sample_wide_inspector_only.png" alt="Audiocity Sample page with inspector-focused layout and output controls" width="49%" />
+</p>
 
-### Tab Gallery
+### Browser, Mapping, and Performance
 
-<table>
-	<tr>
-		<td valign="top" width="50%">
-			<strong>Librarian</strong><br />
-			<img src="docs/LibrarianWindow.PNG" alt="Audiocity Librarian tab with searchable sample browser and preview thumbnails" width="100%" /><br />
-			<ul>
-				<li>Search and sort the sample library</li>
-				<li>Preview files with metadata and waveform thumbnails</li>
-			</ul>
-		</td>
-		<td valign="top" width="50%">
-			<strong>Player</strong><br />
-			<img src="docs/PlayerTab.PNG" alt="Audiocity Player tab with piano keyboard and drum pad layout" width="100%" /><br />
-			<ul>
-				<li>Play samples from the piano keyboard</li>
-				<li>Trigger and assign the drum pad bank</li>
-			</ul>
-		</td>
-	</tr>
-	<tr>
-		<td valign="top" width="50%">
-			<strong>Generate</strong><br />
-			<img src="docs/GenerateTab.PNG" alt="Audiocity Generate tab with waveform sketching and synthesis controls" width="100%" /><br />
-			<ul>
-				<li>Create waveforms with sketching and one-click generators</li>
-				<li>Choose sample count, bit depth, and playback preview settings</li>
-			</ul>
-		</td>
-		<td valign="top" width="50%">
-			<strong>Capture</strong><br />
-			<img src="docs/CaptureTab.PNG" alt="Audiocity Capture tab with recording controls and input metering" width="100%" /><br />
-			<ul>
-				<li>Record live input with gain and channel controls</li>
-				<li>Trim, cut, normalize, and load the capture as a sample</li>
-			</ul>
-		</td>
-	</tr>
-</table>
+<p align="center">
+	<img src="tests/ui-snapshot-baselines/current/library.png" alt="Audiocity Library tab with searchable browser and preview information" width="49%" />
+	<img src="tests/ui-snapshot-baselines/current/mapping.png" alt="Audiocity Mapping tab with zone editing tools and overview keyboard" width="49%" />
+</p>
 
-## Current Feature Set
+<p align="center">
+	<img src="tests/ui-snapshot-baselines/current/player.png" alt="Audiocity Player tab with piano keyboard, pads, and performance status" width="49%" />
+	<img src="tests/ui-snapshot-baselines/current/sample_single_voice.png" alt="Audiocity Sample page showing the compact performance strip and one active voice" width="49%" />
+</p>
 
-- Sample playback with pitch shifting by resampling
-- Polyphony with explicit voice stealing
-- Amp ADSR and filter ADSR with low-pass filtering
-- Sampler-style UI with Browser, Mapping, Editor, Settings, and Diagnostics panels
-- Preset save, rename, delete, and reload workflow using `.acp` XML payloads
-- Library peak-preview caching with invalidation when the source library changes
-- REX import support through the bundled REX SDK runtime
-- Optional ASIO support when the Steinberg ASIO SDK is available at configure time
-- Offline render test coverage for deterministic engine behavior
+### Generate, Capture, and About
+
+<p align="center">
+	<img src="tests/ui-snapshot-baselines/current/generate.png" alt="Audiocity Generate tab with waveform creation tools" width="49%" />
+	<img src="tests/ui-snapshot-baselines/current/capture.png" alt="Audiocity Capture tab with live recording controls" width="49%" />
+</p>
+
+<p align="center">
+	<img src="tests/ui-snapshot-baselines/current/about.png" alt="Audiocity About page with feature summary and workflow tips" width="70%" />
+</p>
+
+## Feature Highlights
+
+- Import one-shots and multisample instruments from modern XML, ZIP, and legacy formats while keeping restore behavior deterministic.
+- Preview and load from the browser rail without leaving the page you are editing.
+- Search presets from the Sample header, then load or save `.acp` patches without switching tabs.
+- Edit imported programs with mapping batch operations, slice workflows, and one shared undo history.
+- Play from the full Player tab or the compact performance strip, with external MIDI note display and live voice or output status.
+- Generate synthetic source material, capture audio, trim it, and move it into the same sampler workflow.
+- Track preload, streaming, and playback diagnostics without touching the audio thread.
+
+## Supported Formats
+
+- Direct sample load: WAV, AIFF, REX, RX2, and NCW through an external converter command.
+- Imported instruments: SFZ, SF2, DecentSampler `.dspreset`, Bitwig `.multisample`, MPC `.xpm`, 1010music Bento, TAL Sampler, TX16Wx, Korg multisample ZIP, Korg `.kmp`, Ableton `.adv` and `.adg`, EXS24, and a validated legacy NKI subset.
+- Detection-only diagnostics: protected or encrypted Kontakt content is identified and reported, but not imported.
 
 ## Support
 
@@ -103,6 +99,7 @@ Support the project: &#9749; [Buy Me A Coffee](https://buymeacoffee.com/theosoph
 Optional:
 
 - Steinberg ASIO SDK for ASIO-enabled builds
+- An NCW conversion tool exposed through `AUDIOCITY_NCW_CONVERTER_COMMAND` if you want to load NCW-backed content
 
 ## Quick Start
 
@@ -117,7 +114,7 @@ Manual development build:
 ```bash
 cmake --preset default
 cmake --build --preset default --config Debug --target Audiocity_All
-cmake --build --preset default --config Debug --target audiocity_offline_tests
+cmake --build --preset default --config Debug --target audiocity_offline_tests audiocity_ui_snapshot_harness
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
@@ -144,10 +141,10 @@ Build the release package set without ASIO:
 ./scripts/build_release.ps1 -DisableAsio
 ```
 
-The release script produces two artifacts in `output/`:
+The release script derives the version from `CMakeLists.txt` and produces two artifacts in `output/`:
 
-- `Audiocity-1.0.0-windows-x64-setup.exe`
-- `Audiocity-1.0.0-windows-x64-portable.zip`
+- `Audiocity-1.2.0-windows-x64-setup.exe`
+- `Audiocity-1.2.0-windows-x64-portable.zip`
 
 ### Installer Behavior
 
@@ -158,6 +155,7 @@ The Inno Setup installer supports:
 - desktop shortcut creation
 - Start Menu shortcuts for the standalone app
 - automatic VST3 installation to the correct path for the selected install scope
+- bundled factory presets for both the standalone app and the VST3 package
 
 VST3 install locations:
 
@@ -171,6 +169,7 @@ The portable zip contains:
 - the standalone application files ready to run after extraction
 - a `VST3/` subfolder containing `Audiocity.vst3`
 - `PortableInstall.txt` with manual plugin install instructions
+- bundled factory presets
 - the MIT license
 
 The plugin bundle is intentionally left in a separate subfolder so the end user can choose whether to copy it to the per-user or machine-wide VST3 location.
@@ -188,14 +187,14 @@ The workspace includes:
 
 ```text
 Audiocity/
-├── assets/             # Icons and artwork
+├── assets/             # Icons, artwork, and factory presets
 ├── docs/               # Architecture, roadmap, RT rules, testing specs
 ├── installer/          # Inno Setup script and portable package docs
 ├── prompts/            # Milestone-oriented Copilot prompts
 ├── scripts/            # Bootstrap, cleanup, ASIO integration, release packaging
-├── src/engine/         # EngineCore, VoicePool, RexLoader, engine-side utilities
+├── src/engine/         # EngineCore, streaming, importers, and engine-side utilities
 ├── src/plugin/         # PluginProcessor, PluginEditor, UI components, presets
-├── tests/              # Offline render and packaging validation tests
+├── tests/              # Offline render, packaging, and UI snapshot validation
 ├── third_party/        # JUCE, REX SDK, optional ASIO SDK
 ├── CMakeLists.txt
 └── CMakePresets.json
@@ -205,9 +204,9 @@ Audiocity/
 
 Audiocity is designed around a single processor shared by standalone and VST3 targets.
 
-- Audio thread: rendering, mixing, DSP, and strict real-time-safe execution
-- UI thread: parameter editing, browser actions, and diagnostic presentation
-- Testing model: offline deterministic renders and regression-oriented packaging checks
+- Audio thread: rendering, mixing, streaming requests, and strict real-time-safe execution
+- UI thread: parameter editing, browser actions, import workflows, and diagnostic presentation
+- Testing model: offline deterministic renders plus snapshot and packaging regression checks
 
 Real-time rules are defined in `docs/02-real-time-rules.md`, and the higher-level architecture lives in `docs/01-architecture.md`.
 

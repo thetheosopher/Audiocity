@@ -7,6 +7,7 @@
 
 #include <functional>
 #include <atomic>
+#include <bitset>
 #include <memory>
 #include <optional>
 #include <array>
@@ -104,6 +105,7 @@ class MappingOverviewComponent final : public juce::Component
 public:
     void setRows(std::vector<audiocity::plugin::ProgramZoneListRow> rows);
     void setSelectedZoneIndex(int zoneIndex);
+    void setHighlightedMidiNotes(std::bitset<128> highlightedMidiNotes);
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
@@ -145,7 +147,31 @@ private:
 
     std::vector<audiocity::plugin::ProgramZoneListRow> rows_;
     int selectedZoneIndex_ = -1;
+    std::bitset<128> highlightedMidiNotes_;
     std::optional<DragState> dragState_;
+};
+
+class PerformanceStripStatusDisplay final : public juce::Component
+{
+public:
+    void setState(juce::String stateText, int activeVoices, float leftLevel, float rightLevel)
+    {
+        constexpr float kDecayPerTick = 0.92f;
+
+        stateText_ = std::move(stateText);
+        activeVoices_ = juce::jlimit(0, 99, activeVoices);
+        leftLevel_ = juce::jmax(juce::jlimit(0.0f, 1.0f, leftLevel), leftLevel_ * kDecayPerTick);
+        rightLevel_ = juce::jmax(juce::jlimit(0.0f, 1.0f, rightLevel), rightLevel_ * kDecayPerTick);
+        repaint();
+    }
+
+    void paint(juce::Graphics& g) override;
+
+private:
+    juce::String stateText_{ "Ready" };
+    int activeVoices_ = 0;
+    float leftLevel_ = 0.0f;
+    float rightLevel_ = 0.0f;
 };
 
 class AudiocityAudioProcessorEditor final : public juce::AudioProcessorEditor,
@@ -177,6 +203,7 @@ public:
     void setSampleRailSnapshotState(bool browserRailEnabled, bool inspectorRailEnabled);
     void setSampleInspectorCardSnapshotState(bool filterModExpanded, bool effectsExpanded);
     void setPresetSearchSnapshotState(const juce::StringArray& presetNames, const juce::String& filterText);
+    void setSnapshotActiveMidiNotes(const std::vector<int>& noteNumbers);
 
 private:
     void handleNoteOn(juce::MidiKeyboardState* source, int midiChannel, int midiNoteNumber, float velocity) override;
@@ -190,6 +217,8 @@ private:
     void returnKeyPressed(int lastRowSelected) override;
 
     void timerCallback() override;
+    void consumeExternalMidiDisplayEvents();
+    void syncExternalMidiDisplayNotes(const std::bitset<128>& nextNotes, float noteOnVelocity = 1.0f);
     void paintSampleInspectorPane(juce::Graphics& g) const;
     void clearSampleInformationComponentBounds();
 
@@ -546,11 +575,14 @@ private:
 
     // ── Player ──
     juce::Label playerKeyboardLabel_{ {}, "Piano" };
-    juce::Label playerStatusLabel_{ {}, "Ready  V0  Out -inf / -inf dB" };
+    PerformanceStripStatusDisplay playerStatusDisplay_;
     juce::TextButton playerOpenButton_{ "Open Player" };
     juce::Viewport playerKeyboardViewport_;
     juce::MidiKeyboardState playerKeyboardState_;
     juce::MidiKeyboardComponent playerKeyboard_{ playerKeyboardState_, juce::MidiKeyboardComponent::horizontalKeyboard };
+    static constexpr int kExternalKeyboardDisplayMidiChannel = 16;
+    std::array<int, 128> externalMidiDisplayNoteCounts_{};
+    std::bitset<128> externalMidiDisplayNotes_;
     juce::Label playerPadsLabel_{ {}, "Drum Pads" };
     static constexpr int kPlayerPadCount = audiocity::plugin::kPlayerPadCount;
     std::array<PlayerPadButton, kPlayerPadCount> playerPadButtons_;

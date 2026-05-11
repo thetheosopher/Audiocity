@@ -1034,6 +1034,13 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         const auto msg = metadata.getMessage();
         if (msg.isController())
             pushCcEvent(msg.getControllerNumber(), msg.getControllerValue());
+
+        if (msg.isNoteOnOrOff())
+        {
+            pushExternalMidiDisplayEvent(msg.getNoteNumber(),
+                                         juce::jlimit(0, 127, static_cast<int>(std::round(msg.getFloatVelocity() * 127.0f))),
+                                         msg.isNoteOn());
+        }
     }
 
     if (previewWavePlaying_.load(std::memory_order_relaxed)
@@ -4235,6 +4242,20 @@ void AudiocityAudioProcessor::enqueueUiMidiNoteOff(const int noteNumber) noexcep
     pushUiMidiEvent(noteNumber, 0, false);
 }
 
+bool AudiocityAudioProcessor::consumeExternalMidiDisplayEvent(int& noteNumber,
+                                                              int& velocity,
+                                                              bool& isNoteOn) noexcept
+{
+    ExternalMidiDisplayEvent event{};
+    if (!popExternalMidiDisplayEvent(event))
+        return false;
+
+    noteNumber = event.noteNumber;
+    velocity = event.velocity;
+    isNoteOn = event.isNoteOn;
+    return true;
+}
+
 // ─── CC FIFO ───────────────────────────────────────────────────────────────────
 
 void AudiocityAudioProcessor::pushCcEvent(const int ccNumber, const int value)
@@ -4287,6 +4308,39 @@ bool AudiocityAudioProcessor::popUiMidiEvent(UiMidiEvent& out) noexcept
 
     out = uiMidiFifo_[static_cast<std::size_t>(readPos)];
     uiMidiReadPos_.store((readPos + 1) % kUiMidiFifoSize, std::memory_order_release);
+    return true;
+}
+
+void AudiocityAudioProcessor::pushExternalMidiDisplayEvent(const int noteNumber,
+                                                           const int velocity,
+                                                           const bool isNoteOn) noexcept
+{
+    const auto writePos = externalMidiDisplayWritePos_.load(std::memory_order_relaxed);
+    const auto nextWrite = (writePos + 1) % kExternalMidiDisplayFifoSize;
+
+    if (nextWrite == externalMidiDisplayReadPos_.load(std::memory_order_acquire))
+    {
+        externalMidiDisplayReadPos_.store((externalMidiDisplayReadPos_.load(std::memory_order_relaxed) + 1)
+                                              % kExternalMidiDisplayFifoSize,
+                                          std::memory_order_release);
+    }
+
+    externalMidiDisplayFifo_[static_cast<std::size_t>(writePos)] = {
+        juce::jlimit(0, 127, noteNumber),
+        juce::jlimit(0, 127, velocity),
+        isNoteOn
+    };
+    externalMidiDisplayWritePos_.store(nextWrite, std::memory_order_release);
+}
+
+bool AudiocityAudioProcessor::popExternalMidiDisplayEvent(ExternalMidiDisplayEvent& out) noexcept
+{
+    const auto readPos = externalMidiDisplayReadPos_.load(std::memory_order_relaxed);
+    if (readPos == externalMidiDisplayWritePos_.load(std::memory_order_acquire))
+        return false;
+
+    out = externalMidiDisplayFifo_[static_cast<std::size_t>(readPos)];
+    externalMidiDisplayReadPos_.store((readPos + 1) % kExternalMidiDisplayFifoSize, std::memory_order_release);
     return true;
 }
 
