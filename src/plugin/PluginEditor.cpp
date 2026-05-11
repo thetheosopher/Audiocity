@@ -238,7 +238,7 @@ juce::String formatPlayerPadButtonLabel(const int padIndex,
 
 int computePersistentPerformanceStripHeight(const int availableHeight)
 {
-    return juce::jlimit(156, 196, availableHeight / 4);
+    return juce::jlimit(176, 216, (availableHeight / 4) + 18);
 }
 
 int computePersistentBrowserRailWidth(const int availableWidth)
@@ -8119,39 +8119,62 @@ void AudiocityAudioProcessorEditor::layoutSampleBrowserArea(juce::Rectangle<int>
 
 void AudiocityAudioProcessorEditor::layoutPlayerPerformanceArea(juce::Rectangle<int> area, const bool compactLayout)
 {
-    area = area.reduced(8, 6);
-
     if (compactLayout)
     {
+        area = area.reduced(6, 4);
+
         playerKeyboardLabel_.setText("Performance Strip", juce::dontSendNotification);
         playerPadsLabel_.setText("Quick Pads", juce::dontSendNotification);
 
-        const int keyboardPanelHeight = juce::jlimit(78, 116, (area.getHeight() * 53) / 100);
-        auto keyboardPanel = area.removeFromTop(keyboardPanelHeight).reduced(8, 8);
-        auto keyboardHeader = keyboardPanel.removeFromTop(38);
+        const int keyboardPanelHeight = juce::jlimit(92, 136, (area.getHeight() * 55) / 100);
+        auto keyboardPanel = area.removeFromTop(keyboardPanelHeight).reduced(8, 6);
+        auto keyboardHeader = keyboardPanel.removeFromTop(34);
         auto keyboardTitleRow = keyboardHeader.removeFromTop(16);
         playerOpenButton_.setBounds(keyboardTitleRow.removeFromRight(92));
         playerKeyboardLabel_.setBounds(keyboardTitleRow);
         keyboardHeader.removeFromTop(2);
-        playerStatusDisplay_.setBounds(keyboardHeader.removeFromTop(20));
+        playerStatusDisplay_.setBounds(keyboardHeader.removeFromTop(16));
         keyboardPanel.removeFromTop(4);
         playerKeyboardViewport_.setBounds(keyboardPanel);
         updatePlayerKeyboardSizing();
 
-        area.removeFromTop(6);
-        auto padsPanel = area.reduced(8, 8);
+        area.removeFromTop(4);
+        auto padsPanel = area.reduced(8, 6);
         playerPadsLabel_.setBounds(padsPanel.removeFromTop(16));
-        padsPanel.removeFromTop(4);
+        padsPanel.removeFromTop(6);
+        padsPanel = padsPanel.reduced(4, 0);
 
-        constexpr int padGap = 6;
-        const int padCellWidth = juce::jmax(64, (padsPanel.getWidth() - (kPlayerPadCount - 1) * padGap) / kPlayerPadCount);
-        const int padCellHeight = juce::jmax(34, padsPanel.getHeight());
+        constexpr int kCompactPadGap = 8;
+        constexpr int kCompactPadMinSingleRowWidth = 92;
+        const bool useTwoRows = padsPanel.getHeight() >= 96
+            && padsPanel.getWidth() < ((kPlayerPadCount * kCompactPadMinSingleRowWidth)
+                + ((kPlayerPadCount - 1) * kCompactPadGap));
+        const int padCols = useTwoRows ? 4 : kPlayerPadCount;
+        const int padRows = (kPlayerPadCount + padCols - 1) / padCols;
+        const int verticalGap = useTwoRows ? 8 : 0;
+        const int padCellWidth = juce::jmax(1, (padsPanel.getWidth() - (padCols - 1) * kCompactPadGap) / padCols);
+        const int availablePadHeight = juce::jmax(1,
+            (padsPanel.getHeight() - (padRows - 1) * verticalGap) / padRows);
+        const int preferredPadHeight = useTwoRows ? 48 : 46;
+        const int minimumPadHeight = useTwoRows ? 34 : 32;
+        const int padCellHeight = availablePadHeight >= minimumPadHeight
+            ? juce::jmin(preferredPadHeight, availablePadHeight)
+            : availablePadHeight;
+        const int gridWidth = padCols * padCellWidth + (padCols - 1) * kCompactPadGap;
+        const int gridHeight = padRows * padCellHeight + (padRows - 1) * verticalGap;
+        auto gridArea = juce::Rectangle<int>(
+            padsPanel.getCentreX() - (gridWidth / 2),
+            padsPanel.getY() + juce::jmax(0, (padsPanel.getHeight() - gridHeight) / 2),
+            gridWidth,
+            gridHeight);
 
         for (int i = 0; i < kPlayerPadCount; ++i)
         {
+            const int row = i / padCols;
+            const int col = i % padCols;
             auto cell = juce::Rectangle<int>(
-                padsPanel.getX() + i * (padCellWidth + padGap),
-                padsPanel.getY(),
+                gridArea.getX() + col * (padCellWidth + kCompactPadGap),
+                gridArea.getY() + row * (padCellHeight + verticalGap),
                 padCellWidth,
                 padCellHeight);
             playerPadButtons_[static_cast<std::size_t>(i)].setBounds(cell);
@@ -8160,6 +8183,8 @@ void AudiocityAudioProcessorEditor::layoutPlayerPerformanceArea(juce::Rectangle<
 
         return;
     }
+
+    area = area.reduced(8, 6);
 
     playerKeyboardLabel_.setText("Piano", juce::dontSendNotification);
     playerPadsLabel_.setText("Drum Pads", juce::dontSendNotification);
