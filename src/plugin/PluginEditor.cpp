@@ -238,7 +238,7 @@ juce::String formatPlayerPadButtonLabel(const int padIndex,
 
 int computePersistentPerformanceStripHeight(const int availableHeight)
 {
-    return juce::jlimit(176, 216, (availableHeight / 4) + 18);
+    return juce::jlimit(184, 224, (availableHeight / 4) + 26);
 }
 
 int computePersistentBrowserRailWidth(const int availableWidth)
@@ -1512,7 +1512,8 @@ void PerformanceStripStatusDisplay::paint(juce::Graphics& g)
     if (bounds.isEmpty())
         return;
 
-    const bool expandedLayout = bounds.getHeight() >= 28;
+    const bool expandedLayout = bounds.getHeight() >= 22;
+    const bool compactHeaderOverlayLayout = compactHeaderOverlayEnabled_ && bounds.getHeight() >= 30;
     const auto cornerRadius = expandedLayout ? 5.0f : 4.0f;
 
     g.setColour(uiChromeColour().brighter(0.02f));
@@ -1520,21 +1521,28 @@ void PerformanceStripStatusDisplay::paint(juce::Graphics& g)
     g.setColour(uiBorderColour().withAlpha(0.95f));
     g.drawRoundedRectangle(bounds.toFloat().reduced(0.5f), cornerRadius, 1.0f);
 
-    auto content = bounds.reduced(expandedLayout ? 7 : 6, expandedLayout ? 3 : 2);
-    static constexpr float kLedAspectRatio = 3.15f;
-    const auto voiceAreaWidth = juce::jlimit(expandedLayout ? 58 : 44,
-                                             expandedLayout ? 74 : 58,
-                                             static_cast<int>(std::round((content.getHeight() - 1) * kLedAspectRatio))
-                                                 + (expandedLayout ? 8 : 6));
-    const auto stateAreaWidth = juce::jlimit(expandedLayout ? 52 : 40,
-                                             expandedLayout ? 76 : 60,
-                                             content.getWidth() / 5);
+    auto content = bounds.reduced(compactHeaderOverlayLayout ? 6 : (expandedLayout ? 7 : 6),
+                                  compactHeaderOverlayLayout ? 2 : (expandedLayout ? 3 : 2));
+    const auto ledAspectRatio = compactHeaderOverlayLayout ? 2.35f : 3.15f;
+    const auto voiceAreaWidth = juce::jlimit(compactHeaderOverlayLayout ? 68 : (expandedLayout ? 58 : 44),
+                                             compactHeaderOverlayLayout ? 82 : (expandedLayout ? 74 : 58),
+                                             static_cast<int>(std::round((content.getHeight() - 1) * ledAspectRatio))
+                                                 + (compactHeaderOverlayLayout ? 6 : (expandedLayout ? 8 : 6)));
 
-    auto stateArea = content.removeFromLeft(stateAreaWidth);
-    content.removeFromLeft(expandedLayout ? 8 : 6);
     auto voiceArea = content.removeFromRight(voiceAreaWidth);
-    content.removeFromRight(expandedLayout ? 6 : 4);
-    auto meterArea = content;
+    content.removeFromRight(compactHeaderOverlayLayout ? 8 : (expandedLayout ? 6 : 4));
+
+    auto statusArea = content;
+    if (compactHeaderOverlayLayout)
+        statusArea.removeFromTop(12);
+
+    const auto stateAreaWidth = juce::jlimit(expandedLayout ? 52 : 40,
+                                             compactHeaderOverlayLayout ? 84 : (expandedLayout ? 76 : 60),
+                                             statusArea.getWidth() / 5);
+
+    auto stateArea = statusArea.removeFromLeft(stateAreaWidth);
+    statusArea.removeFromLeft(compactHeaderOverlayLayout ? 6 : (expandedLayout ? 8 : 6));
+    auto meterArea = statusArea;
 
     auto stateColour = uiTextMutedColour().brighter(0.08f);
     if (stateText_.equalsIgnoreCase("Preview"))
@@ -1609,21 +1617,23 @@ void PerformanceStripStatusDisplay::paint(juce::Graphics& g)
 
     auto ledFrame = voiceArea.toFloat();
     const auto ledHeight = juce::jmin(ledFrame.getHeight() - 1.0f,
-                                      (ledFrame.getWidth() - 2.0f) / kLedAspectRatio);
-    const auto ledWidth = juce::jmin(ledFrame.getWidth() - 1.0f, ledHeight * kLedAspectRatio);
+                                      (ledFrame.getWidth() - 2.0f) / ledAspectRatio);
+    const auto ledWidth = juce::jmin(ledFrame.getWidth() - 1.0f, ledHeight * ledAspectRatio);
     auto ledBounds = juce::Rectangle<float>(0.0f, 0.0f, ledWidth, ledHeight).withCentre(ledFrame.getCentre());
 
     g.setColour(juce::Colour(0xff160303));
-    g.fillRoundedRectangle(ledBounds, 4.0f);
+    g.fillRoundedRectangle(ledBounds, compactHeaderOverlayLayout ? 5.0f : 4.0f);
     g.setColour(juce::Colour(0xff4d1412));
-    g.drawRoundedRectangle(ledBounds.reduced(0.5f), 4.0f, 1.0f);
+    g.drawRoundedRectangle(ledBounds.reduced(0.5f), compactHeaderOverlayLayout ? 5.0f : 4.0f, 1.0f);
     g.setColour(juce::Colour(0x24ff8b73));
     g.fillRoundedRectangle(ledBounds.reduced(1.0f, 1.0f).removeFromTop(ledBounds.getHeight() * 0.35f), 3.0f);
 
     const auto digits = juce::String(activeVoices_).paddedLeft('0', 2);
-    auto digitsArea = ledBounds.reduced(expandedLayout ? 4.0f : 3.0f, expandedLayout ? 2.5f : 2.0f);
-    const auto digitGap = expandedLayout ? 5 : 3;
-    const auto digitWidth = juce::jmax(expandedLayout ? 11.0f : 8.0f, (digitsArea.getWidth() - digitGap) * 0.5f);
+    auto digitsArea = ledBounds.reduced(compactHeaderOverlayLayout ? 3.0f : (expandedLayout ? 4.0f : 3.0f),
+                                        compactHeaderOverlayLayout ? 1.2f : (expandedLayout ? 2.5f : 2.0f));
+    const auto digitGap = compactHeaderOverlayLayout ? 4 : (expandedLayout ? 5 : 3);
+    const auto digitWidth = juce::jmax(compactHeaderOverlayLayout ? 12.0f : (expandedLayout ? 11.0f : 8.0f),
+                                       (digitsArea.getWidth() - digitGap) * 0.5f);
 
     auto drawSevenSegmentDigit = [&](juce::Rectangle<float> area, const int digit)
     {
@@ -1640,12 +1650,14 @@ void PerformanceStripStatusDisplay::paint(juce::Graphics& g)
             {{ true, true, true, true, false, true, true }}
         }};
 
-        auto digitBounds = area.reduced(expandedLayout ? 0.8f : 0.5f, expandedLayout ? 0.6f : 0.35f);
-        const auto horizontalThickness = juce::jlimit(1.2f,
-                                                      expandedLayout ? 2.2f : 1.8f,
-                                                      juce::jmin(digitBounds.getWidth(), digitBounds.getHeight()) * 0.22f);
+        auto digitBounds = area.reduced(compactHeaderOverlayLayout ? 0.45f : (expandedLayout ? 0.8f : 0.5f),
+                                        compactHeaderOverlayLayout ? 0.25f : (expandedLayout ? 0.6f : 0.35f));
+        const auto horizontalThickness = juce::jlimit(compactHeaderOverlayLayout ? 1.6f : 1.2f,
+                                                      compactHeaderOverlayLayout ? 3.0f : (expandedLayout ? 2.2f : 1.8f),
+                                                      juce::jmin(digitBounds.getWidth(), digitBounds.getHeight())
+                                                          * (compactHeaderOverlayLayout ? 0.20f : 0.22f));
         const auto verticalThickness = juce::jlimit(horizontalThickness,
-                                                    expandedLayout ? 2.8f : 2.2f,
+                                                    compactHeaderOverlayLayout ? 3.4f : (expandedLayout ? 2.8f : 2.2f),
                                                     horizontalThickness * 1.28f);
         const auto horizontalInset = juce::jmax(verticalThickness * 0.78f, horizontalThickness * 0.9f);
         const auto horizontalLength = juce::jmax(2.0f, digitBounds.getWidth() - (horizontalInset * 2.0f));
@@ -5592,7 +5604,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
 
     playerKeyboardLabel_.setVisible(showPlayerTab || showPerformanceStrip);
     playerStatusDisplay_.setVisible(showPlayerTab || showPerformanceStrip);
-    playerOpenButton_.setVisible(showPerformanceStrip);
+    playerOpenButton_.setVisible(false);
     playerKeyboardViewport_.setVisible(showPlayerTab || showPerformanceStrip);
     playerPadsLabel_.setVisible(showPlayerTab || showPerformanceStrip);
     for (int i = 0; i < kPlayerPadCount; ++i)
@@ -8126,23 +8138,24 @@ void AudiocityAudioProcessorEditor::layoutPlayerPerformanceArea(juce::Rectangle<
         playerKeyboardLabel_.setText("Performance Strip", juce::dontSendNotification);
         playerPadsLabel_.setText("Quick Pads", juce::dontSendNotification);
 
-        const int keyboardPanelHeight = juce::jlimit(92, 136, (area.getHeight() * 55) / 100);
+        const int keyboardPanelHeight = juce::jlimit(100, 144, (area.getHeight() * 58) / 100);
         auto keyboardPanel = area.removeFromTop(keyboardPanelHeight).reduced(8, 6);
         auto keyboardHeader = keyboardPanel.removeFromTop(34);
-        auto keyboardTitleRow = keyboardHeader.removeFromTop(16);
-        playerOpenButton_.setBounds(keyboardTitleRow.removeFromRight(92));
-        playerKeyboardLabel_.setBounds(keyboardTitleRow);
-        keyboardHeader.removeFromTop(2);
-        playerStatusDisplay_.setBounds(keyboardHeader.removeFromTop(16));
+        const auto keyboardStatusBounds = keyboardHeader;
+        playerOpenButton_.setBounds({});
+        playerKeyboardLabel_.setBounds(keyboardHeader.removeFromTop(12).translated(0, 2));
+        playerStatusDisplay_.setCompactHeaderOverlayEnabled(true);
+        playerStatusDisplay_.setBounds(keyboardStatusBounds);
+        playerKeyboardLabel_.toFront(false);
         keyboardPanel.removeFromTop(4);
-        playerKeyboardViewport_.setBounds(keyboardPanel);
+        playerKeyboardViewport_.setBounds(keyboardPanel.withTrimmedBottom(6));
         updatePlayerKeyboardSizing();
 
         area.removeFromTop(4);
-        auto padsPanel = area.reduced(8, 6);
-        playerPadsLabel_.setBounds(padsPanel.removeFromTop(16));
-        padsPanel.removeFromTop(6);
-        padsPanel = padsPanel.reduced(4, 0);
+        auto padsPanel = area.reduced(8, 4);
+        playerPadsLabel_.setBounds(padsPanel.removeFromTop(14));
+        padsPanel.removeFromTop(4);
+        padsPanel = padsPanel.reduced(2, 0);
 
         constexpr int kCompactPadGap = 8;
         constexpr int kCompactPadMinSingleRowWidth = 92;
@@ -8189,6 +8202,7 @@ void AudiocityAudioProcessorEditor::layoutPlayerPerformanceArea(juce::Rectangle<
     playerKeyboardLabel_.setText("Piano", juce::dontSendNotification);
     playerPadsLabel_.setText("Drum Pads", juce::dontSendNotification);
     playerOpenButton_.setBounds({});
+    playerStatusDisplay_.setCompactHeaderOverlayEnabled(false);
 
     auto keyboardPanel = area.removeFromTop(computePlayerKeyboardPanelHeight(area.getWidth()) + 52);
     keyboardPanel.reduce(10, 10);
@@ -8624,7 +8638,7 @@ void AudiocityAudioProcessorEditor::resized()
         generateWaveformView_.setBounds(waveformArea);
         genArea.removeFromTop(12);
 
-        auto waveButtons = genArea.removeFromTop(32);
+        auto waveButtons = genArea.removeFromTop(32).reduced(12, 0);
         constexpr int kBtnW = 64;
         constexpr int kBtnGap = 6;
         generateLoadAsSampleButton_.setBounds(waveButtons.removeFromRight(140));
@@ -8644,7 +8658,7 @@ void AudiocityAudioProcessorEditor::resized()
         generateRandomButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
 
         genArea.removeFromTop(10);
-        auto settingsRow = genArea.removeFromTop(32);
+        auto settingsRow = genArea.removeFromTop(32).reduced(12, 0);
         generateSamplesLabel_.setBounds(settingsRow.removeFromLeft(58));
         generateSamplesCombo_.setBounds(settingsRow.removeFromLeft(98));
         settingsRow.removeFromLeft(14);
@@ -8658,7 +8672,7 @@ void AudiocityAudioProcessorEditor::resized()
         generatePulseWidthSlider_.setBounds(settingsRow);
 
         genArea.removeFromTop(10);
-        auto actionsRow = genArea.removeFromTop(32);
+        auto actionsRow = genArea.removeFromTop(32).reduced(12, 0);
         generatePreviewButton_.setBounds(actionsRow.removeFromLeft(96));
         actionsRow.removeFromLeft(12);
         generateFrequencyLabel_.setBounds(actionsRow.removeFromLeft(72));
@@ -8677,20 +8691,50 @@ void AudiocityAudioProcessorEditor::resized()
         captureWaveformView_.setBounds(waveformArea);
 
         captureArea.removeFromTop(10);
-        auto controlsRow = captureArea.removeFromTop(32);
-        captureLoadAsSampleButton_.setBounds(controlsRow.removeFromRight(150));
-        controlsRow.removeFromRight(8);
-        captureRecordButton_.setBounds(controlsRow.removeFromLeft(96));
-        controlsRow.removeFromLeft(8);
-        captureClearButton_.setBounds(controlsRow.removeFromLeft(88));
-        controlsRow.removeFromLeft(8);
-        captureCutButton_.setBounds(controlsRow.removeFromLeft(126));
-        controlsRow.removeFromLeft(8);
-        captureTrimButton_.setBounds(controlsRow.removeFromLeft(132));
-        controlsRow.removeFromLeft(8);
-        capturePlayButton_.setBounds(controlsRow.removeFromLeft(120));
-        controlsRow.removeFromLeft(8);
-        captureNormalizeButton_.setBounds(controlsRow.removeFromLeft(100));
+        auto controlsRow = captureArea.removeFromTop(32).reduced(10, 0);
+        const auto measureCaptureButtonWidth = [this, buttonHeight = controlsRow.getHeight()](juce::TextButton& button,
+                                                                                               const juce::StringArray& labels,
+                                                                                               const int minWidth,
+                                                                                               const int maxWidth)
+        {
+            const auto font = dialLaf_.getTextButtonFont(button, buttonHeight);
+            const auto measureTextWidth = [&font](const juce::String& text)
+            {
+                juce::GlyphArrangement glyphs;
+                glyphs.addLineOfText(font, text, 0.0f, 0.0f);
+                return static_cast<int>(std::ceil(glyphs.getBoundingBox(0, glyphs.getNumGlyphs(), true).getWidth()));
+            };
+
+            auto textWidth = measureTextWidth(button.getButtonText());
+            for (const auto& label : labels)
+                textWidth = juce::jmax(textWidth, measureTextWidth(label));
+
+            const auto preferredWidth = textWidth + 22;
+            return juce::jlimit(minWidth, maxWidth, preferredWidth);
+        };
+
+        constexpr int kCaptureButtonGap = 8;
+        const int loadAsSampleWidth = measureCaptureButtonWidth(captureLoadAsSampleButton_, {}, 112, 134);
+        const int recordWidth = measureCaptureButtonWidth(captureRecordButton_, { "Stop" }, 72, 96);
+        const int clearWidth = measureCaptureButtonWidth(captureClearButton_, {}, 62, 84);
+        const int cutWidth = measureCaptureButtonWidth(captureCutButton_, {}, 92, 116);
+        const int trimWidth = measureCaptureButtonWidth(captureTrimButton_, {}, 100, 124);
+        const int playWidth = measureCaptureButtonWidth(capturePlayButton_, { "Stop" }, 76, 92);
+        const int normalizeWidth = measureCaptureButtonWidth(captureNormalizeButton_, {}, 98, 116);
+
+        captureLoadAsSampleButton_.setBounds(controlsRow.removeFromRight(loadAsSampleWidth));
+        controlsRow.removeFromRight(kCaptureButtonGap);
+        captureRecordButton_.setBounds(controlsRow.removeFromLeft(recordWidth));
+        controlsRow.removeFromLeft(kCaptureButtonGap);
+        captureClearButton_.setBounds(controlsRow.removeFromLeft(clearWidth));
+        controlsRow.removeFromLeft(kCaptureButtonGap);
+        captureCutButton_.setBounds(controlsRow.removeFromLeft(cutWidth));
+        controlsRow.removeFromLeft(kCaptureButtonGap);
+        captureTrimButton_.setBounds(controlsRow.removeFromLeft(trimWidth));
+        controlsRow.removeFromLeft(kCaptureButtonGap);
+        capturePlayButton_.setBounds(controlsRow.removeFromLeft(playWidth));
+        controlsRow.removeFromLeft(kCaptureButtonGap);
+        captureNormalizeButton_.setBounds(controlsRow.removeFromLeft(normalizeWidth));
 
         captureArea.removeFromTop(10);
         auto sourceRow = captureArea.removeFromTop(20);
@@ -8713,7 +8757,7 @@ void AudiocityAudioProcessorEditor::resized()
         captureRootNoteCombo_.setBounds(levelRow.removeFromLeft(160));
         levelRow.removeFromLeft(12);
         captureInputLevelLabel_.setBounds(levelRow.removeFromLeft(80));
-        captureInputLevelSlider_.setBounds(levelRow.removeFromLeft(190));
+        captureInputLevelSlider_.setBounds(levelRow.removeFromLeft(190).withSizeKeepingCentre(190, 28));
         levelRow.removeFromLeft(12);
         captureInputVuMeter_.setBounds(levelRow.removeFromLeft(180));
 

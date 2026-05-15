@@ -2,115 +2,115 @@
     {
         "fileName":  "about.png",
         "relativePath":  "about.png",
-        "sizeBytes":  89184,
-        "sha256":  "a502af7bdafdacd903234ec07e75979218599d6e8902c145726fa7b1b80bdce2"
+        "sizeBytes":  88414,
+        "sha256":  "070350f09aa349ed6491cfc37c4c37109bd0d710287c55ec63741791dd2cba71"
     },
     {
         "fileName":  "capture.png",
         "relativePath":  "capture.png",
-        "sizeBytes":  52260,
-        "sha256":  "7e5c15162237db2f437aa006072c48d88b4b9867e76fe0d4c387bd3636c9aaac"
+        "sizeBytes":  52614,
+        "sha256":  "22abdb51055c95296d1baa9b30ccfe2f5159d96b7718c13d57ec692ba8acf2fa"
     },
     {
         "fileName":  "generate.png",
         "relativePath":  "generate.png",
-        "sizeBytes":  59729,
-        "sha256":  "f57c5daf83f3db43772d2bf794b393515c55059af330156cbaa971044704fd1e"
+        "sizeBytes":  60064,
+        "sha256":  "f4d5bd91286ca8ed9cef475df99a7923ecd232498509bfa82a242287b7154a29"
     },
     {
         "fileName":  "library.png",
         "relativePath":  "library.png",
-        "sizeBytes":  38771,
-        "sha256":  "1c3d57db4a23ddf8220c864a2ff8d6e00337308c5630145eb14bbc2f0ebc8ea9"
+        "sizeBytes":  39139,
+        "sha256":  "b83ce283e3a602040f20b5dd2efdc94c98b419b894c9e2b5cd2398a0a96861c5"
     },
     {
         "fileName":  "mapping.png",
         "relativePath":  "mapping.png",
-        "sizeBytes":  83015,
-        "sha256":  "a50aadb9e8df9c9334092d510175c93c006124a34c63c4002475245ee2502681"
+        "sizeBytes":  83220,
+        "sha256":  "ed52a0571dbfae7f742434f5bdaced2f0953877ae79f0b92f86aadf2598a0264"
     },
     {
         "fileName":  "player.png",
         "relativePath":  "player.png",
-        "sizeBytes":  33389,
-        "sha256":  "f3399efd1e2b2074dcfde00ac8a1b182ca0196c0754309d9b225c18e0ea6f73c"
+        "sizeBytes":  33341,
+        "sha256":  "3554516d2736223caee1cdd44ffbe9bdc930bef1a1a55c0a084abec6ef3e49a4"
     },
     {
         "fileName":  "player_single_voice.png",
         "relativePath":  "player_single_voice.png",
-        "sizeBytes":  33122,
-        "sha256":  "c5769c4d659c9b25f726ed314f6184baf5daa787fb4d8f6dce60f8f99d9f27cf"
+        "sizeBytes":  33080,
+        "sha256":  "0d1f37636773ed94b8e22fb236dad45f86b26ba19cff93fbfee09f4f4663c3ef"
     },
     {
         "fileName":  "sample.png",
         "relativePath":  "sample.png",
-        "sizeBytes":  77477,
-        "sha256":  "ea456492982019718330ef8d2c839f54ae2921d4204a5016861732e227562b8a"
+        "sizeBytes":  77699,
+        "sha256":  "2e7cefd89b28adc77ab02cc5b4995155564361e73c847a620d50f1b3aefd2fb7"
     },
     {
         "fileName":  "sample_browser_only.png",
         "relativePath":  "sample_browser_only.png",
-        "sizeBytes":  82324,
-        "sha256":  "3c7a136fea7fa4b5e87824b4ec3da90f0c105629b2eea2e741ff39d7ba354525"
+        "sizeBytes":  82368,
+        "sha256":  "7dfdb772932a4d90ef9067dbc3377ee07554a600d4c7f0449f556fa738f730ba"
     },
     {
         "fileName":  "sample_modulation.png",
         "relativePath":  "sample_modulation.png",
-        "sizeBytes":  92436,
-        "sha256":  "4194f55417c6ac0ba40432b6f64eb09c46a536e1e6ec50acd033fe9e71cc3623"
+        "sizeBytes":  92846,
+        "sha256":  "73e851edf1930a61b0b8961dc029c653144d85fd61d53189b30105721908a833"
     },
     {
         "fileName":  "sample_preset_search.png",
         "relativePath":  "sample_preset_search.png",
-        "sizeBytes":  76900,
-        "sha256":  "6a3ebffdc1b887bb1e016740621f0351e5f09031deb1180992dd848d5e988322"
+        "sizeBytes":  77118,
+        "sha256":  "fdd08bdedca787e34876e362cee848925d638a123c2137b915ca7bba9ff25914"
     },
     {
         "fileName":  "sample_single_voice.png",
         "relativePath":  "sample_single_voice.png",
-        "sizeBytes":  77122,
-        "sha256":  "fb891f41ae46eb75552d741c667521fdac077b0b06a8219e2c89bc44cd63ae8e"
+        "sizeBytes":  77218,
+        "sha256":  "da0a7d92d82573129fea3b9b5ad6ce1daffe853840c5569eec915a99161f2e16"
     },
     {
         "fileName":  "sample_wide.png",
         "relativePath":  "sample_wide.png",
-        "sizeBytes":  144828,
-        "sha256":  "080394461bb0dbb9849d7fc392b9efa793e86b61b394b3aac0fd4491c72d8f8d"
+        "sizeBytes":  145139,
+        "sha256":  "cbba5d8f90af90018b23687662714292fdbe6a450067089b7df45ef77338b1e3"
     },
     {
         "fileName":  "sample_wide_browser_only.png",
         "relativePath":  "sample_wide_browser_only.png",
-        "sizeBytes":  113731,
-        "sha256":  "fc8b0810a3ad8ea4cb61bf799aa6b6e0fe23d6168d8cfd9605604fe0681f21a6"
+        "sizeBytes":  113823,
+        "sha256":  "819035b13b98b5a00fb9ef4dc26783f00aca0ba7aaad41c4d88f3de67ddd9d17"
     },
     {
         "fileName":  "sample_wide_cards_collapsed.png",
         "relativePath":  "sample_wide_cards_collapsed.png",
-        "sizeBytes":  133930,
-        "sha256":  "70e15e1037ad3a00fa8482218cfd5ac9b0a075015716ca078f963042576abc85"
+        "sizeBytes":  134298,
+        "sha256":  "55084f46fa836fb33b46a5f63f66f740eee4e323527c5439d9738474eca74cd4"
     },
     {
         "fileName":  "sample_wide_focus.png",
         "relativePath":  "sample_wide_focus.png",
-        "sizeBytes":  104059,
-        "sha256":  "387d7fda12bc9928e904f236d4c3d71aa43a9ff685842614a605d886bdeb4e95"
+        "sizeBytes":  104277,
+        "sha256":  "bf8cc59c1455cdd74475a394779880c35c3b1cb15d03e5e0d00d86f21928ddc5"
     },
     {
         "fileName":  "sample_wide_inspector_only.png",
         "relativePath":  "sample_wide_inspector_only.png",
-        "sizeBytes":  138126,
-        "sha256":  "9918b6e16aa76b659d2f1ac16b860d61b1cf2f8b0eecc14510d0e43c2bf2490b"
+        "sizeBytes":  138380,
+        "sha256":  "79c233c8f58cb3c3e6d17ca359bdc4b4d158c83fc07da27d672f0aa8868a625f"
     },
     {
         "fileName":  "sample_wide_medium.png",
         "relativePath":  "sample_wide_medium.png",
-        "sizeBytes":  126685,
-        "sha256":  "0b38a77b10147c7cc061ad626e71f668203cdf29f74f5573a1d1282ea05dbe2d"
+        "sizeBytes":  127127,
+        "sha256":  "0d510e34e5f2395cf2c8b7e430a38176bea94d1025841257a5ae5b5b2a940ce3"
     },
     {
         "fileName":  "sample_wide_tall.png",
         "relativePath":  "sample_wide_tall.png",
-        "sizeBytes":  215269,
-        "sha256":  "36391873a9ab9990375d171ba9c7d5040da4d79c322cd709848015ce340a2bf6"
+        "sizeBytes":  215474,
+        "sha256":  "f28616c9df918ef8f82dc5ab86f0d7716dfc2a37ebdfa3e17e828333da427a32"
     }
 ]

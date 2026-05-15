@@ -464,9 +464,10 @@ public:
         g.fillRoundedRectangle(filled, trackThickness * 0.5f);
 
         // Thumb.
-        const float thumbR = juce::jmax(6.0f, juce::jmin(area.getHeight(), area.getWidth()) * 0.45f);
-        juce::Point<float> thumbPos = horizontal ? juce::Point<float>(sliderPos, centre.y)
-                                                  : juce::Point<float>(centre.x, sliderPos);
+        const float thumbR = juce::jlimit(5.0f, 7.0f, static_cast<float>(getSliderThumbRadius(slider)));
+        juce::Point<float> thumbPos = horizontal
+            ? juce::Point<float>(juce::jlimit(area.getX() + thumbR, area.getRight() - thumbR, sliderPos), centre.y)
+            : juce::Point<float>(centre.x, juce::jlimit(area.getY() + thumbR, area.getBottom() - thumbR, sliderPos));
 
         // Soft drop shadow.
         g.setColour(juce::Colours::black.withAlpha(0.35f));
@@ -482,7 +483,7 @@ public:
         juce::ignoreUnused(minSliderPos, maxSliderPos);
     }
 
-    int getSliderThumbRadius(juce::Slider&) override { return 7; }
+    int getSliderThumbRadius(juce::Slider&) override { return 6; }
 
     juce::Label* createSliderTextBox(juce::Slider& slider) override
     {

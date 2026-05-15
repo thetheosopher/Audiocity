@@ -154,6 +154,15 @@ private:
 class PerformanceStripStatusDisplay final : public juce::Component
 {
 public:
+    void setCompactHeaderOverlayEnabled(const bool enabled)
+    {
+        if (compactHeaderOverlayEnabled_ == enabled)
+            return;
+
+        compactHeaderOverlayEnabled_ = enabled;
+        repaint();
+    }
+
     void setState(juce::String stateText, int activeVoices, float leftLevel, float rightLevel)
     {
         constexpr float kDecayPerTick = 0.92f;
@@ -168,6 +177,7 @@ public:
     void paint(juce::Graphics& g) override;
 
 private:
+    bool compactHeaderOverlayEnabled_ = false;
     juce::String stateText_{ "Ready" };
     int activeVoices_ = 0;
     float leftLevel_ = 0.0f;
