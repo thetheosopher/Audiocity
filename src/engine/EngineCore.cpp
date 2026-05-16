@@ -17,6 +17,28 @@ namespace audiocity::engine
 namespace
 {
 constexpr float kPi = 3.14159265358979323846f;
+constexpr int kRenderControlBlockSize = 16;
+
+float wrapPhase(const float phase) noexcept
+{
+    auto wrapped = phase - std::floor(phase);
+    if (wrapped < 0.0f)
+        wrapped += 1.0f;
+    return wrapped;
+}
+
+float advanceWrappedPhase(const float phase, const float increment, const int samples) noexcept
+{
+    return wrapPhase(phase + increment * static_cast<float>(samples));
+}
+
+float interpolateSpanValue(const float start, const float end, const int index, const int count) noexcept
+{
+    if (count <= 1)
+        return end;
+
+    return start + (end - start) * (static_cast<float>(index) / static_cast<float>(count - 1));
+}
 
 float computeLfoWave(const audiocity::engine::EngineCore::FilterSettings::LfoShape shape,
                      const float phase) noexcept
@@ -805,15 +827,15 @@ void EngineCore::prepare(const double sampleRate, const int maxSamplesPerBlock, 
     spec.maximumBlockSize = static_cast<juce::uint32>(juce::jmax(1, maxSamplesPerBlock_));
     spec.numChannels = 1;
 
+    auto voiceFilterSpec = spec;
+    voiceFilterSpec.numChannels = 2;
+
     for (auto& voice : voices_)
     {
-        for (std::size_t filterChannel = 0; filterChannel < voice.filterA.size(); ++filterChannel)
-        {
-            voice.filterA[filterChannel].prepare(spec);
-            voice.filterB[filterChannel].prepare(spec);
-            voice.filterA[filterChannel].reset();
-            voice.filterB[filterChannel].reset();
-        }
+        voice.filterA.prepare(voiceFilterSpec);
+        voice.filterB.prepare(voiceFilterSpec);
+        voice.filterA.reset();
+        voice.filterB.reset();
     }
 
     applyEnvelopeParamsToVoices();
@@ -833,6 +855,12 @@ void EngineCore::prepare(const double sampleRate, const int maxSamplesPerBlock, 
     const auto maxDelaySamples = juce::jmax(1, static_cast<int>(std::ceil(sampleRate_ * 4.0)));
     delayBuffer_.setSize(2, maxDelaySamples, false, true, true);
     delayBuffer_.clear();
+    mixBuffer_.setSize(2, juce::jmax(1, maxSamplesPerBlock_), false, true, true);
+    mixBuffer_.clear();
+    voiceScratchBuffer_.setSize(2, juce::jmax(1, maxSamplesPerBlock_), false, true, true);
+    voiceScratchBuffer_.clear();
+    modulationScratchBuffer_.setSize(4, juce::jmax(1, maxSamplesPerBlock_), false, true, true);
+    modulationScratchBuffer_.clear();
     delayWritePos_ = 0;
 
     if (getTotalSampleLength() == 0)
@@ -847,6 +875,9 @@ void EngineCore::release() noexcept
     resetRoundRobinCursors();
     currentPitchBendSemitones_ = 0.0f;
     delayBuffer_.clear();
+    mixBuffer_.clear();
+    voiceScratchBuffer_.clear();
+    modulationScratchBuffer_.clear();
     delayWritePos_ = 0;
     autopanPhase_ = 0.0f;
     for (auto& filter : dcBlockFilters_)
@@ -1374,6 +1405,18 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     for (int channel = 0; channel < numChannels; ++channel)
         juce::FloatVectorOperations::clear(outputs[channel], numSamples);
 
+    if (numSamples > mixBuffer_.getNumSamples()
+        || numSamples > voiceScratchBuffer_.getNumSamples()
+        || numSamples > modulationScratchBuffer_.getNumSamples())
+    {
+        return;
+    }
+
+    auto* mixLeft = mixBuffer_.getWritePointer(0);
+    auto* mixRight = mixBuffer_.getWritePointer(1);
+    juce::FloatVectorOperations::clear(mixLeft, numSamples);
+    juce::FloatVectorOperations::clear(mixRight, numSamples);
+
     const auto programSnapshot = programSnapshot_.load(std::memory_order_acquire);
     const auto* program = programSnapshot != nullptr && programSnapshot->hasPlayableZones()
         ? programSnapshot.get()
@@ -1383,229 +1426,50 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
 
     sortPendingEventsByOffset();
 
+    auto segmentStart = 0;
+    while (segmentStart < numSamples)
+    {
+        flushPendingEventsAtOffset(segmentStart, program, programAudio);
+
+        const auto segmentEnd = findNextPendingEventOffset(segmentStart, numSamples);
+        const auto segmentSamples = segmentEnd - segmentStart;
+        if (segmentSamples > 0)
+        {
+            fillGlobalModulationBuffers(segmentSamples);
+            renderActiveVoices(segmentStart, segmentSamples, *segments, programAudio);
+        }
+
+        segmentStart = segmentEnd;
+    }
+
     for (int sampleIndex = 0; sampleIndex < numSamples; ++sampleIndex)
     {
-        flushPendingEventsAtOffset(sampleIndex, program, programAudio);
-        const auto modulationFrame = advanceGlobalModulationFrame();
+        mixLeft[sampleIndex] = processSaturationSample(mixLeft[sampleIndex]);
+        mixRight[sampleIndex] = processSaturationSample(mixRight[sampleIndex]);
+    }
 
-        float mixedLeft = 0.0f;
-        float mixedRight = 0.0f;
+    auto* monoScratch = voiceScratchBuffer_.getWritePointer(0);
 
-        for (int voiceIndex = 0; voiceIndex < static_cast<int>(VoicePool::maxVoices); ++voiceIndex)
+    if (numChannels == 1)
+    {
+        juce::FloatVectorOperations::copy(monoScratch, mixLeft, numSamples);
+        juce::FloatVectorOperations::add(monoScratch, mixRight, numSamples);
+        juce::FloatVectorOperations::multiply(monoScratch, 0.5f, numSamples);
+        juce::FloatVectorOperations::copy(outputs[0], monoScratch, numSamples);
+    }
+    else
+    {
+        juce::FloatVectorOperations::copy(outputs[0], mixLeft, numSamples);
+        juce::FloatVectorOperations::copy(outputs[1], mixRight, numSamples);
+
+        if (numChannels > 2)
         {
-            if (!voicePool_.isActive(voiceIndex))
-                continue;
+            juce::FloatVectorOperations::copy(monoScratch, mixLeft, numSamples);
+            juce::FloatVectorOperations::add(monoScratch, mixRight, numSamples);
+            juce::FloatVectorOperations::multiply(monoScratch, 0.5f, numSamples);
 
-            auto& voice = voices_[static_cast<std::size_t>(voiceIndex)];
-            const auto* voiceSegments = programAudio != nullptr
-                ? programAudio->getSampleSegments(voice.sampleAssetIndex)
-                : nullptr;
-            if (voiceSegments == nullptr)
-                voiceSegments = segments.get();
-
-            if (voiceSegments == nullptr)
-            {
-                voicePool_.stopVoiceAtIndex(voiceIndex);
-                voice.noteHeld = false;
-                voice.ampEnvelope.reset();
-                voice.filterEnvelope.reset();
-                continue;
-            }
-
-            const auto sampleLength = getEffectivePlaybackLength(
-                *voiceSegments, voice.sampleStart, voice.sampleEndExclusive);
-
-            if (sampleLength <= 1)
-            {
-                voicePool_.stopVoiceAtIndex(voiceIndex);
-                voice.noteHeld = false;
-                voice.ampEnvelope.reset();
-                voice.filterEnvelope.reset();
-                continue;
-            }
-
-            auto effectiveLoopStart = 0;
-            auto effectiveLoopEnd = sampleLength - 1;
-            const auto hasProgramZone = voice.zoneIndex >= 0;
-            const auto zoneLoopEnabled = hasProgramZone && voice.loopMode != ZoneLoopMode::noLoop;
-            const auto globalLoopEnabled = !hasProgramZone && playbackMode_ == PlaybackMode::loop;
-            const auto loopEnabled = zoneLoopEnabled || globalLoopEnabled;
-
-            if (loopEnabled)
-            {
-                const auto useZoneLoopRange = zoneLoopEnabled && voice.loopEndExclusive > voice.loopStart;
-                if (useZoneLoopRange || globalLoopEnabled)
-                {
-                    const auto loopStart = useZoneLoopRange ? voice.loopStart : loopStartSample_;
-                    const auto loopEnd = useZoneLoopRange ? (voice.loopEndExclusive - 1) : loopEndSample_;
-                    const auto rawLoopStart = mapSampleIndexToPlaybackIndex(
-                        *voiceSegments, loopStart, voice.sampleStart, voice.sampleEndExclusive);
-                    const auto rawLoopEnd = mapSampleIndexToPlaybackIndex(
-                        *voiceSegments, loopEnd, voice.sampleStart, voice.sampleEndExclusive);
-
-                    effectiveLoopStart = juce::jlimit(0, sampleLength - 1, juce::jmin(rawLoopStart, rawLoopEnd));
-                    effectiveLoopEnd = juce::jlimit(0, sampleLength - 1, juce::jmax(rawLoopStart, rawLoopEnd));
-                    if (effectiveLoopEnd <= effectiveLoopStart)
-                    {
-                        effectiveLoopStart = 0;
-                        effectiveLoopEnd = sampleLength - 1;
-                    }
-                }
-            }
-
-            const auto shouldLoopNow = globalLoopEnabled
-                ? voice.noteHeld
-                : zoneLoopEnabled && (voice.noteHeld || voice.loopMode == ZoneLoopMode::continuous);
-            const auto loopLength = juce::jmax(1, effectiveLoopEnd - effectiveLoopStart + 1);
-
-            if (voice.samplePosition >= static_cast<float>(sampleLength - 1))
-            {
-                if (shouldLoopNow)
-                {
-                    voice.samplePosition = static_cast<float>(effectiveLoopStart);
-                }
-                else
-                {
-                    voice.samplePosition = static_cast<float>(sampleLength - 1);
-
-                    if (voice.noteHeld)
-                    {
-                        voice.noteHeld = false;
-                        voice.ampEnvelope.noteOff();
-                        voice.filterEnvelope.noteOff();
-                    }
-
-                    if (!voice.ampEnvelope.isActive())
-                    {
-                        voicePool_.stopVoiceAtIndex(voiceIndex);
-                        voice.noteHeld = false;
-                        voice.ampEnvelope.reset();
-                        voice.filterEnvelope.reset();
-                        continue;
-                    }
-                }
-            }
-
-            if (shouldLoopNow && voice.samplePosition >= static_cast<float>(effectiveLoopEnd))
-            {
-                while (voice.samplePosition >= static_cast<float>(effectiveLoopEnd))
-                    voice.samplePosition -= static_cast<float>(loopLength);
-
-                while (voice.samplePosition < static_cast<float>(effectiveLoopStart))
-                    voice.samplePosition += static_cast<float>(loopLength);
-            }
-
-            if (sampleIndex == 0 && voiceSegments->getStreamNumSamples() > 0)
-            {
-                const auto lookaheadSamples = juce::jmax(512,
-                    juce::jmin(4096, juce::jmax(0, voiceSegments->preloadData.getNumSamples())));
-                const auto lookaheadPlaybackIndex = juce::jmin(sampleLength - 1,
-                    static_cast<int>(voice.samplePosition) + lookaheadSamples);
-                const auto lookaheadSampleIndex = mapPlaybackIndexToSampleIndex(
-                    *voiceSegments,
-                    lookaheadPlaybackIndex,
-                    voice.sampleStart,
-                    voice.sampleEndExclusive);
-                voiceSegments->requestPrimeForAbsoluteSample(lookaheadSampleIndex);
-            }
-
-            const float mappedVelocity = mapVelocity(voice.velocity);
-            ModulationContribution velocityModulation;
-            const std::array<ModulationSourceValue, 1> voiceModulationSources{{
-                { &modulationRoutingSettings_.velocity, voice.velocity }
-            }};
-            accumulateModulationSources(velocityModulation, voiceModulationSources);
-
-            const float ampLevel = voice.ampEnvelope.getNextSample()
-                * mappedVelocity
-                * modulationFrame.ampLfoGain
-                * juce::jmax(0.0f, 1.0f + velocityModulation.ampDelta);
-
-            if (!voice.ampEnvelope.isActive())
-            {
-                voicePool_.stopVoiceAtIndex(voiceIndex);
-                voice.noteHeld = false;
-                voice.filterEnvelope.reset();
-                continue;
-            }
-
-            const auto lfoValue = computeVoiceFilterLfoValue(voiceIndex, voice, modulationFrame);
-
-            auto rawLeft = readSampleLinear(
-                *voiceSegments, voice.samplePosition, voice.sampleStart, voice.sampleEndExclusive, 0);
-            auto rawRight = readSampleLinear(
-                *voiceSegments, voice.samplePosition, voice.sampleStart, voice.sampleEndExclusive, 1);
-            if (shouldLoopNow && loopCrossfadeSamples_ > 0)
-            {
-                const auto crossfadeSamples = juce::jlimit(0, juce::jmax(0, loopLength / 2), loopCrossfadeSamples_);
-                if (crossfadeSamples > 0)
-                {
-                    const auto crossfadeStart = static_cast<float>(effectiveLoopEnd - crossfadeSamples);
-                    if (voice.samplePosition >= crossfadeStart)
-                    {
-                        const auto progress = juce::jlimit(0.0f, 1.0f,
-                            (voice.samplePosition - crossfadeStart) / static_cast<float>(crossfadeSamples));
-
-                        const auto headPosition = static_cast<float>(effectiveLoopStart)
-                            + progress * static_cast<float>(crossfadeSamples);
-
-                        const auto headLeft = readSampleLinear(
-                            *voiceSegments, headPosition, voice.sampleStart, voice.sampleEndExclusive, 0);
-                        const auto headRight = readSampleLinear(
-                            *voiceSegments, headPosition, voice.sampleStart, voice.sampleEndExclusive, 1);
-                        rawLeft = rawLeft + (headLeft - rawLeft) * progress;
-                        rawRight = rawRight + (headRight - rawRight) * progress;
-                    }
-                }
-            }
-            const float filterEnvValue = voice.filterEnvelope.getNextSample();
-            const auto filteredLeft = computeFilterSample(
-                rawLeft,
-                filterEnvValue,
-                lfoValue,
-                voicePool_.noteAt(voiceIndex),
-                voice.velocity,
-                modulationFrame.filterCutoffOffsetHz + velocityModulation.filterHz,
-                voice,
-                0);
-            const auto filteredRight = computeFilterSample(
-                rawRight,
-                filterEnvValue,
-                lfoValue,
-                voicePool_.noteAt(voiceIndex),
-                voice.velocity,
-                modulationFrame.filterCutoffOffsetHz + velocityModulation.filterHz,
-                voice,
-                1);
-            const auto voiceGain = ampLevel * voice.zoneGain;
-            mixedLeft += filteredLeft * voiceGain * voice.zonePanLeftGain;
-            mixedRight += filteredRight * voiceGain * voice.zonePanRightGain;
-
-            voice.lastAmpLevel = ampLevel;
-            voicePool_.setCurrentLevel(voiceIndex, ampLevel);
-
-            advanceVoiceGlide(voice);
-
-            voice.samplePosition += voice.sampleIncrement
-                * modulationFrame.combinedPitchRatio
-                * centsToRatio(velocityModulation.pitchCents);
-        }
-
-        mixedLeft = processSaturationSample(mixedLeft);
-        mixedRight = processSaturationSample(mixedRight);
-
-        if (numChannels == 1)
-        {
-            outputs[0][sampleIndex] += 0.5f * (mixedLeft + mixedRight);
-        }
-        else
-        {
-            outputs[0][sampleIndex] += mixedLeft;
-            outputs[1][sampleIndex] += mixedRight;
-
-            const auto monoRemainder = 0.5f * (mixedLeft + mixedRight);
             for (int channel = 2; channel < numChannels; ++channel)
-                outputs[channel][sampleIndex] += monoRemainder;
+                juce::FloatVectorOperations::copy(outputs[channel], monoScratch, numSamples);
         }
     }
 
@@ -1650,6 +1514,686 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     }
 
     pendingEventCount_ = 0;
+}
+
+int EngineCore::findNextPendingEventOffset(const int currentOffset, const int blockEnd) const noexcept
+{
+    auto nextOffset = blockEnd;
+    for (int eventIndex = 0; eventIndex < pendingEventCount_; ++eventIndex)
+    {
+        const auto eventOffset = pendingEvents_[static_cast<std::size_t>(eventIndex)].offset;
+        if (eventOffset > currentOffset && eventOffset < nextOffset)
+            nextOffset = eventOffset;
+    }
+
+    return nextOffset;
+}
+
+int EngineCore::getGlobalModulationBlockSize(const int remainingSamples) const noexcept
+{
+    const auto isSmoothLfoShape = [](const FilterSettings::LfoShape shape) noexcept
+    {
+        return shape == FilterSettings::LfoShape::sine
+            || shape == FilterSettings::LfoShape::triangle;
+    };
+
+    const auto globalFilterLfoActive = !filterSettings_.lfoRetrigger
+        && filterSettings_.lfoRateHz > 0.0f
+        && std::abs(filterSettings_.lfoAmountHz) > 0.0001f;
+    const auto ampLfoActive = ampLfoSettings_.rateHz > 0.0f
+        && ampLfoSettings_.depth > 0.0001f;
+
+    if ((globalFilterLfoActive && !isSmoothLfoShape(filterSettings_.lfoShape))
+        || (ampLfoActive && !isSmoothLfoShape(ampLfoSettings_.shape)))
+    {
+        return 1;
+    }
+
+    return juce::jmax(1, juce::jmin(kRenderControlBlockSize, remainingSamples));
+}
+
+EngineCore::GlobalModulationSpan EngineCore::advanceGlobalModulationSpan(const int numSamples) noexcept
+{
+    GlobalModulationSpan span;
+    if (numSamples <= 0)
+        return span;
+
+    ModulationContribution globalModulation;
+    const std::array<ModulationSourceValue, 2 + kMacroControlCount> globalModulationSources{{
+        { &modulationRoutingSettings_.modWheel, currentModWheelValue_ },
+        { &modulationRoutingSettings_.aftertouch, currentAftertouchValue_ },
+        { &modulationRoutingSettings_.macros[0], macroControlValues_[0] },
+        { &modulationRoutingSettings_.macros[1], macroControlValues_[1] }
+    }};
+    accumulateModulationSources(globalModulation, globalModulationSources);
+
+    const auto lastSampleIndex = juce::jmax(0, numSamples - 1);
+    const auto pitchBendRatio = semitonesToRatio(currentPitchBendSemitones_);
+    const auto pitchModSemitones = globalModulation.pitchCents / 100.0f;
+    const auto hasActivePitchLfo = pitchLfoSettings_.rateHz > 0.0f && pitchLfoSettings_.depthCents > 0.0001f;
+    if (hasActivePitchLfo)
+    {
+        const auto phaseIncrement = pitchLfoSettings_.rateHz / static_cast<float>(sampleRate_);
+        const auto startWave = computeLfoWave(FilterSettings::LfoShape::sine, globalPitchLfoPhase_);
+        const auto endWave = computeLfoWave(FilterSettings::LfoShape::sine,
+            advanceWrappedPhase(globalPitchLfoPhase_, phaseIncrement, lastSampleIndex));
+        span.start.combinedPitchRatio = pitchBendRatio
+            * semitonesToRatio(pitchModSemitones + (pitchLfoSettings_.depthCents / 100.0f) * startWave);
+        span.end.combinedPitchRatio = pitchBendRatio
+            * semitonesToRatio(pitchModSemitones + (pitchLfoSettings_.depthCents / 100.0f) * endWave);
+        globalPitchLfoPhase_ = advanceWrappedPhase(globalPitchLfoPhase_, phaseIncrement, numSamples);
+    }
+    else
+    {
+        span.start.combinedPitchRatio = pitchBendRatio * semitonesToRatio(pitchModSemitones);
+        span.end.combinedPitchRatio = span.start.combinedPitchRatio;
+    }
+
+    span.start.filterLfoActive = filterSettings_.lfoRateHz > 0.0f && std::abs(filterSettings_.lfoAmountHz) > 0.0001f;
+    span.end.filterLfoActive = span.start.filterLfoActive;
+    if (span.start.filterLfoActive)
+    {
+        const auto phaseIncrement = filterSettings_.lfoRateHz / static_cast<float>(sampleRate_);
+        span.start.filterLfoValue = computeLfoWave(filterSettings_.lfoShape, globalFilterLfoPhase_);
+        span.end.filterLfoValue = computeLfoWave(filterSettings_.lfoShape,
+            advanceWrappedPhase(globalFilterLfoPhase_, phaseIncrement, lastSampleIndex));
+        globalFilterLfoPhase_ = advanceWrappedPhase(globalFilterLfoPhase_, phaseIncrement, numSamples);
+    }
+
+    const auto hasActiveAmpLfo = ampLfoSettings_.rateHz > 0.0f && ampLfoSettings_.depth > 0.0001f;
+    if (hasActiveAmpLfo)
+    {
+        const auto phaseIncrement = ampLfoSettings_.rateHz / static_cast<float>(sampleRate_);
+        const auto startWave = computeLfoWave(ampLfoSettings_.shape, globalAmpLfoPhase_);
+        const auto endWave = computeLfoWave(ampLfoSettings_.shape,
+            advanceWrappedPhase(globalAmpLfoPhase_, phaseIncrement, lastSampleIndex));
+        const auto startUnipolar = 0.5f * (startWave + 1.0f);
+        const auto endUnipolar = 0.5f * (endWave + 1.0f);
+        span.start.ampLfoGain = (1.0f - ampLfoSettings_.depth) + (ampLfoSettings_.depth * startUnipolar);
+        span.end.ampLfoGain = (1.0f - ampLfoSettings_.depth) + (ampLfoSettings_.depth * endUnipolar);
+        globalAmpLfoPhase_ = advanceWrappedPhase(globalAmpLfoPhase_, phaseIncrement, numSamples);
+    }
+
+    span.start.ampLfoGain *= juce::jmax(0.0f, 1.0f + globalModulation.ampDelta);
+    span.end.ampLfoGain *= juce::jmax(0.0f, 1.0f + globalModulation.ampDelta);
+    span.start.filterCutoffOffsetHz = globalModulation.filterHz;
+    span.end.filterCutoffOffsetHz = globalModulation.filterHz;
+
+    return span;
+}
+
+void EngineCore::fillGlobalModulationBuffers(const int numSamples) noexcept
+{
+    auto* pitchRatios = modulationScratchBuffer_.getWritePointer(0);
+    auto* ampGains = modulationScratchBuffer_.getWritePointer(1);
+    auto* filterOffsets = modulationScratchBuffer_.getWritePointer(2);
+    auto* filterLfoValues = modulationScratchBuffer_.getWritePointer(3);
+
+    auto sampleIndex = 0;
+    while (sampleIndex < numSamples)
+    {
+        const auto chunkSize = getGlobalModulationBlockSize(numSamples - sampleIndex);
+        const auto span = advanceGlobalModulationSpan(chunkSize);
+
+        for (int chunkSample = 0; chunkSample < chunkSize; ++chunkSample)
+        {
+            const auto writeIndex = sampleIndex + chunkSample;
+            pitchRatios[writeIndex] = interpolateSpanValue(
+                span.start.combinedPitchRatio,
+                span.end.combinedPitchRatio,
+                chunkSample,
+                chunkSize);
+            ampGains[writeIndex] = interpolateSpanValue(
+                span.start.ampLfoGain,
+                span.end.ampLfoGain,
+                chunkSample,
+                chunkSize);
+            filterOffsets[writeIndex] = interpolateSpanValue(
+                span.start.filterCutoffOffsetHz,
+                span.end.filterCutoffOffsetHz,
+                chunkSample,
+                chunkSize);
+            filterLfoValues[writeIndex] = interpolateSpanValue(
+                span.start.filterLfoValue,
+                span.end.filterLfoValue,
+                chunkSample,
+                chunkSize);
+        }
+
+        sampleIndex += chunkSize;
+    }
+}
+
+EngineCore::ModulationValueSpan EngineCore::advanceVoiceRetriggeredFilterLfoSpan(VoiceState& voice,
+                                                                                  const int numSamples) noexcept
+{
+    ModulationValueSpan span;
+    if (numSamples <= 0)
+        return span;
+
+    const auto filterLfoActive = filterSettings_.lfoRetrigger
+        && filterSettings_.lfoRateHz > 0.0f
+        && std::abs(filterSettings_.lfoAmountHz) > 0.0001f;
+    if (!filterLfoActive)
+        return span;
+
+    auto lfoRateKeyTrackRatio = 1.0f;
+    if (!filterSettings_.lfoTempoSync || filterSettings_.lfoRateKeytrackInTempoSync)
+    {
+        const auto noteSemitoneOffset = static_cast<float>(voice.noteNumber - voice.rootMidiNote);
+        if (filterSettings_.lfoKeytrackLinear)
+        {
+            lfoRateKeyTrackRatio = juce::jmax(0.0f,
+                1.0f + (noteSemitoneOffset / 12.0f) * filterSettings_.lfoRateKeyTracking);
+        }
+        else
+        {
+            lfoRateKeyTrackRatio = std::pow(2.0f,
+                (noteSemitoneOffset / 12.0f) * filterSettings_.lfoRateKeyTracking);
+        }
+    }
+
+    const auto trackedLfoRateHz = juce::jlimit(0.0f, 40.0f,
+        filterSettings_.lfoRateHz * lfoRateKeyTrackRatio);
+    const auto phaseIncrement = trackedLfoRateHz / static_cast<float>(sampleRate_);
+    const auto lastSampleIndex = juce::jmax(0, numSamples - 1);
+    span.start = computeLfoWave(filterSettings_.lfoShape, voice.filterLfoPhase);
+    span.end = computeLfoWave(filterSettings_.lfoShape,
+        advanceWrappedPhase(voice.filterLfoPhase, phaseIncrement, lastSampleIndex));
+    voice.filterLfoPhase = advanceWrappedPhase(voice.filterLfoPhase, phaseIncrement, numSamples);
+
+    if (filterSettings_.lfoUnipolar)
+    {
+        span.start = 0.5f * (span.start + 1.0f);
+        span.end = 0.5f * (span.end + 1.0f);
+    }
+
+    if (voice.filterLfoFadeSamplesTotal > 0 && voice.filterLfoFadeSamplesRemaining > 0)
+    {
+        const auto remainingStart = voice.filterLfoFadeSamplesRemaining;
+        const auto remainingEnd = juce::jmax(0, remainingStart - lastSampleIndex);
+        const auto total = static_cast<float>(voice.filterLfoFadeSamplesTotal);
+        const auto startScale = juce::jlimit(0.0f, 1.0f,
+            1.0f - (static_cast<float>(remainingStart) / total));
+        const auto endScale = juce::jlimit(0.0f, 1.0f,
+            1.0f - (static_cast<float>(remainingEnd) / total));
+        span.start *= startScale;
+        span.end *= endScale;
+        voice.filterLfoFadeSamplesRemaining = juce::jmax(0, remainingStart - numSamples);
+    }
+
+    return span;
+}
+
+EngineCore::ModulationValueSpan EngineCore::advanceVoiceGlideSpan(VoiceState& voice,
+                                                                  const int numSamples) noexcept
+{
+    ModulationValueSpan span;
+    if (numSamples <= 0)
+    {
+        span.start = voice.sampleIncrement;
+        span.end = voice.sampleIncrement;
+        return span;
+    }
+
+    if (voice.glideSamplesRemaining <= 0)
+    {
+        span.start = voice.sampleIncrement;
+        span.end = voice.sampleIncrement;
+        return span;
+    }
+
+    const auto glideStep = (voice.glideTargetIncrement - voice.sampleIncrement)
+        / static_cast<float>(voice.glideSamplesRemaining);
+    span.start = voice.sampleIncrement + glideStep;
+    span.end = voice.sampleIncrement + glideStep * static_cast<float>(numSamples);
+    voice.sampleIncrement = span.end;
+    voice.glideSamplesRemaining = juce::jmax(0, voice.glideSamplesRemaining - numSamples);
+    if (voice.glideSamplesRemaining == 0)
+    {
+        voice.sampleIncrement = voice.glideTargetIncrement;
+        span.end = voice.sampleIncrement;
+    }
+
+    return span;
+}
+
+int EngineCore::getVoiceRenderBlockSize(const VoiceState& voice, const int remainingSamples) const noexcept
+{
+    auto chunkSize = juce::jmax(1, juce::jmin(kRenderControlBlockSize, remainingSamples));
+    const auto retriggeredFilterLfoActive = filterSettings_.lfoRetrigger
+        && filterSettings_.lfoRateHz > 0.0f
+        && std::abs(filterSettings_.lfoAmountHz) > 0.0001f;
+    const auto smoothRetriggeredShape = filterSettings_.lfoShape == FilterSettings::LfoShape::sine
+        || filterSettings_.lfoShape == FilterSettings::LfoShape::triangle;
+
+    if (retriggeredFilterLfoActive && !smoothRetriggeredShape)
+        chunkSize = 1;
+
+    if (voice.glideSamplesRemaining > 0)
+        chunkSize = juce::jmin(chunkSize, voice.glideSamplesRemaining);
+
+    if (retriggeredFilterLfoActive && voice.filterLfoFadeSamplesRemaining > 0)
+        chunkSize = juce::jmin(chunkSize, voice.filterLfoFadeSamplesRemaining);
+
+    return juce::jmax(1, chunkSize);
+}
+
+void EngineCore::renderActiveVoices(const int startSample,
+                                    const int numSamples,
+                                    const SampleSegments& fallbackSegments,
+                                    const ProgramAudioSnapshot* const programAudio) noexcept
+{
+    auto* mixLeft = mixBuffer_.getWritePointer(0) + startSample;
+    auto* mixRight = mixBuffer_.getWritePointer(1) + startSample;
+    const auto* globalPitchRatios = modulationScratchBuffer_.getReadPointer(0);
+    const auto* globalAmpGains = modulationScratchBuffer_.getReadPointer(1);
+    const auto* globalFilterOffsets = modulationScratchBuffer_.getReadPointer(2);
+    const auto* globalFilterLfoValues = modulationScratchBuffer_.getReadPointer(3);
+    const auto requestLookaheadPrime = startSample == 0;
+    const auto filterLfoActive = filterSettings_.lfoRateHz > 0.0f && std::abs(filterSettings_.lfoAmountHz) > 0.0001f;
+    const auto useRetriggeredFilterLfo = filterLfoActive && filterSettings_.lfoRetrigger;
+    const auto useUnipolarFilterLfo = filterLfoActive && filterSettings_.lfoUnipolar;
+    const auto useSecondFilterStage = filterSettings_.mode == FilterSettings::Mode::lowPass24
+        || filterSettings_.mode == FilterSettings::Mode::highPass24;
+    const auto useNotchOutput = filterSettings_.mode == FilterSettings::Mode::notch12;
+    const auto resonanceQ = computeFilterResonanceQ();
+    const auto maxCutoffHz = static_cast<float>(sampleRate_ * 0.45);
+
+    for (int voiceIndex = 0; voiceIndex < static_cast<int>(VoicePool::maxVoices); ++voiceIndex)
+    {
+        if (!voicePool_.isActive(voiceIndex))
+            continue;
+
+        auto& voice = voices_[static_cast<std::size_t>(voiceIndex)];
+        const auto* voiceSegments = programAudio != nullptr
+            ? programAudio->getSampleSegments(voice.sampleAssetIndex)
+            : nullptr;
+        if (voiceSegments == nullptr)
+            voiceSegments = &fallbackSegments;
+
+        if (voiceSegments == nullptr)
+        {
+            voicePool_.stopVoiceAtIndex(voiceIndex);
+            voice.noteNumber = -1;
+            voice.noteHeld = false;
+            voice.ampEnvelope.reset();
+            voice.filterEnvelope.reset();
+            continue;
+        }
+
+        const auto totalSampleLength = getTotalSampleLength(*voiceSegments);
+        if (totalSampleLength <= 0)
+        {
+            voicePool_.stopVoiceAtIndex(voiceIndex);
+            voice.noteNumber = -1;
+            voice.noteHeld = false;
+            voice.ampEnvelope.reset();
+            voice.filterEnvelope.reset();
+            continue;
+        }
+
+        const auto useZoneWindow = voice.sampleEndExclusive > voice.sampleStart;
+        const auto requestedSampleStart = useZoneWindow ? voice.sampleStart : sampleWindowStart_;
+        const auto requestedSampleEnd = useZoneWindow ? (voice.sampleEndExclusive - 1) : sampleWindowEnd_;
+        const auto playbackStartSampleIndex = juce::jlimit(0, totalSampleLength - 1, requestedSampleStart);
+        const auto playbackEndSampleIndex = juce::jlimit(playbackStartSampleIndex, totalSampleLength - 1, requestedSampleEnd);
+        const auto sampleLength = playbackEndSampleIndex - playbackStartSampleIndex + 1;
+        if (sampleLength <= 1)
+        {
+            voicePool_.stopVoiceAtIndex(voiceIndex);
+            voice.noteNumber = -1;
+            voice.noteHeld = false;
+            voice.ampEnvelope.reset();
+            voice.filterEnvelope.reset();
+            continue;
+        }
+
+        const auto sampleLengthMinusOne = sampleLength - 1;
+        const auto maxSamplePosition = static_cast<float>(sampleLengthMinusOne);
+        const auto reversePlayback = reversePlayback_;
+        const auto preloadSamples = voiceSegments->preloadData.getNumSamples();
+        const auto preloadChannelCount = voiceSegments->preloadData.getNumChannels();
+        const auto streamChannelCount = voiceSegments->getStreamNumChannels();
+        const auto preloadRightChannel = preloadChannelCount > 1 ? 1 : 0;
+        const auto streamRightChannel = streamChannelCount > 1 ? 1 : 0;
+        const auto* preloadLeftData = preloadChannelCount > 0 ? voiceSegments->preloadData.getReadPointer(0) : nullptr;
+        const auto* preloadRightData = preloadChannelCount > 0 ? voiceSegments->preloadData.getReadPointer(preloadRightChannel) : nullptr;
+        const auto hasStreamSource = voiceSegments->streamSource != nullptr && streamChannelCount > 0;
+        const auto fadeInScale = fadeInSamples_ > 0 ? 1.0f / static_cast<float>(fadeInSamples_) : 0.0f;
+        const auto fadeOutScale = fadeOutSamples_ > 0 ? 1.0f / static_cast<float>(fadeOutSamples_) : 0.0f;
+        const auto fadeOutStart = static_cast<float>(juce::jmax(0, sampleLengthMinusOne - fadeOutSamples_));
+
+        const auto mapPlaybackIndexToVoiceSampleIndex = [&](const int playbackIndex) noexcept
+        {
+            return reversePlayback
+            ? (playbackEndSampleIndex - playbackIndex)
+            : (playbackStartSampleIndex + playbackIndex);
+        };
+
+        const auto mapVoiceSampleIndexToPlaybackIndex = [&](const int sampleIndex) noexcept
+        {
+            const auto clampedSample = juce::jlimit(playbackStartSampleIndex, playbackEndSampleIndex, sampleIndex);
+            return reversePlayback
+                ? (playbackEndSampleIndex - clampedSample)
+                : (clampedSample - playbackStartSampleIndex);
+        };
+
+        const auto readMappedSample = [&](const int playbackIndex, const int channel) noexcept
+        {
+            const auto absoluteIndex = mapPlaybackIndexToVoiceSampleIndex(playbackIndex);
+
+            if (absoluteIndex < preloadSamples)
+            {
+                const auto* preloadData = channel == 0 ? preloadLeftData : preloadRightData;
+                return preloadData != nullptr ? preloadData[absoluteIndex] : 0.0f;
+            }
+
+            if (hasStreamSource)
+                return voiceSegments->streamSource->readSample(channel == 0 ? 0 : streamRightChannel, absoluteIndex - preloadSamples);
+
+            return 0.0f;
+        };
+
+        const auto computeVoiceEditGain = [&](const float playbackPosition) noexcept
+        {
+            auto gain = 1.0f;
+
+            if (fadeInSamples_ > 0 && playbackPosition < static_cast<float>(fadeInSamples_))
+                gain = playbackPosition * fadeInScale;
+
+            if (fadeOutSamples_ > 0 && playbackPosition >= fadeOutStart)
+            {
+                const auto remaining = maxSamplePosition - playbackPosition;
+                const auto fadeOutGain = remaining * fadeOutScale;
+                if (fadeOutGain < gain)
+                    gain = fadeOutGain;
+            }
+
+            return gain;
+        };
+
+        auto effectiveLoopStart = 0;
+        auto effectiveLoopEnd = sampleLengthMinusOne;
+        const auto hasProgramZone = voice.zoneIndex >= 0;
+        const auto zoneLoopEnabled = hasProgramZone && voice.loopMode != ZoneLoopMode::noLoop;
+        const auto globalLoopEnabled = !hasProgramZone && playbackMode_ == PlaybackMode::loop;
+        const auto loopEnabled = zoneLoopEnabled || globalLoopEnabled;
+
+        if (loopEnabled)
+        {
+            const auto useZoneLoopRange = zoneLoopEnabled && voice.loopEndExclusive > voice.loopStart;
+            if (useZoneLoopRange || globalLoopEnabled)
+            {
+                const auto loopStart = useZoneLoopRange ? voice.loopStart : loopStartSample_;
+                const auto loopEnd = useZoneLoopRange ? (voice.loopEndExclusive - 1) : loopEndSample_;
+                const auto rawLoopStart = mapVoiceSampleIndexToPlaybackIndex(loopStart);
+                const auto rawLoopEnd = mapVoiceSampleIndexToPlaybackIndex(loopEnd);
+
+                effectiveLoopStart = juce::jlimit(0, sampleLengthMinusOne, juce::jmin(rawLoopStart, rawLoopEnd));
+                effectiveLoopEnd = juce::jlimit(0, sampleLengthMinusOne, juce::jmax(rawLoopStart, rawLoopEnd));
+                if (effectiveLoopEnd <= effectiveLoopStart)
+                {
+                    effectiveLoopStart = 0;
+                    effectiveLoopEnd = sampleLengthMinusOne;
+                }
+            }
+        }
+
+        const auto shouldLoopNow = globalLoopEnabled
+            ? voice.noteHeld
+            : zoneLoopEnabled && (voice.noteHeld || voice.loopMode == ZoneLoopMode::continuous);
+        const auto loopLength = juce::jmax(1, effectiveLoopEnd - effectiveLoopStart + 1);
+        const auto crossfadeSamples = shouldLoopNow && loopCrossfadeSamples_ > 0
+            ? juce::jlimit(0, juce::jmax(0, loopLength / 2), loopCrossfadeSamples_)
+            : 0;
+        const auto crossfadeStart = static_cast<float>(effectiveLoopEnd - crossfadeSamples);
+
+        if (requestLookaheadPrime && voiceSegments->getStreamNumSamples() > 0)
+        {
+            const auto lookaheadSamples = juce::jmax(512,
+                juce::jmin(4096, juce::jmax(0, voiceSegments->preloadData.getNumSamples())));
+            const auto lookaheadPlaybackIndex = juce::jmin(sampleLengthMinusOne,
+                static_cast<int>(voice.samplePosition) + lookaheadSamples);
+            const auto lookaheadSampleIndex = mapPlaybackIndexToVoiceSampleIndex(lookaheadPlaybackIndex);
+            voiceSegments->requestPrimeForAbsoluteSample(lookaheadSampleIndex);
+        }
+
+        const auto mappedVelocity = mapVelocity(voice.velocity);
+        ModulationContribution velocityModulation;
+        const std::array<ModulationSourceValue, 1> voiceModulationSources{{
+            { &modulationRoutingSettings_.velocity, voice.velocity }
+        }};
+        accumulateModulationSources(velocityModulation, voiceModulationSources);
+
+        const auto velocityAmpGain = mappedVelocity * juce::jmax(0.0f, 1.0f + velocityModulation.ampDelta);
+        const auto velocityPitchRatio = centsToRatio(velocityModulation.pitchCents);
+        const auto zoneLeftGain = voice.zoneGain * voice.zonePanLeftGain;
+        const auto zoneRightGain = voice.zoneGain * voice.zonePanRightGain;
+        const auto noteNumber = voice.noteNumber >= 0 ? voice.noteNumber : voice.rootMidiNote;
+        const auto noteSemitoneOffset = static_cast<float>(noteNumber - voice.rootMidiNote);
+        const auto lfoAmountKeyTrackRatio = filterSettings_.lfoKeytrackLinear
+            ? juce::jmax(0.0f, 1.0f + (noteSemitoneOffset / 12.0f) * filterSettings_.lfoAmountKeyTracking)
+            : std::pow(2.0f, (noteSemitoneOffset / 12.0f) * filterSettings_.lfoAmountKeyTracking);
+        const auto keyTrackRatio = std::pow(2.0f, (noteSemitoneOffset / 12.0f) * filterSettings_.keyTracking);
+        const auto filterLfoDepthHz = filterSettings_.lfoAmountHz * lfoAmountKeyTrackRatio;
+        auto& filterA = voice.filterA;
+        auto& filterB = voice.filterB;
+
+        if (voice.lastFilterResonanceQ != resonanceQ)
+        {
+            filterA.setResonance(resonanceQ);
+
+            if (useSecondFilterStage)
+                filterB.setResonance(resonanceQ);
+
+            voice.lastFilterResonanceQ = resonanceQ;
+        }
+
+        auto renderVoiceWithReader = [&](auto&& readVoiceSample) noexcept
+        {
+            auto localOffset = 0;
+            auto voiceStopped = false;
+            while (localOffset < numSamples && !voiceStopped)
+            {
+                const auto chunkSize = getVoiceRenderBlockSize(voice, numSamples - localOffset);
+                const auto glideSpan = advanceVoiceGlideSpan(voice, chunkSize);
+                const auto retriggeredFilterLfoSpan = advanceVoiceRetriggeredFilterLfoSpan(voice, chunkSize);
+
+                for (int sampleIndex = 0; sampleIndex < chunkSize; ++sampleIndex)
+                {
+                    const auto bufferIndex = localOffset + sampleIndex;
+
+                    if (voice.samplePosition >= maxSamplePosition)
+                    {
+                        if (shouldLoopNow)
+                        {
+                            voice.samplePosition = static_cast<float>(effectiveLoopStart);
+                        }
+                        else
+                        {
+                            voice.samplePosition = maxSamplePosition;
+
+                            if (voice.noteHeld)
+                            {
+                                voice.noteHeld = false;
+                                voice.ampEnvelope.noteOff();
+                                voice.filterEnvelope.noteOff();
+                            }
+
+                            if (!voice.ampEnvelope.isActive())
+                            {
+                                voicePool_.stopVoiceAtIndex(voiceIndex);
+                                voice.noteNumber = -1;
+                                voice.noteHeld = false;
+                                voice.ampEnvelope.reset();
+                                voice.filterEnvelope.reset();
+                                voiceStopped = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (shouldLoopNow && voice.samplePosition >= static_cast<float>(effectiveLoopEnd))
+                    {
+                        while (voice.samplePosition >= static_cast<float>(effectiveLoopEnd))
+                            voice.samplePosition -= static_cast<float>(loopLength);
+
+                        while (voice.samplePosition < static_cast<float>(effectiveLoopStart))
+                            voice.samplePosition += static_cast<float>(loopLength);
+                    }
+
+                    const auto ampLevel = voice.ampEnvelope.getNextSample()
+                        * velocityAmpGain
+                        * globalAmpGains[bufferIndex];
+                    if (!voice.ampEnvelope.isActive())
+                    {
+                        voicePool_.stopVoiceAtIndex(voiceIndex);
+                        voice.noteNumber = -1;
+                        voice.noteHeld = false;
+                        voice.filterEnvelope.reset();
+                        voiceStopped = true;
+                        break;
+                    }
+
+                    auto lfoValue = 0.0f;
+                    if (filterLfoActive)
+                    {
+                        if (useRetriggeredFilterLfo)
+                        {
+                            lfoValue = interpolateSpanValue(
+                                retriggeredFilterLfoSpan.start,
+                                retriggeredFilterLfoSpan.end,
+                                sampleIndex,
+                                chunkSize);
+                        }
+                        else
+                        {
+                            lfoValue = globalFilterLfoValues[bufferIndex];
+                            if (useUnipolarFilterLfo)
+                                lfoValue = 0.5f * (lfoValue + 1.0f);
+
+                            if (voice.filterLfoFadeSamplesTotal > 0 && voice.filterLfoFadeSamplesRemaining > 0)
+                            {
+                                const auto remaining = static_cast<float>(voice.filterLfoFadeSamplesRemaining);
+                                const auto total = static_cast<float>(voice.filterLfoFadeSamplesTotal);
+                                const auto depthScale = juce::jlimit(0.0f, 1.0f, 1.0f - (remaining / total));
+                                lfoValue *= depthScale;
+                                --voice.filterLfoFadeSamplesRemaining;
+                            }
+                        }
+                    }
+
+                    auto rawLeft = readVoiceSample(voice.samplePosition, 0);
+                    auto rawRight = readVoiceSample(voice.samplePosition, 1);
+                    if (crossfadeSamples > 0 && voice.samplePosition >= crossfadeStart)
+                    {
+                        const auto progress = juce::jlimit(0.0f, 1.0f,
+                            (voice.samplePosition - crossfadeStart) / static_cast<float>(crossfadeSamples));
+                        const auto headPosition = static_cast<float>(effectiveLoopStart)
+                            + progress * static_cast<float>(crossfadeSamples);
+                        const auto headLeft = readVoiceSample(headPosition, 0);
+                        const auto headRight = readVoiceSample(headPosition, 1);
+                        rawLeft = rawLeft + (headLeft - rawLeft) * progress;
+                        rawRight = rawRight + (headRight - rawRight) * progress;
+                    }
+
+                    const auto filterEnvValue = voice.filterEnvelope.getNextSample();
+                    auto cutoff = filterSettings_.baseCutoffHz
+                        + filterEnvValue * filterSettings_.envAmountHz
+                        + voice.velocity * filterSettings_.velocityAmountHz
+                        + lfoValue * filterLfoDepthHz
+                        + globalFilterOffsets[bufferIndex]
+                        + velocityModulation.filterHz;
+                    cutoff *= keyTrackRatio;
+                    cutoff = juce::jlimit(20.0f, maxCutoffHz, cutoff);
+
+                    if (voice.lastFilterCutoffHz != cutoff)
+                    {
+                        filterA.setCutoffFrequency(cutoff);
+
+                        if (useSecondFilterStage)
+                            filterB.setCutoffFrequency(cutoff);
+
+                        voice.lastFilterCutoffHz = cutoff;
+                    }
+
+                    auto filteredLeft = filterA.processSample(0, rawLeft);
+                    auto filteredRight = filterA.processSample(1, rawRight);
+
+                    if (useNotchOutput)
+                    {
+                        filteredLeft = rawLeft - filteredLeft;
+                        filteredRight = rawRight - filteredRight;
+                    }
+
+                    if (useSecondFilterStage)
+                    {
+                        filteredLeft = filterB.processSample(0, filteredLeft);
+                        filteredRight = filterB.processSample(1, filteredRight);
+                    }
+
+                    mixLeft[bufferIndex] += filteredLeft * ampLevel * zoneLeftGain;
+                    mixRight[bufferIndex] += filteredRight * ampLevel * zoneRightGain;
+
+                    voice.lastAmpLevel = ampLevel;
+                    voicePool_.setCurrentLevel(voiceIndex, ampLevel);
+
+                    const auto glideIncrement = interpolateSpanValue(
+                        glideSpan.start,
+                        glideSpan.end,
+                        sampleIndex,
+                        chunkSize);
+                    voice.samplePosition += glideIncrement
+                        * globalPitchRatios[bufferIndex]
+                        * velocityPitchRatio;
+                }
+
+                localOffset += chunkSize;
+            }
+        };
+
+        const auto renderCpuSample = [&](const float position, const int channel) noexcept
+        {
+            const auto clampedPosition = juce::jlimit(0.0f, maxSamplePosition, position);
+            const auto sampleIndex = static_cast<int>(clampedPosition);
+            return readMappedSample(sampleIndex, channel) * computeVoiceEditGain(clampedPosition);
+        };
+        const auto renderFidelitySample = [&](const float position, const int channel) noexcept
+        {
+            const auto clampedPosition = juce::jlimit(0.0f, maxSamplePosition, position);
+            const auto sampleIndex = static_cast<int>(clampedPosition);
+            const auto nextIndex = juce::jmin(sampleIndex + 1, sampleLengthMinusOne);
+            const auto fraction = clampedPosition - static_cast<float>(sampleIndex);
+            const auto sampleA = readMappedSample(sampleIndex, channel);
+            const auto sampleB = readMappedSample(nextIndex, channel);
+            return (sampleA + (sampleB - sampleA) * fraction) * computeVoiceEditGain(clampedPosition);
+        };
+        const auto renderUltraSample = [&](const float position, const int channel) noexcept
+        {
+            const auto clampedPosition = juce::jlimit(0.0f, maxSamplePosition, position);
+            return readSampleWindowedSinc(
+                *voiceSegments,
+                clampedPosition,
+                voice.sampleStart,
+                voice.sampleEndExclusive,
+                channel) * computeVoiceEditGain(clampedPosition);
+        };
+
+        switch (qualityTier_)
+        {
+            case QualityTier::cpu:
+                renderVoiceWithReader(renderCpuSample);
+                break;
+            case QualityTier::ultra:
+                renderVoiceWithReader(renderUltraSample);
+                break;
+            case QualityTier::fidelity:
+            default:
+                renderVoiceWithReader(renderFidelitySample);
+                break;
+        }
+    }
 }
 
 void EngineCore::render(juce::AudioBuffer<float>& audioBuffer, const juce::MidiBuffer& midiBuffer) noexcept
@@ -1700,124 +2244,6 @@ void EngineCore::render(juce::AudioBuffer<float>& audioBuffer, const juce::MidiB
         outputPointers[static_cast<std::size_t>(channel)] = audioBuffer.getWritePointer(channel);
 
     render(outputPointers.data(), clampedChannels, numSamples);
-}
-
-EngineCore::GlobalModulationFrame EngineCore::advanceGlobalModulationFrame() noexcept
-{
-    GlobalModulationFrame frame;
-
-    ModulationContribution globalModulation;
-    const std::array<ModulationSourceValue, 2 + kMacroControlCount> globalModulationSources{{
-        { &modulationRoutingSettings_.modWheel, currentModWheelValue_ },
-        { &modulationRoutingSettings_.aftertouch, currentAftertouchValue_ },
-        { &modulationRoutingSettings_.macros[0], macroControlValues_[0] },
-        { &modulationRoutingSettings_.macros[1], macroControlValues_[1] }
-    }};
-    accumulateModulationSources(globalModulation, globalModulationSources);
-
-    const auto pitchBendRatio = semitonesToRatio(currentPitchBendSemitones_);
-    auto pitchModSemitones = globalModulation.pitchCents / 100.0f;
-    const auto hasActivePitchLfo = pitchLfoSettings_.rateHz > 0.0f && pitchLfoSettings_.depthCents > 0.0001f;
-    if (hasActivePitchLfo)
-    {
-        const auto pitchLfoWave = computeLfoWave(FilterSettings::LfoShape::sine, globalPitchLfoPhase_);
-        pitchModSemitones += (pitchLfoSettings_.depthCents / 100.0f) * pitchLfoWave;
-
-        globalPitchLfoPhase_ += pitchLfoSettings_.rateHz / static_cast<float>(sampleRate_);
-        if (globalPitchLfoPhase_ >= 1.0f)
-            globalPitchLfoPhase_ -= std::floor(globalPitchLfoPhase_);
-    }
-    frame.combinedPitchRatio = pitchBendRatio * semitonesToRatio(pitchModSemitones);
-
-    frame.filterLfoActive = filterSettings_.lfoRateHz > 0.0f && std::abs(filterSettings_.lfoAmountHz) > 0.0001f;
-    if (frame.filterLfoActive)
-    {
-        frame.filterLfoValue = computeLfoWave(filterSettings_.lfoShape, globalFilterLfoPhase_);
-        globalFilterLfoPhase_ += filterSettings_.lfoRateHz / static_cast<float>(sampleRate_);
-        if (globalFilterLfoPhase_ >= 1.0f)
-            globalFilterLfoPhase_ -= std::floor(globalFilterLfoPhase_);
-    }
-
-    const auto hasActiveAmpLfo = ampLfoSettings_.rateHz > 0.0f && ampLfoSettings_.depth > 0.0001f;
-    if (hasActiveAmpLfo)
-    {
-        const auto ampLfoWave = computeLfoWave(ampLfoSettings_.shape, globalAmpLfoPhase_);
-        const auto ampLfoUnipolar = 0.5f * (ampLfoWave + 1.0f);
-        frame.ampLfoGain = (1.0f - ampLfoSettings_.depth) + (ampLfoSettings_.depth * ampLfoUnipolar);
-
-        globalAmpLfoPhase_ += ampLfoSettings_.rateHz / static_cast<float>(sampleRate_);
-        if (globalAmpLfoPhase_ >= 1.0f)
-            globalAmpLfoPhase_ -= std::floor(globalAmpLfoPhase_);
-    }
-
-    frame.ampLfoGain *= juce::jmax(0.0f, 1.0f + globalModulation.ampDelta);
-    frame.filterCutoffOffsetHz = globalModulation.filterHz;
-
-    return frame;
-}
-
-float EngineCore::computeVoiceFilterLfoValue(const int voiceIndex,
-                                             VoiceState& voice,
-                                             const GlobalModulationFrame& frame) noexcept
-{
-    if (!frame.filterLfoActive)
-        return 0.0f;
-
-    auto lfoValue = 0.0f;
-    if (filterSettings_.lfoRetrigger)
-    {
-        lfoValue = computeLfoWave(filterSettings_.lfoShape, voice.filterLfoPhase);
-        auto lfoRateKeyTrackRatio = 1.0f;
-        if (!filterSettings_.lfoTempoSync || filterSettings_.lfoRateKeytrackInTempoSync)
-        {
-            const auto noteSemitoneOffset = static_cast<float>(voicePool_.noteAt(voiceIndex) - voice.rootMidiNote);
-            if (filterSettings_.lfoKeytrackLinear)
-            {
-                lfoRateKeyTrackRatio = juce::jmax(0.0f,
-                    1.0f + (noteSemitoneOffset / 12.0f) * filterSettings_.lfoRateKeyTracking);
-            }
-            else
-            {
-                lfoRateKeyTrackRatio = std::pow(2.0f,
-                    (noteSemitoneOffset / 12.0f) * filterSettings_.lfoRateKeyTracking);
-            }
-        }
-
-        const auto trackedLfoRateHz = juce::jlimit(0.0f, 40.0f,
-            filterSettings_.lfoRateHz * lfoRateKeyTrackRatio);
-        voice.filterLfoPhase += trackedLfoRateHz / static_cast<float>(sampleRate_);
-        if (voice.filterLfoPhase >= 1.0f)
-            voice.filterLfoPhase -= std::floor(voice.filterLfoPhase);
-    }
-    else
-    {
-        lfoValue = frame.filterLfoValue;
-    }
-
-    if (filterSettings_.lfoUnipolar)
-        lfoValue = 0.5f * (lfoValue + 1.0f);
-
-    if (voice.filterLfoFadeSamplesTotal > 0 && voice.filterLfoFadeSamplesRemaining > 0)
-    {
-        const auto remaining = static_cast<float>(voice.filterLfoFadeSamplesRemaining);
-        const auto total = static_cast<float>(voice.filterLfoFadeSamplesTotal);
-        const auto depthScale = juce::jlimit(0.0f, 1.0f, 1.0f - (remaining / total));
-        lfoValue *= depthScale;
-        --voice.filterLfoFadeSamplesRemaining;
-    }
-
-    return lfoValue;
-}
-
-void EngineCore::advanceVoiceGlide(VoiceState& voice) noexcept
-{
-    if (voice.glideSamplesRemaining <= 0)
-        return;
-
-    const auto glideStep = (voice.glideTargetIncrement - voice.sampleIncrement)
-        / static_cast<float>(voice.glideSamplesRemaining);
-    voice.sampleIncrement += glideStep;
-    --voice.glideSamplesRemaining;
 }
 
 void EngineCore::panic() noexcept
@@ -1942,11 +2368,8 @@ void EngineCore::setPolyphonyLimit(const int voices) noexcept
         voice.noteHeld = false;
         voice.releaseOnNoteOff = true;
         voice.lastAmpLevel = 0.0f;
-        for (std::size_t filterChannel = 0; filterChannel < voice.filterA.size(); ++filterChannel)
-        {
-            voice.filterA[filterChannel].reset();
-            voice.filterB[filterChannel].reset();
-        }
+        voice.filterA.reset();
+        voice.filterB.reset();
         voice.filterLfoPhase = 0.0f;
         voice.filterLfoFadeSamplesTotal = 0;
         voice.filterLfoFadeSamplesRemaining = 0;
@@ -2493,6 +2916,7 @@ void EngineCore::flushPendingEventsAtOffset(const int offset,
 void EngineCore::applyVoiceStartContext(VoiceState& voice, const VoiceStartContext& context) noexcept
 {
     voice.velocity = context.velocity;
+    voice.noteNumber = context.noteNumber;
     voice.noteHeld = true;
     voice.releaseOnNoteOff = context.releaseOnNoteOff;
     voice.rootMidiNote = context.rootMidiNote;
@@ -2528,11 +2952,10 @@ void EngineCore::startVoice(const int voiceIndex, const VoiceStartContext& conte
     voice.glideSamplesRemaining = 0;
     voice.lastAmpLevel = 0.0f;
     applyVoiceStartContext(voice, context);
-    for (std::size_t filterChannel = 0; filterChannel < voice.filterA.size(); ++filterChannel)
-    {
-        voice.filterA[filterChannel].reset();
-        voice.filterB[filterChannel].reset();
-    }
+    voice.filterA.reset();
+    voice.filterB.reset();
+    voice.lastFilterCutoffHz = -1.0f;
+    voice.lastFilterResonanceQ = -1.0f;
     if (filterSettings_.lfoRetrigger)
     {
         auto startPhase = filterSettings_.lfoStartPhaseDegrees;
@@ -2597,6 +3020,7 @@ void EngineCore::stopAllVoicesImmediate() noexcept
 
     for (auto& voice : voices_)
     {
+        voice.noteNumber = -1;
         voice.noteHeld = false;
         voice.releaseOnNoteOff = true;
         voice.lastAmpLevel = 0.0f;
@@ -2613,11 +3037,8 @@ void EngineCore::stopAllVoicesImmediate() noexcept
         voice.loopStart = -1;
         voice.loopEndExclusive = -1;
         voice.loopMode = ZoneLoopMode::noLoop;
-        for (std::size_t filterChannel = 0; filterChannel < voice.filterA.size(); ++filterChannel)
-        {
-            voice.filterA[filterChannel].reset();
-            voice.filterB[filterChannel].reset();
-        }
+        voice.filterA.reset();
+        voice.filterB.reset();
         voice.filterLfoPhase = 0.0f;
         voice.filterLfoFadeSamplesTotal = 0;
         voice.filterLfoFadeSamplesRemaining = 0;
@@ -2638,6 +3059,7 @@ void EngineCore::stopVoicesForNoteImmediate(const int noteNumber) noexcept
         voicePool_.stopVoiceAtIndex(voiceIndex);
 
         auto& voice = voices_[static_cast<std::size_t>(voiceIndex)];
+        voice.noteNumber = -1;
         voice.noteHeld = false;
         voice.releaseOnNoteOff = true;
         voice.lastAmpLevel = 0.0f;
@@ -2654,11 +3076,8 @@ void EngineCore::stopVoicesForNoteImmediate(const int noteNumber) noexcept
         voice.loopStart = -1;
         voice.loopEndExclusive = -1;
         voice.loopMode = ZoneLoopMode::noLoop;
-        for (std::size_t filterChannel = 0; filterChannel < voice.filterA.size(); ++filterChannel)
-        {
-            voice.filterA[filterChannel].reset();
-            voice.filterB[filterChannel].reset();
-        }
+        voice.filterA.reset();
+        voice.filterB.reset();
         voice.filterLfoPhase = 0.0f;
         voice.filterLfoFadeSamplesTotal = 0;
         voice.filterLfoFadeSamplesRemaining = 0;
@@ -2683,6 +3102,7 @@ void EngineCore::stopVoicesInChokeGroupImmediate(const int chokeGroup) noexcept
             continue;
 
         voicePool_.stopVoiceAtIndex(voiceIndex);
+        voice.noteNumber = -1;
         voice.noteHeld = false;
         voice.releaseOnNoteOff = true;
         voice.lastAmpLevel = 0.0f;
@@ -2699,11 +3119,8 @@ void EngineCore::stopVoicesInChokeGroupImmediate(const int chokeGroup) noexcept
         voice.loopStart = -1;
         voice.loopEndExclusive = -1;
         voice.loopMode = ZoneLoopMode::noLoop;
-        for (std::size_t filterChannel = 0; filterChannel < voice.filterA.size(); ++filterChannel)
-        {
-            voice.filterA[filterChannel].reset();
-            voice.filterB[filterChannel].reset();
-        }
+        voice.filterA.reset();
+        voice.filterB.reset();
         voice.filterLfoPhase = 0.0f;
         voice.filterLfoFadeSamplesTotal = 0;
         voice.filterLfoFadeSamplesRemaining = 0;
@@ -2789,15 +3206,15 @@ void EngineCore::applyFilterParamsToVoices() noexcept
 
     for (auto& voice : voices_)
     {
-        for (std::size_t filterChannel = 0; filterChannel < voice.filterA.size(); ++filterChannel)
-        {
-            voice.filterA[filterChannel].setType(juceType);
-            voice.filterB[filterChannel].setType(juceType);
-            voice.filterA[filterChannel].setCutoffFrequency(defaultCutoff);
-            voice.filterB[filterChannel].setCutoffFrequency(defaultCutoff);
-            voice.filterA[filterChannel].setResonance(q);
-            voice.filterB[filterChannel].setResonance(q);
-        }
+        voice.filterA.setType(juceType);
+        voice.filterB.setType(juceType);
+        voice.filterA.setCutoffFrequency(defaultCutoff);
+        voice.filterB.setCutoffFrequency(defaultCutoff);
+        voice.filterA.setResonance(q);
+        voice.filterB.setResonance(q);
+
+        voice.lastFilterCutoffHz = -1.0f;
+        voice.lastFilterResonanceQ = -1.0f;
     }
 }
 
@@ -3398,63 +3815,6 @@ std::vector<std::vector<EngineCore::DisplayMinMax>> EngineCore::buildDisplayMinM
     }
 
     return allMinMax;
-}
-
-float EngineCore::computeFilterSample(const float inputSample,
-                                      const float envValue,
-                                      const float lfoValue,
-                                      const int noteNumber,
-                                      const float velocity,
-                                      const float modulationFilterOffsetHz,
-                                      VoiceState& voice,
-                                      const int filterChannel) const noexcept
-{
-    const auto clampedFilterChannel = juce::jlimit(0, static_cast<int>(voice.filterA.size()) - 1, filterChannel);
-    const auto cutoff = computeFilterCutoffHz(envValue, lfoValue, noteNumber, velocity, modulationFilterOffsetHz, voice);
-    const auto q = computeFilterResonanceQ();
-    auto& filterA = voice.filterA[static_cast<std::size_t>(clampedFilterChannel)];
-    auto& filterB = voice.filterB[static_cast<std::size_t>(clampedFilterChannel)];
-    filterA.setCutoffFrequency(cutoff);
-    filterA.setResonance(q);
-
-    auto out = filterA.processSample(0, inputSample);
-
-    if (filterSettings_.mode == FilterSettings::Mode::notch12)
-        out = inputSample - out;
-
-    if (filterSettings_.mode == FilterSettings::Mode::lowPass24
-        || filterSettings_.mode == FilterSettings::Mode::highPass24)
-    {
-        filterB.setCutoffFrequency(cutoff);
-        filterB.setResonance(q);
-        out = filterB.processSample(0, out);
-    }
-
-    return out;
-}
-
-float EngineCore::computeFilterCutoffHz(const float envValue,
-                                        const float lfoValue,
-                                        const int noteNumber,
-                                        const float velocity,
-                                        const float modulationFilterOffsetHz,
-                                        const VoiceState& voice) const noexcept
-{
-    const auto semitoneOffset = static_cast<float>(noteNumber - voice.rootMidiNote);
-    const auto lfoAmountKeyTrackRatio = filterSettings_.lfoKeytrackLinear
-        ? juce::jmax(0.0f, 1.0f + (semitoneOffset / 12.0f) * filterSettings_.lfoAmountKeyTracking)
-        : std::pow(2.0f, (semitoneOffset / 12.0f) * filterSettings_.lfoAmountKeyTracking);
-
-    auto cutoff = filterSettings_.baseCutoffHz
-        + envValue * filterSettings_.envAmountHz
-        + velocity * filterSettings_.velocityAmountHz
-        + lfoValue * (filterSettings_.lfoAmountHz * lfoAmountKeyTrackRatio)
-        + modulationFilterOffsetHz;
-
-    const auto keyTrackRatio = std::pow(2.0f, (semitoneOffset / 12.0f) * filterSettings_.keyTracking);
-    cutoff *= keyTrackRatio;
-
-    return juce::jlimit(20.0f, static_cast<float>(sampleRate_ * 0.45), cutoff);
 }
 
 float EngineCore::computeFilterResonanceQ() const noexcept

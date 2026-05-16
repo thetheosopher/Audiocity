@@ -118,6 +118,17 @@ cmake --build --preset default --config Debug --target audiocity_offline_tests a
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
+## Engine Profiling
+
+Capture a symbolized CPU sample run of the dedicated engine harness and write the raw trace, WPA CSV exports, and summarized hotspots under `build/tests/profile-runs/`:
+
+```powershell
+./scripts/profile_engine_harness.ps1
+./scripts/profile_engine_harness.ps1 -Seconds 6 -Quality ultra -Voices 32 -BlockSize 64
+```
+
+The profiling script builds `audiocity_engine_profile` in `RelWithDebInfo` by default, captures CPU samples with the Visual Studio diagnostics collector, exports WPA tables, and resolves the harness module's hot addresses through `llvm-symbolizer`.
+
 ## Release Builds
 
 Release artifacts are built from a dedicated self-contained preset. The release executable is linked with the static MSVC runtime so it is as self-contained as practical on Windows.

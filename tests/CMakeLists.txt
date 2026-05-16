@@ -1,5 +1,4 @@
-add_executable(audiocity_offline_tests
-    OfflineRenderTests.cpp
+set(AUDIOCITY_ENGINE_TEST_COMMON_SOURCES
     ../src/plugin/PeakPreviewCache.cpp
     ../src/plugin/ImportedProgramState.cpp
     ../src/plugin/PresetJson.cpp
@@ -21,34 +20,54 @@ add_executable(audiocity_offline_tests
     ../src/engine/BinaryMultisampleImporters.cpp
     ../src/engine/VoicePool.cpp)
 
-target_include_directories(audiocity_offline_tests
-    PRIVATE
-        ../src
-        ../third_party/REXSDK_Win_1.9.2)
+add_executable(audiocity_offline_tests
+    OfflineRenderTests.cpp
+    ${AUDIOCITY_ENGINE_TEST_COMMON_SOURCES})
 
-target_link_libraries(audiocity_offline_tests
-    PRIVATE
-        audiocity_rex_sdk)
+set(AUDIOCITY_ENGINE_PROFILE_SOURCES
+    ../src/engine/AudioFileSupport.cpp
+    ../src/engine/EngineCore.cpp
+    ../src/engine/RexLoader.cpp
+    ../src/engine/VoicePool.cpp)
 
-target_compile_definitions(audiocity_offline_tests
-    PRIVATE
-        AUDIOCITY_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-        REX_WINDOWS=1
-        REX_MAC=0)
+add_executable(audiocity_engine_profile
+    EngineProfileHarness.cpp
+    ${AUDIOCITY_ENGINE_PROFILE_SOURCES})
 
-target_link_libraries(audiocity_offline_tests
-    PRIVATE
-        juce::juce_gui_basics
-        juce::juce_audio_basics
-        juce::juce_audio_formats
-        juce::juce_data_structures
-        juce::juce_dsp
-        juce::juce_events
-        juce::juce_core)
+foreach (audiocity_engine_target IN ITEMS audiocity_offline_tests audiocity_engine_profile)
+    target_include_directories(${audiocity_engine_target}
+        PRIVATE
+            ../src
+            ../third_party/REXSDK_Win_1.9.2)
 
-if (MSVC)
-    target_compile_options(audiocity_offline_tests PRIVATE /W4 /WX /permissive-)
-endif ()
+    target_link_libraries(${audiocity_engine_target}
+        PRIVATE
+            audiocity_rex_sdk)
+
+    target_compile_definitions(${audiocity_engine_target}
+        PRIVATE
+            AUDIOCITY_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+            REX_WINDOWS=1
+            REX_MAC=0)
+
+    target_link_libraries(${audiocity_engine_target}
+        PRIVATE
+            juce::juce_gui_basics
+            juce::juce_audio_basics
+            juce::juce_audio_formats
+            juce::juce_data_structures
+            juce::juce_dsp
+            juce::juce_events
+            juce::juce_core)
+
+    if (MSVC)
+        target_compile_options(${audiocity_engine_target} PRIVATE /W4 /WX /permissive-)
+    endif ()
+endforeach ()
+
+target_link_libraries(audiocity_engine_profile
+    PRIVATE
+        juce::juce_gui_basics)
 
 set(AUDIOCITY_OFFLINE_TEST_EXE "$<TARGET_FILE:audiocity_offline_tests>")
 

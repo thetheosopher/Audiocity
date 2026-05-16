@@ -136,6 +136,39 @@ juce::AudioBuffer<float> renderSequence(audiocity::engine::EngineCore& engine)
     return output;
 }
 
+juce::AudioBuffer<float> renderSequenceWithOffsets(audiocity::engine::EngineCore& engine,
+                                                   const int totalSamples,
+                                                   const int blockSize,
+                                                   const int noteOnSample,
+                                                   const int noteOffSample)
+{
+    constexpr int channels = 2;
+    juce::AudioBuffer<float> output(channels, totalSamples);
+
+    auto renderedSamples = 0;
+    while (renderedSamples < totalSamples)
+    {
+        const auto blockSamples = juce::jmin(blockSize, totalSamples - renderedSamples);
+        juce::AudioBuffer<float> blockBuffer(channels, blockSamples);
+        juce::MidiBuffer midi;
+
+        if (noteOnSample >= renderedSamples && noteOnSample < renderedSamples + blockSamples)
+            midi.addEvent(juce::MidiMessage::noteOn(1, 60, 0.8f), noteOnSample - renderedSamples);
+
+        if (noteOffSample >= renderedSamples && noteOffSample < renderedSamples + blockSamples)
+            midi.addEvent(juce::MidiMessage::noteOff(1, 60), noteOffSample - renderedSamples);
+
+        engine.render(blockBuffer, midi);
+
+        for (int channel = 0; channel < channels; ++channel)
+            output.copyFrom(channel, renderedSamples, blockBuffer, channel, 0, blockSamples);
+
+        renderedSamples += blockSamples;
+    }
+
+    return output;
+}
+
 bool runDeterminismTest()
 {
     constexpr int channels = 2;
@@ -156,6 +189,243 @@ bool runDeterminismTest()
     const auto second = renderSequence(secondEngine);
 
     return buffersAreEqual(first, second, 1.0e-7f);
+}
+
+bool runRenderSegmentationMatchesSubBlockSequenceTest()
+{
+    constexpr int channels = 2;
+    constexpr int singleBlockSize = 96;
+    constexpr int splitBlockSize = 24;
+    constexpr int totalSamples = 96;
+    constexpr int noteOnSample = 13;
+    constexpr int noteOffSample = 70;
+    constexpr double sampleRate = 48000.0;
+
+    auto sample = createTestSample(4096);
+
+    audiocity::engine::EngineCore::AmpLfoSettings ampLfo;
+    ampLfo.rateHz = 3.0f;
+    ampLfo.depth = 0.35f;
+    ampLfo.shape = audiocity::engine::EngineCore::FilterSettings::LfoShape::sine;
+
+    audiocity::engine::EngineCore::PitchLfoSettings pitchLfo;
+    pitchLfo.rateHz = 4.0f;
+    pitchLfo.depthCents = 12.0f;
+
+    audiocity::engine::EngineCore::FilterSettings filterSettings;
+    filterSettings.baseCutoffHz = 1800.0f;
+    filterSettings.envAmountHz = 900.0f;
+    filterSettings.lfoRateHz = 2.5f;
+    filterSettings.lfoAmountHz = 750.0f;
+    filterSettings.lfoRetrigger = false;
+    filterSettings.lfoShape = audiocity::engine::EngineCore::FilterSettings::LfoShape::sine;
+
+    auto configureEngine = [&](audiocity::engine::EngineCore& engine, const int blockSize)
+    {
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(sample, sampleRate, 60);
+        engine.setAmpLfoSettings(ampLfo);
+        engine.setPitchLfoSettings(pitchLfo);
+        engine.setFilterSettings(filterSettings);
+    };
+
+    audiocity::engine::EngineCore singleBlockEngine;
+    configureEngine(singleBlockEngine, singleBlockSize);
+
+    audiocity::engine::EngineCore splitBlockEngine;
+    configureEngine(splitBlockEngine, splitBlockSize);
+
+    const auto singleBlock = renderSequenceWithOffsets(
+        singleBlockEngine,
+        totalSamples,
+        singleBlockSize,
+        noteOnSample,
+        noteOffSample);
+    const auto splitBlocks = renderSequenceWithOffsets(
+        splitBlockEngine,
+        totalSamples,
+        splitBlockSize,
+        noteOnSample,
+        noteOffSample);
+
+    return buffersAreEqual(singleBlock, splitBlocks, 1.0e-6f);
+}
+
+bool runStaticFilterSegmentationMatchesSubBlockSequenceTest()
+{
+    constexpr int channels = 2;
+    constexpr int singleBlockSize = 96;
+    constexpr int splitBlockSize = 24;
+    constexpr int totalSamples = 96;
+    constexpr int noteOnSample = 13;
+    constexpr int noteOffSample = 70;
+    constexpr double sampleRate = 48000.0;
+
+    auto sample = createTestSample(4096);
+
+    audiocity::engine::EngineCore::FilterSettings filterSettings;
+    filterSettings.baseCutoffHz = 1600.0f;
+    filterSettings.envAmountHz = 0.0f;
+    filterSettings.resonance = 0.72f;
+    filterSettings.lfoRateHz = 0.0f;
+    filterSettings.lfoAmountHz = 0.0f;
+    filterSettings.lfoRetrigger = false;
+
+    auto configureEngine = [&](audiocity::engine::EngineCore& engine, const int blockSize)
+    {
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(sample, sampleRate, 60);
+        engine.setFilterSettings(filterSettings);
+    };
+
+    audiocity::engine::EngineCore singleBlockEngine;
+    configureEngine(singleBlockEngine, singleBlockSize);
+
+    audiocity::engine::EngineCore splitBlockEngine;
+    configureEngine(splitBlockEngine, splitBlockSize);
+
+    const auto singleBlock = renderSequenceWithOffsets(
+        singleBlockEngine,
+        totalSamples,
+        singleBlockSize,
+        noteOnSample,
+        noteOffSample);
+    const auto splitBlocks = renderSequenceWithOffsets(
+        splitBlockEngine,
+        totalSamples,
+        splitBlockSize,
+        noteOnSample,
+        noteOffSample);
+
+    return buffersAreEqual(singleBlock, splitBlocks, 1.0e-6f);
+}
+
+bool runEditedSampleSegmentationMatchesSubBlockSequenceTest()
+{
+    constexpr int channels = 2;
+    constexpr int singleBlockSize = 96;
+    constexpr int splitBlockSize = 24;
+    constexpr int totalSamples = 96;
+    constexpr int noteOnSample = 13;
+    constexpr int noteOffSample = 70;
+    constexpr double sampleRate = 48000.0;
+
+    auto sample = createTestSample(4096);
+
+    audiocity::engine::EngineCore::AdsrSettings flatAdsr;
+    flatAdsr.attackSeconds = 0.0001f;
+    flatAdsr.decaySeconds = 0.0001f;
+    flatAdsr.sustainLevel = 1.0f;
+    flatAdsr.releaseSeconds = 0.001f;
+
+    audiocity::engine::EngineCore::FilterSettings openFilter;
+    openFilter.baseCutoffHz = 18000.0f;
+    openFilter.envAmountHz = 0.0f;
+
+    auto configureEngine = [&](audiocity::engine::EngineCore& engine, const int blockSize)
+    {
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setQualityTier(audiocity::engine::EngineCore::QualityTier::fidelity);
+        engine.setAmpEnvelope(flatAdsr);
+        engine.setFilterSettings(openFilter);
+        engine.setSampleData(sample, sampleRate, 60);
+        engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::oneShot);
+        engine.setSampleWindow(64, 192);
+        engine.setReversePlayback(true);
+        engine.setFadeSamples(11, 13);
+    };
+
+    audiocity::engine::EngineCore singleBlockEngine;
+    configureEngine(singleBlockEngine, singleBlockSize);
+
+    audiocity::engine::EngineCore splitBlockEngine;
+    configureEngine(splitBlockEngine, splitBlockSize);
+
+    const auto singleBlock = renderSequenceWithOffsets(
+        singleBlockEngine,
+        totalSamples,
+        singleBlockSize,
+        noteOnSample,
+        noteOffSample);
+    const auto splitBlocks = renderSequenceWithOffsets(
+        splitBlockEngine,
+        totalSamples,
+        splitBlockSize,
+        noteOnSample,
+        noteOffSample);
+
+    return buffersAreEqual(singleBlock, splitBlocks, 1.0e-6f);
+}
+
+bool runStereoFilterChannelIsolationTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 4096;
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setSampleData(createTestSample(sampleLength), sampleRate, 60);
+
+    EngineCore::AdsrSettings amp;
+    amp.attackSeconds = 0.0001f;
+    amp.decaySeconds = 0.001f;
+    amp.sustainLevel = 1.0f;
+    amp.releaseSeconds = 0.001f;
+    engine.setAmpEnvelope(amp);
+
+    EngineCore::FilterSettings filterSettings;
+    filterSettings.baseCutoffHz = 1200.0f;
+    filterSettings.envAmountHz = 0.0f;
+    filterSettings.resonance = 0.78f;
+    engine.setFilterSettings(filterSettings);
+
+    EngineCore::DcFilterSettings dc;
+    dc.enabled = false;
+    engine.setDcFilterSettings(dc);
+
+    Program program;
+    SampleAsset asset;
+    asset.lengthSamples = sampleLength;
+    asset.numChannels = channels;
+    asset.sampleRateHz = sampleRate;
+    asset.rootMidiNote = 60;
+    program.sampleAssets.push_back(asset);
+
+    Zone zone;
+    zone.sampleAssetIndex = 0;
+    zone.keyRange = MidiRange::single(60);
+    zone.velocityRange = VelocityRange::full();
+    zone.rootMidiNote = 60;
+    program.zones.push_back(zone);
+
+    juce::AudioBuffer<float> stereoSample(channels, sampleLength);
+    stereoSample.clear();
+
+    const auto leftTone = createTestSample(sampleLength);
+    stereoSample.copyFrom(0, 0, leftTone, 0, 0, sampleLength);
+
+    std::vector<juce::AudioBuffer<float>> samples;
+    samples.push_back(stereoSample);
+    engine.setProgram(program, samples);
+
+    juce::AudioBuffer<float> block(channels, blockSize);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+    engine.render(block, midi);
+
+    auto leftEnergy = 0.0f;
+    auto rightEnergy = 0.0f;
+    for (int sample = 0; sample < blockSize; ++sample)
+    {
+        leftEnergy += std::abs(block.getSample(0, sample));
+        rightEnergy += std::abs(block.getSample(1, sample));
+    }
+
+    return leftEnergy > 0.01f && rightEnergy < leftEnergy * 0.05f;
 }
 
 bool runProgramModelRangeAndZoneMatchingTest()
@@ -11623,6 +11893,10 @@ int main()
 #define AUDIOCITY_TEST(fn, code) { #fn, fn, code }
     const OfflineTestCase tests[] = {
         AUDIOCITY_TEST(runDeterminismTest, 1),
+        AUDIOCITY_TEST(runRenderSegmentationMatchesSubBlockSequenceTest, 225),
+        AUDIOCITY_TEST(runStaticFilterSegmentationMatchesSubBlockSequenceTest, 226),
+        AUDIOCITY_TEST(runEditedSampleSegmentationMatchesSubBlockSequenceTest, 227),
+        AUDIOCITY_TEST(runStereoFilterChannelIsolationTest, 228),
         AUDIOCITY_TEST(runProgramModelRangeAndZoneMatchingTest, 73),
         AUDIOCITY_TEST(runProgramSnapshotBuildAndMatchTest, 75),
         AUDIOCITY_TEST(runProgramMappingRowsTest, 97),

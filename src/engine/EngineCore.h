@@ -306,11 +306,14 @@ private:
         float samplePosition = 0.0f;
         float sampleIncrement = 1.0f;
         float velocity = 0.0f;
+        int noteNumber = -1;
         bool noteHeld = false;
         bool releaseOnNoteOff = true;
         float lastAmpLevel = 0.0f;
-        std::array<juce::dsp::StateVariableTPTFilter<float>, 2> filterA;
-        std::array<juce::dsp::StateVariableTPTFilter<float>, 2> filterB;
+        juce::dsp::StateVariableTPTFilter<float> filterA;
+        juce::dsp::StateVariableTPTFilter<float> filterB;
+        float lastFilterCutoffHz = -1.0f;
+        float lastFilterResonanceQ = -1.0f;
         float filterLfoPhase = 0.0f;
         int filterLfoFadeSamplesTotal = 0;
         int filterLfoFadeSamplesRemaining = 0;
@@ -361,6 +364,18 @@ private:
         float ampLfoGain = 1.0f;
         float filterCutoffOffsetHz = 0.0f;
         bool filterLfoActive = false;
+    };
+
+    struct GlobalModulationSpan
+    {
+        GlobalModulationFrame start;
+        GlobalModulationFrame end;
+    };
+
+    struct ModulationValueSpan
+    {
+        float start = 0.0f;
+        float end = 0.0f;
     };
 
     enum class EventType
@@ -485,26 +500,21 @@ private:
                                                int sampleStart,
                                                int sampleEndExclusive,
                                                int channel) const noexcept;
-    [[nodiscard]] float computeFilterSample(float inputSample,
-                                            float envValue,
-                                            float lfoValue,
-                                            int noteNumber,
-                                            float velocity,
-                                            float modulationFilterOffsetHz,
-                                            VoiceState& voice,
-                                            int filterChannel) const noexcept;
-    [[nodiscard]] float computeFilterCutoffHz(float envValue,
-                                              float lfoValue,
-                                              int noteNumber,
-                                              float velocity,
-                                              float modulationFilterOffsetHz,
-                                              const VoiceState& voice) const noexcept;
     [[nodiscard]] float computeFilterResonanceQ() const noexcept;
-    [[nodiscard]] GlobalModulationFrame advanceGlobalModulationFrame() noexcept;
-    [[nodiscard]] float computeVoiceFilterLfoValue(int voiceIndex,
-                                                   VoiceState& voice,
-                                                   const GlobalModulationFrame& frame) noexcept;
-    void advanceVoiceGlide(VoiceState& voice) noexcept;
+    [[nodiscard]] GlobalModulationSpan advanceGlobalModulationSpan(int numSamples) noexcept;
+    void fillGlobalModulationBuffers(int numSamples) noexcept;
+    [[nodiscard]] int getGlobalModulationBlockSize(int remainingSamples) const noexcept;
+    [[nodiscard]] ModulationValueSpan advanceVoiceRetriggeredFilterLfoSpan(VoiceState& voice,
+                                                                           int numSamples) noexcept;
+    [[nodiscard]] ModulationValueSpan advanceVoiceGlideSpan(VoiceState& voice,
+                                                            int numSamples) noexcept;
+    [[nodiscard]] int getVoiceRenderBlockSize(const VoiceState& voice,
+                                              int remainingSamples) const noexcept;
+    [[nodiscard]] int findNextPendingEventOffset(int currentOffset, int blockEnd) const noexcept;
+    void renderActiveVoices(int startSample,
+                            int numSamples,
+                            const SampleSegments& fallbackSegments,
+                            const ProgramAudioSnapshot* programAudio) noexcept;
     void processDelay(float** outputs, int numChannels, int numSamples) noexcept;
     void processDcFilter(float** outputs, int numChannels, int numSamples) noexcept;
     [[nodiscard]] float processSaturationSample(float sample) const noexcept;
@@ -565,6 +575,9 @@ private:
     float masterVolume_ = 1.0f;
     juce::Reverb reverb_;
     juce::AudioBuffer<float> delayBuffer_;
+    juce::AudioBuffer<float> mixBuffer_;
+    juce::AudioBuffer<float> voiceScratchBuffer_;
+    juce::AudioBuffer<float> modulationScratchBuffer_;
     int delayWritePos_ = 0;
     std::array<juce::dsp::StateVariableTPTFilter<float>, 2> dcBlockFilters_{};
 
