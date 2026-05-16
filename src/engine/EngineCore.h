@@ -301,6 +301,57 @@ private:
     struct SampleSegments;
     struct ProgramAudioSnapshot;
 
+    struct VoiceFilterCoefficients
+    {
+        float g = 0.0f;
+        float h = 1.0f;
+        float r2 = 1.0f;
+
+        void update(float cutoffHz, float resonanceQ, double sampleRate) noexcept
+        {
+            g = static_cast<float>(std::tan(juce::MathConstants<double>::pi * static_cast<double>(cutoffHz) / sampleRate));
+            r2 = 1.0f / resonanceQ;
+            h = 1.0f / (1.0f + r2 * g + g * g);
+        }
+    };
+
+    struct VoiceFilterStage
+    {
+        std::array<float, 2> s1{};
+        std::array<float, 2> s2{};
+
+        void reset() noexcept
+        {
+            s1.fill(0.0f);
+            s2.fill(0.0f);
+        }
+
+        float processSample(int channel,
+                            float input,
+                            const VoiceFilterCoefficients& coefficients,
+                            juce::dsp::StateVariableTPTFilterType type) noexcept
+        {
+            auto& state1 = s1[static_cast<size_t>(channel)];
+            auto& state2 = s2[static_cast<size_t>(channel)];
+            const auto high = coefficients.h * (input - state1 * (coefficients.g + coefficients.r2) - state2);
+            const auto band = high * coefficients.g + state1;
+            state1 = high * coefficients.g + band;
+            const auto low = band * coefficients.g + state2;
+            state2 = band * coefficients.g + low;
+
+            switch (type)
+            {
+                case juce::dsp::StateVariableTPTFilterType::highpass:
+                    return high;
+                case juce::dsp::StateVariableTPTFilterType::bandpass:
+                    return band;
+                case juce::dsp::StateVariableTPTFilterType::lowpass:
+                default:
+                    return low;
+            }
+        }
+    };
+
     struct VoiceState
     {
         float samplePosition = 0.0f;
@@ -310,8 +361,9 @@ private:
         bool noteHeld = false;
         bool releaseOnNoteOff = true;
         float lastAmpLevel = 0.0f;
-        juce::dsp::StateVariableTPTFilter<float> filterA;
-        juce::dsp::StateVariableTPTFilter<float> filterB;
+        VoiceFilterCoefficients filterCoefficients;
+        VoiceFilterStage filterA;
+        VoiceFilterStage filterB;
         float lastFilterCutoffHz = -1.0f;
         float lastFilterResonanceQ = -1.0f;
         float filterLfoPhase = 0.0f;

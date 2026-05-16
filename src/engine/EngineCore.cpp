@@ -827,13 +827,8 @@ void EngineCore::prepare(const double sampleRate, const int maxSamplesPerBlock, 
     spec.maximumBlockSize = static_cast<juce::uint32>(juce::jmax(1, maxSamplesPerBlock_));
     spec.numChannels = 1;
 
-    auto voiceFilterSpec = spec;
-    voiceFilterSpec.numChannels = 2;
-
     for (auto& voice : voices_)
     {
-        voice.filterA.prepare(voiceFilterSpec);
-        voice.filterB.prepare(voiceFilterSpec);
         voice.filterA.reset();
         voice.filterB.reset();
     }
@@ -1798,6 +1793,22 @@ void EngineCore::renderActiveVoices(const int startSample,
         || filterSettings_.mode == FilterSettings::Mode::highPass24;
     const auto useNotchOutput = filterSettings_.mode == FilterSettings::Mode::notch12;
     const auto resonanceQ = computeFilterResonanceQ();
+    const auto filterStageType = [&]() noexcept
+    {
+        switch (filterSettings_.mode)
+        {
+            case FilterSettings::Mode::highPass12:
+            case FilterSettings::Mode::highPass24:
+                return juce::dsp::StateVariableTPTFilterType::highpass;
+            case FilterSettings::Mode::bandPass12:
+            case FilterSettings::Mode::notch12:
+                return juce::dsp::StateVariableTPTFilterType::bandpass;
+            case FilterSettings::Mode::lowPass12:
+            case FilterSettings::Mode::lowPass24:
+            default:
+                return juce::dsp::StateVariableTPTFilterType::lowpass;
+        }
+    }();
     const auto maxCutoffHz = static_cast<float>(sampleRate_ * 0.45);
 
     for (int voiceIndex = 0; voiceIndex < static_cast<int>(VoicePool::maxVoices); ++voiceIndex)
@@ -1982,16 +1993,6 @@ void EngineCore::renderActiveVoices(const int startSample,
         auto& filterA = voice.filterA;
         auto& filterB = voice.filterB;
 
-        if (voice.lastFilterResonanceQ != resonanceQ)
-        {
-            filterA.setResonance(resonanceQ);
-
-            if (useSecondFilterStage)
-                filterB.setResonance(resonanceQ);
-
-            voice.lastFilterResonanceQ = resonanceQ;
-        }
-
         auto renderVoiceWithReader = [&](auto&& readVoiceSample) noexcept
         {
             auto localOffset = 0;
@@ -2111,18 +2112,16 @@ void EngineCore::renderActiveVoices(const int startSample,
                     cutoff *= keyTrackRatio;
                     cutoff = juce::jlimit(20.0f, maxCutoffHz, cutoff);
 
-                    if (voice.lastFilterCutoffHz != cutoff)
+                    if (voice.lastFilterCutoffHz != cutoff
+                        || voice.lastFilterResonanceQ != resonanceQ)
                     {
-                        filterA.setCutoffFrequency(cutoff);
-
-                        if (useSecondFilterStage)
-                            filterB.setCutoffFrequency(cutoff);
-
+                        voice.filterCoefficients.update(cutoff, resonanceQ, sampleRate_);
                         voice.lastFilterCutoffHz = cutoff;
+                        voice.lastFilterResonanceQ = resonanceQ;
                     }
 
-                    auto filteredLeft = filterA.processSample(0, rawLeft);
-                    auto filteredRight = filterA.processSample(1, rawRight);
+                    auto filteredLeft = filterA.processSample(0, rawLeft, voice.filterCoefficients, filterStageType);
+                    auto filteredRight = filterA.processSample(1, rawRight, voice.filterCoefficients, filterStageType);
 
                     if (useNotchOutput)
                     {
@@ -2132,8 +2131,8 @@ void EngineCore::renderActiveVoices(const int startSample,
 
                     if (useSecondFilterStage)
                     {
-                        filteredLeft = filterB.processSample(0, filteredLeft);
-                        filteredRight = filterB.processSample(1, filteredRight);
+                        filteredLeft = filterB.processSample(0, filteredLeft, voice.filterCoefficients, filterStageType);
+                        filteredRight = filterB.processSample(1, filteredRight, voice.filterCoefficients, filterStageType);
                     }
 
                     mixLeft[bufferIndex] += filteredLeft * ampLevel * zoneLeftGain;
@@ -3177,38 +3176,8 @@ void EngineCore::applyEnvelopeParamsToVoices() noexcept
 
 void EngineCore::applyFilterParamsToVoices() noexcept
 {
-    auto juceType = juce::dsp::StateVariableTPTFilterType::lowpass;
-    switch (filterSettings_.mode)
-    {
-        case FilterSettings::Mode::highPass12:
-        case FilterSettings::Mode::highPass24:
-            juceType = juce::dsp::StateVariableTPTFilterType::highpass;
-            break;
-        case FilterSettings::Mode::bandPass12:
-            juceType = juce::dsp::StateVariableTPTFilterType::bandpass;
-            break;
-        case FilterSettings::Mode::notch12:
-            juceType = juce::dsp::StateVariableTPTFilterType::bandpass;
-            break;
-        case FilterSettings::Mode::lowPass12:
-        case FilterSettings::Mode::lowPass24:
-        default:
-            juceType = juce::dsp::StateVariableTPTFilterType::lowpass;
-            break;
-    }
-
-    const auto defaultCutoff = juce::jlimit(20.0f, static_cast<float>(sampleRate_ * 0.45), filterSettings_.baseCutoffHz);
-    const auto q = juce::jlimit(0.5f, 20.0f, 0.5f + filterSettings_.resonance * 19.5f);
-
     for (auto& voice : voices_)
     {
-        voice.filterA.setType(juceType);
-        voice.filterB.setType(juceType);
-        voice.filterA.setCutoffFrequency(defaultCutoff);
-        voice.filterB.setCutoffFrequency(defaultCutoff);
-        voice.filterA.setResonance(q);
-        voice.filterB.setResonance(q);
-
         voice.lastFilterCutoffHz = -1.0f;
         voice.lastFilterResonanceQ = -1.0f;
     }

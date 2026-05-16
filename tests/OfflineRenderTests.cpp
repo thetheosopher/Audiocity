@@ -300,6 +300,68 @@ bool runStaticFilterSegmentationMatchesSubBlockSequenceTest()
     return buffersAreEqual(singleBlock, splitBlocks, 1.0e-6f);
 }
 
+bool runDynamic24dBFilterSegmentationMatchesSubBlockSequenceTest()
+{
+    constexpr int channels = 2;
+    constexpr int singleBlockSize = 96;
+    constexpr int splitBlockSize = 24;
+    constexpr int totalSamples = 96;
+    constexpr int noteOnSample = 13;
+    constexpr int noteOffSample = 70;
+    constexpr double sampleRate = 48000.0;
+
+    auto sample = createTestSample(4096);
+
+    audiocity::engine::EngineCore::AmpLfoSettings ampLfo;
+    ampLfo.rateHz = 3.0f;
+    ampLfo.depth = 0.35f;
+    ampLfo.shape = audiocity::engine::EngineCore::FilterSettings::LfoShape::sine;
+
+    audiocity::engine::EngineCore::PitchLfoSettings pitchLfo;
+    pitchLfo.rateHz = 4.0f;
+    pitchLfo.depthCents = 12.0f;
+
+    audiocity::engine::EngineCore::FilterSettings filterSettings;
+    filterSettings.baseCutoffHz = 1800.0f;
+    filterSettings.envAmountHz = 900.0f;
+    filterSettings.resonance = 0.35f;
+    filterSettings.mode = audiocity::engine::EngineCore::FilterSettings::Mode::lowPass24;
+    filterSettings.lfoRateHz = 2.5f;
+    filterSettings.lfoAmountHz = 750.0f;
+    filterSettings.lfoRetrigger = false;
+    filterSettings.lfoShape = audiocity::engine::EngineCore::FilterSettings::LfoShape::sine;
+
+    auto configureEngine = [&](audiocity::engine::EngineCore& engine, const int blockSize)
+    {
+        engine.prepare(sampleRate, blockSize, channels);
+        engine.setSampleData(sample, sampleRate, 60);
+        engine.setAmpLfoSettings(ampLfo);
+        engine.setPitchLfoSettings(pitchLfo);
+        engine.setFilterSettings(filterSettings);
+    };
+
+    audiocity::engine::EngineCore singleBlockEngine;
+    configureEngine(singleBlockEngine, singleBlockSize);
+
+    audiocity::engine::EngineCore splitBlockEngine;
+    configureEngine(splitBlockEngine, splitBlockSize);
+
+    const auto singleBlock = renderSequenceWithOffsets(
+        singleBlockEngine,
+        totalSamples,
+        singleBlockSize,
+        noteOnSample,
+        noteOffSample);
+    const auto splitBlocks = renderSequenceWithOffsets(
+        splitBlockEngine,
+        totalSamples,
+        splitBlockSize,
+        noteOnSample,
+        noteOffSample);
+
+    return buffersAreEqual(singleBlock, splitBlocks, 1.0e-6f);
+}
+
 bool runEditedSampleSegmentationMatchesSubBlockSequenceTest()
 {
     constexpr int channels = 2;
@@ -381,6 +443,7 @@ bool runStereoFilterChannelIsolationTest()
     filterSettings.baseCutoffHz = 1200.0f;
     filterSettings.envAmountHz = 0.0f;
     filterSettings.resonance = 0.78f;
+    filterSettings.mode = EngineCore::FilterSettings::Mode::lowPass24;
     engine.setFilterSettings(filterSettings);
 
     EngineCore::DcFilterSettings dc;
@@ -11897,6 +11960,7 @@ int main()
         AUDIOCITY_TEST(runStaticFilterSegmentationMatchesSubBlockSequenceTest, 226),
         AUDIOCITY_TEST(runEditedSampleSegmentationMatchesSubBlockSequenceTest, 227),
         AUDIOCITY_TEST(runStereoFilterChannelIsolationTest, 228),
+        AUDIOCITY_TEST(runDynamic24dBFilterSegmentationMatchesSubBlockSequenceTest, 229),
         AUDIOCITY_TEST(runProgramModelRangeAndZoneMatchingTest, 73),
         AUDIOCITY_TEST(runProgramSnapshotBuildAndMatchTest, 75),
         AUDIOCITY_TEST(runProgramMappingRowsTest, 97),
