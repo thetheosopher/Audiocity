@@ -1862,6 +1862,7 @@ void EngineCore::renderActiveVoices(const int startSample,
         const auto hasStreamSource = voiceSegments->streamSource != nullptr && streamChannelCount > 0;
         const auto fadeInScale = fadeInSamples_ > 0 ? 1.0f / static_cast<float>(fadeInSamples_) : 0.0f;
         const auto fadeOutScale = fadeOutSamples_ > 0 ? 1.0f / static_cast<float>(fadeOutSamples_) : 0.0f;
+        const auto fadeInLimit = static_cast<float>(fadeInSamples_);
         const auto fadeOutStart = static_cast<float>(juce::jmax(0, sampleLengthMinusOne - fadeOutSamples_));
 
         const auto mapPlaybackIndexToVoiceSampleIndex = [&](const int playbackIndex) noexcept
@@ -1899,7 +1900,7 @@ void EngineCore::renderActiveVoices(const int startSample,
         {
             auto gain = 1.0f;
 
-            if (fadeInSamples_ > 0 && playbackPosition < static_cast<float>(fadeInSamples_))
+            if (fadeInSamples_ > 0 && playbackPosition < fadeInLimit)
                 gain = playbackPosition * fadeInScale;
 
             if (fadeOutSamples_ > 0 && playbackPosition >= fadeOutStart)
@@ -1948,6 +1949,7 @@ void EngineCore::renderActiveVoices(const int startSample,
             ? juce::jlimit(0, juce::jmax(0, loopLength / 2), loopCrossfadeSamples_)
             : 0;
         const auto crossfadeStart = static_cast<float>(effectiveLoopEnd - crossfadeSamples);
+        const auto crossfadeScale = crossfadeSamples > 0 ? 1.0f / static_cast<float>(crossfadeSamples) : 0.0f;
 
         if (requestLookaheadPrime && voiceSegments->getStreamNumSamples() > 0)
         {
@@ -1999,6 +2001,11 @@ void EngineCore::renderActiveVoices(const int startSample,
                 const auto chunkSize = getVoiceRenderBlockSize(voice, numSamples - localOffset);
                 const auto glideSpan = advanceVoiceGlideSpan(voice, chunkSize);
                 const auto retriggeredFilterLfoSpan = advanceVoiceRetriggeredFilterLfoSpan(voice, chunkSize);
+                const auto chunkLerpScale = chunkSize > 1 ? 1.0f / static_cast<float>(chunkSize - 1) : 0.0f;
+                auto glideIncrement = glideSpan.start;
+                const auto glideIncrementStep = (glideSpan.end - glideSpan.start) * chunkLerpScale;
+                auto retriggeredFilterLfoValue = retriggeredFilterLfoSpan.start;
+                const auto retriggeredFilterLfoStep = (retriggeredFilterLfoSpan.end - retriggeredFilterLfoSpan.start) * chunkLerpScale;
 
                 for (int sampleIndex = 0; sampleIndex < chunkSize; ++sampleIndex)
                 {
@@ -2061,11 +2068,8 @@ void EngineCore::renderActiveVoices(const int startSample,
                     {
                         if (useRetriggeredFilterLfo)
                         {
-                            lfoValue = interpolateSpanValue(
-                                retriggeredFilterLfoSpan.start,
-                                retriggeredFilterLfoSpan.end,
-                                sampleIndex,
-                                chunkSize);
+                            lfoValue = retriggeredFilterLfoValue;
+                            retriggeredFilterLfoValue += retriggeredFilterLfoStep;
                         }
                         else
                         {
@@ -2088,8 +2092,7 @@ void EngineCore::renderActiveVoices(const int startSample,
                     auto rawRight = readVoiceSample(voice.samplePosition, 1);
                     if (crossfadeSamples > 0 && voice.samplePosition >= crossfadeStart)
                     {
-                        const auto progress = juce::jlimit(0.0f, 1.0f,
-                            (voice.samplePosition - crossfadeStart) / static_cast<float>(crossfadeSamples));
+                        const auto progress = (voice.samplePosition - crossfadeStart) * crossfadeScale;
                         const auto headPosition = static_cast<float>(effectiveLoopStart)
                             + progress * static_cast<float>(crossfadeSamples);
                         const auto headLeft = readVoiceSample(headPosition, 0);
@@ -2139,14 +2142,10 @@ void EngineCore::renderActiveVoices(const int startSample,
                     voice.lastAmpLevel = ampLevel;
                     voicePool_.setCurrentLevel(voiceIndex, ampLevel);
 
-                    const auto glideIncrement = interpolateSpanValue(
-                        glideSpan.start,
-                        glideSpan.end,
-                        sampleIndex,
-                        chunkSize);
                     voice.samplePosition += glideIncrement
                         * globalPitchRatios[bufferIndex]
                         * velocityPitchRatio;
+                    glideIncrement += glideIncrementStep;
                 }
 
                 localOffset += chunkSize;
@@ -2155,29 +2154,26 @@ void EngineCore::renderActiveVoices(const int startSample,
 
         const auto renderCpuSample = [&](const float position, const int channel) noexcept
         {
-            const auto clampedPosition = juce::jlimit(0.0f, maxSamplePosition, position);
-            const auto sampleIndex = static_cast<int>(clampedPosition);
-            return readMappedSample(sampleIndex, channel) * computeVoiceEditGain(clampedPosition);
+            const auto sampleIndex = static_cast<int>(position);
+            return readMappedSample(sampleIndex, channel) * computeVoiceEditGain(position);
         };
         const auto renderFidelitySample = [&](const float position, const int channel) noexcept
         {
-            const auto clampedPosition = juce::jlimit(0.0f, maxSamplePosition, position);
-            const auto sampleIndex = static_cast<int>(clampedPosition);
+            const auto sampleIndex = static_cast<int>(position);
             const auto nextIndex = juce::jmin(sampleIndex + 1, sampleLengthMinusOne);
-            const auto fraction = clampedPosition - static_cast<float>(sampleIndex);
+            const auto fraction = position - static_cast<float>(sampleIndex);
             const auto sampleA = readMappedSample(sampleIndex, channel);
             const auto sampleB = readMappedSample(nextIndex, channel);
-            return (sampleA + (sampleB - sampleA) * fraction) * computeVoiceEditGain(clampedPosition);
+            return (sampleA + (sampleB - sampleA) * fraction) * computeVoiceEditGain(position);
         };
         const auto renderUltraSample = [&](const float position, const int channel) noexcept
         {
-            const auto clampedPosition = juce::jlimit(0.0f, maxSamplePosition, position);
             return readSampleWindowedSinc(
                 *voiceSegments,
-                clampedPosition,
+                position,
                 voice.sampleStart,
                 voice.sampleEndExclusive,
-                channel) * computeVoiceEditGain(clampedPosition);
+                channel) * computeVoiceEditGain(position);
         };
 
         switch (qualityTier_)
