@@ -18,6 +18,8 @@ namespace
 {
 constexpr float kPi = 3.14159265358979323846f;
 constexpr int kRenderControlBlockSize = 16;
+constexpr float kFilterCutoffUpdateMinimumHz = 6.0f;
+constexpr float kFilterCutoffUpdateRelativeThreshold = 0.005f;
 
 float wrapPhase(const float phase) noexcept
 {
@@ -1708,10 +1710,8 @@ EngineCore::ModulationValueSpan EngineCore::advanceVoiceRetriggeredFilterLfoSpan
         const auto remainingStart = voice.filterLfoFadeSamplesRemaining;
         const auto remainingEnd = juce::jmax(0, remainingStart - lastSampleIndex);
         const auto total = static_cast<float>(voice.filterLfoFadeSamplesTotal);
-        const auto startScale = juce::jlimit(0.0f, 1.0f,
-            1.0f - (static_cast<float>(remainingStart) / total));
-        const auto endScale = juce::jlimit(0.0f, 1.0f,
-            1.0f - (static_cast<float>(remainingEnd) / total));
+        const auto startScale = 1.0f - (static_cast<float>(remainingStart) / total);
+        const auto endScale = 1.0f - (static_cast<float>(remainingEnd) / total);
         span.start *= startScale;
         span.end *= endScale;
         voice.filterLfoFadeSamplesRemaining = juce::jmax(0, remainingStart - numSamples);
@@ -1793,6 +1793,8 @@ void EngineCore::renderActiveVoices(const int startSample,
         || filterSettings_.mode == FilterSettings::Mode::highPass24;
     const auto useNotchOutput = filterSettings_.mode == FilterSettings::Mode::notch12;
     const auto resonanceQ = computeFilterResonanceQ();
+    const auto filterCutoffUpdateMinimumHz = filterCutoffUpdateMinimumHz_;
+    const auto filterCutoffUpdateRelativeThreshold = filterCutoffUpdateRelativeThreshold_;
     const auto filterStageType = [&]() noexcept
     {
         switch (filterSettings_.mode)
@@ -1866,6 +1868,8 @@ void EngineCore::renderActiveVoices(const int startSample,
         const auto preloadSamples = voiceSegments->preloadData.getNumSamples();
         const auto preloadChannelCount = voiceSegments->preloadData.getNumChannels();
         const auto streamChannelCount = voiceSegments->getStreamNumChannels();
+        const auto voiceChannelCount = juce::jmax(preloadChannelCount, streamChannelCount);
+        const auto voiceHasStereo = voiceChannelCount > 1;
         const auto preloadRightChannel = preloadChannelCount > 1 ? 1 : 0;
         const auto streamRightChannel = streamChannelCount > 1 ? 1 : 0;
         const auto* preloadLeftData = preloadChannelCount > 0 ? voiceSegments->preloadData.getReadPointer(0) : nullptr;
@@ -2082,7 +2086,7 @@ void EngineCore::renderActiveVoices(const int startSample,
                             {
                                 const auto remaining = static_cast<float>(voice.filterLfoFadeSamplesRemaining);
                                 const auto total = static_cast<float>(voice.filterLfoFadeSamplesTotal);
-                                const auto depthScale = juce::jlimit(0.0f, 1.0f, 1.0f - (remaining / total));
+                                const auto depthScale = 1.0f - (remaining / total);
                                 lfoValue *= depthScale;
                                 --voice.filterLfoFadeSamplesRemaining;
                             }
@@ -2090,14 +2094,14 @@ void EngineCore::renderActiveVoices(const int startSample,
                     }
 
                     auto rawLeft = readVoiceSample(voice.samplePosition, 0);
-                    auto rawRight = readVoiceSample(voice.samplePosition, 1);
+                    auto rawRight = voiceHasStereo ? readVoiceSample(voice.samplePosition, 1) : rawLeft;
                     if (crossfadeSamples > 0 && voice.samplePosition >= crossfadeStart)
                     {
                         const auto progress = (voice.samplePosition - crossfadeStart) * crossfadeScale;
                         const auto headPosition = static_cast<float>(effectiveLoopStart)
                             + progress * static_cast<float>(crossfadeSamples);
                         const auto headLeft = readVoiceSample(headPosition, 0);
-                        const auto headRight = readVoiceSample(headPosition, 1);
+                        const auto headRight = voiceHasStereo ? readVoiceSample(headPosition, 1) : headLeft;
                         rawLeft = rawLeft + (headLeft - rawLeft) * progress;
                         rawRight = rawRight + (headRight - rawRight) * progress;
                     }
@@ -2110,9 +2114,17 @@ void EngineCore::renderActiveVoices(const int startSample,
                         + globalFilterOffsets[bufferIndex]
                         + velocityModulation.filterHz;
                     cutoff *= keyTrackRatio;
-                    cutoff = juce::jlimit(20.0f, maxCutoffHz, cutoff);
+                    if (cutoff < 20.0f)
+                        cutoff = 20.0f;
+                    else if (cutoff > maxCutoffHz)
+                        cutoff = maxCutoffHz;
 
-                    if (voice.lastFilterCutoffHz != cutoff
+                    const auto cutoffUpdateThresholdHz = juce::jmax(filterCutoffUpdateMinimumHz,
+                        cutoff * filterCutoffUpdateRelativeThreshold);
+                    const auto shouldUpdateCutoff = voice.lastFilterCutoffHz < 0.0f
+                        || std::abs(cutoff - voice.lastFilterCutoffHz) >= cutoffUpdateThresholdHz;
+
+                    if (shouldUpdateCutoff
                         || voice.lastFilterResonanceQ != resonanceQ)
                     {
                         voice.filterCoefficients.update(cutoff, resonanceQ, sampleRate_);

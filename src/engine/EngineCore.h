@@ -290,6 +290,11 @@ public:
     [[nodiscard]] int getLoopEnd() const noexcept { return loopEndSample_; }
     void setLoopCrossfadeSamples(int crossfadeSamples) noexcept;
     [[nodiscard]] int getLoopCrossfadeSamples() const noexcept { return loopCrossfadeSamples_; }
+    void setFilterCutoffUpdateThresholdsForTesting(float minimumHz, float relativeThreshold) noexcept
+    {
+        filterCutoffUpdateMinimumHz_ = juce::jmax(0.0f, minimumHz);
+        filterCutoffUpdateRelativeThreshold_ = juce::jmax(0.0f, relativeThreshold);
+    }
 
     [[nodiscard]] int activeVoiceCount() const noexcept;
     [[nodiscard]] int stealCount() const noexcept;
@@ -645,5 +650,7 @@ private:
     double sampleRate_ = 44100.0;
     int maxSamplesPerBlock_ = 0;
     int outputChannels_ = 2;
+    float filterCutoffUpdateMinimumHz_ = 6.0f;
+    float filterCutoffUpdateRelativeThreshold_ = 0.005f;
 };
 }
