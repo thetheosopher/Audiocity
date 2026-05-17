@@ -1,0 +1,8 @@
+
+Name                                     LastWriteTime           Length
+----                                     -------------           ------
+Audiocity-1.2.0-windows-x64-portable.zip 5/10/2026 7:24:29 PM 104172669
+Audiocity-1.2.0-windows-x64-setup.exe    5/10/2026 7:24:14 PM  91094552
+Audiocity-1.0.0-windows-x64-portable.zip 5/8/2026 6:22:42 PM  103945992
+Audiocity-1.0.0-windows-x64-setup.exe    5/8/2026 6:22:27 PM   90856665
+

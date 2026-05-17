@@ -1,0 +1,16 @@
+
+Name            : ISCC.exe
+ProcessId       : 20164
+ParentProcessId : 1968
+CommandLine     : "C:\Users\MIKE\AppData\Local\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=1.2.0 /DSourceRoot=C:\Projects\Applications\Audiocity\output\release-stage\installer /DOutputDir=C:\Projects\Applications\Audiocity\output /DOutputBaseFilename=Audiocity-1.2.0-windows-x64-setup C:\Projects\Applications\Audiocity\installer\AudiocityInstaller.iss
+
+Name            : cmake.exe
+ProcessId       : 20312
+ParentProcessId : 20864
+CommandLine     : "C:\Program Files\CMake\bin\cmake.exe" --build C:/Projects/Applications/HyperBrowse/build-release-package --config Release --target HyperBrowseReleaseArtifacts --
+
+Name            : MSBuild.exe
+ProcessId       : 21348
+ParentProcessId : 20312
+CommandLine     : "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/MSBuild/Current/Bin/amd64/MSBuild.exe" HyperBrowseReleaseArtifacts.vcxproj /p:Configuration=Release /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:m
+

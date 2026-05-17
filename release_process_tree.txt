@@ -1,0 +1,11 @@
+
+Name            : cmake.exe
+ProcessId       : 23812
+ParentProcessId : 1968
+CommandLine     : "C:\Program Files\Microsoft Visual Studio\18\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --build --preset release-selfcontained-asio
+
+Name            : MSBuild.exe
+ProcessId       : 14716
+ParentProcessId : 23812
+CommandLine     : "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/MSBuild/Current/Bin/amd64/MSBuild.exe" Audiocity_All.vcxproj /p:Configuration=Release /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:m
+
