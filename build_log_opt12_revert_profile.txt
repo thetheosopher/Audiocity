@@ -1,0 +1,6 @@
+MSBuild version 17.14.40+3e7442088 for .NET Framework
+
+  Checking File Globs
+  audiocity_rex_sdk.vcxproj -> C:\Projects\Applications\Audiocity\build\RelWithDebInfo\audiocity_rex_sdk.lib
+  EngineCore.cpp
+  audiocity_engine_profile.vcxproj -> C:\Projects\Applications\Audiocity\build\tests\RelWithDebInfo\audiocity_engine_profile.exe

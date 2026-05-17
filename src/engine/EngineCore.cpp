@@ -1997,7 +1997,7 @@ void EngineCore::renderActiveVoices(const int startSample,
         auto& filterA = voice.filterA;
         auto& filterB = voice.filterB;
 
-        auto renderVoiceWithReader = [&](auto&& readVoiceSample) noexcept
+        auto renderVoiceWithReader = [&](auto&& readVoiceSample, auto&& processFilterStageSample) noexcept
         {
             auto localOffset = 0;
             auto voiceStopped = false;
@@ -2132,8 +2132,8 @@ void EngineCore::renderActiveVoices(const int startSample,
                         voice.lastFilterResonanceQ = resonanceQ;
                     }
 
-                    auto filteredLeft = filterA.processSample(0, rawLeft, voice.filterCoefficients, filterStageType);
-                    auto filteredRight = filterA.processSample(1, rawRight, voice.filterCoefficients, filterStageType);
+                    auto filteredLeft = processFilterStageSample(filterA, 0, rawLeft, voice.filterCoefficients);
+                    auto filteredRight = processFilterStageSample(filterA, 1, rawRight, voice.filterCoefficients);
 
                     if (useNotchOutput)
                     {
@@ -2143,8 +2143,8 @@ void EngineCore::renderActiveVoices(const int startSample,
 
                     if (useSecondFilterStage)
                     {
-                        filteredLeft = filterB.processSample(0, filteredLeft, voice.filterCoefficients, filterStageType);
-                        filteredRight = filterB.processSample(1, filteredRight, voice.filterCoefficients, filterStageType);
+                        filteredLeft = processFilterStageSample(filterB, 0, filteredLeft, voice.filterCoefficients);
+                        filteredRight = processFilterStageSample(filterB, 1, filteredRight, voice.filterCoefficients);
                     }
 
                     mixLeft[bufferIndex] += filteredLeft * ampLevel * zoneLeftGain;
@@ -2187,17 +2187,52 @@ void EngineCore::renderActiveVoices(const int startSample,
                 channel) * computeVoiceEditGain(position);
         };
 
-        switch (qualityTier_)
+        const auto renderVoiceForQuality = [&](auto&& processFilterStageSample) noexcept
         {
-            case QualityTier::cpu:
-                renderVoiceWithReader(renderCpuSample);
+            switch (qualityTier_)
+            {
+                case QualityTier::cpu:
+                    renderVoiceWithReader(renderCpuSample, processFilterStageSample);
+                    break;
+                case QualityTier::ultra:
+                    renderVoiceWithReader(renderUltraSample, processFilterStageSample);
+                    break;
+                case QualityTier::fidelity:
+                default:
+                    renderVoiceWithReader(renderFidelitySample, processFilterStageSample);
+                    break;
+            }
+        };
+
+        switch (filterStageType)
+        {
+            case juce::dsp::StateVariableTPTFilterType::highpass:
+                renderVoiceForQuality([](VoiceFilterStage& stage,
+                                         int channel,
+                                         float input,
+                                         const VoiceFilterCoefficients& coefficients) noexcept
+                {
+                    return stage.processSample<juce::dsp::StateVariableTPTFilterType::highpass>(channel, input, coefficients);
+                });
                 break;
-            case QualityTier::ultra:
-                renderVoiceWithReader(renderUltraSample);
+            case juce::dsp::StateVariableTPTFilterType::bandpass:
+                renderVoiceForQuality([](VoiceFilterStage& stage,
+                                         int channel,
+                                         float input,
+                                         const VoiceFilterCoefficients& coefficients) noexcept
+                {
+                    return stage.processSample<juce::dsp::StateVariableTPTFilterType::bandpass>(channel, input, coefficients);
+                });
                 break;
-            case QualityTier::fidelity:
+            case juce::dsp::StateVariableTPTFilterType::lowpass:
             default:
-                renderVoiceWithReader(renderFidelitySample);
+                renderVoiceForQuality([](VoiceFilterStage& stage,
+                                         int channel,
+                                         float input,
+                                         const VoiceFilterCoefficients& coefficients) noexcept
+                {
+                    return stage.processSample<juce::dsp::StateVariableTPTFilterType::lowpass>(channel, input, coefficients);
+                });
                 break;
         }
     }

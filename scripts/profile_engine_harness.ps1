@@ -208,7 +208,8 @@ $wpaExporter = Resolve-ToolPath 'wpaexporter.exe' @(
     'C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/wpaexporter.exe'
 )
 
-$wpaProfile = Resolve-ToolPath 'WpaRuleMatchExporter.wpaProfile' @(
+$wpaProfile = Resolve-ToolPath 'WpaEngineCsvExport.wpaProfile' @(
+    (Join-Path $PSScriptRoot 'WpaEngineCsvExport.wpaProfile'),
     'C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/Catalog/WpaRuleMatchExporter.wpaProfile'
 )
 

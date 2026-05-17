@@ -561,16 +561,22 @@ bool runStereoFidelitySegmentationMatchesSubBlockSequenceTest()
     flatAdsr.sustainLevel = 1.0f;
     flatAdsr.releaseSeconds = 0.001f;
 
-    audiocity::engine::EngineCore::FilterSettings openFilter;
-    openFilter.baseCutoffHz = 18000.0f;
-    openFilter.envAmountHz = 0.0f;
+    audiocity::engine::EngineCore::FilterSettings filterSettings;
+    filterSettings.baseCutoffHz = 1600.0f;
+    filterSettings.envAmountHz = 60.0f;
+    filterSettings.resonance = 0.35f;
+    filterSettings.mode = audiocity::engine::EngineCore::FilterSettings::Mode::lowPass24;
+    filterSettings.lfoRateHz = 1.5f;
+    filterSettings.lfoAmountHz = 48.0f;
+    filterSettings.lfoRetrigger = false;
+    filterSettings.lfoShape = audiocity::engine::EngineCore::FilterSettings::LfoShape::sine;
 
     auto configureEngine = [&](audiocity::engine::EngineCore& engine, const int blockSize)
     {
         engine.prepare(sampleRate, blockSize, channels);
         engine.setQualityTier(audiocity::engine::EngineCore::QualityTier::fidelity);
         engine.setAmpEnvelope(flatAdsr);
-        engine.setFilterSettings(openFilter);
+        engine.setFilterSettings(filterSettings);
         engine.setSampleData(stereoSample, sampleRate, 60);
         engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::oneShot);
         engine.setSampleWindow(64, 192);
@@ -618,16 +624,22 @@ bool runMonoFidelityLoopCrossfadeSegmentationMatchesSubBlockSequenceTest()
     flatAdsr.sustainLevel = 1.0f;
     flatAdsr.releaseSeconds = 0.001f;
 
-    audiocity::engine::EngineCore::FilterSettings openFilter;
-    openFilter.baseCutoffHz = 18000.0f;
-    openFilter.envAmountHz = 0.0f;
+    audiocity::engine::EngineCore::FilterSettings filterSettings;
+    filterSettings.baseCutoffHz = 1600.0f;
+    filterSettings.envAmountHz = 60.0f;
+    filterSettings.resonance = 0.35f;
+    filterSettings.mode = audiocity::engine::EngineCore::FilterSettings::Mode::lowPass24;
+    filterSettings.lfoRateHz = 1.5f;
+    filterSettings.lfoAmountHz = 48.0f;
+    filterSettings.lfoRetrigger = false;
+    filterSettings.lfoShape = audiocity::engine::EngineCore::FilterSettings::LfoShape::sine;
 
     auto configureEngine = [&](audiocity::engine::EngineCore& engine, const int blockSize)
     {
         engine.prepare(sampleRate, blockSize, channels);
         engine.setQualityTier(audiocity::engine::EngineCore::QualityTier::fidelity);
         engine.setAmpEnvelope(flatAdsr);
-        engine.setFilterSettings(openFilter);
+        engine.setFilterSettings(filterSettings);
         engine.setSampleData(sample, sampleRate, 60);
         engine.setPlaybackMode(audiocity::engine::EngineCore::PlaybackMode::loop);
         engine.setLoopPoints(384, 2047);
@@ -10684,7 +10696,7 @@ bool runDcOffsetFilterRemovesBiasTest()
     for (int i = 0; i < dcSample.getNumSamples(); ++i)
         dcSample.setSample(0, i, 0.5f);
 
-    auto renderMeanWithSettings = [&](const bool enabled, const float cutoffHz)
+    auto renderMeanWithSettings = [&](const bool enabled, const float cutoffHz, const int channel)
     {
         audiocity::engine::EngineCore engine;
         engine.prepare(sampleRate, blockSize, channels);
@@ -10709,7 +10721,7 @@ bool runDcOffsetFilterRemovesBiasTest()
             engine.render(block, midi);
             midi.clear();
             for (int sample = 0; sample < block.getNumSamples(); ++sample)
-                captured.push_back(block.getSample(0, sample));
+                captured.push_back(block.getSample(channel, sample));
         }
 
         constexpr int kSkip = 384;
@@ -10724,11 +10736,15 @@ bool runDcOffsetFilterRemovesBiasTest()
         return count > 0 ? static_cast<float>(sum / static_cast<double>(count)) : 0.0f;
     };
 
-    const auto meanBypassed = renderMeanWithSettings(false, 10.0f);
-    const auto meanFiltered = renderMeanWithSettings(true, 10.0f);
+    const auto meanBypassedLeft = renderMeanWithSettings(false, 10.0f, 0);
+    const auto meanFilteredLeft = renderMeanWithSettings(true, 10.0f, 0);
+    const auto meanBypassedRight = renderMeanWithSettings(false, 10.0f, 1);
+    const auto meanFilteredRight = renderMeanWithSettings(true, 10.0f, 1);
 
-    return std::abs(meanBypassed) > 0.10f
-        && std::abs(meanFiltered) < 0.02f;
+    return std::abs(meanBypassedLeft) > 0.10f
+        && std::abs(meanFilteredLeft) < 0.02f
+        && std::abs(meanBypassedRight) > 0.10f
+        && std::abs(meanFilteredRight) < 0.02f;
 }
 
 bool runMasterVolumeGainTest()

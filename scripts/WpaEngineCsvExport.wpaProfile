@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WpaProfileContainer xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" Version="2" xmlns="http://tempuri.org/SerializableElement.xsd">
+  <Content xsi:type="WpaProfile2">
+    <Sessions>
+      <Session Index="0">
+        <FileReferences />
+      </Session>
+    </Sessions>
+    <Views>
+      <View Guid="cd90c935-d7b6-4eb9-8b47-f57ea61de1ec" Title="CpuSampling" IsVisible="true">
+        <Graphs>
+          <Graph Guid="b855361e-7be0-4bc8-a754-3e8507715ca5" LayoutStyle="DataTable" Color="#FFFF0000" GraphHeight="125" IsShown="true">
+            <Preset Name="RuleEngine" BarGraphIntervalCount="50" GraphColumnCount="18" KeyColumnCount="1" RightFrozenColumnCount="16" InitialFilterQuery="" InitialSelectionQuery="([Series Name]:=&quot;Process&quot; AND NOT ([Process]:=&quot;Idle (0)&quot;))" GraphFilterColumnGuid="01a82c2c-5048-4c9d-ac37-eaf6556f6af5">
+              <MetadataEntries>
+                <MetadataEntry Guid="05100ece-df05-40c7-aad6-ffff99b60491" Name="Thread ID" ColumnMetadata="EndThreadId" />
+                <MetadataEntry Guid="0bbf4299-0176-445e-b1d9-991df475d631" Name="TimeStamp" ColumnMetadata="EndTime" />
+                <MetadataEntry Guid="e0c6cb9e-04c2-4bb5-ba5f-4ed765f4ecaa" Name="Weight" ColumnMetadata="Duration" />
+                <MetadataEntry Guid="55d56ebb-77af-4af5-a056-6122751ea093" Name="CPU" ColumnMetadata="ResourceId" />
+              </MetadataEntries>
+              <HighlightEntries />
+              <Columns>
+                <Column Guid="5b77e48f-6d24-4f29-8972-69c30e32f87d" Name="Process" Width="200" IsVisible="true" />
+                <Column Guid="9c1ceec3-ef4a-4865-b678-d774881187b9" Name="Process Name" Width="180" IsVisible="true" />
+                <Column Guid="55d56ebb-77af-4af5-a056-6122751ea093" Name="CPU" TextAlignment="Right" Width="40" IsVisible="true" />
+                <Column Guid="00875e0c-482f-418d-ab40-decf05030541" Name="Display Name" Width="200" IsVisible="true" />
+                <Column Guid="ccdb05c1-04a9-4289-aaa6-a376d1d66012" Name="Module" Width="124" IsVisible="true" />
+                <Column Guid="842af11e-661d-477e-b7b6-556ed8181177" Name="Stack" Width="200" IsVisible="true" />
+                <Column Guid="d0028ea0-aa66-452a-882a-616fd8b9fdce" Name="DPC/ISR" Width="184" IsVisible="true" />
+                <Column Guid="05100ece-df05-40c7-aad6-ffff99b60491" Name="Thread ID" TextAlignment="Right" Width="80" IsVisible="true" />
+                <Column Guid="e0c6cb9e-04c2-4bb5-ba5f-4ed765f4ecaa" Name="Weight" TextAlignment="Right" Width="109" CellFormat="mN" IsVisible="true" />
+                <Column Guid="9aa2e00d-db0a-4207-a0bd-964aa492356e" Name="Address" TextAlignment="Right" Width="140" CellFormat="x" IsVisible="true" />
+                <Column Guid="7ad93780-708c-471c-9e3f-5a497cbefdd7" Name="Function" Width="184" IsVisible="true" />
+                <Column Guid="0bbf4299-0176-445e-b1d9-991df475d631" Name="TimeStamp" SortOrder="Ascending" TextAlignment="Right" Width="100" IsVisible="true" />
+                <Column Guid="5a1e1ba4-6a14-43e5-96eb-3b462be470fe" Name="Priority" TextAlignment="Right" Width="80" IsVisible="true" />
+                <Column Guid="ab54241e-ce5d-4ef7-a28c-bbcb5b8d39d4" Name="Rank" TextAlignment="Right" Width="80" IsVisible="true" />
+                <Column Guid="842af11e-661d-477e-b7b6-556ed8181177" Name="Stack" Width="200" IsVisible="true" />
+                <Column Guid="6e81cc09-edf0-4ed9-b667-befc9278e035" Name="Is PGO'ed" Width="80" IsVisible="true" />
+                <Column Guid="35f235e5-1028-48ff-b27a-a2b71e1b08c9" Name="PGO Counts" Width="80" IsVisible="true" />
+              </Columns>
+            </Preset>
+          </Graph>
+        </Graphs>
+        <SessionIndices>
+          <SessionIndex>0</SessionIndex>
+        </SessionIndices>
+      </View>
+      <View Guid="955007c7-c1f7-468a-9f6b-f1f8f61bbced" Title="Processes" IsVisible="true">
+        <Graphs>
+          <Graph Guid="b186f02d-8d06-4bbb-9ad1-abf7985fb61a" LayoutStyle="DataTable" Color="#FF005DE0" GraphHeight="125" IsShown="true">
+            <Preset Name="RuleEngine" BarGraphIntervalCount="50" GraphColumnCount="3" LeftFrozenColumnCount="3" RightFrozenColumnCount="2" InitialFilterShouldKeep="true">
+              <MetadataEntries>
+                <MetadataEntry Guid="36c00ec5-61f8-5f89-a066-641288a34ca9" Name="Start Time" ColumnMetadata="StartTime" />
+                <MetadataEntry Guid="19fb5aa9-a5fc-5f14-cb83-fad0691e92a8" Name="End Time" ColumnMetadata="EndTime" />
+              </MetadataEntries>
+              <HighlightEntries />
+              <Columns>
+                <Column Guid="5f381ee6-ad8e-5906-7de0-4b678b7d78f1" Name="Process ID" TextAlignment="Right" Width="80" IsVisible="true" />
+                <Column Guid="0edbeee1-8d7b-5652-6639-86415222c6e0" Name="Process" Width="200" IsVisible="true" />
+                <Column Guid="0b34b57d-f3cd-519a-4584-b182e0088701" Name="Process Name" Width="200" IsVisible="true" />
+              </Columns>
+            </Preset>
+          </Graph>
+        </Graphs>
+        <SessionIndices>
+          <SessionIndex>0</SessionIndex>
+        </SessionIndices>
+      </View>
+      <View Guid="f6746888-3bc4-4c8c-bd39-b8745a2c1435" Title="Images" IsVisible="true">
+        <Graphs>
+          <Graph Guid="a1df89f9-5b2a-449e-aaab-1bcc3fd25c84" LayoutStyle="DataTable" Color="#FF005DE0" GraphHeight="125" IsShown="true">
+            <Preset Name="RuleEngine" BarGraphIntervalCount="50" GraphColumnCount="3" LeftFrozenColumnCount="3" RightFrozenColumnCount="2" InitialFilterShouldKeep="true">
+              <MetadataEntries>
+                <MetadataEntry Guid="84fa7f2c-c8bb-575c-e607-9b03f2839a2d" Name="Start Time" ColumnMetadata="StartTime" />
+                <MetadataEntry Guid="b5b4978f-1421-5920-14e0-f4edbe844cd6" Name="End Time" ColumnMetadata="EndTime" />
+              </MetadataEntries>
+              <HighlightEntries />
+              <Columns>
+                <Column Guid="63f64d61-d8b1-5fe8-661a-4e48aaf8c613" Name="Process" Width="200" IsVisible="true" />
+                <Column Guid="805996ba-9555-5226-f229-e3a3c0625e12" Name="Image Name" Width="200" IsVisible="true" />
+                <Column Guid="542dbdbb-e4f1-5cb0-f70a-2da71320e1ce" Name="Start Address" TextAlignment="Right" Width="140" CellFormat="x" IsVisible="true" />
+              </Columns>
+            </Preset>
+          </Graph>
+        </Graphs>
+        <SessionIndices>
+          <SessionIndex>0</SessionIndex>
+        </SessionIndices>
+      </View>
+    </Views>
+  </Content>
+</WpaProfileContainer>

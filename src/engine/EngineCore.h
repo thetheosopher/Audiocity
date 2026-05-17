@@ -311,11 +311,13 @@ private:
         float g = 0.0f;
         float h = 1.0f;
         float r2 = 1.0f;
+        float gPlusR2 = 1.0f;
 
         void update(float cutoffHz, float resonanceQ, double sampleRate) noexcept
         {
             g = static_cast<float>(std::tan(juce::MathConstants<double>::pi * static_cast<double>(cutoffHz) / sampleRate));
             r2 = 1.0f / resonanceQ;
+            gPlusR2 = g + r2;
             h = 1.0f / (1.0f + r2 * g + g * g);
         }
     };
@@ -331,29 +333,24 @@ private:
             s2.fill(0.0f);
         }
 
+        template <juce::dsp::StateVariableTPTFilterType Type>
         float processSample(int channel,
                             float input,
-                            const VoiceFilterCoefficients& coefficients,
-                            juce::dsp::StateVariableTPTFilterType type) noexcept
+                            const VoiceFilterCoefficients& coefficients) noexcept
         {
             auto& state1 = s1[static_cast<size_t>(channel)];
             auto& state2 = s2[static_cast<size_t>(channel)];
-            const auto high = coefficients.h * (input - state1 * (coefficients.g + coefficients.r2) - state2);
+            const auto high = coefficients.h * (input - state1 * coefficients.gPlusR2 - state2);
             const auto band = high * coefficients.g + state1;
             state1 = high * coefficients.g + band;
             const auto low = band * coefficients.g + state2;
             state2 = band * coefficients.g + low;
 
-            switch (type)
-            {
-                case juce::dsp::StateVariableTPTFilterType::highpass:
-                    return high;
-                case juce::dsp::StateVariableTPTFilterType::bandpass:
-                    return band;
-                case juce::dsp::StateVariableTPTFilterType::lowpass:
-                default:
-                    return low;
-            }
+            if constexpr (Type == juce::dsp::StateVariableTPTFilterType::highpass)
+                return high;
+            if constexpr (Type == juce::dsp::StateVariableTPTFilterType::bandpass)
+                return band;
+            return low;
         }
     };
 
