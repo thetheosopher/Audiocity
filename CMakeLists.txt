@@ -202,7 +202,8 @@ endif ()
 # presets and writes them to the assets/factory_presets directory.
 add_executable(audiocity_preset_author
     tools/PresetAuthor.cpp
-    src/plugin/PresetJson.cpp)
+    src/plugin/PresetJson.cpp
+    src/engine/Sf2Importer.cpp)
 
 target_include_directories(audiocity_preset_author PRIVATE src)
 
@@ -222,4 +223,45 @@ target_link_libraries(audiocity_preset_author
 
 if (MSVC)
     target_compile_options(audiocity_preset_author PRIVATE /W4 /permissive-)
+endif ()
+
+# ---- Preset auditioner -----------------------------------------------------
+# Offline executable that loads every authored .acp, instantiates an
+# EngineCore, renders a family-specific MIDI audition to a stereo WAV,
+# and writes an objective metrics CSV plus a regressions report. Provides
+# the "listening" feedback loop used to iterate on the factory bank.
+add_executable(audiocity_preset_auditioner
+    tools/PresetAuditioner.cpp
+    src/plugin/PresetJson.cpp
+    src/engine/EngineCore.cpp
+    src/engine/AudioFileSupport.cpp
+    src/engine/RexLoader.cpp
+    src/engine/VoicePool.cpp)
+
+target_include_directories(audiocity_preset_auditioner
+    PRIVATE
+        src
+        third_party/REXSDK_Win_1.9.2)
+
+target_compile_definitions(audiocity_preset_auditioner
+    PRIVATE
+        AUDIOCITY_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        REX_WINDOWS=1
+        REX_MAC=0)
+
+target_link_libraries(audiocity_preset_auditioner
+    PRIVATE
+        audiocity_rex_sdk
+        juce::juce_core
+        juce::juce_data_structures
+        juce::juce_audio_basics
+        juce::juce_audio_formats
+        juce::juce_dsp
+        juce::juce_events
+        juce::juce_recommended_config_flags)
+
+if (MSVC)
+    target_compile_options(audiocity_preset_auditioner PRIVATE /W4 /permissive-)
 endif ()

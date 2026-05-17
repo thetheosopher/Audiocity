@@ -20,9 +20,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <unordered_map>
+#include <string>
+#include <limits>
 #include <vector>
 
 #include "../src/plugin/PresetJson.h"
+#include "../src/engine/Sf2Importer.h"
 
 namespace
 {
@@ -220,6 +225,24 @@ struct Recipe
     int waveformKind = 0; // see synth dispatch
     float param1 = 0.0f;
     float param2 = 0.0f;
+
+    // ---- Optional SF2-sourced sample capture ----
+    // When sf2File is a valid existing file, renderRecipeAudio() captures the
+    // sample from the SF2 preset instead of synthesizing a waveform.
+    juce::File sf2File;             // path to .sf2 (empty -> synthesized recipe)
+    int sf2GmProgram = -1;          // 0..127 GM program; -1 to use namePattern only
+    int sf2Bank = -1;               // preferred bank (e.g. 0); -1 = any bank
+    juce::String sf2NamePattern;    // fallback substring match (case-insensitive)
+    int sf2CaptureMidiNote = 60;    // pitch to capture (selects matching zone)
+    float sf2CaptureSeconds = 2.0f; // length of capture in destination samples
+    bool sf2UseEmbeddedLoop = true; // honor zone loop points when present
+};
+
+struct RecipeAudio
+{
+    std::vector<float> samples;
+    int loopStart = -1;   // -1 = use computeLoopWindow fallback
+    int loopEnd = -1;
 };
 
 struct LoopWindow
@@ -286,7 +309,11 @@ LoopWindow computeLoopWindow(const Recipe& recipe, const int totalSamples) noexc
     if (totalSamples <= 1)
         return {};
 
-    if (usesWholeSampleLoopWindow(recipe) || totalSamples <= 4096)
+    // SF2-sourced recipes are real recorded samples; never use the
+    // whole-sample loop window for them (it produces loopStart==0 which the
+    // factory validator rejects, and the seam will not be musical anyway).
+    const bool isSf2 = (recipe.sf2File != juce::File());
+    if (! isSf2 && (usesWholeSampleLoopWindow(recipe) || totalSamples <= 4096))
     {
         const auto loopLength = juce::jmax(1, totalSamples);
         return { 0, totalSamples - 1, juce::jlimit(0, loopLength / 2, juce::jmin(64, loopLength / 8)) };
@@ -694,6 +721,229 @@ std::vector<float> renderBell(float frequencyHz, int samples, float decayTau, in
     return out;
 }
 
+// --- SF2 sample capture ---------------------------------------------------
+// Cached SF2 probe results keyed by full file path. Probing every recipe
+// would re-parse multi-megabyte SoundFont files, so we cache.
+struct Sf2ProbeCache
+{
+    audiocity::engine::sf2::ProbeResult& get(const juce::File& f)
+    {
+        const auto key = f.getFullPathName().toStdString();
+        auto it = probes.find(key);
+        if (it == probes.end())
+        {
+            auto r = audiocity::engine::sf2::probeFile(f);
+            it = probes.emplace(key, std::move(r)).first;
+        }
+        return it->second;
+    }
+
+    std::unordered_map<std::string, audiocity::engine::sf2::ProbeResult> probes;
+};
+
+inline Sf2ProbeCache& sf2Cache()
+{
+    static Sf2ProbeCache cache;
+    return cache;
+}
+
+int findSf2PresetIndex(const audiocity::engine::sf2::ProbeResult& probe,
+                       const int gmProgram,
+                       const int preferredBank,
+                       const juce::String& namePattern)
+{
+    int bestIdx = -1;
+    int bestBankDistance = std::numeric_limits<int>::max();
+    if (gmProgram >= 0)
+    {
+        for (std::size_t i = 0; i < probe.availablePresets.size(); ++i)
+        {
+            const auto& p = probe.availablePresets[i];
+            if (p.program != gmProgram)
+                continue;
+            const int dist = preferredBank >= 0 ? std::abs(p.bank - preferredBank) : p.bank;
+            if (dist < bestBankDistance)
+            {
+                bestBankDistance = dist;
+                bestIdx = static_cast<int>(i);
+            }
+        }
+        if (bestIdx >= 0)
+            return bestIdx;
+    }
+    if (namePattern.isNotEmpty())
+    {
+        for (std::size_t i = 0; i < probe.availablePresets.size(); ++i)
+            if (probe.availablePresets[i].name.containsIgnoreCase(namePattern))
+                return static_cast<int>(i);
+    }
+    return -1;
+}
+
+RecipeAudio renderRecipeFromSf2(const Recipe& r)
+{
+    RecipeAudio out;
+    if (r.sf2File == juce::File() || !r.sf2File.existsAsFile())
+    {
+        std::fprintf(stderr, "  [sf2] missing file: %s\n", r.sf2File.getFullPathName().toRawUTF8());
+        return out;
+    }
+
+    const auto& probe = sf2Cache().get(r.sf2File);
+    if (probe.availablePresets.empty())
+    {
+        std::fprintf(stderr, "  [sf2] no presets in %s\n", r.sf2File.getFileName().toRawUTF8());
+        return out;
+    }
+
+    const int presetIdx = findSf2PresetIndex(probe, r.sf2GmProgram, r.sf2Bank, r.sf2NamePattern);
+    if (presetIdx < 0)
+    {
+        std::fprintf(stderr, "  [sf2] no preset matches program=%d name='%s' in %s\n",
+            r.sf2GmProgram, r.sf2NamePattern.toRawUTF8(), r.sf2File.getFileName().toRawUTF8());
+        return out;
+    }
+
+    const auto imported = audiocity::engine::sf2::importFilePreset(r.sf2File, presetIdx);
+    if (!imported.hasPlayableProgram())
+    {
+        std::fprintf(stderr, "  [sf2] preset %d has no playable program in %s\n",
+            presetIdx, r.sf2File.getFileName().toRawUTF8());
+        return out;
+    }
+
+    // Find a zone matching capture note. Try common velocities then any.
+    int zoneIdx = imported.program.findFirstMatchingZoneIndex(r.sf2CaptureMidiNote, 100);
+    if (zoneIdx < 0) zoneIdx = imported.program.findFirstMatchingZoneIndex(r.sf2CaptureMidiNote, 127);
+    if (zoneIdx < 0) zoneIdx = imported.program.findFirstMatchingZoneIndex(r.sf2CaptureMidiNote, 64);
+    if (zoneIdx < 0)
+    {
+        for (std::size_t i = 0; i < imported.program.zones.size(); ++i)
+        {
+            const auto& z = imported.program.zones[i];
+            if (imported.program.isZoneSampleIndexValid(z)
+                && imported.program.sampleAssets[static_cast<std::size_t>(z.sampleAssetIndex)].hasAudio())
+            {
+                zoneIdx = static_cast<int>(i);
+                break;
+            }
+        }
+    }
+    if (zoneIdx < 0)
+    {
+        std::fprintf(stderr, "  [sf2] no zone for note %d in preset %d of %s\n",
+            r.sf2CaptureMidiNote, presetIdx, r.sf2File.getFileName().toRawUTF8());
+        return out;
+    }
+
+    const auto& zone = imported.program.zones[static_cast<std::size_t>(zoneIdx)];
+    const auto& asset = imported.program.sampleAssets[static_cast<std::size_t>(zone.sampleAssetIndex)];
+    const auto& srcBuf = imported.sampleDataByAsset[static_cast<std::size_t>(zone.sampleAssetIndex)];
+
+    const int srcChannels = srcBuf.getNumChannels();
+    const int srcFrames = srcBuf.getNumSamples();
+    if (srcChannels <= 0 || srcFrames <= 1 || asset.sampleRateHz <= 0.0)
+        return out;
+
+    const int srcStart = juce::jlimit(0, srcFrames - 1, zone.sampleStart);
+    const int srcEndExclusive = (zone.sampleEndExclusive > 0)
+        ? juce::jlimit(srcStart + 1, srcFrames, zone.sampleEndExclusive)
+        : srcFrames;
+
+    const float semitonesUp = static_cast<float>(r.sf2CaptureMidiNote - zone.rootMidiNote)
+                              + zone.tuneCents / 100.0f;
+    const double pitchRatio = std::pow(2.0, semitonesUp / 12.0);
+    const double srcSr = asset.sampleRateHz;
+    const double dstSr = static_cast<double>(kSampleRate);
+    const double srcPerDst = (srcSr / dstSr) * pitchRatio;
+    if (srcPerDst <= 0.0)
+        return out;
+
+    const int dstLen = std::max(64,
+        static_cast<int>(std::round(dstSr * static_cast<double>(r.sf2CaptureSeconds))));
+
+    auto sampleAt = [&](double p) -> float
+    {
+        if (p < 0.0) return 0.0f;
+        const int i0 = static_cast<int>(std::floor(p));
+        if (i0 >= srcFrames - 1) return 0.0f;
+        const int i1 = i0 + 1;
+        const double frac = p - static_cast<double>(i0);
+        float s0 = 0.0f, s1 = 0.0f;
+        for (int c = 0; c < srcChannels; ++c)
+        {
+            s0 += srcBuf.getSample(c, i0);
+            s1 += srcBuf.getSample(c, i1);
+        }
+        const float invC = 1.0f / static_cast<float>(srcChannels);
+        s0 *= invC; s1 *= invC;
+        return static_cast<float>((1.0 - frac) * s0 + frac * s1);
+    };
+
+    out.samples.resize(static_cast<std::size_t>(dstLen), 0.0f);
+    int producedFrames = 0;
+    for (int i = 0; i < dstLen; ++i)
+    {
+        const double srcPos = static_cast<double>(srcStart) + static_cast<double>(i) * srcPerDst;
+        if (srcPos >= static_cast<double>(srcEndExclusive - 1))
+            break;
+        out.samples[static_cast<std::size_t>(i)] = sampleAt(srcPos);
+        producedFrames = i + 1;
+    }
+    if (producedFrames < static_cast<int>(out.samples.size()))
+        out.samples.resize(static_cast<std::size_t>(producedFrames));
+
+    if (out.samples.size() < 64)
+    {
+        std::fprintf(stderr, "  [sf2] capture too short (%zu samples) in %s\n",
+            out.samples.size(), r.sf2File.getFileName().toRawUTF8());
+        return {};
+    }
+
+    // Translate zone loop points (in source frames) to destination frames.
+    if (r.sf2UseEmbeddedLoop
+        && zone.loopStart >= 0
+        && zone.loopEndExclusive > zone.loopStart
+        && zone.loopStart >= srcStart
+        && zone.loopEndExclusive <= srcEndExclusive)
+    {
+        const double dstStart = static_cast<double>(zone.loopStart - srcStart) / srcPerDst;
+        const double dstEnd   = static_cast<double>(zone.loopEndExclusive - 1 - srcStart) / srcPerDst;
+        const int loopStartDst = static_cast<int>(std::round(dstStart));
+        const int loopEndDst   = static_cast<int>(std::round(dstEnd));
+        if (loopStartDst >= 0
+            && loopEndDst > loopStartDst + 64
+            && loopEndDst < static_cast<int>(out.samples.size()))
+        {
+            out.loopStart = loopStartDst;
+            out.loopEnd = loopEndDst;
+        }
+    }
+
+    // Small edge fade then normalize. Target leaves polyphonic headroom
+    // (audition stacks 3-4 voices) and per-voice envelope/master gain.
+    applyShortFades(out.samples, 32);
+    normalize(out.samples, 0.55f);
+
+    // If the resolved loop seam has a large discontinuity even after our
+    // crossfade hint, drop the embedded loop and let buildPresetState fall
+    // back to a synthesized loop window picked from the rendered audio.
+    if (out.loopStart >= 0
+        && out.loopEnd > out.loopStart
+        && out.loopEnd < static_cast<int>(out.samples.size()))
+    {
+        const float a = out.samples[static_cast<std::size_t>(out.loopEnd)];
+        const float b = out.samples[static_cast<std::size_t>(out.loopStart)];
+        if (std::fabs(a - b) > 0.25f)
+        {
+            out.loopStart = -1;
+            out.loopEnd = -1;
+        }
+    }
+
+    return out;
+}
+
 // --- Recipe -> waveform dispatch ------------------------------------------
 
 std::vector<float> renderRecipeAudio(const Recipe& r)
@@ -857,6 +1107,18 @@ std::vector<float> renderRecipeAudio(const Recipe& r)
     applyShortFades(buf, std::min(64, static_cast<int>(buf.size()) / 8));
     normalize(buf, 0.92f);
     return buf;
+}
+
+// Top-level recipe -> rendered audio dispatch. SF2-sourced recipes capture a
+// sample from a SoundFont and may carry zone loop points back to the caller.
+RecipeAudio renderRecipe(const Recipe& r)
+{
+    if (r.sf2File != juce::File() && r.sf2File.existsAsFile())
+        return renderRecipeFromSf2(r);
+
+    RecipeAudio out;
+    out.samples = renderRecipeAudio(r);
+    return out;
 }
 
 bool isIndexOneOf(const int index, std::initializer_list<int> values) noexcept
@@ -1182,11 +1444,36 @@ void applyFactorySoundDesign(Recipe& r, const int familyIndex)
 }
 
 // --- Recipe table ---------------------------------------------------------
+//
+// 64 factory presets (8 families x 8). The majority are captured from real
+// SoundFont (SF2) instruments via Sf2Importer, so the embedded samples sound
+// like real basses / leads / pads / etc. instead of single-cycle waveforms.
+// A small number of FX recipes remain procedural so we still demonstrate the
+// engine's filter/LFO/sweep capabilities on synthetic material.
+//
+// SF2 search root is `${AUDIOCITY_SF2_DIR}` (env var) and falls back to
+// `J:/Samples/SoundFont`. Recipes whose SF2 file or preset cannot be located
+// are silently skipped — the bank simply ends up smaller.
+
+namespace
+{
+juce::File resolveSf2Root()
+{
+    if (const char* env = std::getenv("AUDIOCITY_SF2_DIR"); env != nullptr && env[0] != '\0')
+        return juce::File(juce::String::fromUTF8(env));
+    return juce::File("J:/Samples/SoundFont");
+}
+
+juce::File sf2(const juce::String& relative)
+{
+    return resolveSf2Root().getChildFile(relative);
+}
+} // namespace
 
 std::vector<Recipe> buildRecipes()
 {
     std::vector<Recipe> recipes;
-    recipes.reserve(128);
+    recipes.reserve(64);
 
     auto add = [&recipes](Recipe r)
     {
@@ -1195,377 +1482,451 @@ std::vector<Recipe> buildRecipes()
             if (existing.family == r.family)
                 ++familyIndex;
 
-        applyFactorySoundDesign(r, familyIndex);
+        // Skip the synth-oriented sound-design sweetening pass on SF2 recipes;
+        // the natural instrument character is what we want to preserve. We do
+        // still set a few neutral defaults.
+        if (r.sf2File == juce::File())
+        {
+            applyFactorySoundDesign(r, familyIndex);
+        }
+        else
+        {
+            r.qualityTier = 1;
+            r.velocityCurve = 0;
+            r.pitchBendRangeSemitones = 2.0f;
+            r.fadeOutSamples = 64;
+        }
         recipes.push_back(r);
     };
 
-    // ----- BASS x16 (rootMidiNote 36, mostly mono, lpf, short release) -----
+    const juce::File fluid = sf2("Fluid/Fluid.sf2");
+    const juce::File orbit = sf2("Orbit Presets.sf2");
+    const juce::File vintage = sf2("Vintage Keys Presets.sf2");
+
+    // Common SF2 recipe factory.
+    auto sfx = [&](Family fam,
+                   const juce::String& displayName,
+                   const juce::File& bank,
+                   int gmProgram,
+                   int captureNote,
+                   float captureSeconds,
+                   int playbackMode,
+                   bool mono)
     {
-        const int root = 36;
-        const std::array<juce::String, 16> names {
-            "Sub Bass", "Round Analog Bass", "Acid Bass", "Picked Synth Bass",
-            "Growl Bass", "Reese Bass", "Rubber Bass", "Plucked Mono Bass",
-            "Hollow Digital Bass", "Lo-Fi Bass", "Muted Bass", "Glide Bass",
-            "Filter Env Bass", "FM Bass", "Dirty Saw Bass", "Punch Bass"
-        };
-        const std::array<int, 16> kinds {
-            2, 0, 1, 0, 1, 0, 4, 0, 5, 8, 1, 0, 0, 5, 0, 1
-        };
-        const std::array<float, 16> cutoff {
-            900, 1800, 1500, 2400, 1300, 1700, 2000, 2500,
-            1400, 900, 1200, 2200, 1000, 2400, 2600, 2800
-        };
-        const std::array<float, 16> reso {
-            0.10f, 0.30f, 0.65f, 0.20f, 0.55f, 0.40f, 0.25f, 0.30f,
-            0.45f, 0.20f, 0.30f, 0.40f, 0.55f, 0.30f, 0.50f, 0.35f
-        };
-        for (int i = 0; i < 16; ++i)
+        Recipe r;
+        r.name = displayName;
+        r.family = fam;
+        r.rootMidiNote = captureNote;
+        r.lengthSeconds = captureSeconds;
+        r.baseCutoffHz = 8000.0f;
+        r.resonance = 0.10f;
+        r.filterMode = 0;
+        r.filterEnvAmount = 0.0f;
+        r.ampAttack = 0.005f;
+        r.ampDecay = 0.20f;
+        r.ampSustain = 0.85f;
+        r.ampRelease = 0.30f;
+        r.reverbMix = 0.10f;
+        r.delayMix = 0.0f;
+        r.masterVolume = 0.45f;
+        r.playbackMode = playbackMode;
+        r.monoMode = mono;
+        r.velocityToAmp = 0.30f;
+        r.velocityToFilter = 800.0f;
+        r.modWheelToFilter = 2500.0f;
+        r.macro1ToFilter = 3000.0f;
+
+        r.sf2File = bank;
+        r.sf2GmProgram = gmProgram;
+        r.sf2CaptureMidiNote = captureNote;
+        r.sf2CaptureSeconds = captureSeconds;
+        r.sf2UseEmbeddedLoop = (playbackMode == 2);
+        return r;
+    };
+
+    // ----- BASS x8 (GM 32-39, captured at C2 = 36) -----
+    {
+        struct B { const char* name; int prog; bool mono; float secs; float cutoff; float drive; };
+        const std::array<B, 8> entries {{
+            { "Acoustic Bass",      32, true,  2.0f,  800.0f, 0.05f },
+            { "Fingered E-Bass",    33, true,  2.0f, 1100.0f, 0.10f },
+            { "Picked E-Bass",      34, true,  2.0f, 1200.0f, 0.18f },
+            { "Fretless Bass",      35, true,  2.5f,  900.0f, 0.05f },
+            { "Slap Bass",          36, true,  2.0f, 1500.0f, 0.22f },
+            { "Slap Bass 2",        37, true,  2.0f, 1500.0f, 0.25f },
+            { "Synth Bass 1",       38, true,  2.5f,  500.0f, 0.04f },
+            { "Synth Bass 2",       39, true,  2.5f, 1100.0f, 0.12f },
+        }};
+        for (const auto& e : entries)
         {
-            Recipe r;
-            r.name = "Bass / " + names[static_cast<std::size_t>(i)];
-            r.family = Family::bass;
-            r.rootMidiNote = root;
-            r.lengthSeconds = (kinds[static_cast<std::size_t>(i)] == 5
-                || kinds[static_cast<std::size_t>(i)] == 8) ? 1.2f : 1.0f;
-            r.baseCutoffHz = cutoff[static_cast<std::size_t>(i)];
-            r.resonance = reso[static_cast<std::size_t>(i)];
-            r.filterMode = 0;
-            r.ampAttack = 0.002f;
-            r.ampDecay = 0.18f;
-            r.ampSustain = 0.78f;
-            r.ampRelease = 0.20f;
-            r.reverbMix = 0.05f;
-            r.delayMix = 0.0f;
-            r.saturationDrive = (i == 4 || i == 14) ? 0.35f : 0.10f;
-            r.saturationMode = 0;
-            r.playbackMode = 2;
-            r.monoMode = true;
-            r.masterVolume = 0.85f;
-            r.recipeSeed = 100 + i;
-            r.waveformKind = kinds[static_cast<std::size_t>(i)];
-            r.param1 = (i == 13 ? 1.5f : 0.4f);
-            r.param2 = (i == 13 ? 1.0f : 0.0f);
+            auto r = sfx(Family::bass, juce::String("Bass / ") + e.name, fluid,
+                         e.prog, /*captureNote*/36, e.secs, /*playbackMode*/2, e.mono);
+            r.baseCutoffHz = e.cutoff;
+            r.saturationDrive = e.drive;
+            r.ampRelease = 0.18f;
+            r.filterKeyTracking = 0.25f;
+            r.macro1ToFilter = 2500.0f;
+            // Keep mod-wheel sweeps inside the bass register so the centroid
+            // stays below the auditioner's 1200 Hz threshold.
+            r.modWheelToFilter = 800.0f;
             add(r);
         }
     }
 
-    // ----- LEAD x16 (root 60, mostly mono, brighter cutoff) -----
+    // ----- LEAD x8 (GM 80-87 + Vintage Keys, captured at C4 = 60) -----
     {
-        const int root = 60;
-        const std::array<juce::String, 16> names {
-            "Clean Mono Lead", "Wide Saw Lead", "Square Lead", "Sync Style Lead",
-            "Portamento Lead", "Vocal Lead", "Bright Digital Lead", "Soft Expressive Lead",
-            "Distorted Lead", "Bell Lead", "Flute Lead", "Nasal Lead",
-            "PWM Lead", "Octave Lead", "Filter Mod Lead", "Retro Game Lead"
-        };
-        const std::array<int, 16> kinds {
-            0, 0, 1, 4, 0, 11, 5, 2, 0, 6, 7, 4, 10, 4, 0, 1
-        };
-        const std::array<float, 16> cutoff {
-            5500, 7000, 5000, 6500, 4800, 4200, 8000, 5200,
-            6000, 9000, 5800, 6500, 5500, 6800, 4500, 5500
-        };
-        for (int i = 0; i < 16; ++i)
+        struct L { const char* name; int prog; juce::File bank; float secs; float cutoff; bool mono; };
+        const std::array<L, 8> entries {{
+            { "Square Lead",        80, fluid,   2.5f, 6000.0f, true  },
+            { "Sawtooth Lead",      81, fluid,   2.5f, 6500.0f, true  },
+            { "Calliope Lead",      82, fluid,   2.5f, 7000.0f, true  },
+            { "Chiff Lead",         83, fluid,   2.5f, 7500.0f, true  },
+            { "Charang Lead",       84, fluid,   2.5f, 6500.0f, true  },
+            { "Voice Lead",         85, fluid,   2.5f, 5500.0f, true  },
+            { "Fifths Lead",        86, fluid,   2.5f, 6000.0f, true  },
+            { "Bass+Lead",          87, fluid,   2.5f, 5500.0f, true  },
+        }};
+        for (const auto& e : entries)
         {
-            Recipe r;
-            r.name = "Lead / " + names[static_cast<std::size_t>(i)];
-            r.family = Family::lead;
-            r.rootMidiNote = root;
-            r.lengthSeconds = (kinds[static_cast<std::size_t>(i)] == 5
-                || kinds[static_cast<std::size_t>(i)] == 6
-                || kinds[static_cast<std::size_t>(i)] == 7
-                || kinds[static_cast<std::size_t>(i)] == 11) ? 1.5f : 1.0f;
-            r.baseCutoffHz = cutoff[static_cast<std::size_t>(i)];
-            r.resonance = 0.15f + 0.03f * static_cast<float>(i % 5);
-            r.filterMode = 0;
-            r.ampAttack = (i == 7 || i == 10) ? 0.05f : 0.005f;
-            r.ampDecay = 0.20f;
-            r.ampSustain = 0.85f;
-            r.ampRelease = 0.30f;
-            r.reverbMix = 0.10f + 0.01f * static_cast<float>(i % 4);
-            r.delayMix = (i == 1 || i == 14) ? 0.20f : 0.05f;
-            r.saturationDrive = (i == 8) ? 0.45f : 0.10f;
-            r.saturationMode = 0;
-            r.playbackMode = 2;
-            r.monoMode = (i != 1 && i != 13);
-            r.masterVolume = 0.80f;
-            r.recipeSeed = 200 + i;
-            r.waveformKind = kinds[static_cast<std::size_t>(i)];
-            r.param1 = (i == 5) ? 0.7f : 0.4f;
-            r.param2 = (i == 5) ? 0.05f : 0.0f;
+            auto r = sfx(Family::lead, juce::String("Lead / ") + e.name, e.bank,
+                         e.prog, /*captureNote*/60, e.secs, /*playbackMode*/2, e.mono);
+            r.baseCutoffHz = e.cutoff;
+            r.reverbMix = 0.12f;
+            r.delayMix = 0.10f;
+            r.delayTimeMs = 260.0f;
+            r.delayFeedback = 0.28f;
+            r.modWheelToFilter = 3500.0f;
+            r.velocityToFilter = 1500.0f;
+            r.masterVolume = 0.40f;
+            // Add filter LFO motion to a couple of leads so the bank shows
+            // off the modulation matrix on more than just pads/ensembles.
+            if (e.prog == 82 || e.prog == 84 || e.prog == 86)
+            {
+                r.filterLfoRate = 4.5f;
+                r.filterLfoAmount = 350.0f;
+            }
+            // Distorted leads.
+            if (e.prog == 84 || e.prog == 87)
+                r.saturationDrive = 0.24f;
             add(r);
         }
     }
 
-    // ----- PAD x16 (long sustained, stereo width via reverb, slow attack) -----
+    // ----- PAD x8 (GM 88-95, captured at C4, long sustain, lush stereo) -----
     {
-        const int root = 60;
-        const std::array<juce::String, 16> names {
-            "Warm Analog Pad", "Glass Pad", "Choir Pad", "Tape Pad",
-            "Shimmer Pad", "Dark Air Pad", "Slow Brass Pad", "String Pad",
-            "Motion Pad", "Lo-Fi Haze Pad", "Resonant Pad", "Organ Pad",
-            "Noisy Texture Pad", "Soft FM Pad", "Pulse Pad", "Frozen Pad"
-        };
-        const std::array<int, 16> kinds {
-            11, 6, 11, 11, 9, 11, 11, 11, 5, 11, 11, 7, 8, 5, 1, 11
-        };
-        const std::array<float, 16> cutoff {
-            1800, 5000, 2800, 2200, 6000, 1400, 2600, 3200,
-            3500, 1800, 2400, 3000, 1600, 3800, 2500, 2000
-        };
-        for (int i = 0; i < 16; ++i)
+        struct P { const char* name; int prog; float secs; float cutoff; float attack; };
+        const std::array<P, 8> entries {{
+            { "New Age Pad",        88, 4.0f, 5500.0f, 0.10f },
+            { "Warm Pad",           89, 4.5f, 4500.0f, 0.20f },
+            { "Polysynth Pad",      90, 4.0f, 5800.0f, 0.05f },
+            { "Choir Pad",          91, 4.5f, 5000.0f, 0.30f },
+            { "Bowed Pad",          92, 4.5f, 4800.0f, 0.40f },
+            { "Metallic Pad",       93, 4.0f, 6500.0f, 0.10f },
+            { "Halo Pad",           94, 4.5f, 5200.0f, 0.25f },
+            { "Sweep Pad",          95, 4.5f, 5500.0f, 0.15f },
+        }};
+        for (const auto& e : entries)
         {
-            Recipe r;
-            r.name = "Pad / " + names[static_cast<std::size_t>(i)];
-            r.family = Family::pad;
-            r.rootMidiNote = root;
-            r.lengthSeconds = 2.0f;
-            r.baseCutoffHz = cutoff[static_cast<std::size_t>(i)];
-            r.resonance = 0.10f + 0.02f * static_cast<float>(i % 4);
-            r.filterMode = 0;
-            r.ampAttack = 0.55f + 0.05f * static_cast<float>(i % 4);
-            r.ampDecay = 0.40f;
+            auto r = sfx(Family::pad, juce::String("Pad / ") + e.name, fluid,
+                         e.prog, /*captureNote*/60, e.secs, /*playbackMode*/2, /*mono*/false);
+            r.baseCutoffHz = e.cutoff;
+            r.ampAttack = e.attack;
+            r.ampDecay = 0.50f;
             r.ampSustain = 0.95f;
             r.ampRelease = 1.20f;
-            r.reverbMix = 0.45f;
-            r.delayMix = (i == 4 || i == 8) ? 0.25f : 0.10f;
-            r.saturationDrive = 0.05f;
-            r.saturationMode = 0;
-            r.playbackMode = 2; // loop
-            r.monoMode = false;
-            r.masterVolume = 0.75f;
-            r.recipeSeed = 300 + i;
-            r.waveformKind = kinds[static_cast<std::size_t>(i)];
-            r.param1 = (kinds[static_cast<std::size_t>(i)] == 8)
-                ? 1500.0f
-                : (kinds[static_cast<std::size_t>(i)] == 11 ? 0.4f + 0.05f * static_cast<float>(i)
-                : 1.2f);
-            r.param2 = (kinds[static_cast<std::size_t>(i)] == 11) ? 0.04f : 0.6f;
+            r.reverbMix = 0.35f;
+            r.delayMix = 0.12f;
+            r.delayTimeMs = 360.0f;
+            r.filterLfoRate = 0.18f;
+            r.filterLfoAmount = 300.0f;
+            r.filterLfoShape = 0;
+            r.autopanRateHz = 0.25f;
+            r.autopanDepth = 0.20f;
+            r.modWheelToFilter = 4000.0f;
+            // Diversify filter mode across the pad bank for engine coverage.
+            // 0=lp (default), 1=hp on shimmery pads, 2=bp on metallic/halo.
+            if (e.prog == 93 || e.prog == 94)
+                r.filterMode = 2;
+            else if (e.prog == 90 || e.prog == 92)
+                r.filterMode = 1;
             add(r);
         }
     }
 
-    // ----- PLUCK x16 (short, fast attack + decay, oneShot) -----
+    // ----- PLUCK x8 (guitars 24-31 + harp 46 + kalimba 108 + koto 107) -----
     {
-        const int root = 60;
-        const std::array<juce::String, 16> names {
-            "Harp Pluck", "Synth Pluck", "Muted Pluck", "Resonant Pluck",
-            "Marimba Pluck", "Glass Pluck", "Acid Pluck", "Fast Arp Pluck",
-            "Bright Key Pluck", "Clicky Pluck", "Hollow Pluck", "Lo-Fi Pluck",
-            "Metallic Pluck", "Transient Pluck", "Sine Pop Pluck", "PWM Pluck"
-        };
-        const std::array<int, 16> kinds {
-            6, 0, 1, 0, 6, 6, 1, 0, 4, 8, 7, 4, 9, 8, 2, 10
-        };
-        for (int i = 0; i < 16; ++i)
+        struct K { const char* name; int prog; float secs; float cutoff; };
+        const std::array<K, 8> entries {{
+            { "Nylon Guitar",       24, 3.0f, 6000.0f },
+            { "Steel Guitar",       25, 3.0f, 6500.0f },
+            { "Jazz Guitar",        26, 3.0f, 5500.0f },
+            { "Clean Guitar",       27, 3.0f, 6500.0f },
+            { "Muted Guitar",       28, 2.5f, 5000.0f },
+            { "Harp",               46, 3.5f, 7000.0f },
+            { "Koto",              107, 3.0f, 6500.0f },
+            { "Kalimba",          108, 3.0f, 7500.0f },
+        }};
+        for (const auto& e : entries)
         {
-            Recipe r;
-            r.name = "Pluck / " + names[static_cast<std::size_t>(i)];
-            r.family = Family::pluck;
-            r.rootMidiNote = root;
-            r.lengthSeconds = (kinds[static_cast<std::size_t>(i)] == 6
-                || kinds[static_cast<std::size_t>(i)] == 9) ? 1.4f : 1.0f;
-            r.baseCutoffHz = 4000.0f + 200.0f * static_cast<float>(i);
-            r.resonance = 0.20f + 0.03f * static_cast<float>(i % 5);
-            r.filterMode = 0;
-            r.ampAttack = 0.002f;
-            r.ampDecay = 0.10f + 0.01f * static_cast<float>(i % 6);
-            r.ampSustain = 0.0f;
-            r.ampRelease = 0.20f;
-            r.reverbMix = 0.18f;
-            r.delayMix = (i % 3 == 0) ? 0.15f : 0.05f;
-            r.saturationDrive = 0.05f;
-            r.saturationMode = 0;
-            r.playbackMode = 1; // oneShot
-            r.monoMode = false;
-            r.masterVolume = 0.80f;
-            r.recipeSeed = 400 + i;
-            r.waveformKind = kinds[static_cast<std::size_t>(i)];
-            r.param1 = (kinds[static_cast<std::size_t>(i)] == 6) ? 0.8f
-                : (kinds[static_cast<std::size_t>(i)] == 8 ? 2200.0f : 0.4f);
-            r.param2 = 0.3f;
-            add(r);
-        }
-    }
-
-    // ----- KEYS x16 (electric piano, organ, hybrid keys) -----
-    {
-        const int root = 60;
-        const std::array<juce::String, 16> names {
-            "Mellow EP", "Bright EP", "Tine Key", "Reed Key",
-            "Toy Key", "Soft Keyboard", "Attack Key", "Digital Key",
-            "FM Key", "Organ Key", "Lo-Fi Key", "Chorus Key",
-            "Bell Key", "Vibey Key", "Hybrid Piano Key", "Muted Stage Key"
-        };
-        const std::array<int, 16> kinds {
-            5, 9, 5, 7, 1, 7, 0, 4, 5, 7, 8, 5, 6, 5, 9, 5
-        };
-        for (int i = 0; i < 16; ++i)
-        {
-            Recipe r;
-            r.name = "Keys / " + names[static_cast<std::size_t>(i)];
-            r.family = Family::keys;
-            r.rootMidiNote = root;
-            r.lengthSeconds = 1.6f;
-            r.baseCutoffHz = 4000.0f + 250.0f * static_cast<float>(i);
-            r.resonance = 0.15f;
-            r.filterMode = 0;
-            r.ampAttack = 0.005f;
-            r.ampDecay = 0.30f;
-            r.ampSustain = 0.30f;
-            r.ampRelease = 0.50f;
-            r.reverbMix = 0.20f;
-            r.delayMix = (i == 11 || i == 13) ? 0.15f : 0.05f;
-            r.saturationDrive = 0.10f;
-            r.saturationMode = 0;
-            r.playbackMode = 1; // oneShot
-            r.monoMode = false;
-            r.masterVolume = 0.78f;
-            r.recipeSeed = 500 + i;
-            r.waveformKind = kinds[static_cast<std::size_t>(i)];
-            r.param1 = 1.5f;
-            r.param2 = 1.0f;
-            add(r);
-        }
-    }
-
-    // ----- BELL/MALLET x16 -----
-    {
-        const int root = 72;
-        const std::array<juce::String, 16> names {
-            "Bell", "Music Box", "Mallet", "Tubular Hit",
-            "Metallophone", "Kalimba Tone", "Chime", "Vibraphone Tone",
-            "Marimba Tone", "Soft Glass", "Hard Glass", "Digital Bell",
-            "Detuned Bell", "Noisy Mallet", "Cinematic Ping", "Low Metal Thunk"
-        };
-        for (int i = 0; i < 16; ++i)
-        {
-            Recipe r;
-            r.name = "Bell / " + names[static_cast<std::size_t>(i)];
-            r.family = Family::bell;
-            r.rootMidiNote = (i == 15) ? 48 : root;
-            r.lengthSeconds = 1.8f;
-            r.baseCutoffHz = 9000.0f;
-            r.resonance = 0.10f;
-            r.filterMode = 0;
+            auto r = sfx(Family::pluck, juce::String("Pluck / ") + e.name, fluid,
+                         e.prog, /*captureNote*/60, e.secs, /*playbackMode*/1, /*mono*/false);
+            r.baseCutoffHz = e.cutoff;
             r.ampAttack = 0.001f;
-            r.ampDecay = 0.50f;
-            r.ampSustain = 0.0f;
-            r.ampRelease = 0.30f;
-            r.reverbMix = 0.30f;
-            r.delayMix = 0.05f;
-            r.saturationDrive = 0.0f;
-            r.saturationMode = 0;
-            r.playbackMode = 1;
-            r.monoMode = false;
-            r.masterVolume = 0.75f;
-            r.recipeSeed = 600 + i;
-            r.waveformKind = (i == 13) ? 8 : 6; // bell or noise mallet
-            r.param1 = 1.0f + 0.20f * static_cast<float>(i % 4);
-            r.param2 = 0.0f;
+            r.ampDecay = 0.40f;
+            r.ampSustain = 0.40f;
+            r.ampRelease = 0.40f;
+            r.reverbMix = 0.18f;
+            r.velocityToAmp = 0.35f;
+            r.velocityToFilter = 1800.0f;
             add(r);
         }
     }
 
-    // ----- ENSEMBLE x16 -----
+    // ----- KEYS x8 (GM 0-7 + Vintage Keys EP, captured at C4) -----
     {
-        const int root = 60;
-        const std::array<juce::String, 16> names {
-            "Synth String", "Soft String", "Bright String", "Brass Stab",
-            "Warm Brass", "Mellow Horn", "Reed Ensemble", "Organ Ensemble",
-            "Choir Vowel", "Breathy Ensemble", "Synth Brass", "Trem String",
-            "Attack String", "Lo-Fi Choir", "Stacked Saw", "Cinematic Ensemble"
-        };
-        const std::array<int, 16> kinds {
-            11, 11, 11, 0, 11, 7, 7, 7, 11, 11, 0, 11, 11, 11, 0, 11
-        };
-        for (int i = 0; i < 16; ++i)
+        struct K { const char* name; int prog; juce::File bank; juce::String nameHint; float secs; float cutoff; };
+        const std::array<K, 8> entries {{
+            { "Acoustic Grand",      0, fluid,   "",            3.5f, 7500.0f },
+            { "Bright Piano",        1, fluid,   "",            3.5f, 8000.0f },
+            { "Electric Grand",      2, fluid,   "",            3.5f, 7000.0f },
+            { "Honky-Tonk",          3, fluid,   "",            3.0f, 7000.0f },
+            { "Rhodes EP",           4, fluid,   "Rhodes",      3.5f, 6500.0f },
+            { "Chorus EP",           5, fluid,   "Chorused",    3.5f, 6500.0f },
+            { "Harpsichord",         6, fluid,   "Harpsichord", 3.0f, 7000.0f },
+            { "Clavinet",            7, fluid,   "Clavinet",    2.5f, 6500.0f },
+        }};
+        for (const auto& e : entries)
         {
-            Recipe r;
-            r.name = "Ensemble / " + names[static_cast<std::size_t>(i)];
-            r.family = Family::ensemble;
-            r.rootMidiNote = root;
-            r.lengthSeconds = 2.0f;
-            r.baseCutoffHz = 3500.0f + 200.0f * static_cast<float>(i);
-            r.resonance = 0.10f;
-            r.filterMode = 0;
-            r.ampAttack = 0.20f;
+            auto r = sfx(Family::keys, juce::String("Keys / ") + e.name, e.bank,
+                         e.prog, /*captureNote*/60, e.secs, /*playbackMode*/2, /*mono*/false);
+            r.sf2NamePattern = e.nameHint;
+            r.baseCutoffHz = e.cutoff;
+            r.ampAttack = 0.002f;
             r.ampDecay = 0.30f;
+            r.ampSustain = 0.55f;
+            r.ampRelease = 0.45f;
+            r.reverbMix = 0.16f;
+            r.masterVolume = 0.40f;
+            r.velocityToAmp = 0.40f;
+            r.velocityToFilter = 1500.0f;
+            r.filterKeyTracking = 0.20f;
+            // Clavinet's SF2 loop region clicks; render as a natural decay.
+            if (e.prog == 7)
+            {
+                r.playbackMode = 1;
+                r.sf2UseEmbeddedLoop = false;
+            }
+            add(r);
+        }
+    }
+
+    // ----- BELL x8 (GM 8-15 chromatic percussion, captured at C5 = 72) -----
+    {
+        struct B { const char* name; int prog; int capture; float secs; };
+        const std::array<B, 8> entries {{
+            { "Celesta",             8, 72, 3.0f },
+            { "Glockenspiel",        9, 84, 3.0f },
+            { "Music Box",          10, 72, 3.5f },
+            { "Vibraphone",         11, 72, 3.5f },
+            { "Marimba",            12, 72, 3.0f },
+            { "Xylophone",          13, 72, 2.5f },
+            { "Tubular Bells",      14, 60, 4.0f },
+            { "Dulcimer",           15, 60, 3.0f },
+        }};
+        for (const auto& e : entries)
+        {
+            auto r = sfx(Family::bell, juce::String("Bell / ") + e.name, fluid,
+                         e.prog, e.capture, e.secs, /*playbackMode*/1, /*mono*/false);
+            r.baseCutoffHz = 12000.0f;
+            r.ampAttack = 0.001f;
+            r.ampDecay = 0.80f;
+            r.ampSustain = 0.05f;
+            r.ampRelease = 0.80f;
+            r.reverbMix = 0.18f;
+            r.saturationDrive = 0.08f;
+            r.velocityToAmp = 0.45f;
+            r.velocityToFilter = 1000.0f;
+            r.filterKeyTracking = 0.10f;
+            add(r);
+        }
+    }
+
+    // ----- ENSEMBLE x8 (GM 48-55 strings/choirs/synth strings) -----
+    {
+        struct E { const char* name; int prog; float secs; float attack; float cutoff; };
+        const std::array<E, 8> entries {{
+            { "String Ensemble",    48, 4.0f, 0.20f, 5000.0f },
+            { "Strings 2",          49, 4.0f, 0.30f, 4800.0f },
+            { "Synth Strings 1",    50, 4.0f, 0.20f, 5200.0f },
+            { "Synth Strings 2",    51, 4.0f, 0.25f, 5400.0f },
+            { "Choir Aahs",         52, 4.5f, 0.20f, 4500.0f },
+            { "Voice Oohs",         53, 4.5f, 0.25f, 4200.0f },
+            { "Synth Voice",        54, 4.0f, 0.20f, 4800.0f },
+            { "Orchestra Hit",      55, 2.0f, 0.001f, 6500.0f },
+        }};
+        for (const auto& e : entries)
+        {
+            auto r = sfx(Family::ensemble, juce::String("Ensemble / ") + e.name, fluid,
+                         e.prog, /*captureNote*/60, e.secs, /*playbackMode*/2, /*mono*/false);
+            r.baseCutoffHz = e.cutoff;
+            r.ampAttack = e.attack;
+            r.ampDecay = 0.40f;
             r.ampSustain = 0.90f;
             r.ampRelease = 0.80f;
             r.reverbMix = 0.30f;
-            r.delayMix = 0.05f;
-            r.saturationDrive = 0.05f;
-            r.saturationMode = 0;
-            r.playbackMode = 2;
-            r.monoMode = false;
-            r.masterVolume = 0.78f;
-            r.recipeSeed = 700 + i;
-            r.waveformKind = kinds[static_cast<std::size_t>(i)];
-            r.param1 = 0.5f;
-            r.param2 = (i == 9) ? 0.08f : 0.04f;
+            r.masterVolume = 0.40f;
+            r.filterLfoRate = 0.20f;
+            r.filterLfoAmount = 220.0f;
+            r.autopanRateHz = 0.30f;
+            r.autopanDepth = 0.12f;
+            r.modWheelToFilter = 3500.0f;
+            // Synth-string entries get a touch of analogue grit.
+            if (e.prog == 50 || e.prog == 51 || e.prog == 54)
+                r.saturationDrive = 0.12f;
             add(r);
         }
     }
 
-    // ----- TEXTURE/FX x16 -----
+    // ----- FX x8 (GM 96-103 sound-effects programs + procedural risers) -----
+    // First 6 from SF2 (atmospheric SFX programs), last 2 procedural to keep
+    // a couple of demonstrably synth-driven sweeps in the bank.
     {
-        const int root = 60;
-        const std::array<juce::String, 16> names {
-            "Riser", "Downer", "Impact Tone", "Reverse Wash",
-            "Noise Sweep", "Drone", "Glitch Tone", "Sci-Fi Ping",
-            "Vinyl Texture", "Tape Wobble", "Alarm Tone", "Pulse Drone",
-            "Shimmer Hit", "Gated Texture", "Unstable Texture", "Sample Showcase"
-        };
-        for (int i = 0; i < 16; ++i)
+        struct F { const char* name; int prog; float secs; };
+        const std::array<F, 6> sf2Entries {{
+            { "Rain",                96, 4.0f },
+            { "Soundtrack",          97, 4.0f },
+            { "Crystal",             98, 3.5f },
+            { "Atmosphere",          99, 4.5f },
+            { "Brightness",         100, 4.0f },
+            { "Goblins",            101, 4.0f },
+        }};
+        for (const auto& e : sf2Entries)
         {
-            Recipe r;
-            r.name = "FX / " + names[static_cast<std::size_t>(i)];
-            r.family = Family::fx;
-            r.rootMidiNote = root;
-            r.lengthSeconds = 2.0f;
-            r.baseCutoffHz = 3000.0f + 200.0f * static_cast<float>(i);
-            r.resonance = 0.20f;
-            r.filterMode = 0;
-            r.ampAttack = 0.20f;
-            r.ampDecay = 0.40f;
-            r.ampSustain = 0.70f;
-            r.ampRelease = 0.80f;
+            auto r = sfx(Family::fx, juce::String("FX / ") + e.name, fluid,
+                         e.prog, /*captureNote*/60, e.secs, /*playbackMode*/2, /*mono*/false);
+            r.baseCutoffHz = 5500.0f;
+            r.ampAttack = 0.05f;
+            r.ampDecay = 0.50f;
+            r.ampSustain = 0.85f;
+            r.ampRelease = 1.00f;
             r.reverbMix = 0.40f;
             r.delayMix = 0.20f;
-            r.saturationDrive = 0.10f;
-            r.saturationMode = 0;
+            r.delayTimeMs = 420.0f;
+            r.delayFeedback = 0.35f;
+            r.filterLfoRate = 0.35f;
+            r.filterLfoAmount = 400.0f;
+            r.autopanRateHz = 0.20f;
+            r.autopanDepth = 0.25f;
+            r.modWheelToFilter = 4000.0f;
+            r.saturationDrive = 0.06f;
+            r.masterVolume = 0.55f;
+            // Crystal is unusually peaky in our SF2 source; bypass saturator
+            // and trim the wet FX tails so its bell stack doesn't pile up.
+            if (e.prog == 98)
+            {
+                r.saturationDrive = 0.0f;
+                r.masterVolume    = 0.35f;
+                r.delayFeedback   = 0.15f;
+                r.delayMix        = 0.12f;
+                r.reverbMix       = 0.28f;
+            }
+            add(r);
+        }
+
+        // Procedural riser
+        {
+            Recipe r;
+            r.name = "FX / Synth Riser";
+            r.family = Family::fx;
+            r.rootMidiNote = 60;
+            r.lengthSeconds = 4.0f;
+            r.baseCutoffHz = 2000.0f;
+            r.resonance = 0.40f;
+            r.filterMode = 0;
+            r.filterEnvAmount = 6000.0f;
+            r.filterAttack = 3.0f;
+            r.filterDecay = 0.5f;
+            r.filterSustain = 1.0f;
+            r.filterRelease = 0.5f;
+            r.ampAttack = 0.5f;
+            r.ampDecay = 0.5f;
+            r.ampSustain = 1.0f;
+            r.ampRelease = 0.5f;
+            r.reverbMix = 0.45f;
+            r.delayMix = 0.25f;
+            r.delayTimeMs = 380.0f;
+            r.delayFeedback = 0.40f;
             r.playbackMode = 2;
             r.monoMode = false;
-            r.masterVolume = 0.75f;
-            r.recipeSeed = 800 + i;
-            r.waveformKind = (i % 3 == 0) ? 8 : (i % 3 == 1 ? 5 : 11);
-            r.param1 = (i % 3 == 0) ? 1500.0f : 1.0f;
-            r.param2 = 0.5f;
+            r.masterVolume = 0.45f;
+            r.recipeSeed = 901;
+            r.waveformKind = 12; // detuned stack
+            r.param1 = 8.0f;
+            r.param2 = 0.4f;
+            add(r);
+        }
+
+        // Procedural downer
+        {
+            Recipe r;
+            r.name = "FX / Synth Downer";
+            r.family = Family::fx;
+            r.rootMidiNote = 60;
+            r.lengthSeconds = 4.0f;
+            r.baseCutoffHz = 4000.0f;
+            r.resonance = 0.35f;
+            r.filterMode = 0;
+            r.filterEnvAmount = -2500.0f;
+            r.filterAttack = 0.05f;
+            r.filterDecay = 3.0f;
+            r.filterSustain = 0.2f;
+            r.filterRelease = 0.5f;
+            r.ampAttack = 0.10f;
+            r.ampDecay = 0.50f;
+            r.ampSustain = 0.85f;
+            r.ampRelease = 0.80f;
+            r.reverbMix = 0.45f;
+            r.delayMix = 0.25f;
+            r.delayTimeMs = 420.0f;
+            r.delayFeedback = 0.40f;
+            r.playbackMode = 2;
+            r.monoMode = false;
+            r.masterVolume = 0.55f;
+            r.recipeSeed = 902;
+            r.waveformKind = 11; // pad-style harmonic stack
+            r.param1 = 1.5f;
+            r.param2 = 0.20f;
             add(r);
         }
     }
 
+    juce::ignoreUnused(orbit, vintage);
     return recipes;
 }
 
 // --- ValueTree assembly ---------------------------------------------------
 
-juce::ValueTree buildPresetState(const Recipe& r, const std::vector<float>& audio)
+juce::ValueTree buildPresetState(const Recipe& r, const RecipeAudio& ra)
 {
+    const auto& audio = ra.samples;
     juce::ValueTree state(kPatchRoot);
 
     juce::MemoryBlock bytes(audio.size() * sizeof(float));
     if (!audio.empty())
         std::memcpy(bytes.getData(), audio.data(), bytes.getSize());
 
+    // Embedded sample is always stored at the recipe's root pitch — for SF2
+    // recipes the sample has been pitch-shifted to sf2CaptureMidiNote so that
+    // it plays at unity at the same root the engine uses.
+    const int storedRoot = (r.sf2File != juce::File()) ? r.sf2CaptureMidiNote : r.rootMidiNote;
+
     state.setProperty(kEmbeddedSampleData, juce::var(bytes), nullptr);
     state.setProperty(kEmbeddedSampleRate, static_cast<double>(kSampleRate), nullptr);
-    state.setProperty(kEmbeddedSampleRootMidiNote, r.rootMidiNote, nullptr);
+    state.setProperty(kEmbeddedSampleRootMidiNote, storedRoot, nullptr);
     state.setProperty(kEmbeddedSampleChannels, 1, nullptr);
     state.setProperty(kEmbeddedSampleName, r.name, nullptr);
 
-    state.setProperty(kRootMidiNote, r.rootMidiNote, nullptr);
+    state.setProperty(kRootMidiNote, storedRoot, nullptr);
     state.setProperty(kCoarseTuneSemitones, 0.0f, nullptr);
     state.setProperty(kFineTuneCents, 0.0f, nullptr);
     state.setProperty(kPitchBendRangeSemitones, r.pitchBendRangeSemitones, nullptr);
@@ -1631,10 +1992,30 @@ juce::ValueTree buildPresetState(const Recipe& r, const std::vector<float>& audi
 
     if (r.playbackMode == 2)
     {
-        const auto loopWindow = computeLoopWindow(r, static_cast<int>(audio.size()));
-        state.setProperty(kLoopStart, loopWindow.start, nullptr);
-        state.setProperty(kLoopEnd, loopWindow.end, nullptr);
-        state.setProperty(kLoopCrossfadeSamples, loopWindow.crossfadeSamples, nullptr);
+        const int totalLen = static_cast<int>(audio.size());
+        if (ra.loopStart > 0
+            && ra.loopEnd > ra.loopStart
+            && ra.loopEnd < totalLen - 1
+            && (ra.loopEnd - ra.loopStart + 1) >= 1024)
+        {
+            const int loopLen = ra.loopEnd - ra.loopStart + 1;
+            // Larger crossfade hides loop-seam discontinuities that the
+            // source SF2 zone can introduce when sample-stitched. Keep the
+            // crossfade strictly less than half the loop so the factory
+            // validator accepts it.
+            const int maxXfade = juce::jmax(1, (loopLen / 2) - 1);
+            const int crossfade = juce::jlimit(juce::jmin(256, maxXfade), maxXfade, loopLen / 3);
+            state.setProperty(kLoopStart, ra.loopStart, nullptr);
+            state.setProperty(kLoopEnd, ra.loopEnd, nullptr);
+            state.setProperty(kLoopCrossfadeSamples, crossfade, nullptr);
+        }
+        else
+        {
+            const auto loopWindow = computeLoopWindow(r, static_cast<int>(audio.size()));
+            state.setProperty(kLoopStart, loopWindow.start, nullptr);
+            state.setProperty(kLoopEnd, loopWindow.end, nullptr);
+            state.setProperty(kLoopCrossfadeSamples, loopWindow.crossfadeSamples, nullptr);
+        }
     }
 
     state.setProperty(kMacro1Value, r.macro1Value, nullptr);
@@ -1706,9 +2087,9 @@ int main(int argc, char* argv[])
     }
 
     const auto recipes = buildRecipes();
-    if (recipes.size() < 128)
+    if (recipes.size() < 64)
     {
-        std::fprintf(stderr, "Recipe table has only %d entries; expected >= 128.\n",
+        std::fprintf(stderr, "Recipe table has only %d entries; expected >= 64.\n",
             static_cast<int>(recipes.size()));
         return 1;
     }
@@ -1718,15 +2099,15 @@ int main(int argc, char* argv[])
     for (std::size_t i = 0; i < recipes.size(); ++i)
     {
         const auto& r = recipes[i];
-        const auto audio = renderRecipeAudio(r);
-        if (audio.empty())
+        const auto rendered = renderRecipe(r);
+        if (rendered.samples.empty())
         {
             ++failed;
             std::fprintf(stderr, "[%03zu] EMPTY  %s\n", i, r.name.toRawUTF8());
             continue;
         }
 
-        const auto state = buildPresetState(r, audio);
+        const auto state = buildPresetState(r, rendered);
         const auto xml = audiocity::plugin::encodePresetXml(state);
         if (xml.isEmpty())
         {

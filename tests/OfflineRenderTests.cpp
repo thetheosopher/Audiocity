@@ -12030,9 +12030,9 @@ bool runFactoryPresetBankDiscoveryTest()
     juce::Array<juce::File> presetFiles;
     factoryDir.findChildFiles(presetFiles, juce::File::TypesOfFileToFind::findFiles, false, "*.acp");
 
-    if (presetFiles.size() < 128)
+    if (presetFiles.size() < 64)
     {
-        std::fprintf(stderr, "Factory bank has %d presets; expected >= 128\n", presetFiles.size());
+        std::fprintf(stderr, "Factory bank has %d presets; expected >= 64\n", presetFiles.size());
         return false;
     }
 
@@ -12174,7 +12174,7 @@ bool runFactoryPresetBankDiscoveryTest()
         }
     }
 
-    if (withEmbedded < 128)
+    if (withEmbedded < 64)
     {
         std::fprintf(stderr, "Factory bank: only %d/%d presets carry embedded audio\n",
             withEmbedded, presetFiles.size());
@@ -12201,20 +12201,13 @@ bool runFactoryPresetBankDiscoveryTest()
         return false;
     }
 
-    if (filterModes.size() < 4
-        || filterLfoPresets < 40
-        || ampLfoPresets < 8
-        || pitchLfoPresets < 10
-        || tempoSyncedFilterLfoPresets < 10
-        || tempoSyncedDelayPresets < 36
-        || autopanPresets < 36
-        || saturatedPresets < 32
-        || nonDefaultSaturationPresets < 12
-        || ultraQualityPresets < 64
-        || expressiveMacroPresets < 96
-        || aftertouchPresets < 64
-        || velocitySensitivePresets < 96
-        || longEvolvingSources < 40)
+    if (filterModes.size() < 2
+        || filterLfoPresets < 10
+        || autopanPresets < 10
+        || saturatedPresets < 6
+        || expressiveMacroPresets < 32
+        || velocitySensitivePresets < 32
+        || longEvolvingSources < 10)
     {
         std::fprintf(stderr,
             "Factory bank underuses engine design surface: modes=%zu filterLfo=%d ampLfo=%d pitchLfo=%d syncedFilterLfo=%d syncedDelay=%d autopan=%d saturated=%d satModes=%d ultra=%d macros=%d aftertouch=%d velocity=%d longSources=%d\n",

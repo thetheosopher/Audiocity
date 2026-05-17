@@ -348,9 +348,10 @@ private:
 
             if constexpr (Type == juce::dsp::StateVariableTPTFilterType::highpass)
                 return high;
-            if constexpr (Type == juce::dsp::StateVariableTPTFilterType::bandpass)
+            else if constexpr (Type == juce::dsp::StateVariableTPTFilterType::bandpass)
                 return band;
-            return low;
+            else
+                return low;
         }
     };
 
