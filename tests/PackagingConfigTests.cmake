@@ -18,7 +18,7 @@ file(READ "${_audiocity_source_dir}/tests/RunUiSnapshotHarness.cmake" _audiocity
 file(READ "${_audiocity_source_dir}/LICENSE" _audiocity_license)
 file(GLOB _audiocity_ui_snapshot_baselines "${_audiocity_source_dir}/tests/ui-snapshot-baselines/current/*.png")
 
-string(REGEX MATCH "project[^\n\r]*Audiocity[ \t]+VERSION[ \t]+([0-9]+\.[0-9]+\.[0-9]+)"
+string(REGEX MATCH "project[^\n\r]*Audiocity[ \t]+VERSION[ \t]+([0-9]+[.][0-9]+[.][0-9]+)"
     _audiocity_version_match
     "${_audiocity_root_cmake}")
 set(_audiocity_version "${CMAKE_MATCH_1}")
@@ -83,8 +83,17 @@ if (NOT _audiocity_build_release MATCHES "Invoke-CMakeConfigureWithRetry -Preset
     message(FATAL_ERROR "build_release.ps1 must configure CMake through the retry helper using the selected self-contained preset.")
 endif ()
 
-if (NOT _audiocity_root_cmake MATCHES "TARGET_FILE_DIR:Audiocity_VST3>/\.\./Resources/FactoryPresets")
+if (NOT _audiocity_root_cmake MATCHES "TARGET_FILE_DIR:Audiocity_VST3>/[.][.]/Resources/FactoryPresets")
     message(FATAL_ERROR "CMakeLists.txt must copy factory presets into the VST3 bundle's Contents/Resources directory.")
+endif ()
+
+if (NOT _audiocity_root_cmake MATCHES "-E rm -rf")
+    message(FATAL_ERROR "CMakeLists.txt must clear stale FactoryPresets directories before copying the stock bank.")
+endif ()
+
+if (NOT (_audiocity_build_release MATCHES "Reset-Directory"
+         AND _audiocity_build_release MATCHES "factoryPresetDestination"))
+    message(FATAL_ERROR "build_release.ps1 must reset staged FactoryPresets directories before copying the stock bank.")
 endif ()
 
 if (NOT _audiocity_build_release MATCHES "Compress-Archive")
@@ -135,8 +144,8 @@ if (NOT _audiocity_vscode_tasks MATCHES "CMake: Build Audiocity \\(Debug\\)")
     message(FATAL_ERROR ".vscode/tasks.json must define the debug build task.")
 endif ()
 
-if (NOT _audiocity_vscode_tasks MATCHES "CommonExtensions/Microsoft/CMake/CMake/bin/cmake\\.exe")
-    message(FATAL_ERROR ".vscode/tasks.json must use the Visual Studio bundled cmake.exe path in this workspace.")
+if (NOT _audiocity_vscode_tasks MATCHES "'cmake\\.exe'")
+    message(FATAL_ERROR ".vscode/tasks.json must invoke cmake.exe by name so the workspace can use the resolved CMake installation.")
 endif ()
 
 if (NOT _audiocity_vscode_tasks MATCHES "--preset default")
@@ -159,8 +168,8 @@ if (NOT _audiocity_vscode_tasks MATCHES "--build --preset default --config Debug
     message(FATAL_ERROR ".vscode/tasks.json must build audiocity_offline_tests and audiocity_ui_snapshot_harness from the default Debug preset.")
 endif ()
 
-if (NOT _audiocity_vscode_tasks MATCHES "CommonExtensions/Microsoft/CMake/CMake/bin/ctest\\.exe")
-    message(FATAL_ERROR ".vscode/tasks.json must use the Visual Studio bundled ctest.exe path for Debug test execution.")
+if (NOT _audiocity_vscode_tasks MATCHES "'ctest\\.exe'")
+    message(FATAL_ERROR ".vscode/tasks.json must invoke ctest.exe by name for Debug test execution.")
 endif ()
 
 string(REGEX MATCHALL "\"label\"[^\r\n]*\"Build UI Snapshot Harness Debug\"" _audiocity_snapshot_task_labels "${_audiocity_vscode_tasks}")

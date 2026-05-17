@@ -1,5 +1,6 @@
 {
   "cmake.configureOnOpen": false,
+  "cmake.cmakePath": "cmake.exe",
   "cmake.useCMakePresets": "always",
   "cmake.defaultConfigurePreset": "default",
   "cmake.defaultBuildPreset": "default",

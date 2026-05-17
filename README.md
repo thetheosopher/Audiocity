@@ -4,7 +4,7 @@
 
 A Windows-focused hybrid sampler built with JUCE and C++20, delivered as a standalone application and a VST3 instrument plugin.
 
-![Version 1.2.0](https://img.shields.io/badge/version-1.2.0-blue)
+![Version 1.3.0](https://img.shields.io/badge/version-1.3.0-blue)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue?logo=cplusplus)
 ![JUCE 8.0.4](https://img.shields.io/badge/JUCE-8.0.4-orange)
 ![Windows x64](https://img.shields.io/badge/platform-Windows%20x64-lightgrey?logo=windows)
@@ -12,20 +12,17 @@ A Windows-focused hybrid sampler built with JUCE and C++20, delivered as a stand
 
 ## Overview
 
-Audiocity 1.2 expands the sampler from a single-sample workflow into a broader instrument workstation with multisample import, transient slicing, richer modulation, modernized page layouts, and better live feedback.
+Audiocity 1.3 combines broad multisample import coverage, transient slicing, expressive modulation, and a modernized sampler workspace with a curated 64-preset factory bank, auditioner-backed preset QA, and a dedicated profiling workflow for engine tuning.
 
 The engine and UI are still driven by one JUCE `AudioProcessor`, with deterministic offline tests, snapshot-based UI validation, and shared behavior across the plugin and standalone targets.
 
-## New in 1.2
+## New in 1.3
 
-- Broader import coverage for SFZ, SoundFont 2, DecentSampler, Bitwig multisample, MPC XPM, 1010music Bento, TAL Sampler, TX16Wx, Korg multisample, Korg KMP, Ableton Sampler, EXS24, legacy NKI, REX/RX2, and NCW-backed content.
-- A multi-preset chooser for libraries that expose more than one patch, plus a searchable preset strip on the Sample page.
-- Persistent browser and performance rails on Sample, Mapping, Generate, and Capture so browsing and auditioning stay visible while editing.
-- Mapping productivity tools for batch edit, create, duplicate, split, merge, chromatic remap, key-range spread, and root-note derivation.
-- Transient slice import and editing workflows with waveform overlays and direct split or merge gestures.
-- Expanded modulation with mod wheel, aftertouch, velocity, and Macro 1 or Macro 2 routing to pitch, filter, and amp.
-- Better live feedback through external MIDI key highlighting, stereo output meters, and a two-digit LED voice counter.
-- Quality and streaming upgrades with CPU, Fidelity, and Ultra render modes, preload control, and streaming diagnostics.
+- A curated 64-preset bundled factory bank spanning bass, lead, pad, pluck, keys, bell, ensemble, and FX categories, with embedded audio so the presets travel cleanly between Standalone and VST3.
+- Deterministic preset-authoring and auditioner tooling that regenerates the bank, renders it offline, and flags clipped output, weak levels, DC offset, or loop-seam regressions before release packaging.
+- Sample-workspace polish with the responsive browser/workspace/inspector layout, searchable preset strip, persistent browser and performance rails, and clearer modulation or output feedback across the main editing pages.
+- A dedicated engine profiling harness plus `scripts/profile_engine_harness.ps1`, which captures CPU samples, exports WPA data, and resolves hotspots through `llvm-symbolizer`.
+- Filter and render-path follow-up optimizations backed by expanded offline regressions, so the higher-quality playback tiers keep their behavior while leaving more runtime headroom.
 
 ## Screenshots
 
@@ -68,13 +65,23 @@ The screenshots below come from the deterministic UI snapshot harness used in th
 
 ## Feature Highlights
 
-- Import one-shots and multisample instruments from modern XML, ZIP, and legacy formats while keeping restore behavior deterministic.
+- Browse the bundled 64-preset factory bank or import one-shots and multisample instruments from modern XML, ZIP, and legacy formats while keeping restore behavior deterministic.
 - Preview and load from the browser rail without leaving the page you are editing.
 - Search presets from the Sample header, then load or save `.acp` patches without switching tabs.
 - Edit imported programs with mapping batch operations, slice workflows, and one shared undo history.
 - Play from the full Player tab or the compact performance strip, with external MIDI note display and live voice or output status.
 - Generate synthetic source material, capture audio, trim it, and move it into the same sampler workflow.
 - Track preload, streaming, and playback diagnostics without touching the audio thread.
+
+## Factory Presets and Auditioning
+
+Audiocity now ships 64 bundled factory presets under `assets/factory_presets`, covering bass, lead, pad, pluck, keys, bell, ensemble, and FX categories. The presets embed their source audio so the same bank works in the standalone app, the VST3, the installer, and the portable package without any external sample dependency.
+
+The content workflow is deterministic and test-backed:
+
+- `tools/PresetAuthor.cpp` regenerates the factory bank.
+- `tools/PresetAuditioner.cpp` renders the presets offline and writes reports under `artifacts/preset_audition/`.
+- `tests/OfflineRenderTests.cpp` enforces loop-mode, modulation/filter coverage, and other factory-bank quality gates before release packaging.
 
 ## Supported Formats
 
@@ -154,8 +161,8 @@ Build the release package set without ASIO:
 
 The release script derives the version from `CMakeLists.txt` and produces two artifacts in `output/`:
 
-- `Audiocity-1.2.0-windows-x64-setup.exe`
-- `Audiocity-1.2.0-windows-x64-portable.zip`
+- `Audiocity-1.3.0-windows-x64-setup.exe`
+- `Audiocity-1.3.0-windows-x64-portable.zip`
 
 ### Installer Behavior
 
@@ -198,6 +205,7 @@ The workspace includes:
 
 ```text
 Audiocity/
+├── artifacts/          # Generated preset audition and validation reports
 ├── assets/             # Icons, artwork, and factory presets
 ├── docs/               # Architecture, roadmap, RT rules, testing specs
 ├── installer/          # Inno Setup script and portable package docs
@@ -207,6 +215,7 @@ Audiocity/
 ├── src/plugin/         # PluginProcessor, PluginEditor, UI components, presets
 ├── tests/              # Offline render, packaging, and UI snapshot validation
 ├── third_party/        # JUCE, REX SDK, optional ASIO SDK
+├── tools/              # Preset authoring, auditioning, and support utilities
 ├── CMakeLists.txt
 └── CMakePresets.json
 ```

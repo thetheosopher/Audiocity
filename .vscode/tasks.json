@@ -10,7 +10,7 @@
 				"-ExecutionPolicy",
 				"Bypass",
 				"-Command",
-				"$cmake = 'C:/Program Files/Microsoft Visual Studio/2022/Enterprise/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe'; & $cmake --preset default; if ($LASTEXITCODE -ne 0) { Write-Host 'Retrying configure after deleting stale default-config files.'; foreach ($path in @('build/CMakeCache.txt', 'build/CMakeFiles')) { if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force } }; & $cmake --preset default; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }; & $cmake --build --preset default --config Debug --target Audiocity_All; exit $LASTEXITCODE"
+				"& 'cmake.exe' --preset default; if ($LASTEXITCODE -ne 0) { Write-Host 'Retrying configure after deleting stale default-config files.'; foreach ($path in @('build/CMakeCache.txt', 'build/CMakeFiles')) { if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force } }; & 'cmake.exe' --preset default; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }; & 'cmake.exe' --build --preset default --config Debug --target Audiocity_All; exit $LASTEXITCODE"
 			],
 			"group": "build",
 			"problemMatcher": "$msCompile",
@@ -25,7 +25,7 @@
 				"-ExecutionPolicy",
 				"Bypass",
 				"-Command",
-				"$cmake = 'C:/Program Files/Microsoft Visual Studio/2022/Enterprise/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe'; & $cmake --preset release-selfcontained-asio; if ($LASTEXITCODE -ne 0) { Write-Host 'Retrying configure after deleting stale release-selfcontained-asio files.'; foreach ($path in @('build/release-selfcontained-asio/CMakeCache.txt', 'build/release-selfcontained-asio/CMakeFiles', 'build/release-selfcontained-asio/_deps/juce-build', 'build/release-selfcontained-asio/_deps/juce-subbuild')) { if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force } }; & $cmake --preset release-selfcontained-asio; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }; & $cmake --build --preset release-selfcontained-asio; exit $LASTEXITCODE"
+				"& 'cmake.exe' --preset release-selfcontained-asio; if ($LASTEXITCODE -ne 0) { Write-Host 'Retrying configure after deleting stale release-selfcontained-asio files.'; foreach ($path in @('build/release-selfcontained-asio/CMakeCache.txt', 'build/release-selfcontained-asio/CMakeFiles', 'build/release-selfcontained-asio/_deps/juce-build', 'build/release-selfcontained-asio/_deps/juce-subbuild')) { if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force } }; & 'cmake.exe' --preset release-selfcontained-asio; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }; & 'cmake.exe' --build --preset release-selfcontained-asio; exit $LASTEXITCODE"
 			],
 			"group": "build",
 			"problemMatcher": "$msCompile",
@@ -55,7 +55,7 @@
 				"-ExecutionPolicy",
 				"Bypass",
 				"-Command",
-				"$cmake = 'C:/Program Files/Microsoft Visual Studio/2022/Enterprise/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe'; & $cmake --preset default; if ($LASTEXITCODE -ne 0) { Write-Host 'Retrying configure after deleting stale default-config files.'; foreach ($path in @('build/CMakeCache.txt', 'build/CMakeFiles')) { if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force } }; & $cmake --preset default; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }; & $cmake --build --preset default --config Debug --target audiocity_offline_tests audiocity_ui_snapshot_harness; exit $LASTEXITCODE"
+				"& 'cmake.exe' --preset default; if ($LASTEXITCODE -ne 0) { Write-Host 'Retrying configure after deleting stale default-config files.'; foreach ($path in @('build/CMakeCache.txt', 'build/CMakeFiles')) { if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force } }; & 'cmake.exe' --preset default; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }; & 'cmake.exe' --build --preset default --config Debug --target audiocity_offline_tests audiocity_ui_snapshot_harness; exit $LASTEXITCODE"
 			],
 			"group": "build",
 			"problemMatcher": "$msCompile",
@@ -70,7 +70,7 @@
 				"-ExecutionPolicy",
 				"Bypass",
 				"-Command",
-				"$ctest = 'C:/Program Files/Microsoft Visual Studio/2022/Enterprise/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/ctest.exe'; & $ctest --test-dir build -C Debug --output-on-failure; exit $LASTEXITCODE"
+				"& 'ctest.exe' --test-dir build -C Debug --output-on-failure; exit $LASTEXITCODE"
 			],
 			"group": "test",
 			"dependsOn": "CMake: Build Tests (Debug)",
@@ -80,9 +80,9 @@
 		{
 			"label": "Build UI Snapshot Harness Debug",
 			"type": "process",
-			"command": "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/MSBuild/Current/Bin/MSBuild.exe",
+			"command": "MSBuild.exe",
 			"args": [
-				"C:/Projects/Applications/Audiocity/build/tests/audiocity_ui_snapshot_harness.vcxproj",
+				"${workspaceFolder}/build/tests/audiocity_ui_snapshot_harness.vcxproj",
 				"/p:Configuration=Debug",
 				"/p:Platform=x64",
 				"/verbosity:minimal",

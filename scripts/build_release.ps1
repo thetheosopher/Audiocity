@@ -213,13 +213,15 @@ Copy-Item -LiteralPath $portableInstructionsPath -Destination (Join-Path $portab
 # Stage factory presets so the installer + portable bundle ship the stock bank
 $factoryPresetsSource = Join-Path $repoRoot 'assets\factory_presets'
 if (Test-Path -LiteralPath $factoryPresetsSource) {
-    $portableFactoryDir = Join-Path $portablePackageRoot 'FactoryPresets'
-    Ensure-Directory $portableFactoryDir
-    Copy-Item -Path (Join-Path $factoryPresetsSource '*') -Destination $portableFactoryDir -Recurse -Force
-
-    $portableVst3FactoryDir = Join-Path $portableVst3Stage 'Audiocity.vst3\Contents\Resources\FactoryPresets'
-    Ensure-Directory $portableVst3FactoryDir
-    Copy-Item -Path (Join-Path $factoryPresetsSource '*') -Destination $portableVst3FactoryDir -Recurse -Force
+    foreach ($factoryPresetDestination in @(
+        (Join-Path $installerStandaloneStage 'FactoryPresets'),
+        (Join-Path $installerVst3Stage 'Audiocity.vst3\Contents\Resources\FactoryPresets'),
+        (Join-Path $portablePackageRoot 'FactoryPresets'),
+        (Join-Path $portableVst3Stage 'Audiocity.vst3\Contents\Resources\FactoryPresets')
+    )) {
+        Reset-Directory $factoryPresetDestination
+        Copy-Item -Path (Join-Path $factoryPresetsSource '*') -Destination $factoryPresetDestination -Recurse -Force
+    }
 }
 else {
     Write-Warning "Factory presets not found at '$factoryPresetsSource'; bank will not be bundled."

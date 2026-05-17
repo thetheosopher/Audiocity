@@ -68,18 +68,18 @@ function Resolve-ToolPath {
         [string[]]$Candidates
     )
 
+    $command = Get-Command $CommandName -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        return $command.Source
+    }
+
     foreach ($candidate in $Candidates) {
         if ($candidate -and (Test-Path -LiteralPath $candidate)) {
             return (Resolve-Path -LiteralPath $candidate).Path
         }
     }
 
-    $command = Get-Command $CommandName -ErrorAction SilentlyContinue
-    if ($null -ne $command) {
-        return $command.Source
-    }
-
-    throw "$CommandName was not found. Install Visual Studio 2022 with CMake tools or add $CommandName to PATH."
+    throw "$CommandName was not found. Install CMake or Visual Studio CMake tools and add $CommandName to PATH."
 }
 
 function Resolve-WorkspacePath {

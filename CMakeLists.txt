@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(Audiocity VERSION 1.2.0 LANGUAGES C CXX)
+project(Audiocity VERSION 1.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -180,12 +180,16 @@ set(AUDIOCITY_FACTORY_PRESETS_DIR "${CMAKE_SOURCE_DIR}/assets/factory_presets")
 if (EXISTS "${AUDIOCITY_FACTORY_PRESETS_DIR}")
     if (TARGET Audiocity_Standalone)
         add_custom_command(TARGET Audiocity_Standalone POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E rm -rf
+                    "$<TARGET_FILE_DIR:Audiocity_Standalone>/FactoryPresets"
             COMMAND ${CMAKE_COMMAND} -E copy_directory
                 "${AUDIOCITY_FACTORY_PRESETS_DIR}"
                 "$<TARGET_FILE_DIR:Audiocity_Standalone>/FactoryPresets")
     endif ()
     if (TARGET Audiocity_VST3)
         add_custom_command(TARGET Audiocity_VST3 POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E rm -rf
+                    "$<TARGET_FILE_DIR:Audiocity_VST3>/../Resources/FactoryPresets"
             COMMAND ${CMAKE_COMMAND} -E copy_directory
                 "${AUDIOCITY_FACTORY_PRESETS_DIR}"
                 "$<TARGET_FILE_DIR:Audiocity_VST3>/../Resources/FactoryPresets")

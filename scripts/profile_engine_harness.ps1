@@ -80,6 +80,11 @@ function Resolve-ToolPath {
         [string[]]$WildcardCandidates = @()
     )
 
+    $command = Get-Command $CommandName -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        return $command.Source
+    }
+
     foreach ($candidate in $Candidates) {
         if ($candidate -and (Test-Path -LiteralPath $candidate)) {
             return (Resolve-Path -LiteralPath $candidate).Path
@@ -91,11 +96,6 @@ function Resolve-ToolPath {
         if ($matches.Count -gt 0) {
             return $matches[0].FullName
         }
-    }
-
-    $command = Get-Command $CommandName -ErrorAction SilentlyContinue
-    if ($null -ne $command) {
-        return $command.Source
     }
 
     throw "$CommandName was not found. Install the required Visual Studio and Windows Performance Toolkit components or add $CommandName to PATH."
