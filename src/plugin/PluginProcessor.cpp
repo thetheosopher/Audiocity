@@ -7,6 +7,7 @@
 #include "../engine/LegacyNkiProbe.h"
 #include "../engine/RexSliceProgram.h"
 #include "../engine/SfzImporter.h"
+#include "../engine/SfzExporter.h"
 #include "../engine/Sf2Importer.h"
 #include "../engine/DecentSamplerImporter.h"
 #include "../engine/BitwigMultisampleImporter.h"
@@ -1878,6 +1879,22 @@ bool AudiocityAudioProcessor::loadPlaybackPresetXml(const juce::String& xmlText,
     }
 
     const auto filteredPresetState = buildPlaybackPresetStateTree(presetState);
+    const auto presetChangesSampleSource =
+        filteredPresetState.getProperty(kEmbeddedSampleData).getBinaryData() != nullptr
+        || filteredPresetState.getProperty(kGeneratedWaveformData).getBinaryData() != nullptr
+        || filteredPresetState.getProperty(kCapturedSampleData).getBinaryData() != nullptr
+        || filteredPresetState.getProperty(kSamplePath).toString().isNotEmpty()
+        || audiocity::plugin::readImportedProgramStatePath(filteredPresetState).isNotEmpty();
+
+    if (presetChangesSampleSource)
+    {
+        if (!filteredPresetState.hasProperty(kSampleWindowStart))
+            currentState.removeProperty(kSampleWindowStart, nullptr);
+
+        if (!filteredPresetState.hasProperty(kSampleWindowEnd))
+            currentState.removeProperty(kSampleWindowEnd, nullptr);
+    }
+
     for (int propertyIndex = 0; propertyIndex < filteredPresetState.getNumProperties(); ++propertyIndex)
     {
         const auto propertyName = filteredPresetState.getPropertyName(propertyIndex);
@@ -2184,6 +2201,116 @@ bool AudiocityAudioProcessor::updateImportedProgramZoneMappings(
     return true;
 }
 
+bool AudiocityAudioProcessor::ensureImportedProgramSampleAsset(const juce::File& sampleFile,
+                                                              int& sampleAssetIndexOut,
+                                                              juce::String& errorOut)
+{
+    sampleAssetIndexOut = -1;
+    errorOut.clear();
+
+    if (!hasImportedProgram())
+    {
+        errorOut = "No library is currently loaded; create or open one before adding samples.";
+        return false;
+    }
+
+    if (!sampleFile.existsAsFile())
+    {
+        errorOut = "Sample file does not exist: " + sampleFile.getFullPathName();
+        return false;
+    }
+
+    const auto samplePath = sampleFile.getFullPathName();
+    auto findExistingSampleAssetIndex = [&](const audiocity::engine::Program& program) -> int
+    {
+        for (int assetIndex = 0; assetIndex < static_cast<int>(program.sampleAssets.size()); ++assetIndex)
+        {
+            const auto& asset = program.sampleAssets[static_cast<std::size_t>(assetIndex)];
+            const auto assetPath = juce::String(asset.sourcePath);
+            if (assetPath.isNotEmpty() && assetPath.equalsIgnoreCase(samplePath))
+                return assetIndex;
+        }
+
+        return -1;
+    };
+
+    {
+        std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+        if (!importedProgramLoaded_.load(std::memory_order_relaxed))
+        {
+            errorOut = "Library state was cleared while adding sample.";
+            return false;
+        }
+
+        const auto existingIndex = findExistingSampleAssetIndex(importedProgram_);
+        if (existingIndex >= 0)
+        {
+            sampleAssetIndexOut = existingIndex;
+            return true;
+        }
+    }
+
+    juce::AudioBuffer<float> buffer;
+    double sampleRateHz = 44100.0;
+    if (!readAudioFileToBuffer(sampleFile, buffer, sampleRateHz))
+    {
+        errorOut = "Failed to decode audio file: " + sampleFile.getFullPathName();
+        return false;
+    }
+
+    if (buffer.getNumChannels() <= 0 || buffer.getNumSamples() <= 0)
+    {
+        errorOut = "Decoded audio buffer was empty: " + sampleFile.getFullPathName();
+        return false;
+    }
+
+    audiocity::engine::Program programToPublish;
+    std::vector<juce::AudioBuffer<float>> sampleDataToPublish;
+    bool publishUpdatedProgram = false;
+
+    {
+        std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+        if (!importedProgramLoaded_.load(std::memory_order_relaxed))
+        {
+            errorOut = "Library state was cleared while adding sample.";
+            return false;
+        }
+
+        const auto existingIndex = findExistingSampleAssetIndex(importedProgram_);
+        if (existingIndex >= 0)
+        {
+            sampleAssetIndexOut = existingIndex;
+            return true;
+        }
+
+        audiocity::engine::SampleAsset asset;
+        asset.sourcePath = samplePath.toStdString();
+        asset.displayName = sampleFile.getFileNameWithoutExtension().toStdString();
+        asset.lengthSamples = buffer.getNumSamples();
+        asset.numChannels = buffer.getNumChannels();
+        asset.sampleRateHz = sampleRateHz;
+        asset.rootMidiNote = 60;
+        asset.bitDepth = 0;
+        asset.embeddedInProgram = false;
+
+        importedProgram_.sampleAssets.push_back(std::move(asset));
+        importedProgramSampleDataByAsset_.push_back(buffer);
+        sampleAssetIndexOut = static_cast<int>(importedProgram_.sampleAssets.size()) - 1;
+
+        refreshImportedProgramDerivedStateLocked("Sample added: " + sampleFile.getFileName());
+        captureImportedProgramSnapshotLocked(programToPublish, sampleDataToPublish);
+        publishUpdatedProgram = true;
+    }
+
+    if (publishUpdatedProgram)
+    {
+        engine_.panic();
+        engine_.setProgram(programToPublish, sampleDataToPublish);
+    }
+
+    return sampleAssetIndexOut >= 0;
+}
+
 int AudiocityAudioProcessor::createImportedProgramZoneForSampleAsset(const int sampleAssetIndex,
                                                                      const int seedZoneIndex)
 {
@@ -2219,6 +2346,135 @@ int AudiocityAudioProcessor::createImportedProgramZoneForSampleAsset(const int s
 int AudiocityAudioProcessor::createImportedProgramZone(const int seedZoneIndex)
 {
     return createImportedProgramZoneForSampleAsset(-1, seedZoneIndex);
+}
+
+bool AudiocityAudioProcessor::createEmptyImportedSfzProgram(const juce::String& libraryName)
+{
+    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
+    stopGeneratedWaveformPreview();
+
+    auto trimmedName = libraryName.trim();
+    if (trimmedName.isEmpty())
+        trimmedName = "New Library";
+
+    audiocity::engine::Program program;
+    program.name = trimmedName.toStdString();
+
+    const std::vector<juce::AudioBuffer<float>> sampleData; // empty
+
+    const auto destinationFolder = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                                       .getChildFile("Audiocity")
+                                       .getChildFile("Libraries");
+    const auto syntheticPath = destinationFolder.getChildFile(trimmedName + ".sfz");
+
+    engine_.panic();
+    engine_.clearSamplePath();
+    engine_.setProgram(program, sampleData);
+    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
+
+    setImportedProgramMetadata(syntheticPath,
+                               audiocity::plugin::ImportedProgramFormat::sfz,
+                               program,
+                               sampleData,
+                               juce::String("New empty SFZ library created"),
+                               0,
+                               -1);
+    return true;
+}
+
+bool AudiocityAudioProcessor::addSampleAssetToImportedProgram(const juce::File& sampleFile,
+                                                              juce::String& errorOut)
+{
+    int sampleAssetIndex = -1;
+    if (!ensureImportedProgramSampleAsset(sampleFile, sampleAssetIndex, errorOut))
+        return false;
+
+    if (createImportedProgramZoneForSampleAsset(sampleAssetIndex, -1) < 0)
+    {
+        errorOut = "Failed to create zone for sample asset.";
+        return false;
+    }
+
+    return true;
+}
+
+bool AudiocityAudioProcessor::saveImportedProgramAsSfz(const juce::File& destSfzFile,
+                                                       const bool copySamples,
+                                                       juce::String& errorOut,
+                                                       juce::StringArray* warningsOut)
+{
+    errorOut.clear();
+    if (warningsOut != nullptr)
+        warningsOut->clear();
+
+    if (!hasImportedProgram())
+    {
+        errorOut = "No library is currently loaded.";
+        return false;
+    }
+    if (destSfzFile == juce::File{})
+    {
+        errorOut = "Destination path is empty.";
+        return false;
+    }
+
+    audiocity::engine::Program snapshotProgram;
+    std::vector<juce::AudioBuffer<float>> snapshotSamples;
+    juce::String libraryDisplayName;
+    {
+        std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+        captureImportedProgramSnapshotLocked(snapshotProgram, snapshotSamples);
+        libraryDisplayName = importedProgramName_;
+    }
+
+    audiocity::engine::sfz_export::ExportOptions options;
+    options.copySamples = copySamples;
+    options.libraryDisplayName = libraryDisplayName.toStdString();
+
+    auto result = audiocity::engine::sfz_export::exportProgramToSfz(destSfzFile,
+                                                                     snapshotProgram,
+                                                                     snapshotSamples,
+                                                                     options);
+
+    if (warningsOut != nullptr)
+    {
+        for (const auto& d : result.diagnostics)
+        {
+            if (d.severity == audiocity::engine::sfz_export::ExportDiagnostic::Severity::warning)
+                warningsOut->add(juce::String::fromUTF8(d.message.c_str()));
+        }
+    }
+
+    if (result.hasErrors())
+    {
+        for (const auto& d : result.diagnostics)
+        {
+            if (d.severity == audiocity::engine::sfz_export::ExportDiagnostic::Severity::error)
+            {
+                errorOut = juce::String::fromUTF8(d.message.c_str());
+                break;
+            }
+        }
+        if (errorOut.isEmpty())
+            errorOut = "SFZ export failed.";
+        return false;
+    }
+
+    // Track the on-disk SFZ path so subsequent saves and the diagnostics panel
+    // know where the library lives.
+    {
+        std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+        importedProgramPath_ = destSfzFile.getFullPathName();
+        importedProgramFormat_ = audiocity::plugin::ImportedProgramFormat::sfz;
+        lastImportDiagnosticSummary_ = "Library saved to "
+            + destSfzFile.getFileName()
+            + " (" + juce::String(result.writtenRegionCount) + " regions, "
+            + juce::String(result.copiedSampleCount) + " samples copied)";
+    }
+
+    return true;
 }
 
 int AudiocityAudioProcessor::duplicateImportedProgramZone(const int zoneIndex)

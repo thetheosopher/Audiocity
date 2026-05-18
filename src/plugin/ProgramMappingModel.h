@@ -67,6 +67,7 @@ struct ProgramZoneListRow
 struct ProgramZoneEdit
 {
     int zoneIndex = -1;
+    int sampleAssetIndex = -1;
     int keyLow = audiocity::engine::kMidiNoteMin;
     int keyHigh = audiocity::engine::kMidiNoteMax;
     int velocityLow = audiocity::engine::kVelocityMin;
@@ -90,6 +91,7 @@ struct ProgramZoneEdit
     audiocity::engine::RoundRobinMode roundRobinMode = audiocity::engine::RoundRobinMode::ordered;
     bool hasGainDb = false;
     bool hasPan = false;
+    bool hasSampleAssetIndex = false;
     bool hasSampleStart = false;
     bool hasSampleEnd = false;
     bool hasLoopStart = false;

@@ -108,6 +108,7 @@ target_sources(Audiocity
         src/plugin/PresetJson.cpp
         src/plugin/ProgramMappingModel.cpp
         src/plugin/PlayerPadState.cpp
+        src/plugin/SampleBrowserTooltip.cpp
         src/plugin/CcLearnDial.cpp
         src/plugin/LibraryFileIndex.cpp
         src/plugin/LibraryMetadata.cpp
@@ -116,6 +117,7 @@ target_sources(Audiocity
         src/engine/LegacyNkiProbe.cpp
         src/engine/RexLoader.cpp
         src/engine/SfzImporter.cpp
+        src/engine/SfzExporter.cpp
         src/engine/Sf2Importer.cpp
         src/engine/DecentSamplerImporter.cpp
         src/engine/BitwigMultisampleImporter.cpp

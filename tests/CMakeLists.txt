@@ -5,6 +5,7 @@ set(AUDIOCITY_ENGINE_TEST_COMMON_SOURCES
     ../src/plugin/ProgramMappingModel.cpp
     ../src/plugin/CcLearnDial.cpp
     ../src/plugin/PlayerPadState.cpp
+    ../src/plugin/SampleBrowserTooltip.cpp
     ../src/plugin/LibraryFileIndex.cpp
     ../src/plugin/LibraryMetadata.cpp
     ../src/engine/AudioFileSupport.cpp
@@ -12,6 +13,7 @@ set(AUDIOCITY_ENGINE_TEST_COMMON_SOURCES
     ../src/engine/LegacyNkiProbe.cpp
     ../src/engine/RexLoader.cpp
     ../src/engine/SfzImporter.cpp
+    ../src/engine/SfzExporter.cpp
     ../src/engine/Sf2Importer.cpp
     ../src/engine/DecentSamplerImporter.cpp
     ../src/engine/BitwigMultisampleImporter.cpp
@@ -189,6 +191,7 @@ set(AUDIOCITY_UI_SNAPSHOT_SHARED_SOURCES
     ../src/plugin/PresetJson.cpp
     ../src/plugin/ProgramMappingModel.cpp
     ../src/plugin/PlayerPadState.cpp
+    ../src/plugin/SampleBrowserTooltip.cpp
     ../src/plugin/CcLearnDial.cpp
     ../src/plugin/LibraryFileIndex.cpp
     ../src/plugin/LibraryMetadata.cpp
@@ -197,6 +200,7 @@ set(AUDIOCITY_UI_SNAPSHOT_SHARED_SOURCES
     ../src/engine/LegacyNkiProbe.cpp
     ../src/engine/RexLoader.cpp
     ../src/engine/SfzImporter.cpp
+    ../src/engine/SfzExporter.cpp
     ../src/engine/Sf2Importer.cpp
     ../src/engine/DecentSamplerImporter.cpp
     ../src/engine/BitwigMultisampleImporter.cpp
@@ -209,7 +213,17 @@ add_executable(audiocity_ui_snapshot_harness
     UiScreenshotHarness.cpp
     ${AUDIOCITY_UI_SNAPSHOT_SHARED_SOURCES})
 
+add_executable(audiocity_preset_runtime_smoke
+    PresetRuntimeSmoke.cpp
+    ${AUDIOCITY_UI_SNAPSHOT_SHARED_SOURCES})
+
 target_include_directories(audiocity_ui_snapshot_harness
+    PRIVATE
+        ../src
+        ../third_party/REXSDK_Win_1.9.2
+        ${CMAKE_BINARY_DIR}/Audiocity_artefacts/JuceLibraryCode)
+
+target_include_directories(audiocity_preset_runtime_smoke
     PRIVATE
         ../src
         ../third_party/REXSDK_Win_1.9.2
@@ -217,13 +231,28 @@ target_include_directories(audiocity_ui_snapshot_harness
 
 if (NOT AUDIOCITY_ASIO_HEADER_DIR STREQUAL "")
     target_include_directories(audiocity_ui_snapshot_harness PRIVATE "${AUDIOCITY_ASIO_HEADER_DIR}")
+    target_include_directories(audiocity_preset_runtime_smoke PRIVATE "${AUDIOCITY_ASIO_HEADER_DIR}")
 endif ()
 
 if (NOT AUDIOCITY_ASIO_HOST_DIR STREQUAL "")
     target_include_directories(audiocity_ui_snapshot_harness PRIVATE "${AUDIOCITY_ASIO_HOST_DIR}")
+    target_include_directories(audiocity_preset_runtime_smoke PRIVATE "${AUDIOCITY_ASIO_HOST_DIR}")
 endif ()
 
 target_compile_definitions(audiocity_ui_snapshot_harness
+    PRIVATE
+        AUDIOCITY_UI_SNAPSHOT_HARNESS=1
+        AUDIOCITY_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        REX_WINDOWS=1
+        REX_MAC=0
+        JUCE_ENABLE_LIVE_CONSTANT_EDITOR=0
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_ASIO=${AUDIOCITY_JUCE_ASIO}
+        JucePlugin_Name="Audiocity"
+        JucePlugin_VersionString="${PROJECT_VERSION}")
+
+target_compile_definitions(audiocity_preset_runtime_smoke
     PRIVATE
         AUDIOCITY_UI_SNAPSHOT_HARNESS=1
         AUDIOCITY_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
@@ -252,9 +281,27 @@ target_link_libraries(audiocity_ui_snapshot_harness
         juce::juce_gui_basics
         juce::juce_gui_extra)
 
+target_link_libraries(audiocity_preset_runtime_smoke
+    PRIVATE
+        AudiocityBinaryData
+        audiocity_rex_sdk
+        juce::juce_audio_basics
+        juce::juce_audio_devices
+        juce::juce_audio_formats
+        juce::juce_audio_processors
+        juce::juce_audio_utils
+        juce::juce_data_structures
+        juce::juce_dsp
+        juce::juce_events
+        juce::juce_graphics
+        juce::juce_gui_basics
+        juce::juce_gui_extra)
+
 if (MSVC)
     target_compile_options(audiocity_ui_snapshot_harness PRIVATE /W4 /WX /permissive- /FS)
     target_compile_options(audiocity_ui_snapshot_harness PRIVATE $<$<CONFIG:Debug>:/Z7>)
+    target_compile_options(audiocity_preset_runtime_smoke PRIVATE /W4 /WX /permissive- /FS)
+    target_compile_options(audiocity_preset_runtime_smoke PRIVATE $<$<CONFIG:Debug>:/Z7>)
 endif ()
 
 add_executable(audiocity_ui_snapshot_core_smoke
@@ -319,4 +366,8 @@ add_test(
         -DAUDIOCITY_UI_SNAPSHOT_DIR=${CMAKE_BINARY_DIR}/ui-snapshots
         -DAUDIOCITY_UI_SNAPSHOT_BASELINE_DIR=${CMAKE_CURRENT_LIST_DIR}/ui-snapshot-baselines/current
         -P "${CMAKE_CURRENT_LIST_DIR}/RunUiSnapshotHarness.cmake")
+
+add_test(
+    NAME audiocity_preset_runtime_smoke
+    COMMAND "$<TARGET_FILE:audiocity_preset_runtime_smoke>")
 

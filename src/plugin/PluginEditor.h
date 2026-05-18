@@ -100,7 +100,8 @@ private:
     CcLearnDial macro2AmpDial_{ "M2 Amp", -100, 100, 1, "%", 0 };
 };
 
-class MappingOverviewComponent final : public juce::Component
+class MappingOverviewComponent final : public juce::Component,
+                                      public juce::DragAndDropTarget
 {
 public:
     void setRows(std::vector<audiocity::plugin::ProgramZoneListRow> rows);
@@ -110,9 +111,16 @@ public:
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
+    bool isInterestedInDragSource(const SourceDetails& dragSourceDetails) override;
+    void itemDragEnter(const SourceDetails& dragSourceDetails) override;
+    void itemDragMove(const SourceDetails& dragSourceDetails) override;
+    void itemDragExit(const SourceDetails& dragSourceDetails) override;
+    void itemDropped(const SourceDetails& dragSourceDetails) override;
 
     std::function<void(int)> onZoneSelected;
     std::function<void(const audiocity::plugin::ProgramZoneEdit&)> onZoneEditCommitted;
+    std::function<void(const juce::File&, int)> onSampleDroppedOnZone;
+    std::function<void(const juce::File&, int)> onSampleDroppedOnKeyboard;
 
 private:
     struct OverviewLayout
@@ -141,14 +149,19 @@ private:
         const audiocity::plugin::ProgramZoneListRow& row,
         juce::Point<int> position,
         juce::Rectangle<int> plot) const;
+    [[nodiscard]] int findKeyboardNoteAt(juce::Point<int> position) const;
     [[nodiscard]] int positionToNoteValue(int x, juce::Rectangle<int> plot) const;
     [[nodiscard]] int positionToVelocityValue(int y, juce::Rectangle<int> plot) const;
     void updateDragPreview(juce::Point<int> position);
+    void updateSampleDropPreview(juce::Point<int> position);
+    void clearSampleDropPreview();
 
     std::vector<audiocity::plugin::ProgramZoneListRow> rows_;
     int selectedZoneIndex_ = -1;
     std::bitset<128> highlightedMidiNotes_;
     std::optional<DragState> dragState_;
+    int sampleDropZoneIndex_ = -1;
+    int sampleDropKeyboardNote_ = -1;
 };
 
 class PerformanceStripStatusDisplay final : public juce::Component
@@ -186,6 +199,7 @@ private:
 
 class AudiocityAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                             public juce::FileDragAndDropTarget,
+                                            public juce::DragAndDropContainer,
                                             private juce::MidiKeyboardStateListener,
                                             private juce::ListBoxModel,
                                             private juce::Timer
@@ -221,9 +235,11 @@ private:
 
     int getNumRows() override;
     void paintListBoxItem(int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected) override;
+    juce::var getDragSourceDescription(const juce::SparseSet<int>& rowsToDescribe) override;
     void listBoxItemClicked(int row, const juce::MouseEvent& event) override;
     void listBoxItemDoubleClicked(int row, const juce::MouseEvent& event) override;
     void selectedRowsChanged(int lastRowSelected) override;
+    juce::String getTooltipForRow(int row) override;
     void returnKeyPressed(int lastRowSelected) override;
 
     void timerCallback() override;
@@ -485,6 +501,21 @@ private:
         int recentRank = -1;
     };
 
+    class SampleBrowserListBox final : public juce::ListBox
+    {
+    public:
+        explicit SampleBrowserListBox(AudiocityAudioProcessorEditor& owner) : owner_(owner) {}
+
+        void mouseDown(const juce::MouseEvent& event) override;
+        void mouseDrag(const juce::MouseEvent& event) override;
+        void mouseUp(const juce::MouseEvent& event) override;
+
+    private:
+        AudiocityAudioProcessorEditor& owner_;
+        int dragCandidateRow_ = -1;
+        bool dragInProgress_ = false;
+    };
+
     class MappingZoneListModel final : public juce::ListBoxModel
     {
     public:
@@ -498,6 +529,26 @@ private:
 
     private:
         AudiocityAudioProcessorEditor& owner_;
+    };
+
+    class MappingZoneListBox final : public juce::ListBox,
+                                     public juce::DragAndDropTarget
+    {
+    public:
+        explicit MappingZoneListBox(AudiocityAudioProcessorEditor& owner) : owner_(owner) {}
+
+        bool isInterestedInDragSource(const SourceDetails& dragSourceDetails) override;
+        void itemDragEnter(const SourceDetails& dragSourceDetails) override;
+        void itemDragMove(const SourceDetails& dragSourceDetails) override;
+        void itemDragExit(const SourceDetails& dragSourceDetails) override;
+        void itemDropped(const SourceDetails& dragSourceDetails) override;
+        void paintOverChildren(juce::Graphics& g) override;
+
+    private:
+        void updateDropRow(juce::Point<int> position);
+
+        AudiocityAudioProcessorEditor& owner_;
+        int dropRow_ = -1;
     };
 
     std::vector<SampleListEntry> allSampleEntries_;
@@ -524,7 +575,7 @@ private:
     juce::ComboBox sampleBrowserTagFilterCombo_;
     juce::TextEditor sampleBrowserTagsEditor_;
     juce::TextButton sampleBrowserApplyTagsButton_{ "Apply Tags" };
-    juce::ListBox sampleBrowserListBox_;
+    SampleBrowserListBox sampleBrowserListBox_{ *this };
     juce::Label sampleBrowserCountLabel_;
     juce::Label sampleBrowserPreviewLabel_{ {}, "" };
 
@@ -532,13 +583,16 @@ private:
     std::vector<audiocity::plugin::ProgramZoneListRow> mappingZoneRows_;
     MappingZoneListModel mappingZoneListModel_;
     juce::Label mappingSummaryLabel_{ {}, "No imported program" };
+    juce::TextButton mappingNewLibraryButton_{ "New Library" };
+    juce::TextButton mappingAddSampleButton_{ "Add Sample" };
+    juce::TextButton mappingSaveLibraryButton_{ "Save Library" };
     juce::TextButton mappingRefreshButton_{ "Refresh" };
     juce::TextButton mappingCreateZoneButton_{ "New Zone" };
     juce::TextButton mappingDuplicateZoneButton_{ "Duplicate" };
     juce::TextButton mappingSplitZoneButton_{ "Split" };
     juce::TextButton mappingDeleteZoneButton_{ "Delete" };
     MappingOverviewComponent mappingOverview_;
-    juce::ListBox mappingZoneListBox_;
+    MappingZoneListBox mappingZoneListBox_{ *this };
     juce::TextEditor mappingDetailsText_;
     juce::Label mappingEditKeyLowLabel_{ {}, "Key Low" };
     juce::Slider mappingEditKeyLowSlider_;
@@ -1079,8 +1133,10 @@ private:
     void updateMappingDetails();
     void updateMappingEditControls();
     void applySelectedMappingZoneEdit();
+    void beginSampleBrowserDrag(int row, const juce::MouseEvent& event);
     void createMappingZone();
     void createMappingZoneForSampleAsset(int sampleAssetIndex, int seedZoneIndex);
+    void createMappingZoneForSampleAssetAtNote(int sampleAssetIndex, int midiNote);
     void duplicateSelectedMappingZone();
     void splitSelectedMappingZone();
     void deleteSelectedMappingZone();
@@ -1089,7 +1145,16 @@ private:
     void mapSelectedMappingZonesToRootNotes();
     void spreadSelectedMappingZonesAcrossKeyRange();
     void deriveSelectedMappingZoneRootsFromKeyRange();
+    void createNewLibraryFromScratch();
+    void addSampleToCurrentLibrary();
+    void saveCurrentLibraryAs();
     bool commitMappingZoneEdit(const audiocity::plugin::ProgramZoneEdit& edit, const juce::String& statusText);
+    [[nodiscard]] bool isSampleBrowserDragSource(const juce::DragAndDropTarget::SourceDetails& dragSourceDetails) const;
+    [[nodiscard]] juce::File sampleFileFromDragSource(const juce::DragAndDropTarget::SourceDetails& dragSourceDetails) const;
+    bool ensureDraggedSampleAvailable(const juce::File& sampleFile, int& sampleAssetIndexOut);
+    bool assignDraggedSampleToMappingZone(const juce::File& sampleFile, int zoneIndex);
+    bool createMappingZoneFromDraggedSample(const juce::File& sampleFile, int midiNote);
+    void handleMappingZoneListSampleDrop(int row, const juce::DragAndDropTarget::SourceDetails& dragSourceDetails);
     void paintMappingListRow(int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected);
     void refreshBrowserEntryLibraryFlags();
     void updateBrowserLibraryControls();

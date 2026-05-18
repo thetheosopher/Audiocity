@@ -96,6 +96,9 @@ public:
     bool applyImportedProgramMappingState(const juce::ValueTree& mappingState);
     bool updateImportedProgramZoneMapping(const audiocity::plugin::ProgramZoneEdit& edit);
     bool updateImportedProgramZoneMappings(const std::vector<audiocity::plugin::ProgramZoneEdit>& edits);
+    bool ensureImportedProgramSampleAsset(const juce::File& sampleFile,
+                                         int& sampleAssetIndexOut,
+                                         juce::String& errorOut);
     [[nodiscard]] int createImportedProgramZoneForSampleAsset(int sampleAssetIndex, int seedZoneIndex = -1);
     [[nodiscard]] int createImportedProgramZone(int seedZoneIndex = -1);
     [[nodiscard]] int duplicateImportedProgramZone(int zoneIndex);
@@ -108,6 +111,15 @@ public:
     bool mapImportedProgramZonesToRootNotes(const std::vector<int>& zoneIndices);
     bool spreadImportedProgramZonesAcrossKeyRange(const std::vector<int>& zoneIndices);
     bool deriveImportedProgramZoneRootsFromKeyRanges(const std::vector<int>& zoneIndices);
+
+    // Library authoring (create empty, add sample, save as SFZ). See docs/16-library-authoring-plan.md.
+    bool createEmptyImportedSfzProgram(const juce::String& libraryName);
+    bool addSampleAssetToImportedProgram(const juce::File& sampleFile, juce::String& errorOut);
+    bool saveImportedProgramAsSfz(const juce::File& destSfzFile,
+                                  bool copySamples,
+                                  juce::String& errorOut,
+                                  juce::StringArray* warningsOut = nullptr);
+
     [[nodiscard]] juce::String getLastImportDiagnosticSummary() const;
     [[nodiscard]] bool isRexRuntimeAvailable() const noexcept { return engine_.isRexRuntimeAvailable(); }
     void loadGeneratedWaveformAsSample(const std::vector<float>& waveform, int rootMidiNote = 60);

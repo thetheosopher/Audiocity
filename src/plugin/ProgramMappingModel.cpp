@@ -476,6 +476,17 @@ bool applyProgramZoneEdit(audiocity::engine::Program& program, const ProgramZone
         return false;
 
     auto& zone = program.zones[static_cast<std::size_t>(edit.zoneIndex)];
+
+    const auto sampleAssignmentChanged = edit.hasSampleAssetIndex
+        && edit.sampleAssetIndex != zone.sampleAssetIndex;
+    if (edit.hasSampleAssetIndex)
+    {
+        if (!isValidSampleAssetIndex(program, edit.sampleAssetIndex))
+            return false;
+
+        zone.sampleAssetIndex = edit.sampleAssetIndex;
+    }
+
     zone.keyRange = audiocity::engine::MidiRange::fromUnordered(edit.keyLow, edit.keyHigh);
     zone.velocityRange = audiocity::engine::VelocityRange::fromUnordered(edit.velocityLow, edit.velocityHigh);
 
@@ -500,7 +511,7 @@ bool applyProgramZoneEdit(audiocity::engine::Program& program, const ProgramZone
     const auto sampleLength = resolveSampleLength(program, zone);
     const auto maxSampleIndex = juce::jmax(0, sampleLength - 1);
 
-    if (edit.hasSampleStart || edit.hasSampleEnd)
+    if (sampleAssignmentChanged || edit.hasSampleStart || edit.hasSampleEnd)
     {
         auto nextSampleStart = juce::jlimit(0,
                                             maxSampleIndex,
@@ -512,7 +523,7 @@ bool applyProgramZoneEdit(audiocity::engine::Program& program, const ProgramZone
         zone.sampleEndExclusive = nextSampleEnd + 1;
     }
 
-    if (edit.hasLoopStart || edit.hasLoopEnd)
+    if (sampleAssignmentChanged || edit.hasLoopStart || edit.hasLoopEnd)
     {
         const auto sampleStart = zone.sampleStart;
         const auto sampleEnd = resolveSampleEndInclusive(zone, sampleLength);
@@ -1062,6 +1073,11 @@ std::vector<ProgramZoneEdit> parseProgramZoneMappingState(const juce::ValueTree&
 
         ProgramZoneEdit edit;
         edit.zoneIndex = static_cast<int>(child.getProperty(kZoneIndex, -1));
+        if (child.hasProperty(kZoneSampleAssetIndex))
+        {
+            edit.sampleAssetIndex = static_cast<int>(child.getProperty(kZoneSampleAssetIndex, -1));
+            edit.hasSampleAssetIndex = true;
+        }
         edit.keyLow = static_cast<int>(child.getProperty(kKeyLow, audiocity::engine::kMidiNoteMin));
         edit.keyHigh = static_cast<int>(child.getProperty(kKeyHigh, audiocity::engine::kMidiNoteMax));
         edit.velocityLow = static_cast<int>(child.getProperty(kVelocityLow, audiocity::engine::kVelocityMin));

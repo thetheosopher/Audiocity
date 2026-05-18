@@ -10,6 +10,7 @@
 #include "../src/engine/SettingsUndoHistory.h"
 #include "../src/engine/TransientSliceProgram.h"
 #include "../src/engine/SfzImporter.h"
+#include "../src/engine/SfzExporter.h"
 #include "../src/engine/Sf2Importer.h"
 #include "../src/engine/DecentSamplerImporter.h"
 #include "../src/engine/BitwigMultisampleImporter.h"
@@ -24,6 +25,7 @@
 #include "../src/plugin/PlayerPadState.h"
 #include "../src/plugin/ProgramMappingModel.h"
 #include "../src/plugin/ProgramMappingUndoHistory.h"
+#include "../src/plugin/SampleBrowserTooltip.h"
 
 #include <cmath>
 #include <array>
@@ -988,7 +990,14 @@ bool runProgramMappingEditTest()
 
     SampleAsset sample;
     sample.displayName = "tone.wav";
+    sample.lengthSamples = 512;
     program.sampleAssets.push_back(sample);
+
+    SampleAsset alternateSample;
+    alternateSample.displayName = "alt.wav";
+    alternateSample.lengthSamples = 96;
+    alternateSample.rootMidiNote = 67;
+    program.sampleAssets.push_back(alternateSample);
 
     Group group;
     group.keyRange = MidiRange::single(60);
@@ -1022,6 +1031,10 @@ bool runProgramMappingEditTest()
     second.loopMode = ZoneLoopMode::sustain;
     second.velocityFadeIn = VelocityFadeRange::fromUnordered(16, 48);
     second.velocityFadeOut = VelocityFadeRange::fromUnordered(96, 120);
+    second.sampleStart = 12;
+    second.sampleEndExclusive = 160;
+    second.loopStart = 24;
+    second.loopEndExclusive = 150;
     program.zones.push_back(second);
 
     audiocity::plugin::ProgramZoneEdit edit;
@@ -1073,7 +1086,26 @@ bool runProgramMappingEditTest()
     if (!audiocity::plugin::applyProgramZoneEdit(program, rangeOnlyEdit))
         return false;
 
-    if (audiocity::plugin::applyProgramZoneEdit(program, { 99, 0, 127, 0, 127, 60 }))
+    audiocity::plugin::ProgramZoneEdit sampleSwapEdit;
+    sampleSwapEdit.zoneIndex = 1;
+    sampleSwapEdit.sampleAssetIndex = 1;
+    sampleSwapEdit.hasSampleAssetIndex = true;
+    sampleSwapEdit.keyLow = 64;
+    sampleSwapEdit.keyHigh = 64;
+    sampleSwapEdit.velocityLow = 10;
+    sampleSwapEdit.velocityHigh = 11;
+    sampleSwapEdit.rootMidiNote = 65;
+    if (!audiocity::plugin::applyProgramZoneEdit(program, sampleSwapEdit))
+        return false;
+
+    audiocity::plugin::ProgramZoneEdit invalidEdit;
+    invalidEdit.zoneIndex = 99;
+    invalidEdit.keyLow = 0;
+    invalidEdit.keyHigh = 127;
+    invalidEdit.velocityLow = 0;
+    invalidEdit.velocityHigh = 127;
+    invalidEdit.rootMidiNote = 60;
+    if (audiocity::plugin::applyProgramZoneEdit(program, invalidEdit))
         return false;
 
     const auto& editedZone = program.zones[0];
@@ -1104,6 +1136,11 @@ bool runProgramMappingEditTest()
         && !untouchedZone.velocityFadeIn.isEnabled()
         && !untouchedZone.velocityFadeOut.isEnabled()
         && untouchedZone.rootMidiNote == 65
+        && untouchedZone.sampleAssetIndex == 1
+        && untouchedZone.sampleStart == 12
+        && untouchedZone.sampleEndExclusive == 96
+        && untouchedZone.loopStart == 24
+        && untouchedZone.loopEndExclusive == 96
         && std::abs(untouchedZone.gainDb - 2.0f) <= 1.0e-6f
         && std::abs(untouchedZone.pan - 0.10f) <= 1.0e-6f
         && untouchedZone.roundRobinGroup == 3
@@ -1782,8 +1819,22 @@ bool runProgramMappingAtomicBatchEditRollbackTest()
     const auto beforeFailure = audiocity::plugin::createProgramZoneMappingState(program);
 
     std::vector<audiocity::plugin::ProgramZoneEdit> failingEdits;
-    failingEdits.push_back({ 0, 48, 52, 8, 96, -1, -1, -1, -1, 50 });
-    failingEdits.push_back({ 99, 0, 127, 0, 127, 60 });
+    audiocity::plugin::ProgramZoneEdit firstFailingEdit;
+    firstFailingEdit.zoneIndex = 0;
+    firstFailingEdit.keyLow = 48;
+    firstFailingEdit.keyHigh = 52;
+    firstFailingEdit.velocityLow = 8;
+    firstFailingEdit.velocityHigh = 96;
+    firstFailingEdit.rootMidiNote = 50;
+    failingEdits.push_back(firstFailingEdit);
+    audiocity::plugin::ProgramZoneEdit secondFailingEdit;
+    secondFailingEdit.zoneIndex = 99;
+    secondFailingEdit.keyLow = 0;
+    secondFailingEdit.keyHigh = 127;
+    secondFailingEdit.velocityLow = 0;
+    secondFailingEdit.velocityHigh = 127;
+    secondFailingEdit.rootMidiNote = 60;
+    failingEdits.push_back(secondFailingEdit);
 
     if (audiocity::plugin::applyProgramZoneEditsAtomic(program, failingEdits))
         return false;
@@ -1793,8 +1844,22 @@ bool runProgramMappingAtomicBatchEditRollbackTest()
         return false;
 
     std::vector<audiocity::plugin::ProgramZoneEdit> successfulEdits;
-    successfulEdits.push_back({ 0, 48, 52, 8, 96, -1, -1, -1, -1, 50 });
-    successfulEdits.push_back({ 1, 53, 57, 16, 100, -1, -1, -1, -1, 55 });
+    audiocity::plugin::ProgramZoneEdit firstSuccessfulEdit;
+    firstSuccessfulEdit.zoneIndex = 0;
+    firstSuccessfulEdit.keyLow = 48;
+    firstSuccessfulEdit.keyHigh = 52;
+    firstSuccessfulEdit.velocityLow = 8;
+    firstSuccessfulEdit.velocityHigh = 96;
+    firstSuccessfulEdit.rootMidiNote = 50;
+    successfulEdits.push_back(firstSuccessfulEdit);
+    audiocity::plugin::ProgramZoneEdit secondSuccessfulEdit;
+    secondSuccessfulEdit.zoneIndex = 1;
+    secondSuccessfulEdit.keyLow = 53;
+    secondSuccessfulEdit.keyHigh = 57;
+    secondSuccessfulEdit.velocityLow = 16;
+    secondSuccessfulEdit.velocityHigh = 100;
+    secondSuccessfulEdit.rootMidiNote = 55;
+    successfulEdits.push_back(secondSuccessfulEdit);
 
     if (!audiocity::plugin::applyProgramZoneEditsAtomic(program, successfulEdits))
         return false;
@@ -9427,6 +9492,63 @@ bool runPlayerPadStateUtilityTest()
     return true;
 }
 
+bool runSampleBrowserTooltipFormattingTest()
+{
+    audiocity::plugin::SampleBrowserTooltipData tooltipData;
+    tooltipData.fileName = "Kick_01.wav";
+    tooltipData.relativePath = "Drums/Acoustic/Kick_01.wav";
+    tooltipData.metadataLine = "SR: 48000 Hz  Ch: 2  Bit Depth: 24  Duration: 00:01.000  Samples: 48000";
+    tooltipData.loopFormatBadge = "Apple Loop";
+    tooltipData.loopMetadataLine = "Root: C3  |  Loop: 1024-4096";
+    tooltipData.tags.add("kick");
+    tooltipData.tags.add("acoustic");
+    tooltipData.isFavorite = true;
+    tooltipData.isRecent = true;
+    tooltipData.previewSupported = true;
+    tooltipData.mappingDragSupported = true;
+
+    const auto tooltipText = audiocity::plugin::buildSampleBrowserTooltipText(tooltipData);
+    if (!tooltipText.contains("Kick_01.wav"))
+        return false;
+    if (!tooltipText.contains("Path: Drums/Acoustic/Kick_01.wav"))
+        return false;
+    if (!tooltipText.contains(tooltipData.metadataLine))
+        return false;
+    if (!tooltipText.contains("Format: Apple Loop  |  Root: C3  |  Loop: 1024-4096"))
+        return false;
+    if (!tooltipText.contains("Tags: kick, acoustic"))
+        return false;
+    if (!tooltipText.contains("Status: Favorite, Recent"))
+        return false;
+    if (tooltipText.contains("Actions:"))
+        return false;
+
+    if (audiocity::plugin::buildSampleBrowserActionText(true, false, true) != "Previewing  |  Dbl-click load")
+        return false;
+
+    tooltipData.fileName = "Pad.sfz";
+    tooltipData.relativePath = "Pads/Pad.sfz";
+    tooltipData.metadataLine = "SFZ instrument";
+    tooltipData.loopFormatBadge = "SFZ";
+    tooltipData.loopMetadataLine = {};
+    tooltipData.tags.clear();
+    tooltipData.isFavorite = false;
+    tooltipData.isRecent = false;
+    tooltipData.previewSupported = false;
+    tooltipData.mappingDragSupported = false;
+    tooltipData.previewing = false;
+
+    const auto sfzTooltipText = audiocity::plugin::buildSampleBrowserTooltipText(tooltipData);
+    if (!sfzTooltipText.contains("Pad.sfz"))
+        return false;
+    if (!sfzTooltipText.contains("Format: SFZ"))
+        return false;
+    if (sfzTooltipText.contains("Actions:"))
+        return false;
+
+    return true;
+}
+
 bool runFilterModeDifferenceTest()
 {
     constexpr int channels = 2;
@@ -12231,6 +12353,207 @@ bool runFactoryPresetBankDiscoveryTest()
     return true;
 }
 
+bool runSfzExporterRoundTripTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 512;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_sfz_export_test", "");
+
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    auto cleanupAndFail = [&]()
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    };
+
+    // Build a small in-memory program: one sample asset, two zones (different
+    // key ranges, second zone with a sustaining loop).
+    Program program;
+    program.name = "Round Trip Library";
+
+    SampleAsset asset;
+    asset.sourcePath = ""; // exporter will write from buffer
+    asset.displayName = "RoundTripTone";
+    asset.lengthSamples = sampleLength;
+    asset.numChannels = 1;
+    asset.sampleRateHz = sampleRate;
+    asset.rootMidiNote = 60;
+    program.sampleAssets.push_back(asset);
+
+    Zone zoneLow{};
+    zoneLow.sampleAssetIndex = 0;
+    zoneLow.keyRange = { 48, 59 };
+    zoneLow.velocityRange = { 1, 100 };
+    zoneLow.rootMidiNote = 55;
+    zoneLow.gainDb = -3.0f;
+    zoneLow.pan = -0.5f;
+    zoneLow.tuneCents = 12.0f;
+    zoneLow.sampleEndExclusive = sampleLength;
+    zoneLow.loopMode = ZoneLoopMode::noLoop;
+    program.zones.push_back(zoneLow);
+
+    Zone zoneHigh{};
+    zoneHigh.sampleAssetIndex = 0;
+    zoneHigh.keyRange = { 60, 72 };
+    zoneHigh.velocityRange = { 64, 127 };
+    zoneHigh.rootMidiNote = 64;
+    zoneHigh.gainDb = 2.0f;
+    zoneHigh.pan = 0.25f;
+    zoneHigh.tuneCents = -7.0f;
+    zoneHigh.sampleEndExclusive = sampleLength;
+    zoneHigh.loopMode = ZoneLoopMode::continuous;
+    zoneHigh.loopStart = 64;
+    zoneHigh.loopEndExclusive = 256;
+    zoneHigh.chokeGroup = 3;
+    program.zones.push_back(zoneHigh);
+
+    std::vector<juce::AudioBuffer<float>> sampleData;
+    sampleData.push_back(createTestSample(sampleLength));
+
+    const auto destSfz = tempDirectory.getChildFile("RoundTrip.sfz");
+
+    sfz_export::ExportOptions options;
+    options.copySamples = true;
+    options.libraryDisplayName = "Round Trip Library";
+    const auto exportResult = sfz_export::exportProgramToSfz(destSfz, program, sampleData, options);
+
+    if (exportResult.hasErrors() || exportResult.writtenRegionCount != 2)
+        return cleanupAndFail();
+    if (!destSfz.existsAsFile())
+        return cleanupAndFail();
+    if (exportResult.copiedSampleCount != 1
+        || !tempDirectory.getChildFile("Samples").isDirectory())
+    {
+        return cleanupAndFail();
+    }
+
+    // Re-import the exported file and verify the model survived the round trip.
+    SfzImporter importer;
+    const auto importResult = importer.importFile(destSfz);
+    if (importResult.hasErrors() || importResult.program.zones.size() != 2u)
+        return cleanupAndFail();
+
+    const auto& importedZones = importResult.program.zones;
+    const auto findZone = [&](const int rootNote) -> const Zone*
+    {
+        for (const auto& z : importedZones)
+            if (z.rootMidiNote == rootNote)
+                return &z;
+        return nullptr;
+    };
+
+    const auto* lowImported = findZone(55);
+    const auto* highImported = findZone(64);
+    if (lowImported == nullptr || highImported == nullptr)
+        return cleanupAndFail();
+
+    if (lowImported->keyRange.low != 48 || lowImported->keyRange.high != 59)
+        return cleanupAndFail();
+    if (lowImported->velocityRange.low != 1 || lowImported->velocityRange.high != 100)
+        return cleanupAndFail();
+    if (std::abs(lowImported->gainDb - (-3.0f)) > 0.05f)
+        return cleanupAndFail();
+    if (std::abs(lowImported->pan - (-0.5f)) > 0.05f)
+        return cleanupAndFail();
+    if (std::abs(lowImported->tuneCents - 12.0f) > 1.0f)
+        return cleanupAndFail();
+    if (lowImported->loopMode != ZoneLoopMode::noLoop)
+        return cleanupAndFail();
+
+    if (highImported->keyRange.low != 60 || highImported->keyRange.high != 72)
+        return cleanupAndFail();
+    if (highImported->velocityRange.low != 64 || highImported->velocityRange.high != 127)
+        return cleanupAndFail();
+    if (highImported->loopMode != ZoneLoopMode::continuous)
+        return cleanupAndFail();
+    if (highImported->loopStart != 64 || highImported->loopEndExclusive != 256)
+        return cleanupAndFail();
+    if (highImported->chokeGroup != 3)
+        return cleanupAndFail();
+    if (std::abs(highImported->gainDb - 2.0f) > 0.05f)
+        return cleanupAndFail();
+    if (std::abs(highImported->pan - 0.25f) > 0.05f)
+        return cleanupAndFail();
+
+    tempDirectory.deleteRecursively();
+    return true;
+}
+
+bool runSfzExporterCreateFromScratchTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 256;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_sfz_from_scratch_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    auto cleanupAndFail = [&]()
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    };
+
+    // Simulate the create-from-scratch + add-sample flow that the processor seam
+    // performs: start with an empty program, then push two sample assets and one
+    // zone per asset using the same helper the processor uses.
+    Program program;
+    program.name = "From Scratch";
+
+    std::vector<juce::AudioBuffer<float>> sampleData;
+
+    for (int i = 0; i < 2; ++i)
+    {
+        SampleAsset asset;
+        asset.displayName = "Voice_" + std::to_string(i + 1);
+        asset.lengthSamples = sampleLength;
+        asset.numChannels = 1;
+        asset.sampleRateHz = sampleRate;
+        asset.rootMidiNote = 60 + i * 12;
+        program.sampleAssets.push_back(asset);
+        sampleData.push_back(createTestSample(sampleLength));
+
+        const auto newZoneIndex = audiocity::plugin::createProgramZoneForSampleAsset(
+            program, static_cast<int>(program.sampleAssets.size()) - 1, -1);
+        if (newZoneIndex < 0)
+            return cleanupAndFail();
+    }
+
+    if (program.zones.size() != 2u)
+        return cleanupAndFail();
+
+    const auto destSfz = tempDirectory.getChildFile("FromScratch.sfz");
+
+    sfz_export::ExportOptions options;
+    options.copySamples = true;
+    options.libraryDisplayName = program.name;
+
+    const auto exportResult = sfz_export::exportProgramToSfz(destSfz, program, sampleData, options);
+    if (exportResult.hasErrors() || exportResult.writtenRegionCount != 2 || exportResult.copiedSampleCount != 2)
+        return cleanupAndFail();
+
+    if (!destSfz.existsAsFile())
+        return cleanupAndFail();
+
+    // Re-import to confirm playability.
+    SfzImporter importer;
+    const auto importResult = importer.importFile(destSfz);
+    if (importResult.hasErrors() || importResult.program.zones.size() != 2u)
+        return cleanupAndFail();
+
+    tempDirectory.deleteRecursively();
+    return true;
+}
+
 struct OfflineTestCase
 {
     const char* name = nullptr;
@@ -12301,6 +12624,8 @@ int main()
         AUDIOCITY_TEST(runSfzImportChokeGroupPlaybackTest, 135),
         AUDIOCITY_TEST(runSfzImportVelocityCrossfadePlaybackTest, 127),
         AUDIOCITY_TEST(runSfzImporterDiagnosticsTest, 89),
+        AUDIOCITY_TEST(runSfzExporterRoundTripTest, 234),
+        AUDIOCITY_TEST(runSfzExporterCreateFromScratchTest, 235),
         AUDIOCITY_TEST(runDecentSamplerImporterTest, 136),
         AUDIOCITY_TEST(runSf2ImporterMinimalTest, 137),
         AUDIOCITY_TEST(runSf2ImporterPresetSelectionTest, 224),
@@ -12402,6 +12727,7 @@ int main()
         AUDIOCITY_TEST(runPeakPreviewCacheRoundTripTest, 70),
         AUDIOCITY_TEST(runPeakPreviewCacheResetClearsFileTest, 71),
         AUDIOCITY_TEST(runPlayerPadStateUtilityTest, 23),
+        AUDIOCITY_TEST(runSampleBrowserTooltipFormattingTest, 236),
         AUDIOCITY_TEST(runFilterModeDifferenceTest, 25),
         AUDIOCITY_TEST(runFilterModulationDifferenceTest, 26),
         AUDIOCITY_TEST(runFilterKeytrackPolarityTest, 30),
