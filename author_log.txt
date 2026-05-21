@@ -1,1 +1,0 @@
-Wrote 128 presets to C:\Projects\Applications\Audiocity\assets\factory_presets (failed: 0).

@@ -1,8 +1,0 @@
-MSBuild version 17.14.40+3e7442088 for .NET Framework
-
-  Checking File Globs
-  audiocity_rex_sdk.vcxproj -> C:\Projects\Applications\Audiocity\build\Debug\audiocity_rex_sdk.lib
-  LegacyNkiProbe.cpp
-  OfflineRenderTests.cpp
-  Generating Code...
-  audiocity_offline_tests.vcxproj -> C:\Projects\Applications\Audiocity\build\tests\Debug\audiocity_offline_tests.exe
