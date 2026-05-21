@@ -57,3 +57,30 @@ Testing/
 
 # Release packaging outputs
 /output/
+
+# Local snapshot/test artifact exports
+/artifacts/preset_audition/audio/
+/artifacts/preset_audition/regressions.txt
+/installer/obj/
+/installer/redist/
+/ui-snapshots/
+/snapshot-manifest.json
+/about.png
+/capture.png
+/generate.png
+/library.png
+/mapping.png
+/player.png
+/sample*.png
+
+# Root-level validation and profiling logs
+/author_log.txt
+/build_log*.txt
+/build_release_log_status.txt
+/msbuild_out.txt
+/output_status.txt
+/process_*.txt
+/profile_script_validate2_log.txt
+/release_process_tree.txt
+/release_selfcontained_*_log.txt
+/test_log.txt

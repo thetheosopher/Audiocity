@@ -170,8 +170,13 @@ if (-not $SkipTests) {
     Write-Step 'Configure debug test build'
     Invoke-CMakeConfigureWithRetry -Preset 'default' -BuildRoot $defaultBuildRoot
 
-    Write-Step 'Build offline tests'
-    Invoke-External 'cmake' @('--build', '--preset', 'default', '--config', 'Debug', '--target', 'audiocity_offline_tests')
+    Write-Step 'Build debug test executables'
+    Invoke-External 'cmake' @(
+        '--build', '--preset', 'default', '--config', 'Debug', '--target',
+        'audiocity_offline_tests',
+        'audiocity_ui_snapshot_harness',
+        'audiocity_preset_runtime_smoke'
+    )
 
     Write-Step 'Run test suite'
     Invoke-External 'ctest' @('--test-dir', (Join-Path $repoRoot 'build'), '-C', 'Debug', '--output-on-failure')
