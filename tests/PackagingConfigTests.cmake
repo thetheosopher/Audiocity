@@ -18,7 +18,7 @@ file(READ "${_audiocity_source_dir}/tests/RunUiSnapshotHarness.cmake" _audiocity
 file(READ "${_audiocity_source_dir}/LICENSE" _audiocity_license)
 file(GLOB _audiocity_ui_snapshot_baselines "${_audiocity_source_dir}/tests/ui-snapshot-baselines/current/*.png")
 
-string(REGEX MATCH "project[^\n\r]*Audiocity[ \t]+VERSION[ \t]+([0-9]+[.][0-9]+[.][0-9]+)"
+string(REGEX MATCH "project[^\n\r]*Audiocity[ \t]+VERSION[ \t]+([0-9]+[.][0-9]+([.][0-9]+([.][0-9]+)?)?)"
     _audiocity_version_match
     "${_audiocity_root_cmake}")
 set(_audiocity_version "${CMAKE_MATCH_1}")

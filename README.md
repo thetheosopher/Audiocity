@@ -4,7 +4,7 @@
 
 A Windows-focused hybrid sampler built with JUCE and C++20, delivered as a standalone application and a VST3 instrument plugin.
 
-![Version 1.3.0](https://img.shields.io/badge/version-1.3.0-blue)
+![Version 1.3.1.0](https://img.shields.io/badge/version-1.3.1.0-blue)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue?logo=cplusplus)
 ![JUCE 8.0.4](https://img.shields.io/badge/JUCE-8.0.4-orange)
 ![Windows x64](https://img.shields.io/badge/platform-Windows%20x64-lightgrey?logo=windows)
@@ -12,9 +12,16 @@ A Windows-focused hybrid sampler built with JUCE and C++20, delivered as a stand
 
 ## Overview
 
-Audiocity 1.3 combines broad multisample import coverage, transient slicing, expressive modulation, and a modernized sampler workspace with a curated 64-preset factory bank, auditioner-backed preset QA, and a dedicated profiling workflow for engine tuning.
+Audiocity 1.3.1.0 combines broad multisample import coverage, transient slicing, expressive modulation, and a modernized sampler workspace with a curated 64-preset factory bank, auditioner-backed preset QA, and a dedicated profiling workflow for engine tuning.
 
 The engine and UI are still driven by one JUCE `AudioProcessor`, with deterministic offline tests, snapshot-based UI validation, and shared behavior across the plugin and standalone targets.
+
+## New in 1.3.1.0
+
+- Preset saves now embed the currently loaded single-sample source, so Wave- and AIFF-backed `.acp` presets round-trip without depending on an external sample path.
+- Embedded preset restore now preserves multi-channel sample display data and restores the same loop, window, root-note, reverse, and playback-mode state on load.
+- Library instrument rows now render explicit library placeholders instead of blank waveform panes, use accurate format badges, and show detailed import diagnostics when a double-click load fails.
+- The persistent browser rail is hidden on the Generate and Capture tabs so those workflows stay focused on waveform creation and recording.
 
 ## New in 1.3
 
@@ -161,8 +168,8 @@ Build the release package set without ASIO:
 
 The release script derives the version from `CMakeLists.txt` and produces two artifacts in `output/`:
 
-- `Audiocity-1.3.0-windows-x64-setup.exe`
-- `Audiocity-1.3.0-windows-x64-portable.zip`
+- `Audiocity-1.3.1.0-windows-x64-setup.exe`
+- `Audiocity-1.3.1.0-windows-x64-portable.zip`
 
 ### Installer Behavior
 
