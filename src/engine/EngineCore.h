@@ -189,6 +189,7 @@ public:
     [[nodiscard]] int getLoadedStreamSamples() const noexcept;
     [[nodiscard]] int getLoadedSampleLength() const noexcept;
     [[nodiscard]] int getLoadedSampleChannels() const noexcept;
+    [[nodiscard]] juce::AudioBuffer<float> copyLoadedSampleDisplayData() const { return displaySampleData_; }
     [[nodiscard]] double getLoadedSampleRateHz() const noexcept { return sampleDataRate_; }
     [[nodiscard]] int getLoadedSampleBitDepth() const noexcept { return loadedSampleBitDepth_; }
     [[nodiscard]] int getLoadedMetadataRootMidiNote() const noexcept { return loadedMetadataRootMidiNote_; }

@@ -2156,7 +2156,8 @@ bool runImportedProgramStateSubtreeRoundTripTest()
     if (audiocity::plugin::readImportedProgramStatePath(patchState) != importedProgramPath
         || audiocity::plugin::detectImportedProgramFormat(importedProgramPath)
             != audiocity::plugin::ImportedProgramFormat::rex
-        || audiocity::plugin::importedProgramFormatBadge(importedProgramPath) != "REX")
+        || audiocity::plugin::importedProgramFormatBadge(importedProgramPath) != "REX"
+        || audiocity::plugin::importedProgramFormatDescription(importedProgramPath) != "REX loop")
     {
         return false;
     }
@@ -6959,6 +6960,30 @@ bool runEditorModulationPanelExtractionTest()
         && !editorClassBody.contains("void syncModulationControlsFromProcessor()");
 }
 
+bool runEditorPersistentBrowserRailTabGateTest()
+{
+    const auto editorFile = fixtureFile("src/plugin/PluginEditor.cpp");
+    if (!editorFile.existsAsFile())
+        return false;
+
+    const auto editorSource = editorFile.loadFileAsString();
+    const auto functionStart = editorSource.indexOf(
+        "bool AudiocityAudioProcessorEditor::shouldShowPersistentBrowserRail() const noexcept");
+    if (functionStart < 0)
+        return false;
+
+    const auto functionEnd = editorSource.indexOf(
+        functionStart,
+        "bool AudiocityAudioProcessorEditor::shouldShowSampleInspectorRail() const noexcept");
+    if (functionEnd <= functionStart)
+        return false;
+
+    const auto functionBody = editorSource.substring(functionStart, functionEnd);
+    return functionBody.contains("currentTabIndex_ == 4")
+        && functionBody.contains("currentTabIndex_ == 5")
+        && functionBody.contains("return false;");
+}
+
 bool runPlaybackModesTest()
 {
     constexpr int channels = 2;
@@ -9525,10 +9550,12 @@ bool runSampleBrowserTooltipFormattingTest()
 
     if (audiocity::plugin::buildSampleBrowserActionText(true, false, true) != "Previewing  |  Dbl-click load")
         return false;
+    if (audiocity::plugin::buildSampleBrowserActionText(false, false, false) != "Dbl-click load")
+        return false;
 
     tooltipData.fileName = "Pad.sfz";
     tooltipData.relativePath = "Pads/Pad.sfz";
-    tooltipData.metadataLine = "SFZ instrument";
+    tooltipData.metadataLine = audiocity::plugin::importedProgramFormatDescription("Pads/Pad.sfz");
     tooltipData.loopFormatBadge = "SFZ";
     tooltipData.loopMetadataLine = {};
     tooltipData.tags.clear();
@@ -9543,8 +9570,22 @@ bool runSampleBrowserTooltipFormattingTest()
         return false;
     if (!sfzTooltipText.contains("Format: SFZ"))
         return false;
+    if (!sfzTooltipText.contains("SFZ instrument"))
+        return false;
     if (sfzTooltipText.contains("Actions:"))
         return false;
+
+    if (audiocity::plugin::importedProgramFormatDescription("C:/Library/Keys/Layered.multisample")
+            != "Bitwig multisample")
+    {
+        return false;
+    }
+
+    if (audiocity::plugin::importedProgramFormatDescription(audiocity::plugin::ImportedProgramFormat::nki)
+            != "NKI instrument (legacy subset)")
+    {
+        return false;
+    }
 
     return true;
 }
@@ -12095,20 +12136,24 @@ constexpr auto kVelocityToAmp = "velocityToAmp";
 bool runEmbeddedSamplePresetRoundTripTest()
 {
     constexpr int sampleCount = 256;
-    std::vector<float> waveform(sampleCount);
+    std::vector<float> leftWaveform(sampleCount);
+    std::vector<float> rightWaveform(sampleCount);
     for (int i = 0; i < sampleCount; ++i)
     {
         const float t = static_cast<float>(i) / static_cast<float>(sampleCount);
-        waveform[static_cast<std::size_t>(i)] = std::sin(juce::MathConstants<float>::twoPi * t);
+        leftWaveform[static_cast<std::size_t>(i)] = std::sin(juce::MathConstants<float>::twoPi * t);
+        rightWaveform[static_cast<std::size_t>(i)] = 0.5f * std::cos(juce::MathConstants<float>::twoPi * t * 2.0f);
     }
 
     juce::ValueTree state(factory::kPatchRoot);
-    juce::MemoryBlock bytes(waveform.size() * sizeof(float));
-    std::memcpy(bytes.getData(), waveform.data(), bytes.getSize());
+    juce::MemoryBlock bytes(static_cast<std::size_t>(sampleCount) * 2 * sizeof(float));
+    auto* floatBytes = static_cast<float*>(bytes.getData());
+    std::memcpy(floatBytes, leftWaveform.data(), static_cast<std::size_t>(sampleCount) * sizeof(float));
+    std::memcpy(floatBytes + sampleCount, rightWaveform.data(), static_cast<std::size_t>(sampleCount) * sizeof(float));
     state.setProperty(factory::kEmbeddedSampleData, juce::var(bytes), nullptr);
     state.setProperty(factory::kEmbeddedSampleRate, 44100.0, nullptr);
     state.setProperty(factory::kEmbeddedSampleRootMidiNote, 60, nullptr);
-    state.setProperty(factory::kEmbeddedSampleChannels, 1, nullptr);
+    state.setProperty(factory::kEmbeddedSampleChannels, 2, nullptr);
     state.setProperty(factory::kEmbeddedSampleName, juce::String("Round Trip"), nullptr);
 
     const auto xml = audiocity::plugin::encodePresetXml(state);
@@ -12128,6 +12173,9 @@ bool runEmbeddedSamplePresetRoundTripTest()
         return false;
 
     if (std::memcmp(decodedBytes->getData(), bytes.getData(), bytes.getSize()) != 0)
+        return false;
+
+    if (static_cast<int>(decoded.getProperty(factory::kEmbeddedSampleChannels, -1)) != 2)
         return false;
 
     if (static_cast<int>(decoded.getProperty(factory::kEmbeddedSampleRootMidiNote, -1)) != 60)
@@ -12728,6 +12776,7 @@ int main()
         AUDIOCITY_TEST(runPeakPreviewCacheResetClearsFileTest, 71),
         AUDIOCITY_TEST(runPlayerPadStateUtilityTest, 23),
         AUDIOCITY_TEST(runSampleBrowserTooltipFormattingTest, 236),
+        AUDIOCITY_TEST(runEditorPersistentBrowserRailTabGateTest, 237),
         AUDIOCITY_TEST(runFilterModeDifferenceTest, 25),
         AUDIOCITY_TEST(runFilterModulationDifferenceTest, 26),
         AUDIOCITY_TEST(runFilterKeytrackPolarityTest, 30),

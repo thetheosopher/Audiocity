@@ -8,8 +8,8 @@
   "configurePresets": [
     {
       "name": "default",
-      "displayName": "Default (VS2022)",
-      "generator": "Visual Studio 17 2022",
+      "displayName": "Default (VS2026)",
+      "generator": "Visual Studio 18 2026",
       "binaryDir": "${sourceDir}/build",
       "architecture": "x64",
       "cacheVariables": {
@@ -19,8 +19,8 @@
     },
     {
       "name": "release-selfcontained",
-      "displayName": "Release Self-Contained (VS2022)",
-      "generator": "Visual Studio 17 2022",
+      "displayName": "Release Self-Contained (VS2026)",
+      "generator": "Visual Studio 18 2026",
       "binaryDir": "${sourceDir}/build/release-selfcontained",
       "architecture": "x64",
       "cacheVariables": {
@@ -30,7 +30,7 @@
     },
     {
       "name": "release-selfcontained-asio",
-      "displayName": "Release Self-Contained (VS2022, ASIO)",
+      "displayName": "Release Self-Contained (VS2026, ASIO)",
       "inherits": "release-selfcontained",
       "binaryDir": "${sourceDir}/build/release-selfcontained-asio",
       "cacheVariables": {

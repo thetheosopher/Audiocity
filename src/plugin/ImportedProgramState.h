@@ -68,6 +68,8 @@ struct ImportedProgramRestoreResult
 [[nodiscard]] ImportedProgramFormat readImportedProgramStateFormat(const juce::ValueTree& state);
 [[nodiscard]] juce::String importedProgramFormatBadge(ImportedProgramFormat format);
 [[nodiscard]] juce::String importedProgramFormatBadge(const juce::String& programPath);
+[[nodiscard]] juce::String importedProgramFormatDescription(ImportedProgramFormat format);
+[[nodiscard]] juce::String importedProgramFormatDescription(const juce::String& programPath);
 void appendImportedProgramState(juce::ValueTree& state,
                                 const juce::String& programPath,
                                 const juce::ValueTree& mappingState,

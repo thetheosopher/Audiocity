@@ -343,6 +343,55 @@ juce::String importedProgramFormatBadge(const juce::String& programPath)
     return importedProgramFormatBadge(detectImportedProgramFormat(programPath));
 }
 
+juce::String importedProgramFormatDescription(const ImportedProgramFormat format)
+{
+    switch (format)
+    {
+        case ImportedProgramFormat::sfz:
+            return "SFZ instrument";
+        case ImportedProgramFormat::rex:
+            return "REX loop";
+        case ImportedProgramFormat::sampleSlices:
+            return "Transient slice program";
+        case ImportedProgramFormat::nki:
+            return "NKI instrument (legacy subset)";
+        case ImportedProgramFormat::sf2:
+            return "SoundFont bank";
+        case ImportedProgramFormat::decentSampler:
+            return "DecentSampler preset";
+        case ImportedProgramFormat::bitwigMultisample:
+            return "Bitwig multisample";
+        case ImportedProgramFormat::mpcKeygroup:
+            return "MPC keygroup program";
+        case ImportedProgramFormat::bento1010:
+            return "1010music preset";
+        case ImportedProgramFormat::talSampler:
+            return "TAL Sampler preset";
+        case ImportedProgramFormat::tx16wx:
+            return "TX16Wx program";
+        case ImportedProgramFormat::korgMultisample:
+            return "Korg multisample";
+        case ImportedProgramFormat::abletonSampler:
+            return "Ableton sampler preset";
+        case ImportedProgramFormat::distingExPreset:
+            return "disting EX preset";
+        case ImportedProgramFormat::korgKmp:
+            return "Korg KMP program";
+        case ImportedProgramFormat::logicExs24:
+            return "EXS24 instrument";
+        case ImportedProgramFormat::nnxt:
+            return "NN-XT instrument";
+        case ImportedProgramFormat::unknown:
+        default:
+            return "Instrument library";
+    }
+}
+
+juce::String importedProgramFormatDescription(const juce::String& programPath)
+{
+    return importedProgramFormatDescription(detectImportedProgramFormat(programPath));
+}
+
 ImportedProgramChoiceProbe probeImportedProgramChoices(const juce::File& programFile)
 {
     ImportedProgramChoiceProbe probe;

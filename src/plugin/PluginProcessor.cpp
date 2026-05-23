@@ -280,6 +280,69 @@ bool isPlaybackPresetExcludedProperty(const juce::Identifier& property)
         || propertyName == kCaptureInputGain;
 }
 
+juce::MemoryBlock serializeAudioBufferSamples(const juce::AudioBuffer<float>& buffer)
+{
+    const auto channels = juce::jmax(0, buffer.getNumChannels());
+    const auto samples = juce::jmax(0, buffer.getNumSamples());
+    juce::MemoryBlock bytes(static_cast<std::size_t>(channels) * static_cast<std::size_t>(samples) * sizeof(float));
+    auto* dest = static_cast<float*>(bytes.getData());
+
+    for (int channel = 0; channel < channels; ++channel)
+    {
+        std::memcpy(dest + static_cast<std::size_t>(channel) * static_cast<std::size_t>(samples),
+                    buffer.getReadPointer(channel),
+                    static_cast<std::size_t>(samples) * sizeof(float));
+    }
+
+    return bytes;
+}
+
+bool deserializeAudioBufferSamples(const juce::MemoryBlock& bytes,
+                                   const int channels,
+                                   juce::AudioBuffer<float>& buffer)
+{
+    const auto safeChannels = juce::jmax(1, channels);
+    const auto totalBytes = bytes.getSize();
+    const auto channelStrideBytes = static_cast<std::size_t>(safeChannels) * sizeof(float);
+    if (totalBytes < channelStrideBytes || (totalBytes % channelStrideBytes) != 0)
+        return false;
+
+    const auto samples = static_cast<int>(totalBytes / sizeof(float) / static_cast<std::size_t>(safeChannels));
+    if (samples <= 0)
+        return false;
+
+    buffer.setSize(safeChannels, samples, false, false, true);
+    const auto* src = static_cast<const float*>(bytes.getData());
+    for (int channel = 0; channel < safeChannels; ++channel)
+    {
+        std::memcpy(buffer.getWritePointer(channel),
+                    src + static_cast<std::size_t>(channel) * static_cast<std::size_t>(samples),
+                    static_cast<std::size_t>(samples) * sizeof(float));
+    }
+
+    return true;
+}
+
+void writeEmbeddedSampleState(juce::ValueTree& state,
+                              const juce::AudioBuffer<float>& buffer,
+                              const double sampleRate,
+                              const int rootMidiNote,
+                              const juce::String& sampleName)
+{
+    if (buffer.getNumChannels() <= 0 || buffer.getNumSamples() <= 0)
+        return;
+
+    state.setProperty(kEmbeddedSampleData, juce::var(serializeAudioBufferSamples(buffer)), nullptr);
+    state.setProperty(kEmbeddedSampleRate, juce::jmax(1.0, sampleRate), nullptr);
+    state.setProperty(kEmbeddedSampleRootMidiNote, juce::jlimit(0, 127, rootMidiNote), nullptr);
+    state.setProperty(kEmbeddedSampleChannels, buffer.getNumChannels(), nullptr);
+
+    if (sampleName.isNotEmpty())
+        state.setProperty(kEmbeddedSampleName, sampleName, nullptr);
+    else
+        state.removeProperty(kEmbeddedSampleName, nullptr);
+}
+
 juce::ValueTree buildPlaybackPresetStateTree(const juce::ValueTree& fullState)
 {
     auto presetState = fullState.createCopy();
@@ -1256,14 +1319,12 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 
         if (embeddedSampleLoaded_.load(std::memory_order_relaxed) && !embeddedSampleState_.empty())
         {
-            juce::MemoryBlock embeddedBytes(embeddedSampleState_.size() * sizeof(float));
-            std::memcpy(embeddedBytes.getData(), embeddedSampleState_.data(), embeddedBytes.getSize());
-            state.setProperty(kEmbeddedSampleData, juce::var(embeddedBytes), nullptr);
-            state.setProperty(kEmbeddedSampleRate, embeddedSampleRateState_, nullptr);
-            state.setProperty(kEmbeddedSampleRootMidiNote, embeddedSampleRootMidiNoteState_, nullptr);
-            state.setProperty(kEmbeddedSampleChannels, 1, nullptr);
-            if (embeddedSampleNameState_.isNotEmpty())
-                state.setProperty(kEmbeddedSampleName, embeddedSampleNameState_, nullptr);
+            const auto embeddedBuffer = engine_.copyLoadedSampleDisplayData();
+            writeEmbeddedSampleState(state,
+                                     embeddedBuffer,
+                                     embeddedSampleRateState_,
+                                     embeddedSampleRootMidiNoteState_,
+                                     embeddedSampleNameState_);
         }
     }
     state.setProperty(kSampleBrowserRootFolder, sampleBrowserRootFolderPath_, nullptr);
@@ -1438,18 +1499,16 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
 
     if (const auto* embeddedData = state.getProperty(kEmbeddedSampleData).getBinaryData(); embeddedData != nullptr)
     {
-        const auto totalBytes = embeddedData->getSize();
-        if (totalBytes >= sizeof(float) && (totalBytes % sizeof(float)) == 0)
+        const auto embeddedChannels = juce::jmax(1,
+            static_cast<int>(state.getProperty(kEmbeddedSampleChannels, 1)));
+        juce::AudioBuffer<float> restoredBuffer;
+        if (deserializeAudioBufferSamples(*embeddedData, embeddedChannels, restoredBuffer))
         {
-            const auto sampleCount = static_cast<int>(totalBytes / sizeof(float));
             const auto storedSampleRate = juce::jmax(1.0,
                 static_cast<double>(state.getProperty(kEmbeddedSampleRate, 44100.0)));
             const auto embeddedRoot = juce::jlimit(0, 127,
                 static_cast<int>(state.getProperty(kEmbeddedSampleRootMidiNote, storedRootMidiNote)));
             const auto embeddedName = state.getProperty(kEmbeddedSampleName, juce::var{}).toString();
-
-            juce::AudioBuffer<float> restoredBuffer(1, sampleCount);
-            std::memcpy(restoredBuffer.getWritePointer(0), embeddedData->getData(), totalBytes);
 
             loadEmbeddedSampleAsSample(restoredBuffer, storedSampleRate, embeddedRoot, embeddedName);
             restoredSample = true;
@@ -1840,7 +1899,31 @@ juce::String AudiocityAudioProcessor::createPlaybackPresetXml()
     if (!state.isValid() || !state.hasType(kPatchRoot))
         return {};
 
-    return audiocity::plugin::encodePresetXml(buildPlaybackPresetStateTree(state));
+    auto presetState = buildPlaybackPresetStateTree(state);
+    const auto samplePath = presetState.getProperty(kSamplePath).toString();
+    const auto hasEmbeddedSample = presetState.getProperty(kEmbeddedSampleData).getBinaryData() != nullptr;
+    const auto hasGeneratedSample = presetState.getProperty(kGeneratedWaveformData).getBinaryData() != nullptr;
+    const auto hasCapturedSample = presetState.getProperty(kCapturedSampleData).getBinaryData() != nullptr;
+
+    if (samplePath.isNotEmpty()
+        && !hasEmbeddedSample
+        && !hasGeneratedSample
+        && !hasCapturedSample
+        && audiocity::plugin::readImportedProgramStatePath(presetState).isEmpty())
+    {
+        const auto displaySample = engine_.copyLoadedSampleDisplayData();
+        if (displaySample.getNumChannels() > 0 && displaySample.getNumSamples() > 0)
+        {
+            writeEmbeddedSampleState(presetState,
+                                     displaySample,
+                                     engine_.getLoadedSampleRateHz(),
+                                     static_cast<int>(presetState.getProperty(kRootMidiNote, engine_.getRootMidiNote())),
+                                     juce::File(samplePath).getFileName());
+            presetState.removeProperty(kSamplePath, nullptr);
+        }
+    }
+
+    return audiocity::plugin::encodePresetXml(presetState);
 }
 
 bool AudiocityAudioProcessor::loadPlaybackPresetXml(const juce::String& xmlText, juce::String& errorMessage)
@@ -2755,8 +2838,17 @@ juce::String AudiocityAudioProcessor::getLastImportDiagnosticSummary() const
 
 bool AudiocityAudioProcessor::loadSampleFromFile(const juce::File& file)
 {
-    if (!engine_.loadSampleFromFile(file))
+    if (!file.existsAsFile())
+    {
+        setLastImportDiagnosticSummary("Sample load failed: file not found");
         return false;
+    }
+
+    if (!engine_.loadSampleFromFile(file))
+    {
+        setLastImportDiagnosticSummary("Sample load failed: audio file could not be decoded");
+        return false;
+    }
 
     engine_.clearProgram();
     clearImportedProgramMetadata();
@@ -3640,27 +3732,11 @@ void AudiocityAudioProcessor::loadEmbeddedSampleAsSample(const juce::AudioBuffer
     const auto clampedRoot = juce::jlimit(0, 127, rootMidiNote);
     const auto safeRate = juce::jmax(1.0, sampleRate);
 
-    juce::AudioBuffer<float> monoBuffer(1, buffer.getNumSamples());
-    auto* dest = monoBuffer.getWritePointer(0);
-    if (buffer.getNumChannels() == 1)
-    {
-        std::memcpy(dest, buffer.getReadPointer(0),
-            static_cast<std::size_t>(buffer.getNumSamples()) * sizeof(float));
-    }
-    else
-    {
-        const auto* left = buffer.getReadPointer(0);
-        const auto* right = buffer.getReadPointer(1);
-        const auto inv = 0.5f;
-        for (int i = 0; i < buffer.getNumSamples(); ++i)
-            dest[i] = (left[i] + right[i]) * inv;
-    }
-
     samplePreviewPlaying_.store(false, std::memory_order_relaxed);
     stopGeneratedWaveformPreview();
     engine_.panic();
 
-    engine_.setSampleData(monoBuffer, safeRate, clampedRoot);
+    engine_.setSampleData(buffer, safeRate, clampedRoot);
     engine_.setRootMidiNote(clampedRoot);
     engine_.clearSamplePath();
     engine_.clearProgram();
@@ -3678,7 +3754,16 @@ void AudiocityAudioProcessor::loadEmbeddedSampleAsSample(const juce::AudioBuffer
         embeddedSampleNameState_.clear();
         embeddedSampleRateState_ = 44100.0;
         embeddedSampleRootMidiNoteState_ = 60;
-        embeddedSampleState_.assign(dest, dest + monoBuffer.getNumSamples());
+        const auto channels = buffer.getNumChannels();
+        const auto samples = buffer.getNumSamples();
+        embeddedSampleState_.resize(static_cast<std::size_t>(channels) * static_cast<std::size_t>(samples));
+        auto* dest = embeddedSampleState_.data();
+        for (int channel = 0; channel < channels; ++channel)
+        {
+            std::memcpy(dest + static_cast<std::size_t>(channel) * static_cast<std::size_t>(samples),
+                        buffer.getReadPointer(channel),
+                        static_cast<std::size_t>(samples) * sizeof(float));
+        }
         embeddedSampleRateState_ = safeRate;
         embeddedSampleRootMidiNoteState_ = clampedRoot;
         embeddedSampleNameState_ = displayName;

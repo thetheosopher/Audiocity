@@ -496,6 +496,7 @@ private:
         juce::StringArray tags;
         juce::String tagsLower;
         std::vector<float> previewPeaks;
+        bool isInstrument = false;
         bool isFavorite = false;
         bool isRecent = false;
         int recentRank = -1;
@@ -1161,6 +1162,9 @@ private:
     void toggleSelectedBrowserFavorite();
     void applySelectedBrowserTags();
     void rebuildVisibleSampleList();
+    void showInstrumentLoadErrorDialog(const juce::File& file,
+                                       const juce::String& diagnosticSummary,
+                                       std::function<void()> onDismissed = {});
     bool loadFileAsInstrument(const juce::File& file,
                               std::function<void(bool)> completion = {});
     bool importInstrumentFileByFormat(const juce::File& file,

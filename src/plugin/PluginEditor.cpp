@@ -5913,7 +5913,7 @@ juce::String AudiocityAudioProcessorEditor::getTooltipForRow(const int row)
         return {};
 
     const auto& entry = allSampleEntries_[static_cast<std::size_t>(sourceIndex)];
-    const bool previewSupported = !entry.file.getFileExtension().equalsIgnoreCase(".sfz");
+    const bool previewSupported = !entry.isInstrument;
     const bool mappingDragSupported = isMappingSampleFile(entry.file);
 
     audiocity::plugin::SampleBrowserTooltipData tooltipData;
@@ -5942,7 +5942,7 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
     const auto sourceIndex = visibleSampleEntryIndices_[static_cast<std::size_t>(rowNumber)];
     const auto& entry = allSampleEntries_[static_cast<std::size_t>(sourceIndex)];
     const bool compactBrowserRow = shouldShowPersistentBrowserRail();
-    const bool previewSupported = !entry.file.getFileExtension().equalsIgnoreCase(".sfz");
+    const bool previewSupported = !entry.isInstrument;
     const bool mappingDragSupported = isMappingSampleFile(entry.file);
     const bool rowPreviewing = previewSupported
         && processor_.isSamplePreviewPlaying()
@@ -6040,6 +6040,30 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
         g.setColour(juce::Colour(0xff61d9ff).withAlpha(0.65f));
         g.strokePath(bottomPath, juce::PathStrokeType(1.15f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
+    else if (entry.isInstrument)
+    {
+        auto placeholder = thumbBounds.reduced(compactBrowserRow ? 8 : 10, compactBrowserRow ? 7 : 9);
+        auto badgeArea = placeholder.removeFromTop(compactBrowserRow ? 16 : 18);
+        const auto badgeText = entry.loopFormatBadge.isNotEmpty() ? entry.loopFormatBadge : juce::String("LIB");
+        const auto badgeWidth = juce::jmin(thumbBounds.getWidth() - 16,
+            juce::jmax(42, badgeText.length() * (compactBrowserRow ? 7 : 8) + 14));
+        badgeArea = badgeArea.withSizeKeepingCentre(badgeWidth, badgeArea.getHeight());
+
+        g.setColour(juce::Colour(0xff35547f));
+        g.fillRoundedRectangle(badgeArea.toFloat(), 4.0f);
+        g.setColour(juce::Colour(0xffedf3ff));
+        g.setFont(juce::Font(juce::FontOptions(compactBrowserRow ? 9.5f : 10.5f)).boldened());
+        g.drawText(badgeText, badgeArea, juce::Justification::centred, false);
+
+        auto messageArea = placeholder.reduced(2, 6);
+        g.setColour(uiTextMutedColour().withAlpha(0.9f));
+        g.setFont(juce::Font(juce::FontOptions(compactBrowserRow ? 10.0f : 11.0f)));
+        g.drawFittedText("Library", messageArea.removeFromTop(compactBrowserRow ? 12 : 14), juce::Justification::centred, 1);
+
+        g.setColour(uiTextMutedColour().withAlpha(0.72f));
+        g.setFont(juce::Font(juce::FontOptions(compactBrowserRow ? 8.5f : 9.5f)));
+        g.drawFittedText("Double-click to load", messageArea, juce::Justification::centred, 2);
+    }
 
     auto firstLine = content.removeFromTop(17);
     auto pathArea = firstLine;
@@ -6063,7 +6087,8 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
         drawRowBadge("REC", juce::Colour(0xff23636e), 38);
     if (entry.loopFormatBadge.isNotEmpty())
     {
-        const auto badgeWidth = entry.loopFormatBadge == "Apple Loop" ? 84 : 66;
+        const auto badgeWidth = juce::jmax(entry.loopFormatBadge == "Apple Loop" ? 84 : 66,
+            entry.loopFormatBadge.length() * 7 + 18);
         const auto badgeColour = entry.loopFormatBadge == "Apple Loop"
             ? juce::Colour(0xff5b4b8a)
             : (entry.loopFormatBadge == "SFZ" ? juce::Colour(0xff6c5ce7) : juce::Colour(0xff4b6b2a));
@@ -7726,16 +7751,61 @@ void AudiocityAudioProcessorEditor::completeInstrumentLoad(const juce::File& fil
     {
         updateDiagnosticsStatusText();
 
+        std::function<void()> onDismissed;
         if (file.getFileExtension().equalsIgnoreCase(".nki"))
         {
             const auto probe = audiocity::engine::nki::probeFile(file);
             if (!probe.missingSampleReferences.isEmpty())
-                promptForNkiSampleFolder(file);
+            {
+                juce::Component::SafePointer<AudiocityAudioProcessorEditor> safeThis(this);
+                onDismissed = [safeThis, file]
+                {
+                    if (safeThis != nullptr)
+                        safeThis->promptForNkiSampleFolder(file);
+                };
+            }
         }
+
+        showInstrumentLoadErrorDialog(file,
+                                      processor_.getLastImportDiagnosticSummary().trim(),
+                                      std::move(onDismissed));
     }
 
     if (completion)
         completion(loaded);
+}
+
+void AudiocityAudioProcessorEditor::showInstrumentLoadErrorDialog(const juce::File& file,
+                                                                 const juce::String& diagnosticSummary,
+                                                                 std::function<void()> onDismissed)
+{
+    juce::String message;
+    message << "Failed to load '" << file.getFileName() << "'.\n\n";
+
+    const auto detailText = diagnosticSummary.isNotEmpty()
+        ? diagnosticSummary
+        : juce::String("No detailed diagnostic was provided.");
+    message << detailText;
+
+    if (file != juce::File{})
+        message << "\n\nPath:\n" << file.getFullPathName();
+
+    auto options = juce::MessageBoxOptions::makeOptionsOk(
+        juce::MessageBoxIconType::WarningIcon,
+        "Load Failed",
+        message,
+        "OK",
+        this);
+
+    juce::Component::SafePointer<AudiocityAudioProcessorEditor> safeThis(this);
+    juce::NativeMessageBox::showAsync(options, [safeThis, onDismissed = std::move(onDismissed)](int)
+    {
+        if (safeThis == nullptr)
+            return;
+
+        if (onDismissed)
+            onDismissed();
+    });
 }
 
 bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file,
@@ -8003,6 +8073,7 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
             item.fileName = indexedFile.fileName;
             item.fileNameLower = item.fileName.toLowerCase();
             item.relativePathLower = item.relativePath.toLowerCase();
+            item.isInstrument = indexedFile.isInstrument;
 
             const auto cacheKey = audiocity::plugin::makePeakPreviewCacheKey(indexedFile.file);
             const auto fileSizeBytes = indexedFile.sizeBytes;
@@ -8010,16 +8081,8 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
             SamplePreviewData previewData;
             if (indexedFile.isInstrument)
             {
-                if (indexedFile.extensionLower == ".nki")
-                {
-                    previewData.metadataLine = "NKI instrument (legacy subset)";
-                    previewData.loopFormatBadge = "NKI";
-                }
-                else
-                {
-                    previewData.metadataLine = "SFZ instrument";
-                    previewData.loopFormatBadge = "SFZ";
-                }
+                previewData.metadataLine = audiocity::plugin::importedProgramFormatDescription(indexedFile.file.getFullPathName());
+                previewData.loopFormatBadge = audiocity::plugin::importedProgramFormatBadge(indexedFile.file.getFullPathName());
             }
             else if (const auto cacheIt = cacheEntries.find(cacheKey);
                 cacheIt != cacheEntries.end() && cacheIt->second.fileSizeBytes == fileSizeBytes)
@@ -8420,10 +8483,11 @@ void AudiocityAudioProcessorEditor::previewSampleFromBrowserRow(const int row, c
 
     lastPreviewedBrowserSourceIndex_ = sourceIndex;
 
-    const auto& file = allSampleEntries_[static_cast<std::size_t>(sourceIndex)].file;
-    if (file.getFileExtension().equalsIgnoreCase(".sfz"))
+    const auto& entry = allSampleEntries_[static_cast<std::size_t>(sourceIndex)];
+    if (entry.isInstrument)
         return;
 
+    const auto& file = entry.file;
     processor_.previewSampleFromFile(file);
     updateGeneratePreviewButtonText();
 }
@@ -8455,7 +8519,8 @@ bool AudiocityAudioProcessorEditor::shouldShowPersistentPerformanceStrip() const
 
 bool AudiocityAudioProcessorEditor::shouldShowPersistentBrowserRail() const noexcept
 {
-    if (currentTabIndex_ == 1 || currentTabIndex_ == 3 || currentTabIndex_ == 6)
+    if (currentTabIndex_ == 1 || currentTabIndex_ == 3 || currentTabIndex_ == 4
+        || currentTabIndex_ == 5 || currentTabIndex_ == 6)
         return false;
 
     if (currentTabIndex_ == 0)
