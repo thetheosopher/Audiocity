@@ -16,7 +16,7 @@ Severity legend: 🔴 Critical · 🟠 High · 🟡 Medium · 🔵 Low
 Last updated: 2026-05-31
 
 - Completed QW-1 through QW-6 from the enhancement roadmap: non-UI CI workflow, EngineCore render-path micro-optimizations, drag/drop debug logging gate, and persistent/copyable import diagnostics.
-- Started MP-4 importer hardening: added shared archive-relative path validation and wired it into Bitwig `.multisample` and Korg `.korgmultisample` ZIP importers with offline regression tests for traversal-shaped sample references; added an NCW converter regression covering shell metacharacters in input paths.
+- Started MP-4 importer hardening: added shared archive-relative path validation and wired it into Bitwig `.multisample` and Korg `.korgmultisample` ZIP importers with offline regression tests for traversal-shaped sample references; added an NCW converter regression covering shell metacharacters in input paths; added a malformed importer corpus regression covering SF2, Bitwig, Korg, Ableton, KMP, EXS24, and NN-XT failure paths.
 - Local validation: offline render CTest entries passed; non-UI CTest suite passed 4/4; UI and preset smoke targets build. UI snapshot CTest still reports broad baseline mismatches across unrelated screens in this local environment, so baselines were not updated.
 
 ---

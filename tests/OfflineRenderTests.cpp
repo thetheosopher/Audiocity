@@ -4596,6 +4596,53 @@ bool runNnxtImporterDiagnosticTest()
     return r.hasErrors() && !r.hasPlayableProgram();
 }
 
+bool runMalformedImporterCorpusTest()
+{
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_malformed_importer_corpus_test", "");
+    if (!dir.createDirectory()) return false;
+
+    auto writeBytes = [&dir](const juce::String& name, std::initializer_list<juce::uint8> bytes)
+    {
+        const auto file = dir.getChildFile(name);
+        juce::MemoryBlock blob;
+        for (const auto byte : bytes)
+            blob.append(&byte, 1);
+        return file.replaceWithData(blob.getData(), blob.getSize()) ? file : juce::File{};
+    };
+
+    const auto rejects = [](const auto& result)
+    {
+        return result.hasErrors() && !result.hasPlayableProgram();
+    };
+
+    bool ok = true;
+
+    const auto sf2 = writeBytes("broken.sf2", { 'R', 'I', 'F', 'F', 0xff, 0xff, 0xff, 0x7f, 's', 'f', 'b', 'k' });
+    ok = ok && sf2.existsAsFile() && rejects(audiocity::engine::sf2::importFile(sf2));
+
+    const auto bitwig = writeBytes("broken.multisample", { 'P', 'K', 3, 4, 0, 0, 0 });
+    ok = ok && bitwig.existsAsFile() && rejects(audiocity::engine::bitwig::importFile(bitwig));
+
+    const auto korgMulti = writeBytes("broken.korgmultisample", { 'P', 'K', 3, 4, 0, 0, 0 });
+    ok = ok && korgMulti.existsAsFile() && rejects(audiocity::engine::korgmulti::importFile(korgMulti));
+
+    const auto ableton = writeBytes("broken.adv", { '<', 'A', 'b', 'l', 'e', 't', 'o', 'n', '>' });
+    ok = ok && ableton.existsAsFile() && rejects(audiocity::engine::ableton::importFile(ableton));
+
+    const auto kmp = writeBytes("broken.kmp", { 'M', 'S', 'P', '1', 0, 0, 0, 64, 1, 2, 3 });
+    ok = ok && kmp.existsAsFile() && rejects(audiocity::engine::korgkmp::importFile(kmp));
+
+    const auto exs = writeBytes("broken.exs", { 0, 1, 2, 3, 4, 5, 6, 7 });
+    ok = ok && exs.existsAsFile() && rejects(audiocity::engine::exs24::importFile(exs));
+
+    const auto sxt = writeBytes("broken.sxt", { 'C', 'A', 'T', ' ', 'N', 'N', '-', 'X', 'T', 0, 1, 2 });
+    ok = ok && sxt.existsAsFile() && rejects(audiocity::engine::nnxt::importFile(sxt));
+
+    dir.deleteRecursively();
+    return ok;
+}
+
 bool runLegacyNkiImportNcwViaConverterTest()
 {
     using namespace audiocity::engine::nki;
@@ -12843,6 +12890,7 @@ int main()
         AUDIOCITY_TEST(runKorgKmpImporterTest, 147),
         AUDIOCITY_TEST(runLogicExs24ImporterTest, 148),
         AUDIOCITY_TEST(runNnxtImporterDiagnosticTest, 149),
+        AUDIOCITY_TEST(runMalformedImporterCorpusTest, 240),
         AUDIOCITY_TEST(runLegacyNkiImportNcwViaConverterTest, 222),
         AUDIOCITY_TEST(runLegacyNkiProbeDetectsEncryptedPatchTest, 139),
         AUDIOCITY_TEST(runLegacyNkiProbeDetectsDiscreteSampleReferencesTest, 122),
