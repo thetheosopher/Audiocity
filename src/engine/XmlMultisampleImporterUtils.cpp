@@ -76,6 +76,30 @@ juce::File resolveSamplePath(const juce::String& rawPath, const juce::File& pres
     return {};
 }
 
+bool isSafeArchiveRelativePath(const juce::String& rawPath)
+{
+    const auto normalized = rawPath.trim().replaceCharacter('\\', '/');
+    if (normalized.isEmpty())
+        return false;
+
+    if (normalized.startsWithChar('/') || normalized.startsWith("//") || juce::File::isAbsolutePath(normalized))
+        return false;
+
+    if (normalized.containsChar(':'))
+        return false;
+
+    juce::StringArray segments;
+    segments.addTokens(normalized, "/", {});
+    for (const auto& segment : segments)
+    {
+        const auto trimmed = segment.trim();
+        if (trimmed.isEmpty() || trimmed == "." || trimmed == "..")
+            return false;
+    }
+
+    return true;
+}
+
 int loadSampleAssetFromFile(juce::AudioFormatManager& fm,
                             const juce::File& audioFile,
                             const int rootMidiNote,

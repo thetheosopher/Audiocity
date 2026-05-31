@@ -4108,6 +4108,90 @@ bool writeMonoToneWav(const juce::File& wavFile, int sampleRate, int sampleLengt
 }
 } // namespace
 
+bool runArchiveRelativePathSafetyTest()
+{
+    using audiocity::engine::xml_multi::isSafeArchiveRelativePath;
+
+    return isSafeArchiveRelativePath("tone.wav")
+        && isSafeArchiveRelativePath("Samples/tone.wav")
+        && isSafeArchiveRelativePath("Samples\\tone.wav")
+        && !isSafeArchiveRelativePath({})
+        && !isSafeArchiveRelativePath("../tone.wav")
+        && !isSafeArchiveRelativePath("Samples/../tone.wav")
+        && !isSafeArchiveRelativePath("/tone.wav")
+        && !isSafeArchiveRelativePath("C:/Samples/tone.wav")
+        && !isSafeArchiveRelativePath("file:///Samples/tone.wav");
+}
+
+bool runBitwigMultisampleRejectsUnsafeArchivePathTest()
+{
+    namespace bw = audiocity::engine::bitwig;
+
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_bitwig_unsafe_path_test", "");
+    if (!dir.createDirectory()) return false;
+
+    const auto wav = dir.getChildFile("tone.wav");
+    if (!writeMonoToneWav(wav, 44100, 256)) { dir.deleteRecursively(); return false; }
+
+    const auto manifest = dir.getChildFile("multisample.xml");
+    const juce::String xml =
+        R"(<?xml version="1.0" encoding="UTF-8"?>
+<multisample name="Unsafe">
+  <sample file="../tone.wav">
+    <key root="60" low="60" high="60"/>
+  </sample>
+</multisample>
+)";
+    if (!manifest.replaceWithText(xml)) { dir.deleteRecursively(); return false; }
+
+    const auto archive = dir.getChildFile("Unsafe.multisample");
+    {
+        juce::ZipFile::Builder builder;
+        builder.addFile(manifest, 9, "multisample.xml");
+        builder.addFile(wav, 0, "tone.wav");
+        std::unique_ptr<juce::FileOutputStream> out(archive.createOutputStream());
+        if (out == nullptr || !builder.writeToStream(*out, nullptr)) { dir.deleteRecursively(); return false; }
+    }
+
+    const auto result = bw::importFile(archive);
+    dir.deleteRecursively();
+
+    return result.hasErrors() && !result.hasPlayableProgram();
+}
+
+bool runKorgMultisampleRejectsUnsafeArchivePathTest()
+{
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_korg_unsafe_path_test", "");
+    if (!dir.createDirectory()) return false;
+
+    const auto wav = dir.getChildFile("bell.wav");
+    if (!writeMonoToneWav(wav, 44100, 256)) { dir.deleteRecursively(); return false; }
+
+    const auto manifest = dir.getChildFile("multisample.xml");
+    const juce::String xml =
+        R"(<?xml version="1.0" encoding="UTF-8"?>
+<KorgMultiSample name="Unsafe">
+  <sample file="../bell.wav" rootkey="72" lokey="72" hikey="72"/>
+</KorgMultiSample>)";
+    if (!manifest.replaceWithText(xml)) { dir.deleteRecursively(); return false; }
+
+    const auto archive = dir.getChildFile("Unsafe.korgmultisample");
+    {
+        juce::ZipFile::Builder builder;
+        builder.addFile(manifest, 9, "multisample.xml");
+        builder.addFile(wav, 0, "bell.wav");
+        std::unique_ptr<juce::FileOutputStream> out(archive.createOutputStream());
+        if (out == nullptr || !builder.writeToStream(*out, nullptr)) { dir.deleteRecursively(); return false; }
+    }
+
+    const auto result = audiocity::engine::korgmulti::importFile(archive);
+    dir.deleteRecursively();
+
+    return result.hasErrors() && !result.hasPlayableProgram();
+}
+
 bool runMpcKeygroupImporterTest()
 {
     const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
@@ -7499,6 +7583,74 @@ bool runLoadNcwSampleViaConverterTest()
         {
             const float phase = static_cast<float>(2.0 * juce::MathConstants<double>::pi * i * 440.0 / sampleRate);
             buffer.setSample(0, i, 0.35f * std::sin(phase));
+        }
+
+        if (!writer->writeFromAudioSampleBuffer(buffer, 0, sampleLength))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    ScopedEnvironmentVariable converterCommand(
+        "AUDIOCITY_NCW_CONVERTER_COMMAND",
+        "cmd.exe /c copy /y {input} {output} >nul");
+    if (!converterCommand.valid)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+
+    const auto loaded = engine.loadSampleFromFile(tempFile);
+    const auto ok = loaded
+        && engine.getLoadedSampleLength() == sampleLength
+        && engine.getSamplePath() == tempFile.getFullPathName();
+
+    tempDirectory.deleteRecursively();
+    return ok;
+}
+
+bool runLoadNcwSampleViaConverterQuotesShellMetacharactersTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 256;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_load_ncw_shell_metachar_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto tempFile = tempDirectory.getChildFile("Converted & Echo.ncw");
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(tempFile.createOutputStream());
+        if (output == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+
+        output.release();
+
+        juce::AudioBuffer<float> buffer(1, sampleLength);
+        for (int i = 0; i < sampleLength; ++i)
+        {
+            const float phase = static_cast<float>(2.0 * juce::MathConstants<double>::pi * i * 330.0 / sampleRate);
+            buffer.setSample(0, i, 0.25f * std::sin(phase));
         }
 
         if (!writer->writeFromAudioSampleBuffer(buffer, 0, sampleLength))
@@ -12678,11 +12830,14 @@ int main()
         AUDIOCITY_TEST(runSf2ImporterMinimalTest, 137),
         AUDIOCITY_TEST(runSf2ImporterPresetSelectionTest, 224),
         AUDIOCITY_TEST(runBitwigMultisampleImporterTest, 138),
+        AUDIOCITY_TEST(runArchiveRelativePathSafetyTest, 236),
+        AUDIOCITY_TEST(runBitwigMultisampleRejectsUnsafeArchivePathTest, 237),
         AUDIOCITY_TEST(runMpcKeygroupImporterTest, 140),
         AUDIOCITY_TEST(run1010MusicPresetImporterTest, 141),
         AUDIOCITY_TEST(runTalSamplerImporterTest, 142),
         AUDIOCITY_TEST(runTx16WxImporterTest, 143),
         AUDIOCITY_TEST(runKorgMultisampleImporterTest, 144),
+        AUDIOCITY_TEST(runKorgMultisampleRejectsUnsafeArchivePathTest, 238),
         AUDIOCITY_TEST(runAbletonAdvImporterTest, 145),
         AUDIOCITY_TEST(runDistingExPresetImporterTest, 146),
         AUDIOCITY_TEST(runKorgKmpImporterTest, 147),
@@ -12720,6 +12875,7 @@ int main()
         AUDIOCITY_TEST(runLoadSampleClearsProgramSnapshotTest, 92),
         AUDIOCITY_TEST(runLoadSampleResetsEnvelopeAndFilterDefaultsTest, 45),
         AUDIOCITY_TEST(runLoadNcwSampleViaConverterTest, 223),
+        AUDIOCITY_TEST(runLoadNcwSampleViaConverterQuotesShellMetacharactersTest, 239),
         AUDIOCITY_TEST(runFilterModulationAmountsAreBipolarTest, 70),
         AUDIOCITY_TEST(runEmbeddedLoopMetadataLoadsWithoutRootNoteTest, 64),
         AUDIOCITY_TEST(runRexRuntimeFallbackSmokeTest, 62),

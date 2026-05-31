@@ -1,5 +1,7 @@
 #include "BitwigMultisampleImporter.h"
 
+#include "XmlMultisampleImporterUtils.h"
+
 #include <juce_audio_formats/juce_audio_formats.h>
 
 #include <algorithm>
@@ -135,6 +137,13 @@ private:
 
     [[nodiscard]] int getOrAddSampleAsset(const juce::String& fileName, const int rootMidiNote, ImportResult& result)
     {
+        if (!xml_multi::isSafeArchiveRelativePath(fileName))
+        {
+            addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error,
+                          "Bitwig multisample rejected unsafe audio entry path: " + fileName);
+            return -1;
+        }
+
         const auto key = fileName.toStdString();
         const auto found = sampleAssetIndices.find(key);
         if (found != sampleAssetIndices.end())
@@ -208,14 +217,19 @@ private:
         for (int i = 0; i < zipFile.getNumEntries(); ++i)
         {
             const auto* entry = zipFile.getEntry(i);
-            if (entry != nullptr && entry->filename == fileName)
+            if (entry != nullptr
+                && xml_multi::isSafeArchiveRelativePath(entry->filename)
+                && entry->filename == fileName)
+            {
                 return i;
+            }
         }
         const auto base = juce::File::createFileWithoutCheckingPath(fileName).getFileName();
         for (int i = 0; i < zipFile.getNumEntries(); ++i)
         {
             const auto* entry = zipFile.getEntry(i);
             if (entry == nullptr) continue;
+            if (!xml_multi::isSafeArchiveRelativePath(entry->filename)) continue;
             const auto entryBase = juce::File::createFileWithoutCheckingPath(entry->filename).getFileName();
             if (entryBase.equalsIgnoreCase(base))
                 return i;

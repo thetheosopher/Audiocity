@@ -36,6 +36,10 @@ inline void addDiagnostic(std::vector<Diagnostic>& out, Diagnostic::Severity sev
 // fallbacks (Samples/ sibling, parent-up-2-levels lookup).
 [[nodiscard]] juce::File resolveSamplePath(const juce::String& rawPath, const juce::File& presetFolder);
 
+// Validate a path stored inside an archive before matching or opening it. Archive sample
+// references must stay relative and must not contain path traversal segments.
+[[nodiscard]] bool isSafeArchiveRelativePath(const juce::String& rawPath);
+
 // Load an external WAV/AIFF/etc into a SampleAsset + AudioBuffer using JUCE's reader.
 // On failure, pushes an error diagnostic and returns -1.
 [[nodiscard]] int loadSampleAssetFromFile(juce::AudioFormatManager& fm,

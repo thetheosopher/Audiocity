@@ -1,6 +1,6 @@
 # Audiocity — Deep Code Review
 
-```
+```text
 Review conducted: 2026-05-31
 Reviewer: Claude Opus (via GitHub Copilot)
 Perspectives: Software Optimization Engineering + Product Management
@@ -11,11 +11,22 @@ Severity legend: 🔴 Critical · 🟠 High · 🟡 Medium · 🔵 Low
 
 ---
 
+## Implementation Progress
+
+Last updated: 2026-05-31
+
+- Completed QW-1 through QW-6 from the enhancement roadmap: non-UI CI workflow, EngineCore render-path micro-optimizations, drag/drop debug logging gate, and persistent/copyable import diagnostics.
+- Started MP-4 importer hardening: added shared archive-relative path validation and wired it into Bitwig `.multisample` and Korg `.korgmultisample` ZIP importers with offline regression tests for traversal-shaped sample references; added an NCW converter regression covering shell metacharacters in input paths.
+- Local validation: offline render CTest entries passed; non-UI CTest suite passed 4/4; UI and preset smoke targets build. UI snapshot CTest still reports broad baseline mismatches across unrelated screens in this local environment, so baselines were not updated.
+
+---
+
 ## Project Context
 
 **Purpose & domain.** Audiocity is a Windows-focused hybrid sampler built on JUCE 8.0.4 and C++20, shipped as a standalone app and a VST3 instrument plugin from a single `AudioProcessor`. Target users are music producers and sound designers who want broad multisample import coverage, transient slicing, modulation, disk streaming, and a curated factory preset bank.
 
 **Tech stack.**
+
 - Language: C++20. Build: CMake (3.22+) with presets (`default`, `release-selfcontained-asio`).
 - Framework: JUCE 8.0.4 (audio_basics, audio_formats, dsp, gui). VST3 via JUCE wrapper.
 - Vendored deps under `third_party/` (REX SDK, optional ASIO SDK).
@@ -23,6 +34,7 @@ Severity legend: 🔴 Critical · 🟠 High · 🟡 Medium · 🔵 Low
 - CI: a single GitHub Actions workflow ([.github/workflows/ui-snapshots.yml](.github/workflows/ui-snapshots.yml)) that only exports/diffs UI snapshots.
 
 **Architecture map.**
+
 - Engine ([src/engine/](src/engine)): `EngineCore` (voice rendering, mixing, DSP, modulation, streaming), `VoicePool` (allocation/stealing), `ProgramSnapshot`/`ProgramModel` (immutable program data), and a large family of importers (SFZ, SF2, DecentSampler, Bitwig, MPC/binary, XML, REX, legacy NKI probe).
 - Plugin/UI ([src/plugin/](src/plugin)): `AudiocityAudioProcessor` (parameter state, preview/capture, host glue) and `AudiocityAudioProcessorEditor` (the entire UI), plus mapping model, library index/metadata, preset JSON, peak cache.
 - Tools ([tools/](tools)): `PresetAuthor` (regenerates the 64-preset factory bank) and `PresetAuditioner` (offline render QA).

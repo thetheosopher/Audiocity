@@ -1,11 +1,15 @@
 # Audiocity — Executive Summary
 
-```
+```text
 Review conducted: 2026-05-31
 Reviewer: Claude Opus (via GitHub Copilot)
 Perspectives: Software Optimization Engineering + Product Management
 Codebase: Audiocity (JUCE/C++20 hybrid sampler — Standalone + VST3)
 ```
+
+## Implementation Status
+
+Last updated: 2026-05-31. The first implementation pass has completed the highest-leverage quick wins: CI now runs the non-UI test suite, several low-risk render-path costs were removed, drag/drop debug logging is gated, import diagnostics can be copied and are persisted locally, ZIP importers now reject traversal-shaped sample references for Bitwig and Korg archive formats, and NCW converter quoting is covered by a shell-metacharacter path regression. The next prudent workstream is to continue MP-4 importer hardening or start MP-1 async import as a dedicated architectural slice.
 
 ## What the software does
 

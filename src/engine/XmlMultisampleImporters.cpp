@@ -633,6 +633,7 @@ ImportResult importFile(const juce::File& file)
     {
         const auto* e = zip.getEntry(i);
         if (e == nullptr) continue;
+        if (!xml_multi::isSafeArchiveRelativePath(e->filename)) continue;
         const auto base = juce::File::createFileWithoutCheckingPath(e->filename).getFileName();
         if (base.equalsIgnoreCase("multisample.xml")
             || base.endsWithIgnoreCase(".KorgMultiSample.xml")
@@ -676,16 +677,23 @@ ImportResult importFile(const juce::File& file)
     auto findEntryByName = [&](const juce::String& name) -> int
     {
         if (name.isEmpty()) return -1;
+        if (!xml_multi::isSafeArchiveRelativePath(name)) return -1;
         for (int i = 0; i < zip.getNumEntries(); ++i)
         {
             const auto* e = zip.getEntry(i);
-            if (e != nullptr && e->filename == name) return i;
+            if (e != nullptr
+                && xml_multi::isSafeArchiveRelativePath(e->filename)
+                && e->filename == name)
+            {
+                return i;
+            }
         }
         const auto base = juce::File::createFileWithoutCheckingPath(name).getFileName();
         for (int i = 0; i < zip.getNumEntries(); ++i)
         {
             const auto* e = zip.getEntry(i);
             if (e == nullptr) continue;
+            if (!xml_multi::isSafeArchiveRelativePath(e->filename)) continue;
             if (juce::File::createFileWithoutCheckingPath(e->filename).getFileName().equalsIgnoreCase(base))
                 return i;
         }
@@ -750,6 +758,12 @@ ImportResult importFile(const juce::File& file)
 
         const auto fname = readAttrCi(*el, { "file", "filename", "url", "path", "samplefile" });
         if (fname.isEmpty()) continue;
+        if (!xml_multi::isSafeArchiveRelativePath(fname))
+        {
+            addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
+                          "Korg multisample rejected unsafe audio entry path: " + fname);
+            continue;
+        }
 
         const int rootNote = parseMidiNoteText(readAttrCi(*el, { "rootkey", "root", "rootnote", "originalpitch" }, "60"), 60);
         const int entryIdx = findEntryByName(fname);
