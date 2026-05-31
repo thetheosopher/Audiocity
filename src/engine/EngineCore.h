@@ -566,7 +566,7 @@ private:
                                                             int numSamples) noexcept;
     [[nodiscard]] int getVoiceRenderBlockSize(const VoiceState& voice,
                                               int remainingSamples) const noexcept;
-    [[nodiscard]] int findNextPendingEventOffset(int currentOffset, int blockEnd) const noexcept;
+    [[nodiscard]] int findNextPendingEventOffset(int currentOffset, int blockEnd, int& eventCursor) const noexcept;
     void renderActiveVoices(int startSample,
                             int numSamples,
                             const SampleSegments& fallbackSegments,

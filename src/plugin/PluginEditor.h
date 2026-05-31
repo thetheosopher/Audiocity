@@ -1059,6 +1059,11 @@ private:
 
     // ── Diagnostics ──
     juce::Label diagnosticsLabel_;
+    juce::TextButton copyImportDiagnosticsButton_{ "Copy Log" };
+    static constexpr int kImportDiagnosticLogCapacity = 8;
+    std::array<juce::String, kImportDiagnosticLogCapacity> importDiagnosticLogEntries_{};
+    int importDiagnosticLogCount_ = 0;
+    int nextImportDiagnosticLogIndex_ = 0;
 
     // ── About ──
     juce::TextButton aboutGitHubButton_{ "GitHub" };
@@ -1165,6 +1170,11 @@ private:
     void showInstrumentLoadErrorDialog(const juce::File& file,
                                        const juce::String& diagnosticSummary,
                                        std::function<void()> onDismissed = {});
+    void recordImportDiagnosticEntry(const juce::File& file, bool loaded, bool cancelledByUser);
+    [[nodiscard]] juce::File getImportDiagnosticLogFile() const;
+    void appendImportDiagnosticEntryToDisk(const juce::String& entry) const;
+    [[nodiscard]] juce::String buildImportDiagnosticLogText() const;
+    void copyImportDiagnosticLogToClipboard();
     bool loadFileAsInstrument(const juce::File& file,
                               std::function<void(bool)> completion = {});
     bool importInstrumentFileByFormat(const juce::File& file,

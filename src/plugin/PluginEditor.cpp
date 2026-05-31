@@ -31,6 +31,7 @@ juce::Colour uiAccentAmberColour() { return juce::Colour(0xffd8a55a); }
 juce::Colour uiAccentGreenColour() { return juce::Colour(0xff6fd6ae); }
 
 constexpr auto kSampleBrowserDragPrefix = "audiocity-browser-sample:";
+constexpr auto kVerboseDragDropLogging = false;
 
 juce::var makeSampleBrowserDragDescription(const juce::File& file)
 {
@@ -4967,6 +4968,11 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(diagnosticsLabel_);
     diagnosticsLabel_.setJustificationType(juce::Justification::centredLeft);
     diagnosticsLabel_.setFont(juce::Font(juce::FontOptions(11.0f)));
+    addAndMakeVisible(copyImportDiagnosticsButton_);
+    copyImportDiagnosticsButton_.onClick = [this]
+    {
+        copyImportDiagnosticLogToClipboard();
+    };
 
     programMapText_.setMultiLine(true);
     programMapText_.setReadOnly(true);
@@ -5162,6 +5168,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addToSampleControls(saturationModeCombo_);
     addToSampleControls(programMapText_);
     addToSampleControls(diagnosticsLabel_);
+    addToSampleControls(copyImportDiagnosticsButton_);
 
     // About pane
     aboutIconImage_ = juce::ImageFileFormat::loadFrom(BinaryData::audiocity_icon_128_png,
@@ -5324,7 +5331,8 @@ void AudiocityAudioProcessorEditor::timerCallback()
     // ── Process deferred drag-and-drop (safe: outside OLE modal loop) ──
     if (hasPendingDrop_)
     {
-        DBG("[DnD] timerCallback: processing pending drop");
+        if constexpr (kVerboseDragDropLogging)
+            DBG("[DnD] timerCallback: processing pending drop");
         hasPendingDrop_ = false;
         auto droppedFiles = std::move(pendingDropFiles_);
         pendingDropFiles_.clear();
@@ -5332,7 +5340,8 @@ void AudiocityAudioProcessorEditor::timerCallback()
         for (const auto& path : droppedFiles)
         {
             auto normalizedPath = path.trim();
-            DBG("[DnD]   raw path: \"" + normalizedPath + "\"");
+            if constexpr (kVerboseDragDropLogging)
+                DBG("[DnD]   raw path: \"" + normalizedPath + "\"");
 
             // Normalise file:// URIs to a local path (string ops first, URL fallback)
             if (normalizedPath.startsWithIgnoreCase("file:///"))
@@ -5343,35 +5352,42 @@ void AudiocityAudioProcessorEditor::timerCallback()
             // Percent-decode common URL-encoded chars (%20 → space, etc.)
             normalizedPath = juce::URL::removeEscapeChars(normalizedPath);
 
-            DBG("[DnD]   normalized: \"" + normalizedPath + "\"");
+            if constexpr (kVerboseDragDropLogging)
+                DBG("[DnD]   normalized: \"" + normalizedPath + "\"");
 
             const juce::File dropped(normalizedPath);
-            DBG("[DnD]   existsAsFile: " + juce::String(dropped.existsAsFile() ? "yes" : "no"));
+            if constexpr (kVerboseDragDropLogging)
+                DBG("[DnD]   existsAsFile: " + juce::String(dropped.existsAsFile() ? "yes" : "no"));
             if (!dropped.existsAsFile())
                 continue;
 
             const auto ext = dropped.getFileExtension().toLowerCase();
-            DBG("[DnD]   ext: \"" + ext + "\"");
+            if constexpr (kVerboseDragDropLogging)
+                DBG("[DnD]   ext: \"" + ext + "\"");
             if (isSupportedSampleFile(dropped))
             {
-                DBG("[DnD]   loading instrument...");
+                if constexpr (kVerboseDragDropLogging)
+                    DBG("[DnD]   loading instrument...");
                 loadFileAsInstrument(dropped, [this](const bool loaded)
                 {
                     if (loaded)
                     {
-                        DBG("[DnD]   load succeeded, refreshing UI");
+                        if constexpr (kVerboseDragDropLogging)
+                            DBG("[DnD]   load succeeded, refreshing UI");
                         clearSelectedPresetAfterSourceLoad();
                         refreshUI(true);
                     }
                     else
                     {
-                        DBG("[DnD]   load FAILED");
+                        if constexpr (kVerboseDragDropLogging)
+                            DBG("[DnD]   load FAILED");
                     }
                 });
                 break;
             }
         }
-        DBG("[DnD] timerCallback: pending drop processing complete");
+        if constexpr (kVerboseDragDropLogging)
+            DBG("[DnD] timerCallback: pending drop processing complete");
     }
 
     const auto selectedTab = tabBar_.getCurrentTabIndex();
@@ -5816,6 +5832,7 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
     programMapText_.setVisible(showSampleTab && processor_.hasImportedProgram()
         && (useProgramMapInspector || isSampleGroupExpanded("programMap")));
     diagnosticsLabel_.setVisible(showSampleTab && showDiagnosticsPanel_);
+    copyImportDiagnosticsButton_.setVisible(showSampleTab && showDiagnosticsPanel_);
 
     playerKeyboardLabel_.setVisible(showPlayerTab || showPerformanceStrip);
     playerStatusDisplay_.setVisible(showPlayerTab || showPerformanceStrip);
@@ -7738,6 +7755,8 @@ void AudiocityAudioProcessorEditor::completeInstrumentLoad(const juce::File& fil
                                                           const bool cancelledByUser,
                                                           const std::function<void(bool)>& completion)
 {
+    recordImportDiagnosticEntry(file, loaded, cancelledByUser);
+
     if (loaded)
     {
         editorUndoHistory_.clear();
@@ -7806,6 +7825,75 @@ void AudiocityAudioProcessorEditor::showInstrumentLoadErrorDialog(const juce::Fi
         if (onDismissed)
             onDismissed();
     });
+}
+
+void AudiocityAudioProcessorEditor::recordImportDiagnosticEntry(const juce::File& file,
+                                                               const bool loaded,
+                                                               const bool cancelledByUser)
+{
+    juce::String entry;
+    entry << juce::Time::getCurrentTime().toString(true, true, true, true)
+          << " | " << (cancelledByUser ? "Cancelled" : (loaded ? "Loaded" : "Failed"))
+          << " | " << file.getFileName();
+
+    if (file != juce::File{})
+        entry << " | " << file.getFullPathName();
+
+    const auto diagnosticSummary = processor_.getLastImportDiagnosticSummary().trim();
+    if (!loaded && diagnosticSummary.isNotEmpty())
+        entry << juce::newLine << diagnosticSummary;
+
+    importDiagnosticLogEntries_[static_cast<std::size_t>(nextImportDiagnosticLogIndex_)] = entry;
+    nextImportDiagnosticLogIndex_ = (nextImportDiagnosticLogIndex_ + 1) % kImportDiagnosticLogCapacity;
+    importDiagnosticLogCount_ = juce::jmin(importDiagnosticLogCount_ + 1, kImportDiagnosticLogCapacity);
+    appendImportDiagnosticEntryToDisk(entry);
+}
+
+juce::File AudiocityAudioProcessorEditor::getImportDiagnosticLogFile() const
+{
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("Audiocity")
+        .getChildFile("ImportDiagnostics.log");
+}
+
+void AudiocityAudioProcessorEditor::appendImportDiagnosticEntryToDisk(const juce::String& entry) const
+{
+    const auto logFile = getImportDiagnosticLogFile();
+    if (!logFile.getParentDirectory().createDirectory())
+        return;
+
+    logFile.appendText(entry + juce::newLine + juce::newLine, false, false, "\n");
+}
+
+juce::String AudiocityAudioProcessorEditor::buildImportDiagnosticLogText() const
+{
+    const auto logFile = getImportDiagnosticLogFile();
+    if (logFile.existsAsFile())
+    {
+        const auto persistedLog = logFile.loadFileAsString().trim();
+        if (persistedLog.isNotEmpty())
+            return persistedLog;
+    }
+
+    if (importDiagnosticLogCount_ <= 0)
+        return "No import attempts recorded.";
+
+    juce::String log;
+    for (int i = 0; i < importDiagnosticLogCount_; ++i)
+    {
+        const auto index = (nextImportDiagnosticLogIndex_ - importDiagnosticLogCount_ + i + kImportDiagnosticLogCapacity)
+            % kImportDiagnosticLogCapacity;
+        if (i > 0)
+            log << juce::newLine << juce::newLine;
+        log << importDiagnosticLogEntries_[static_cast<std::size_t>(index)];
+    }
+
+    return log;
+}
+
+void AudiocityAudioProcessorEditor::copyImportDiagnosticLogToClipboard()
+{
+    juce::SystemClipboard::copyTextToClipboard(buildImportDiagnosticLogText());
 }
 
 bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file,
@@ -10354,11 +10442,15 @@ void AudiocityAudioProcessorEditor::resized()
     if (showDiagnosticsPanel_)
     {
         auto diagInner = makeGroup("diagnostics", "Diagnostics", 56);
-        diagnosticsLabel_.setBounds(diagInner.removeFromTop(22));
+        auto diagnosticsRow = diagInner.removeFromTop(24);
+        copyImportDiagnosticsButton_.setBounds(diagnosticsRow.removeFromRight(94));
+        diagnosticsRow.removeFromRight(8);
+        diagnosticsLabel_.setBounds(diagnosticsRow);
     }
     else
     {
         diagnosticsLabel_.setBounds({});
+        copyImportDiagnosticsButton_.setBounds({});
     }
 
     sampleControlsContent_.setSize(viewportWidth, juce::jmax(sampleControlsViewport_.getHeight(), scrollY + 4));
@@ -11673,6 +11765,8 @@ void AudiocityAudioProcessorEditor::setupTooltips()
         processor_.isRexRuntimeAvailable() ? "Load Sample, SFZ, or REX (Ctrl+O)" : "Load Sample (Ctrl+O)");
     diagnosticsToggleButton_.setTooltip(
         "Show or hide preload, stream, and voice diagnostics (Ctrl+Alt+D)");
+    copyImportDiagnosticsButton_.setTooltip(
+        "Copy recent import diagnostics to the clipboard");
     waveformResetRangesButton_.setTooltip(
         "Reset playback and loop ranges to the full sample");
     waveformInteractionSummaryLabel_.setTooltip(
@@ -11956,9 +12050,12 @@ bool AudiocityAudioProcessorEditor::isInterestedInFileDrag(const juce::StringArr
     // IMPORTANT: Called from the OLE modal loop on every mouse-move.
     // juce::File() and getFileExtension() are pure string ops — safe here.
     // Do NOT use juce::URL (triggers COM), File::existsAsFile() (I/O), etc.
-    DBG("[DnD] isInterestedInFileDrag called with " + juce::String(files.size()) + " file(s)");
-    for (int i = 0; i < files.size(); ++i)
-        DBG("[DnD]   file[" + juce::String(i) + "] = \"" + files[i] + "\"");
+    if constexpr (kVerboseDragDropLogging)
+    {
+        DBG("[DnD] isInterestedInFileDrag called with " + juce::String(files.size()) + " file(s)");
+        for (int i = 0; i < files.size(); ++i)
+            DBG("[DnD]   file[" + juce::String(i) + "] = \"" + files[i] + "\"");
+    }
 
     for (const auto& rawPath : files)
     {
@@ -11973,21 +12070,25 @@ bool AudiocityAudioProcessorEditor::isInterestedInFileDrag(const juce::StringArr
             path = path.substring(7).replace("/", "\\");
 
         const auto ext = juce::File(path).getFileExtension().toLowerCase();
-        DBG("[DnD]   normalized=\"" + path + "\"  ext=\"" + ext + "\"");
+        if constexpr (kVerboseDragDropLogging)
+            DBG("[DnD]   normalized=\"" + path + "\"  ext=\"" + ext + "\"");
         if (ext == ".sfz" || ext == ".nki" || ext == ".wav" || ext == ".aiff" || ext == ".aif"
             || (processor_.isRexRuntimeAvailable() && (ext == ".rex" || ext == ".rx2")))
         {
-            DBG("[DnD]   -> INTERESTED");
+            if constexpr (kVerboseDragDropLogging)
+                DBG("[DnD]   -> INTERESTED");
             return true;
         }
     }
-    DBG("[DnD]   -> NOT interested");
+    if constexpr (kVerboseDragDropLogging)
+        DBG("[DnD]   -> NOT interested");
     return false;
 }
 
 void AudiocityAudioProcessorEditor::fileDragEnter(const juce::StringArray& files, int, int)
 {
-    DBG("[DnD] fileDragEnter");
+    if constexpr (kVerboseDragDropLogging)
+        DBG("[DnD] fileDragEnter");
     isHoveringValidDrop_ = isInterestedInFileDrag(files);
     repaint();
 }
@@ -11999,7 +12100,8 @@ void AudiocityAudioProcessorEditor::fileDragMove(const juce::StringArray& files,
 
 void AudiocityAudioProcessorEditor::fileDragExit(const juce::StringArray&)
 {
-    DBG("[DnD] fileDragExit");
+    if constexpr (kVerboseDragDropLogging)
+        DBG("[DnD] fileDragExit");
     isHoveringValidDrop_ = false;
     repaint();
 }
@@ -12009,14 +12111,18 @@ void AudiocityAudioProcessorEditor::filesDropped(const juce::StringArray& files,
     // IMPORTANT: Called during the OLE modal loop.
     // Must NOT do file I/O, juce::URL, callAsync, or any COM call.
     // Just stash the raw paths and let timerCallback handle the load.
-    DBG("[DnD] filesDropped called with " + juce::String(files.size()) + " file(s)");
-    for (int i = 0; i < files.size(); ++i)
-        DBG("[DnD]   dropped[" + juce::String(i) + "] = \"" + files[i] + "\"");
+    if constexpr (kVerboseDragDropLogging)
+    {
+        DBG("[DnD] filesDropped called with " + juce::String(files.size()) + " file(s)");
+        for (int i = 0; i < files.size(); ++i)
+            DBG("[DnD]   dropped[" + juce::String(i) + "] = \"" + files[i] + "\"");
+    }
     isHoveringValidDrop_ = false;
     pendingDropFiles_ = files;
     hasPendingDrop_ = true;
     repaint();
-    DBG("[DnD] filesDropped finished, hasPendingDrop_=true");
+    if constexpr (kVerboseDragDropLogging)
+        DBG("[DnD] filesDropped finished, hasPendingDrop_=true");
 }
 
 // ─── File Chooser ──────────────────────────────────────────────────────────────

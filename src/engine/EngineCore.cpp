@@ -1424,11 +1424,12 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     sortPendingEventsByOffset();
 
     auto segmentStart = 0;
+    auto pendingEventCursor = 0;
     while (segmentStart < numSamples)
     {
         flushPendingEventsAtOffset(segmentStart, program, programAudio);
 
-        const auto segmentEnd = findNextPendingEventOffset(segmentStart, numSamples);
+        const auto segmentEnd = findNextPendingEventOffset(segmentStart, numSamples, pendingEventCursor);
         const auto segmentSamples = segmentEnd - segmentStart;
         if (segmentSamples > 0)
         {
@@ -1439,10 +1440,13 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
         segmentStart = segmentEnd;
     }
 
-    for (int sampleIndex = 0; sampleIndex < numSamples; ++sampleIndex)
+    if (juce::jlimit(0.0f, 1.0f, saturationSettings_.drive) > 1.0e-5f)
     {
-        mixLeft[sampleIndex] = processSaturationSample(mixLeft[sampleIndex]);
-        mixRight[sampleIndex] = processSaturationSample(mixRight[sampleIndex]);
+        for (int sampleIndex = 0; sampleIndex < numSamples; ++sampleIndex)
+        {
+            mixLeft[sampleIndex] = processSaturationSample(mixLeft[sampleIndex]);
+            mixRight[sampleIndex] = processSaturationSample(mixRight[sampleIndex]);
+        }
     }
 
     auto* monoScratch = voiceScratchBuffer_.getWritePointer(0);
@@ -1473,23 +1477,34 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     if (numChannels >= 2)
     {
         const auto clampedPan = juce::jlimit(-1.0f, 1.0f, pan_);
-        const auto autopanRateHz = juce::jlimit(0.01f, 20.0f, autopanSettings_.rateHz);
         const auto autopanDepth = juce::jlimit(0.0f, 1.0f, autopanSettings_.depth);
-        const auto phaseInc = autopanRateHz / static_cast<float>(sampleRate_);
 
-        for (int sampleIndex = 0; sampleIndex < numSamples; ++sampleIndex)
+        if (autopanDepth <= 1.0e-4f)
         {
-            const auto autopanOffset = std::sin(2.0f * juce::MathConstants<float>::pi * autopanPhase_) * autopanDepth;
-            const auto effectivePan = juce::jlimit(-1.0f, 1.0f, clampedPan + autopanOffset);
-            const auto leftGain = effectivePan > 0.0f ? (1.0f - effectivePan) : 1.0f;
-            const auto rightGain = effectivePan < 0.0f ? (1.0f + effectivePan) : 1.0f;
+            const auto leftGain = clampedPan > 0.0f ? (1.0f - clampedPan) : 1.0f;
+            const auto rightGain = clampedPan < 0.0f ? (1.0f + clampedPan) : 1.0f;
+            juce::FloatVectorOperations::multiply(outputs[0], leftGain, numSamples);
+            juce::FloatVectorOperations::multiply(outputs[1], rightGain, numSamples);
+        }
+        else
+        {
+            const auto autopanRateHz = juce::jlimit(0.01f, 20.0f, autopanSettings_.rateHz);
+            const auto phaseInc = autopanRateHz / static_cast<float>(sampleRate_);
 
-            outputs[0][sampleIndex] *= leftGain;
-            outputs[1][sampleIndex] *= rightGain;
+            for (int sampleIndex = 0; sampleIndex < numSamples; ++sampleIndex)
+            {
+                const auto autopanOffset = std::sin(2.0f * juce::MathConstants<float>::pi * autopanPhase_) * autopanDepth;
+                const auto effectivePan = juce::jlimit(-1.0f, 1.0f, clampedPan + autopanOffset);
+                const auto leftGain = effectivePan > 0.0f ? (1.0f - effectivePan) : 1.0f;
+                const auto rightGain = effectivePan < 0.0f ? (1.0f + effectivePan) : 1.0f;
 
-            autopanPhase_ += phaseInc;
-            if (autopanPhase_ >= 1.0f)
-                autopanPhase_ -= std::floor(autopanPhase_);
+                outputs[0][sampleIndex] *= leftGain;
+                outputs[1][sampleIndex] *= rightGain;
+
+                autopanPhase_ += phaseInc;
+                if (autopanPhase_ >= 1.0f)
+                    autopanPhase_ -= std::floor(autopanPhase_);
+            }
         }
     }
 
@@ -1513,17 +1528,18 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     pendingEventCount_ = 0;
 }
 
-int EngineCore::findNextPendingEventOffset(const int currentOffset, const int blockEnd) const noexcept
+int EngineCore::findNextPendingEventOffset(const int currentOffset, const int blockEnd, int& eventCursor) const noexcept
 {
-    auto nextOffset = blockEnd;
-    for (int eventIndex = 0; eventIndex < pendingEventCount_; ++eventIndex)
+    while (eventCursor < pendingEventCount_
+        && pendingEvents_[static_cast<std::size_t>(eventCursor)].offset <= currentOffset)
     {
-        const auto eventOffset = pendingEvents_[static_cast<std::size_t>(eventIndex)].offset;
-        if (eventOffset > currentOffset && eventOffset < nextOffset)
-            nextOffset = eventOffset;
+        ++eventCursor;
     }
 
-    return nextOffset;
+    if (eventCursor < pendingEventCount_)
+        return juce::jmin(blockEnd, pendingEvents_[static_cast<std::size_t>(eventCursor)].offset);
+
+    return blockEnd;
 }
 
 int EngineCore::getGlobalModulationBlockSize(const int remainingSamples) const noexcept

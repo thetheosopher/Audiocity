@@ -1,0 +1,49 @@
+name: Build and Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/build-and-test.yml'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'assets/**'
+      - 'scripts/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'third_party/**'
+      - 'tools/**'
+  pull_request:
+    paths:
+      - '.github/workflows/build-and-test.yml'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'assets/**'
+      - 'scripts/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'third_party/**'
+      - 'tools/**'
+
+jobs:
+  build-and-test:
+    runs-on: windows-2022
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        shell: pwsh
+        run: cmake --preset default
+
+      - name: Build offline and preset smoke tests
+        shell: pwsh
+        run: cmake --build --preset default --config Debug --target audiocity_offline_tests audiocity_preset_runtime_smoke
+
+      - name: Run non-UI CTest suite
+        shell: pwsh
+        run: ctest --test-dir build -C Debug --output-on-failure --exclude-regex '^audiocity_ui_snapshot_harness$'
