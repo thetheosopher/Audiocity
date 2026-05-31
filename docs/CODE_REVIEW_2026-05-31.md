@@ -16,8 +16,9 @@ Severity legend: 🔴 Critical · 🟠 High · 🟡 Medium · 🔵 Low
 Last updated: 2026-05-31
 
 - Completed QW-1 through QW-6 from the enhancement roadmap: non-UI CI workflow, EngineCore render-path micro-optimizations, drag/drop debug logging gate, and persistent/copyable import diagnostics.
-- Started MP-4 importer hardening: added shared archive-relative path validation and wired it into Bitwig `.multisample` and Korg `.korgmultisample` ZIP importers with offline regression tests for traversal-shaped sample references; added an NCW converter regression covering shell metacharacters in input paths; added a malformed importer corpus regression covering SF2, Bitwig, Korg, Ableton, KMP, EXS24, and NN-XT failure paths; capped KMP `RLP1` entry parsing to declared/format limits; added overflow-safe EXS24 chunk truncation diagnostics.
-- Local validation: offline render CTest entries passed; non-UI CTest suite passed 4/4; UI and preset smoke targets build. UI snapshot CTest still reports broad baseline mismatches across unrelated screens in this local environment, so baselines were not updated.
+- Completed MP-4 importer hardening: added shared archive-relative path validation and wired it into Bitwig `.multisample` and Korg `.korgmultisample` ZIP importers with offline regression tests for traversal-shaped sample references; added an NCW converter regression covering shell metacharacters in input paths; added a malformed importer corpus regression covering SF2, Bitwig, Korg, Ableton, KMP, EXS24, and NN-XT failure paths; capped KMP `RLP1` entry parsing to declared/format limits; added overflow-safe EXS24 chunk truncation diagnostics; added SF2 LIST/table validation; capped Bitwig/Korg ZIP manifest/audio and Ableton gzip XML payload reads.
+- Started MP-1 async import: selected imported-program formats now parse/decode on a background worker, publish prepared `Program`/sample buffers back on the message thread, and expose cancel by invalidating the active import generation. Cooperative decode cancellation, richer progress, and SFZ/REX/NKI/sample async coverage remain follow-up work.
+- Local validation: offline render CTest entries passed; non-UI CTest suite passed 4/4; UI snapshot harness generated the MP-1 check snapshots; UI and preset smoke targets build. UI snapshot CTest still reports broad baseline mismatches across unrelated screens in this local environment, so baselines were not updated.
 
 ---
 
@@ -122,7 +123,7 @@ Last updated: 2026-05-31
 
 ### 3B. UX & Developer Experience Gaps
 
-🟠 **Synchronous import on drop blocks the UI** (see 2C). From the user's perspective, dragging a large library appears to "freeze" the app — no progress indicator, no cancel. A background import with a progress/cancel affordance is table stakes for a sampler handling multi-GB libraries.
+🟠 **Synchronous import on drop is only partly fixed** (see 2C). Selected imported-program formats now move parse/decode to a worker and expose a cancel affordance, but SFZ/REX/NKI/sample paths, cooperative cancellation inside long decodes, and richer progress reporting still need to be completed for multi-GB library workflows.
 
 🟡 **Import failure feedback is ephemeral.** Failed loads show a status label but no persistent, copyable diagnostic, so users cannot easily report *why* a given `.nki`/`.sf2` failed. A "copy diagnostics" action and a rolling import log would cut support friction.
 

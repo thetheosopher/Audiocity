@@ -6,8 +6,13 @@
 #include "PluginProcessor.h"
 #include "ProgramMappingModel.h"
 #include "../engine/AudioFileSupport.h"
+#include "../engine/BinaryMultisampleImporters.h"
+#include "../engine/BitwigMultisampleImporter.h"
+#include "../engine/DecentSamplerImporter.h"
 #include "SampleBrowserTooltip.h"
 #include "../engine/LegacyNkiProbe.h"
+#include "../engine/Sf2Importer.h"
+#include "../engine/XmlMultisampleImporters.h"
 #include <BinaryData.h>
 
 #include <algorithm>
@@ -32,6 +37,159 @@ juce::Colour uiAccentGreenColour() { return juce::Colour(0xff6fd6ae); }
 
 constexpr auto kSampleBrowserDragPrefix = "audiocity-browser-sample:";
 constexpr auto kVerboseDragDropLogging = false;
+
+struct BackgroundImportResult
+{
+    audiocity::engine::Program program;
+    std::vector<juce::AudioBuffer<float>> sampleData;
+    juce::String summary;
+    audiocity::plugin::ImportedProgramFormat format = audiocity::plugin::ImportedProgramFormat::unknown;
+    int displayAssetIndex = -1;
+    int selectionIndex = -1;
+    bool ok = false;
+};
+
+template <typename ResultT>
+BackgroundImportResult prepareBackgroundImportResult(ResultT&& result,
+                                                     juce::String summary,
+                                                     const audiocity::plugin::ImportedProgramFormat format,
+                                                     const juce::String& failurePrefix,
+                                                     const int selectionIndex = -1)
+{
+    BackgroundImportResult prepared;
+    prepared.format = format;
+    prepared.selectionIndex = selectionIndex;
+
+    const auto hasPlayable = result.hasPlayableProgram();
+    const auto imported = !result.hasErrors() && hasPlayable;
+    if (!hasPlayable && !result.hasErrors())
+        summary = failurePrefix + " import failed: no playable zones";
+
+    if (!imported)
+    {
+        prepared.summary = std::move(summary);
+        return prepared;
+    }
+
+    for (std::size_t i = 0; i < result.sampleDataByAsset.size(); ++i)
+    {
+        if (result.sampleDataByAsset[i].getNumChannels() > 0
+            && result.sampleDataByAsset[i].getNumSamples() > 0)
+        {
+            prepared.displayAssetIndex = static_cast<int>(i);
+            break;
+        }
+    }
+
+    if (prepared.displayAssetIndex < 0)
+    {
+        prepared.summary = failurePrefix + " import failed: decoded samples were empty";
+        return prepared;
+    }
+
+    prepared.program = std::move(result.program);
+    prepared.sampleData = std::move(result.sampleDataByAsset);
+    prepared.summary = std::move(summary);
+    prepared.ok = true;
+    return prepared;
+}
+
+BackgroundImportResult prepareBackgroundInstrumentImport(const juce::File& file,
+                                                        const audiocity::plugin::ImportedProgramFormat format,
+                                                        const int selectedChoiceIndex)
+{
+    using audiocity::plugin::ImportedProgramFormat;
+
+    switch (format)
+    {
+        case ImportedProgramFormat::sf2:
+        {
+            auto r = audiocity::engine::sf2::importFilePreset(file, selectedChoiceIndex >= 0 ? selectedChoiceIndex : 0);
+            const auto selectionIndex = r.chosenPresetIndex;
+            auto s = audiocity::engine::sf2::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "SF2", selectionIndex);
+        }
+        case ImportedProgramFormat::decentSampler:
+        {
+            auto r = audiocity::engine::dspreset::importFile(file);
+            auto s = audiocity::engine::dspreset::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "DecentSampler");
+        }
+        case ImportedProgramFormat::bitwigMultisample:
+        {
+            auto r = audiocity::engine::bitwig::importFile(file);
+            auto s = audiocity::engine::bitwig::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "Bitwig multisample");
+        }
+        case ImportedProgramFormat::mpcKeygroup:
+        {
+            auto r = audiocity::engine::mpc::importFile(file);
+            auto s = audiocity::engine::mpc::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "MPC keygroup");
+        }
+        case ImportedProgramFormat::bento1010:
+        {
+            auto r = audiocity::engine::bento::importFile(file);
+            auto s = audiocity::engine::bento::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "1010music preset");
+        }
+        case ImportedProgramFormat::talSampler:
+        {
+            auto r = audiocity::engine::talsmpl::importFile(file);
+            auto s = audiocity::engine::talsmpl::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "TAL Sampler");
+        }
+        case ImportedProgramFormat::tx16wx:
+        {
+            auto r = audiocity::engine::tx16wx::importFile(file);
+            auto s = audiocity::engine::tx16wx::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "TX16Wx");
+        }
+        case ImportedProgramFormat::korgMultisample:
+        {
+            auto r = audiocity::engine::korgmulti::importFile(file);
+            auto s = audiocity::engine::korgmulti::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "Korg multisample");
+        }
+        case ImportedProgramFormat::abletonSampler:
+        {
+            auto r = audiocity::engine::ableton::importFile(file);
+            auto s = audiocity::engine::ableton::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "Ableton sampler");
+        }
+        case ImportedProgramFormat::distingExPreset:
+        {
+            auto r = audiocity::engine::distingex::importFile(file);
+            auto s = audiocity::engine::distingex::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "disting EX preset");
+        }
+        case ImportedProgramFormat::korgKmp:
+        {
+            auto r = audiocity::engine::korgkmp::importFile(file);
+            auto s = audiocity::engine::korgkmp::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "Korg KMP");
+        }
+        case ImportedProgramFormat::logicExs24:
+        {
+            auto r = audiocity::engine::exs24::importFile(file);
+            auto s = audiocity::engine::exs24::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "Logic EXS24");
+        }
+        case ImportedProgramFormat::nnxt:
+        {
+            auto r = audiocity::engine::nnxt::importFile(file);
+            auto s = audiocity::engine::nnxt::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
+            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "Reason NN-XT");
+        }
+        default:
+            break;
+    }
+
+    BackgroundImportResult failed;
+    failed.format = format;
+    failed.summary = "Background import is not available for this format";
+    return failed;
+}
 
 juce::var makeSampleBrowserDragDescription(const juce::File& file)
 {
@@ -4369,7 +4527,13 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 
     addAndMakeVisible(loadButton_);
     loadButton_.setTooltip("Load Sample, SFZ, or REX");
-    loadButton_.onClick = [this] { openSampleChooser(); };
+    loadButton_.onClick = [this]
+    {
+        if (backgroundImportInProgress_.load(std::memory_order_relaxed))
+            cancelBackgroundInstrumentLoad();
+        else
+            openSampleChooser();
+    };
 
     addAndMakeVisible(sampleBrowserRailToggleButton_);
     sampleBrowserRailToggleButton_.setClickingTogglesState(true);
@@ -7896,6 +8060,122 @@ void AudiocityAudioProcessorEditor::copyImportDiagnosticLogToClipboard()
     juce::SystemClipboard::copyTextToClipboard(buildImportDiagnosticLogText());
 }
 
+bool AudiocityAudioProcessorEditor::canImportInstrumentInBackground(
+    const audiocity::plugin::ImportedProgramFormat format) const noexcept
+{
+    using audiocity::plugin::ImportedProgramFormat;
+    switch (format)
+    {
+        case ImportedProgramFormat::sf2:
+        case ImportedProgramFormat::decentSampler:
+        case ImportedProgramFormat::bitwigMultisample:
+        case ImportedProgramFormat::mpcKeygroup:
+        case ImportedProgramFormat::bento1010:
+        case ImportedProgramFormat::talSampler:
+        case ImportedProgramFormat::tx16wx:
+        case ImportedProgramFormat::korgMultisample:
+        case ImportedProgramFormat::abletonSampler:
+        case ImportedProgramFormat::distingExPreset:
+        case ImportedProgramFormat::korgKmp:
+        case ImportedProgramFormat::logicExs24:
+        case ImportedProgramFormat::nnxt:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void AudiocityAudioProcessorEditor::setBackgroundImportUiActive(const bool active, const juce::File& file)
+{
+    backgroundImportInProgress_.store(active, std::memory_order_relaxed);
+    loadButton_.setButtonText(active ? "Cancel" : "Load");
+    loadButton_.setTooltip(active
+        ? ("Cancel import of " + file.getFileName())
+        : (processor_.isRexRuntimeAvailable() ? "Load Sample, SFZ, or REX (Ctrl+O)" : "Load Sample (Ctrl+O)"));
+
+    if (active)
+    {
+        diagnosticsLabel_.setText("Importing " + file.getFileName() + "...", juce::dontSendNotification);
+        diagnosticsLabel_.setColour(juce::Label::textColourId, uiAccentAmberColour());
+    }
+    else
+    {
+        updateDiagnosticsStatusText();
+    }
+}
+
+void AudiocityAudioProcessorEditor::cancelBackgroundInstrumentLoad()
+{
+    if (!backgroundImportInProgress_.load(std::memory_order_relaxed))
+        return;
+
+    const auto file = backgroundImportFile_;
+    auto completion = std::move(backgroundImportCompletion_);
+    backgroundImportCompletion_ = {};
+    ++backgroundImportGeneration_;
+    processor_.setImportDiagnosticSummary("Import cancelled: " + file.getFileName());
+    setBackgroundImportUiActive(false);
+    completeInstrumentLoad(file, false, true, completion);
+}
+
+bool AudiocityAudioProcessorEditor::startBackgroundInstrumentLoad(
+    const juce::File& file,
+    const audiocity::plugin::ImportedProgramFormat format,
+    const int selectedChoiceIndex,
+    std::function<void(bool)> completion)
+{
+    if (!canImportInstrumentInBackground(format))
+        return false;
+
+    if (backgroundImportInProgress_.load(std::memory_order_relaxed))
+        cancelBackgroundInstrumentLoad();
+
+    backgroundImportFile_ = file;
+    backgroundImportCompletion_ = completion;
+    const auto generation = ++backgroundImportGeneration_;
+    setBackgroundImportUiActive(true, file);
+
+    const auto safeThis = juce::Component::SafePointer<AudiocityAudioProcessorEditor>(this);
+    std::thread([safeThis, file, format, selectedChoiceIndex, generation]() mutable
+    {
+        auto prepared = prepareBackgroundInstrumentImport(file, format, selectedChoiceIndex);
+
+        juce::MessageManager::callAsync([safeThis, file, generation, prepared = std::move(prepared)]() mutable
+        {
+            if (safeThis == nullptr)
+                return;
+
+            auto* self = safeThis.getComponent();
+            if (generation != self->backgroundImportGeneration_.load(std::memory_order_relaxed))
+                return;
+
+            auto completion = std::move(self->backgroundImportCompletion_);
+            self->backgroundImportCompletion_ = {};
+
+            bool loaded = false;
+            if (prepared.ok)
+            {
+                loaded = self->processor_.publishPreparedImportedProgram(file,
+                                                                         prepared.format,
+                                                                         std::move(prepared.program),
+                                                                         std::move(prepared.sampleData),
+                                                                         prepared.summary,
+                                                                         prepared.displayAssetIndex,
+                                                                         prepared.selectionIndex);
+            }
+            else
+            {
+                self->processor_.setImportDiagnosticSummary(prepared.summary);
+            }
+
+            self->setBackgroundImportUiActive(false);
+            self->completeInstrumentLoad(file, loaded, false, completion);
+        });
+    }).detach();
+
+    return true;
+}
+
 bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file,
                                                          std::function<void(bool)> completion)
 {
@@ -7926,6 +8206,14 @@ bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file,
                                                 return;
                                             }
 
+                                            if (safeThis->startBackgroundInstrumentLoad(file,
+                                                                                       detectedFormat,
+                                                                                       *choiceIndex,
+                                                                                       completion))
+                                            {
+                                                return;
+                                            }
+
                                             const auto loaded = safeThis->importInstrumentFileByFormat(file,
                                                                                                        detectedFormat,
                                                                                                        *choiceIndex);
@@ -7934,6 +8222,9 @@ bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file,
 
         return false;
     }
+
+    if (startBackgroundInstrumentLoad(file, detectedFormat, -1, completion))
+        return false;
 
     const auto loaded = importInstrumentFileByFormat(file, detectedFormat, -1);
     completeInstrumentLoad(file, loaded, false, completion);

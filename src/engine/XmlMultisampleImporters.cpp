@@ -18,6 +18,9 @@ using xml_multi::buildGenericSummary;
 
 namespace
 {
+constexpr juce::int64 kMaxArchiveManifestBytes = static_cast<juce::int64>(16) * 1024 * 1024;
+constexpr juce::int64 kMaxArchiveAudioBytes = static_cast<juce::int64>(512) * 1024 * 1024;
+
 [[nodiscard]] ZoneLoopMode parseLoopText(const juce::String& raw, ZoneLoopMode fallback = ZoneLoopMode::noLoop)
 {
     const auto l = raw.toLowerCase();
@@ -650,6 +653,14 @@ ImportResult importFile(const juce::File& file)
         return result;
     }
 
+    const auto* manifestEntry = zip.getEntry(manifestIndex);
+    if (manifestEntry == nullptr || manifestEntry->uncompressedSize > kMaxArchiveManifestBytes)
+    {
+        addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
+                      "Korg multisample manifest too large");
+        return result;
+    }
+
     std::unique_ptr<juce::InputStream> mstream(zip.createStreamForEntry(manifestIndex));
     if (mstream == nullptr)
     {
@@ -658,7 +669,18 @@ ImportResult importFile(const juce::File& file)
         return result;
     }
 
-    auto xml = juce::parseXML(mstream->readEntireStreamAsString());
+    juce::MemoryBlock manifestBlob;
+    mstream->readIntoMemoryBlock(manifestBlob, static_cast<int>(kMaxArchiveManifestBytes + 1));
+    if (static_cast<juce::int64>(manifestBlob.getSize()) > kMaxArchiveManifestBytes)
+    {
+        addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
+                      "Korg multisample manifest too large");
+        return result;
+    }
+
+    const auto manifestText = juce::String::fromUTF8(static_cast<const char*>(manifestBlob.getData()),
+                                                    static_cast<int>(manifestBlob.getSize()));
+    auto xml = juce::parseXML(manifestText);
     if (xml == nullptr)
     {
         addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
@@ -708,10 +730,34 @@ ImportResult importFile(const juce::File& file)
                           "Korg multisample missing audio entry: " + humanLabel);
             return -1;
         }
+        const auto* entry = zip.getEntry(entryIndex);
+        if (entry == nullptr)
+        {
+            addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
+                          "Korg multisample missing audio entry: " + humanLabel);
+            return -1;
+        }
+        if (entry->uncompressedSize > kMaxArchiveAudioBytes)
+        {
+            addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
+                          "Korg multisample audio entry too large: " + humanLabel);
+            return -1;
+        }
         std::unique_ptr<juce::InputStream> raw(zip.createStreamForEntry(entryIndex));
-        if (raw == nullptr) return -1;
+        if (raw == nullptr)
+        {
+            addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
+                          "Could not open Korg multisample audio entry: " + humanLabel);
+            return -1;
+        }
         juce::MemoryBlock blob;
-        raw->readIntoMemoryBlock(blob);
+        raw->readIntoMemoryBlock(blob, static_cast<int>(kMaxArchiveAudioBytes + 1));
+        if (static_cast<juce::int64>(blob.getSize()) > kMaxArchiveAudioBytes)
+        {
+            addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
+                          "Korg multisample audio entry too large: " + humanLabel);
+            return -1;
+        }
         std::unique_ptr<juce::AudioFormatReader> reader(
             fm.createReaderFor(std::make_unique<juce::MemoryInputStream>(blob, true)));
         if (reader == nullptr)
@@ -857,6 +903,8 @@ namespace
 [[nodiscard]] std::unique_ptr<juce::XmlElement> parseGzipXml(const juce::File& file,
                                                              std::vector<Diagnostic>& diagnostics)
 {
+    constexpr juce::int64 kMaxAbletonXmlBytes = static_cast<juce::int64>(16) * 1024 * 1024;
+
     juce::FileInputStream raw(file);
     if (!raw.openedOk())
     {
@@ -868,12 +916,19 @@ namespace
     juce::MemoryBlock mem;
     {
         juce::MemoryOutputStream mos(mem, false);
-        if (mos.writeFromInputStream(gz, -1) <= 0)
+        const auto bytesRead = mos.writeFromInputStream(gz, kMaxAbletonXmlBytes + 1);
+        if (bytesRead <= 0)
         {
             addDiagnostic(diagnostics, Diagnostic::Severity::error,
                           "Could not gzip-decompress: " + file.getFullPathName());
             return {};
         }
+    }
+    if (static_cast<juce::int64>(mem.getSize()) > kMaxAbletonXmlBytes)
+    {
+        addDiagnostic(diagnostics, Diagnostic::Severity::error,
+                      "Ableton preset XML payload too large: " + file.getFullPathName());
+        return {};
     }
     auto xmlText = juce::String::fromUTF8(static_cast<const char*>(mem.getData()), (int) mem.getSize());
     auto xml = juce::parseXML(xmlText);

@@ -4006,6 +4006,83 @@ bool runSf2ImporterPresetSelectionTest()
     return zone.keyRange.low == 61 && zone.keyRange.high == 72 && zone.rootMidiNote == 72;
 }
 
+bool runSf2ImporterRejectsShortListChunkTest()
+{
+    namespace sf = audiocity::engine::sf2;
+
+    const auto tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_sf2_short_list_test", ".sf2");
+
+    juce::MemoryOutputStream body;
+    appendFourcc(body, "sfbk");
+    appendFourcc(body, "LIST");
+    appendU32LE(body, 2);
+    const juce::uint8 payload[2] = { 0, 0 };
+    body.write(payload, sizeof(payload));
+
+    juce::MemoryOutputStream out;
+    appendFourcc(out, "RIFF");
+    appendU32LE(out, static_cast<juce::uint32>(body.getDataSize()));
+    out.write(body.getData(), body.getDataSize());
+
+    if (!tempFile.replaceWithData(out.getData(), out.getDataSize()))
+        return false;
+
+    const auto result = sf::importFile(tempFile);
+    tempFile.deleteFile();
+
+    bool sawShortList = false;
+    for (const auto& diagnostic : result.diagnostics)
+        sawShortList = sawShortList || diagnostic.message.find("LIST chunk too small") != std::string::npos;
+
+    return result.hasErrors() && !result.hasPlayableProgram() && sawShortList;
+}
+
+bool runSf2ImporterRejectsEmptyRequiredTablesTest()
+{
+    namespace sf = audiocity::engine::sf2;
+
+    const auto tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_sf2_empty_tables_test", ".sf2");
+
+    auto writeListChunk = [](juce::MemoryOutputStream& dst, const char* listType,
+                             const std::vector<const char*>& subchunkTags)
+    {
+        juce::MemoryOutputStream payload;
+        appendFourcc(payload, listType);
+        for (const auto* tag : subchunkTags)
+        {
+            appendFourcc(payload, tag);
+            appendU32LE(payload, 0);
+        }
+        appendFourcc(dst, "LIST");
+        appendU32LE(dst, static_cast<juce::uint32>(payload.getDataSize()));
+        dst.write(payload.getData(), payload.getDataSize());
+    };
+
+    juce::MemoryOutputStream body;
+    appendFourcc(body, "sfbk");
+    writeListChunk(body, "sdta", { "smpl" });
+    writeListChunk(body, "pdta", { "phdr", "pbag", "pgen", "inst", "ibag", "igen", "shdr" });
+
+    juce::MemoryOutputStream out;
+    appendFourcc(out, "RIFF");
+    appendU32LE(out, static_cast<juce::uint32>(body.getDataSize()));
+    out.write(body.getData(), body.getDataSize());
+
+    if (!tempFile.replaceWithData(out.getData(), out.getDataSize()))
+        return false;
+
+    const auto result = sf::importFile(tempFile);
+    tempFile.deleteFile();
+
+    bool sawEmptyTables = false;
+    for (const auto& diagnostic : result.diagnostics)
+        sawEmptyTables = sawEmptyTables || diagnostic.message.find("empty or missing terminal pdta records") != std::string::npos;
+
+    return result.hasErrors() && !result.hasPlayableProgram() && sawEmptyTables;
+}
+
 bool runBitwigMultisampleImporterTest()
 {
     namespace bw = audiocity::engine::bitwig;
@@ -4106,6 +4183,40 @@ bool writeMonoToneWav(const juce::File& wavFile, int sampleRate, int sampleLengt
         buf.setSample(0, i, 0.2f * std::sin(static_cast<float>(2.0 * juce::MathConstants<double>::pi * i * freq / sampleRate)));
     return writer->writeFromAudioSampleBuffer(buf, 0, sampleLength);
 }
+
+bool writeRepeatedBytes(const juce::File& file, juce::int64 bytesToWrite, const char byte)
+{
+    std::unique_ptr<juce::FileOutputStream> out(file.createOutputStream());
+    if (out == nullptr) return false;
+
+    std::array<char, 4096> buffer;
+    buffer.fill(byte);
+    while (bytesToWrite > 0)
+    {
+        const auto chunk = static_cast<size_t>(juce::jmin<juce::int64>(static_cast<juce::int64>(buffer.size()), bytesToWrite));
+        if (!out->write(buffer.data(), chunk)) return false;
+        bytesToWrite -= static_cast<juce::int64>(chunk);
+    }
+    return true;
+}
+
+bool writeGzipRepeatedBytes(const juce::File& file, juce::int64 bytesToWrite, const char byte)
+{
+    std::unique_ptr<juce::FileOutputStream> raw(file.createOutputStream());
+    if (raw == nullptr) return false;
+
+    juce::GZIPCompressorOutputStream gz(raw.get(), 9, false, juce::GZIPCompressorOutputStream::windowBitsGZIP);
+    std::array<char, 4096> buffer;
+    buffer.fill(byte);
+    while (bytesToWrite > 0)
+    {
+        const auto chunk = static_cast<size_t>(juce::jmin<juce::int64>(static_cast<juce::int64>(buffer.size()), bytesToWrite));
+        if (!gz.write(buffer.data(), chunk)) return false;
+        bytesToWrite -= static_cast<juce::int64>(chunk);
+    }
+    gz.flush();
+    return true;
+}
 } // namespace
 
 bool runArchiveRelativePathSafetyTest()
@@ -4190,6 +4301,49 @@ bool runKorgMultisampleRejectsUnsafeArchivePathTest()
     dir.deleteRecursively();
 
     return result.hasErrors() && !result.hasPlayableProgram();
+}
+
+bool runArchiveImportersRejectOversizedManifestTest()
+{
+    constexpr juce::int64 oversizedManifestBytes = static_cast<juce::int64>(16) * 1024 * 1024 + 1;
+
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_oversized_manifest_test", "");
+    if (!dir.createDirectory()) return false;
+
+    const auto manifest = dir.getChildFile("multisample.xml");
+    if (!writeRepeatedBytes(manifest, oversizedManifestBytes, ' ')) { dir.deleteRecursively(); return false; }
+
+    const auto bitwigArchive = dir.getChildFile("Oversized.multisample");
+    {
+        juce::ZipFile::Builder builder;
+        builder.addFile(manifest, 9, "multisample.xml");
+        std::unique_ptr<juce::FileOutputStream> out(bitwigArchive.createOutputStream());
+        if (out == nullptr || !builder.writeToStream(*out, nullptr)) { dir.deleteRecursively(); return false; }
+    }
+
+    const auto bitwigResult = audiocity::engine::bitwig::importFile(bitwigArchive);
+    bool bitwigSawTooLarge = false;
+    for (const auto& diagnostic : bitwigResult.diagnostics)
+        bitwigSawTooLarge = bitwigSawTooLarge || diagnostic.message.find("manifest too large") != std::string::npos;
+    const bool bitwigRejected = bitwigResult.hasErrors() && !bitwigResult.hasPlayableProgram() && bitwigSawTooLarge;
+
+    const auto korgArchive = dir.getChildFile("Oversized.korgmultisample");
+    {
+        juce::ZipFile::Builder builder;
+        builder.addFile(manifest, 9, "multisample.xml");
+        std::unique_ptr<juce::FileOutputStream> out(korgArchive.createOutputStream());
+        if (out == nullptr || !builder.writeToStream(*out, nullptr)) { dir.deleteRecursively(); return false; }
+    }
+
+    const auto korgResult = audiocity::engine::korgmulti::importFile(korgArchive);
+    bool korgSawTooLarge = false;
+    for (const auto& diagnostic : korgResult.diagnostics)
+        korgSawTooLarge = korgSawTooLarge || diagnostic.message.find("manifest too large") != std::string::npos;
+    const bool korgRejected = korgResult.hasErrors() && !korgResult.hasPlayableProgram() && korgSawTooLarge;
+
+    dir.deleteRecursively();
+    return bitwigRejected && korgRejected;
 }
 
 bool runMpcKeygroupImporterTest()
@@ -4422,6 +4576,27 @@ bool runAbletonAdvImporterTest()
     return z.keyRange.low == 48 && z.keyRange.high == 72 && z.rootMidiNote == 60
         && z.loopMode == audiocity::engine::ZoneLoopMode::continuous
         && z.loopStart == 200 && z.loopEndExclusive == 3500;
+}
+
+bool runAbletonAdvRejectsOversizedXmlTest()
+{
+    constexpr juce::int64 oversizedXmlBytes = static_cast<juce::int64>(16) * 1024 * 1024 + 1;
+
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_ableton_oversized_test", "");
+    if (!dir.createDirectory()) return false;
+
+    const auto adv = dir.getChildFile("Oversized.adv");
+    if (!writeGzipRepeatedBytes(adv, oversizedXmlBytes, ' ')) { dir.deleteRecursively(); return false; }
+
+    const auto result = audiocity::engine::ableton::importFile(adv);
+    dir.deleteRecursively();
+
+    bool sawTooLarge = false;
+    for (const auto& diagnostic : result.diagnostics)
+        sawTooLarge = sawTooLarge || diagnostic.message.find("XML payload too large") != std::string::npos;
+
+    return result.hasErrors() && !result.hasPlayableProgram() && sawTooLarge;
 }
 
 bool runDistingExPresetImporterTest()
@@ -7204,6 +7379,52 @@ bool runEditorPersistentBrowserRailTabGateTest()
     return functionBody.contains("currentTabIndex_ == 4")
         && functionBody.contains("currentTabIndex_ == 5")
         && functionBody.contains("return false;");
+}
+
+bool runBackgroundImportWorkerPublishContractTest()
+{
+    const auto editorHeader = fixtureFile("src/plugin/PluginEditor.h");
+    const auto editorSource = fixtureFile("src/plugin/PluginEditor.cpp");
+    const auto processorHeader = fixtureFile("src/plugin/PluginProcessor.h");
+    const auto processorSource = fixtureFile("src/plugin/PluginProcessor.cpp");
+    if (!editorHeader.existsAsFile()
+        || !editorSource.existsAsFile()
+        || !processorHeader.existsAsFile()
+        || !processorSource.existsAsFile())
+    {
+        return false;
+    }
+
+    const auto headerText = editorHeader.loadFileAsString();
+    const auto sourceText = editorSource.loadFileAsString();
+    const auto processorHeaderText = processorHeader.loadFileAsString();
+    const auto processorSourceText = processorSource.loadFileAsString();
+
+    const auto startFunction = sourceText.indexOf(
+        "bool AudiocityAudioProcessorEditor::startBackgroundInstrumentLoad(");
+    if (startFunction < 0)
+        return false;
+
+    const auto loadFunction = sourceText.indexOf(
+        "bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file,");
+    if (loadFunction < 0)
+        return false;
+
+    const auto startFunctionBody = sourceText.substring(startFunction, loadFunction);
+    const auto loadFunctionBody = sourceText.substring(loadFunction);
+
+    return headerText.contains("std::atomic<int> backgroundImportGeneration_")
+        && headerText.contains("std::atomic<bool> backgroundImportInProgress_")
+        && headerText.contains("void cancelBackgroundInstrumentLoad()")
+        && startFunctionBody.contains("std::thread([safeThis, file, format, selectedChoiceIndex, generation]() mutable")
+        && startFunctionBody.contains("prepareBackgroundInstrumentImport(file, format, selectedChoiceIndex)")
+        && startFunctionBody.contains("juce::MessageManager::callAsync")
+        && startFunctionBody.contains("publishPreparedImportedProgram(file")
+        && startFunctionBody.contains("generation != self->backgroundImportGeneration_.load")
+        && loadFunctionBody.contains("startBackgroundInstrumentLoad(file, detectedFormat, -1, completion)")
+        && processorHeaderText.contains("bool publishPreparedImportedProgram(const juce::File& file")
+        && processorSourceText.contains("bool AudiocityAudioProcessor::publishPreparedImportedProgram(")
+        && processorSourceText.contains("setImportedProgramMetadata(file,");
 }
 
 bool runPlaybackModesTest()
@@ -12967,9 +13188,12 @@ int main()
         AUDIOCITY_TEST(runDecentSamplerImporterTest, 136),
         AUDIOCITY_TEST(runSf2ImporterMinimalTest, 137),
         AUDIOCITY_TEST(runSf2ImporterPresetSelectionTest, 224),
+        AUDIOCITY_TEST(runSf2ImporterRejectsShortListChunkTest, 243),
+        AUDIOCITY_TEST(runSf2ImporterRejectsEmptyRequiredTablesTest, 244),
         AUDIOCITY_TEST(runBitwigMultisampleImporterTest, 138),
         AUDIOCITY_TEST(runArchiveRelativePathSafetyTest, 236),
         AUDIOCITY_TEST(runBitwigMultisampleRejectsUnsafeArchivePathTest, 237),
+        AUDIOCITY_TEST(runArchiveImportersRejectOversizedManifestTest, 245),
         AUDIOCITY_TEST(runMpcKeygroupImporterTest, 140),
         AUDIOCITY_TEST(run1010MusicPresetImporterTest, 141),
         AUDIOCITY_TEST(runTalSamplerImporterTest, 142),
@@ -12977,6 +13201,7 @@ int main()
         AUDIOCITY_TEST(runKorgMultisampleImporterTest, 144),
         AUDIOCITY_TEST(runKorgMultisampleRejectsUnsafeArchivePathTest, 238),
         AUDIOCITY_TEST(runAbletonAdvImporterTest, 145),
+        AUDIOCITY_TEST(runAbletonAdvRejectsOversizedXmlTest, 246),
         AUDIOCITY_TEST(runDistingExPresetImporterTest, 146),
         AUDIOCITY_TEST(runKorgKmpImporterTest, 147),
         AUDIOCITY_TEST(runKorgKmpImporterCapsRlp1EntriesTest, 241),
@@ -13029,6 +13254,7 @@ int main()
         AUDIOCITY_TEST(runParameterIdSafetyTest, 72),
         AUDIOCITY_TEST(runEditorFilterLfoPushPreservesAdvancedControlsTest, 180),
         AUDIOCITY_TEST(runEditorModulationPanelExtractionTest, 181),
+        AUDIOCITY_TEST(runBackgroundImportWorkerPublishContractTest, 247),
         AUDIOCITY_TEST(runEditorSampleEditControlsTest, 5),
         AUDIOCITY_TEST(runPolyphonicDifferentNotesLayerWhenMonoOffTest, 43),
         AUDIOCITY_TEST(runMonoLegatoUsesSingleVoiceTest, 7),

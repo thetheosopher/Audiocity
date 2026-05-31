@@ -472,6 +472,10 @@ private:
     int sampleListColumnWidth_ = 360;
     std::atomic<int> sampleScanGeneration_{ 0 };
     std::atomic<bool> sampleScanInProgress_{ false };
+    std::atomic<int> backgroundImportGeneration_{ 0 };
+    std::atomic<bool> backgroundImportInProgress_{ false };
+    juce::File backgroundImportFile_;
+    std::function<void(bool)> backgroundImportCompletion_;
     juce::TabbedComponent tabBar_{ juce::TabbedButtonBar::TabsAtTop };
     juce::Component tabSamplePage_;
     juce::Component tabLibraryPage_;
@@ -1175,6 +1179,13 @@ private:
     void appendImportDiagnosticEntryToDisk(const juce::String& entry) const;
     [[nodiscard]] juce::String buildImportDiagnosticLogText() const;
     void copyImportDiagnosticLogToClipboard();
+    [[nodiscard]] bool canImportInstrumentInBackground(audiocity::plugin::ImportedProgramFormat format) const noexcept;
+    bool startBackgroundInstrumentLoad(const juce::File& file,
+                                       audiocity::plugin::ImportedProgramFormat format,
+                                       int selectedChoiceIndex,
+                                       std::function<void(bool)> completion);
+    void cancelBackgroundInstrumentLoad();
+    void setBackgroundImportUiActive(bool active, const juce::File& file = {});
     bool loadFileAsInstrument(const juce::File& file,
                               std::function<void(bool)> completion = {});
     bool importInstrumentFileByFormat(const juce::File& file,

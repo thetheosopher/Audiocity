@@ -22,6 +22,9 @@ bool ImportResult::hasErrors() const noexcept
 
 namespace
 {
+constexpr juce::int64 kMaxArchiveManifestBytes = static_cast<juce::int64>(16) * 1024 * 1024;
+constexpr juce::int64 kMaxArchiveAudioBytes = static_cast<juce::int64>(512) * 1024 * 1024;
+
 void addDiagnostic(std::vector<ImportDiagnostic>& diagnostics,
                    const ImportDiagnostic::Severity severity,
                    const juce::String& message)
@@ -157,6 +160,20 @@ private:
             return -1;
         }
 
+        const auto* entry = zipFile.getEntry(entryIndex);
+        if (entry == nullptr)
+        {
+            addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error,
+                          "Bitwig multisample missing audio entry: " + fileName);
+            return -1;
+        }
+        if (entry->uncompressedSize > kMaxArchiveAudioBytes)
+        {
+            addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error,
+                          "Bitwig multisample audio entry too large: " + fileName);
+            return -1;
+        }
+
         std::unique_ptr<juce::InputStream> raw(zipFile.createStreamForEntry(entryIndex));
         if (raw == nullptr)
         {
@@ -167,7 +184,13 @@ private:
 
         // Buffer entire entry to memory so JUCE can seek for WAV header parsing.
         juce::MemoryBlock blob;
-        raw->readIntoMemoryBlock(blob);
+        raw->readIntoMemoryBlock(blob, static_cast<int>(kMaxArchiveAudioBytes + 1));
+        if (static_cast<juce::int64>(blob.getSize()) > kMaxArchiveAudioBytes)
+        {
+            addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error,
+                          "Bitwig multisample audio entry too large: " + fileName);
+            return -1;
+        }
         auto memoryStream = std::make_unique<juce::MemoryInputStream>(blob, true);
 
         std::unique_ptr<juce::AudioFormatReader> reader(
@@ -279,6 +302,14 @@ ImportResult importFile(const juce::File& multisampleFile)
         return result;
     }
 
+    const auto* manifestEntry = zip.getEntry(manifestIndex);
+    if (manifestEntry == nullptr || manifestEntry->uncompressedSize > kMaxArchiveManifestBytes)
+    {
+        addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error,
+                      "Bitwig multisample manifest too large: " + multisampleFile.getFullPathName());
+        return result;
+    }
+
     std::unique_ptr<juce::InputStream> manifestStream(zip.createStreamForEntry(manifestIndex));
     if (manifestStream == nullptr)
     {
@@ -286,7 +317,16 @@ ImportResult importFile(const juce::File& multisampleFile)
                       "Could not read 'multisample.xml' inside: " + multisampleFile.getFullPathName());
         return result;
     }
-    const auto manifestText = manifestStream->readEntireStreamAsString();
+    juce::MemoryBlock manifestBlob;
+    manifestStream->readIntoMemoryBlock(manifestBlob, static_cast<int>(kMaxArchiveManifestBytes + 1));
+    if (static_cast<juce::int64>(manifestBlob.getSize()) > kMaxArchiveManifestBytes)
+    {
+        addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error,
+                      "Bitwig multisample manifest too large: " + multisampleFile.getFullPathName());
+        return result;
+    }
+    const auto manifestText = juce::String::fromUTF8(static_cast<const char*>(manifestBlob.getData()),
+                                                    static_cast<int>(manifestBlob.getSize()));
     auto xml = juce::parseXML(manifestText);
     if (xml == nullptr || !xml->hasTagName("multisample"))
     {

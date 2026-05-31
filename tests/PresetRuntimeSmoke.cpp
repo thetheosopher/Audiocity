@@ -271,6 +271,80 @@ int main()
         return 19;
     }
 
+    auto invalidPreparedProcessor = std::make_unique<AudiocityAudioProcessor>();
+    invalidPreparedProcessor->prepareToPlay(48000.0, 256);
+    audiocity::engine::Program invalidProgram;
+    std::vector<juce::AudioBuffer<float>> invalidSampleData;
+    if (invalidPreparedProcessor->publishPreparedImportedProgram(
+            tempDirectory.getChildFile("InvalidPrepared.dspreset"),
+            audiocity::plugin::ImportedProgramFormat::decentSampler,
+            std::move(invalidProgram),
+            std::move(invalidSampleData),
+            "Should not publish",
+            0)
+        || invalidPreparedProcessor->hasImportedProgram()
+        || !invalidPreparedProcessor->getLastImportDiagnosticSummary().contains("display sample index"))
+    {
+        std::fprintf(stderr, "Prepared import publish accepted invalid display sample data.\n");
+        tempDirectory.deleteRecursively();
+        return 20;
+    }
+
+    auto preparedProcessor = std::make_unique<AudiocityAudioProcessor>();
+    preparedProcessor->prepareToPlay(48000.0, 256);
+
+    audiocity::engine::Program preparedProgram;
+    preparedProgram.name = "Worker Prepared Program";
+
+    audiocity::engine::SampleAsset preparedAsset;
+    preparedAsset.sourcePath = tempDirectory.getChildFile("WorkerPrepared.wav").getFullPathName().toStdString();
+    preparedAsset.displayName = "WorkerPrepared.wav";
+    preparedAsset.lengthSamples = 128;
+    preparedAsset.numChannels = 2;
+    preparedAsset.sampleRateHz = 48000.0;
+    preparedAsset.rootMidiNote = 64;
+    preparedProgram.sampleAssets.push_back(preparedAsset);
+
+    audiocity::engine::Zone preparedZone;
+    preparedZone.sampleAssetIndex = 0;
+    preparedZone.rootMidiNote = preparedAsset.rootMidiNote;
+    preparedZone.sampleEndExclusive = preparedAsset.lengthSamples;
+    preparedProgram.zones.push_back(preparedZone);
+
+    std::vector<juce::AudioBuffer<float>> preparedSampleData;
+    preparedSampleData.emplace_back(preparedAsset.numChannels, preparedAsset.lengthSamples);
+    for (int sample = 0; sample < preparedAsset.lengthSamples; ++sample)
+    {
+        const auto value = static_cast<float>(sample) / static_cast<float>(preparedAsset.lengthSamples);
+        preparedSampleData[0].setSample(0, sample, value);
+        preparedSampleData[0].setSample(1, sample, -value);
+    }
+
+    const auto preparedFile = tempDirectory.getChildFile("WorkerPrepared.dspreset");
+    if (!preparedProcessor->publishPreparedImportedProgram(
+            preparedFile,
+            audiocity::plugin::ImportedProgramFormat::decentSampler,
+            std::move(preparedProgram),
+            std::move(preparedSampleData),
+            "Prepared async import summary",
+            0,
+            7)
+        || !preparedProcessor->hasImportedProgram()
+        || preparedProcessor->getImportedProgramFormat() != audiocity::plugin::ImportedProgramFormat::decentSampler
+        || preparedProcessor->getImportedProgramPath() != preparedFile.getFullPathName()
+        || preparedProcessor->getImportedProgramName() != "Worker Prepared Program"
+        || preparedProcessor->getImportedProgramZoneCount() != 1
+        || preparedProcessor->getLoadedSampleChannels() != 2
+        || preparedProcessor->getLoadedSampleLength() != 128
+        || preparedProcessor->getRootMidiNote() != 64
+        || preparedProcessor->getLoadedSamplePath().isNotEmpty()
+        || !preparedProcessor->getLastImportDiagnosticSummary().contains("Prepared async import summary"))
+    {
+        std::fprintf(stderr, "Prepared import publish did not restore program metadata and display audio.\n");
+        tempDirectory.deleteRecursively();
+        return 21;
+    }
+
     tempDirectory.deleteRecursively();
 
     return 0;

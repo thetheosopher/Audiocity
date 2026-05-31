@@ -3270,6 +3270,66 @@ bool AudiocityAudioProcessor::publishXmlMultisampleImport(
     return true;
 }
 
+bool AudiocityAudioProcessor::publishPreparedImportedProgram(
+    const juce::File& file,
+    const audiocity::plugin::ImportedProgramFormat format,
+    audiocity::engine::Program program,
+    std::vector<juce::AudioBuffer<float>> sampleData,
+    const juce::String& diagnosticSummary,
+    const int displayAssetIndex,
+    const int selectionIndex)
+{
+    if (displayAssetIndex < 0
+        || static_cast<std::size_t>(displayAssetIndex) >= sampleData.size()
+        || static_cast<std::size_t>(displayAssetIndex) >= program.sampleAssets.size())
+    {
+        setLastImportDiagnosticSummary("Prepared import failed: display sample index out of range");
+        return false;
+    }
+
+    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
+    stopGeneratedWaveformPreview();
+    engine_.panic();
+
+    const auto& displaySample = sampleData[static_cast<std::size_t>(displayAssetIndex)];
+    const auto& displayAsset = program.sampleAssets[static_cast<std::size_t>(displayAssetIndex)];
+    const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
+    engine_.setSampleData(displaySample, displaySampleRate, displayAsset.rootMidiNote);
+    engine_.clearSamplePath();
+    engine_.setProgram(program, sampleData);
+
+    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+        generatedWaveformState_.clear();
+        capturedSampleState_.clear();
+        capturedSampleRateState_ = 44100.0;
+        embeddedSampleState_.clear();
+        embeddedSampleNameState_.clear();
+        embeddedSampleRateState_ = 44100.0;
+        embeddedSampleRootMidiNoteState_ = 60;
+    }
+
+    setImportedProgramMetadata(file,
+                               format,
+                               program,
+                               sampleData,
+                               diagnosticSummary,
+                               static_cast<int>(program.zones.size()),
+                               selectionIndex);
+    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
+    syncSampleDerivedParametersFromEngine();
+    setWaveformViewRange(0, engine_.getLoadedSampleLength());
+    return true;
+}
+
+void AudiocityAudioProcessor::setImportDiagnosticSummary(const juce::String& diagnosticSummary)
+{
+    setLastImportDiagnosticSummary(diagnosticSummary);
+}
+
 bool AudiocityAudioProcessor::importMpcKeygroupProgram(const juce::File& file)
 {
     if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".xpm"))

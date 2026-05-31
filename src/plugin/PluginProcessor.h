@@ -77,6 +77,14 @@ public:
     bool importKorgKmpProgram(const juce::File& file);
     bool importLogicExs24Program(const juce::File& file);
     bool importNnxtProgram(const juce::File& file);
+    bool publishPreparedImportedProgram(const juce::File& file,
+                                        audiocity::plugin::ImportedProgramFormat format,
+                                        audiocity::engine::Program program,
+                                        std::vector<juce::AudioBuffer<float>> sampleData,
+                                        const juce::String& diagnosticSummary,
+                                        int displayAssetIndex,
+                                        int selectionIndex = -1);
+    void setImportDiagnosticSummary(const juce::String& diagnosticSummary);
     [[nodiscard]] bool hasImportedProgram() const noexcept
     {
         return importedProgramLoaded_.load(std::memory_order_relaxed);

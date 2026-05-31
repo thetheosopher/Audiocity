@@ -130,6 +130,8 @@ struct Sf2File
 bool parseSf2Container(const juce::uint8* base, const size_t size, Sf2File& file,
                        std::vector<ImportDiagnostic>& diagnostics);
 
+bool validateSf2Tables(const Sf2File& file, std::vector<ImportDiagnostic>& diagnostics);
+
 bool loadSf2File(const juce::File& sf2File,
                  juce::MemoryBlock& blob,
                  Sf2File& parsed,
@@ -180,6 +182,11 @@ bool parseSf2Container(const juce::uint8* base, const size_t size, Sf2File& file
 
         if (chunkId == fourcc('L','I','S','T'))
         {
+            if (chunkSize < 4)
+            {
+                addDiagnostic(diagnostics, ImportDiagnostic::Severity::error, "SF2 LIST chunk too small");
+                return false;
+            }
             const auto listType = readU32LE(chunkPayload);
             size_t inner = 4;
             const size_t innerEnd = chunkSize;
@@ -233,6 +240,42 @@ bool parseSf2Container(const juce::uint8* base, const size_t size, Sf2File& file
                       "SF2 file missing required pdta or sdta chunks");
         return false;
     }
+    return validateSf2Tables(file, diagnostics);
+}
+
+bool validateSf2Tables(const Sf2File& file, std::vector<ImportDiagnostic>& diagnostics)
+{
+    if (file.phdrCount < 2 || file.instCount < 2 || file.shdrCount < 2
+        || file.pbagCount < 1 || file.pgenCount < 1 || file.ibagCount < 1 || file.igenCount < 1)
+    {
+        addDiagnostic(diagnostics, ImportDiagnostic::Severity::error,
+                      "SF2 file has empty or missing terminal pdta records");
+        return false;
+    }
+
+    auto validateBagRange = [&diagnostics](const char* label, const auto* records,
+                                           const size_t recordCount, const size_t bagCount) -> bool
+    {
+        for (size_t i = 0; i + 1 < recordCount; ++i)
+        {
+            const auto current = static_cast<size_t>(records[i].bagIdx);
+            const auto next = static_cast<size_t>(records[i + 1].bagIdx);
+            if (current >= bagCount || next >= bagCount || next < current)
+            {
+                addDiagnostic(diagnostics, ImportDiagnostic::Severity::error,
+                              juce::String("SF2 ") + label + " bag index out of range");
+                return false;
+            }
+        }
+        return true;
+    };
+
+    if (!validateBagRange("preset", file.phdr, file.phdrCount, file.pbagCount)
+        || !validateBagRange("instrument", file.inst, file.instCount, file.ibagCount))
+    {
+        return false;
+    }
+
     return true;
 }
 
