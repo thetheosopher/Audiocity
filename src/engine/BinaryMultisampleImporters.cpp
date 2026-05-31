@@ -228,6 +228,11 @@ juce::String buildImportSummary(const ImportResult& r, const bool imported)
 //   tools convert .ksf -> .wav next to the .kmp.
 namespace korgkmp
 {
+namespace
+{
+constexpr int kMaxKmpSampleEntries = 128;
+}
+
 ImportResult importFile(const juce::File& file)
 {
     ImportResult result;
@@ -278,7 +283,7 @@ ImportResult importFile(const juce::File& file)
         std::memcpy(id, bytes + pos, 4);
         const auto chunkSize = readBE32(bytes + pos + 4);
         pos += 8;
-        if (pos + chunkSize > totalSize)
+        if (chunkSize > totalSize - pos)
         {
             addDiagnostic(result.diagnostics, Diagnostic::Severity::warning,
                           "Truncated KMP chunk: " + juce::String(id));
@@ -298,7 +303,12 @@ ImportResult importFile(const juce::File& file)
         }
         else if (std::strncmp(id, "RLP1", 4) == 0)
         {
-            const int count = static_cast<int>(chunkSize / 18);
+            const int declaredCount = static_cast<int>(chunkSize / 18);
+            const int countLimit = numSamples > 0 ? numSamples : kMaxKmpSampleEntries;
+            const int count = juce::jmin(declaredCount, countLimit);
+            if (declaredCount > count)
+                addDiagnostic(result.diagnostics, Diagnostic::Severity::warning,
+                              "KMP RLP1 entry count exceeds declared sample count - extra entries ignored");
             for (int i = 0; i < count; ++i)
             {
                 const auto* e = p + i * 18;
@@ -468,10 +478,15 @@ ImportResult importFile(const juce::File& file)
         const uint32_t size = readLE32(bytes + pos + 4);
         const uint32_t type = readLE32(bytes + pos + 8);
         const auto chunkPayloadSize = static_cast<size_t>(size);
-        const auto fullChunk = kExsHeaderSize + chunkPayloadSize;
-        if (pos + fullChunk > total) break;
-
         const auto chunkName = readFixedString(bytes + pos + 20, 64);
+        if (chunkPayloadSize > total - pos - kExsHeaderSize)
+        {
+            addDiagnostic(result.diagnostics, Diagnostic::Severity::warning,
+                          "Truncated EXS24 chunk: " + chunkName);
+            break;
+        }
+
+        const auto fullChunk = kExsHeaderSize + chunkPayloadSize;
         const auto* payload = bytes + pos + kExsHeaderSize;
 
         switch (type & 0x0FFFFFFFu) // tolerant of high bits used as flags

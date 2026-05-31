@@ -4506,6 +4506,97 @@ bool runKorgKmpImporterTest()
     return z.rootMidiNote == 72 && z.keyRange.low == 0 && z.keyRange.high == 84;
 }
 
+bool runKorgKmpImporterCapsRlp1EntriesTest()
+{
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_kmp_rlp1_cap_test", "");
+    if (!dir.createDirectory()) return false;
+
+    const auto kmp = dir.getChildFile("Oversized.kmp");
+    juce::MemoryBlock blob;
+    auto appendChunk = [&](const char id[4], const std::vector<juce::uint8>& payload)
+    {
+        juce::uint8 hdr[8];
+        std::memcpy(hdr, id, 4);
+        juce::uint32 sz = (juce::uint32) payload.size();
+        hdr[4] = (juce::uint8)((sz >> 24) & 0xFF);
+        hdr[5] = (juce::uint8)((sz >> 16) & 0xFF);
+        hdr[6] = (juce::uint8)((sz >> 8) & 0xFF);
+        hdr[7] = (juce::uint8)( sz        & 0xFF);
+        blob.append(hdr, 8);
+        blob.append(payload.data(), payload.size());
+    };
+
+    {
+        std::vector<juce::uint8> msp1(18, 0);
+        const char* name = "Oversized";
+        std::memcpy(msp1.data(), name, std::strlen(name));
+        msp1[16] = 2;
+        appendChunk("MSP1", msp1);
+    }
+    {
+        std::vector<juce::uint8> rlp1(18 * 4, 0);
+        const std::array<const char*, 4> names { "A.KSF", "B.KSF", "C.KSF", "D.KSF" };
+        for (size_t i = 0; i < names.size(); ++i)
+        {
+            auto* entry = rlp1.data() + i * 18;
+            entry[0] = static_cast<juce::uint8>(48 + i);
+            entry[1] = 60;
+            std::memcpy(entry + 6, names[i], std::strlen(names[i]));
+        }
+        appendChunk("RLP1", rlp1);
+    }
+    if (!kmp.replaceWithData(blob.getData(), blob.getSize())) { dir.deleteRecursively(); return false; }
+
+    const auto r = audiocity::engine::korgkmp::importFile(kmp);
+    dir.deleteRecursively();
+
+    bool sawCapWarning = false;
+    bool sawFirstDeclaredEntry = false;
+    bool sawIgnoredEntry = false;
+    for (const auto& diagnostic : r.diagnostics)
+    {
+        sawCapWarning = sawCapWarning || diagnostic.message.find("extra entries ignored") != std::string::npos;
+        sawFirstDeclaredEntry = sawFirstDeclaredEntry || diagnostic.message.find("A.KSF") != std::string::npos;
+        sawIgnoredEntry = sawIgnoredEntry || diagnostic.message.find("C.KSF") != std::string::npos;
+    }
+
+    return r.hasErrors() && !r.hasPlayableProgram()
+        && sawCapWarning
+        && sawFirstDeclaredEntry
+        && !sawIgnoredEntry;
+}
+
+bool runLogicExs24ImporterRejectsOversizedChunkTest()
+{
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_exs_oversized_chunk_test", "");
+    if (!dir.createDirectory()) return false;
+
+    const auto exs = dir.getChildFile("Oversized.exs");
+    juce::uint8 header[84] = {};
+    header[4] = 0xff;
+    header[5] = 0xff;
+    header[6] = 0xff;
+    header[7] = 0x7f;
+    header[8] = 0x02;
+    header[9] = 0x01;
+    header[10] = 0x00;
+    header[11] = 0x01;
+    const char* name = "OversizedZone";
+    std::memcpy(header + 20, name, std::strlen(name));
+    if (!exs.replaceWithData(header, sizeof(header))) { dir.deleteRecursively(); return false; }
+
+    const auto r = audiocity::engine::exs24::importFile(exs);
+    dir.deleteRecursively();
+
+    bool sawTruncation = false;
+    for (const auto& diagnostic : r.diagnostics)
+        sawTruncation = sawTruncation || diagnostic.message.find("Truncated EXS24 chunk") != std::string::npos;
+
+    return r.hasErrors() && !r.hasPlayableProgram() && sawTruncation;
+}
+
 bool runLogicExs24ImporterTest()
 {
     const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
@@ -12888,6 +12979,8 @@ int main()
         AUDIOCITY_TEST(runAbletonAdvImporterTest, 145),
         AUDIOCITY_TEST(runDistingExPresetImporterTest, 146),
         AUDIOCITY_TEST(runKorgKmpImporterTest, 147),
+        AUDIOCITY_TEST(runKorgKmpImporterCapsRlp1EntriesTest, 241),
+        AUDIOCITY_TEST(runLogicExs24ImporterRejectsOversizedChunkTest, 242),
         AUDIOCITY_TEST(runLogicExs24ImporterTest, 148),
         AUDIOCITY_TEST(runNnxtImporterDiagnosticTest, 149),
         AUDIOCITY_TEST(runMalformedImporterCorpusTest, 240),
