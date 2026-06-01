@@ -18,6 +18,9 @@ The engine and UI are still driven by one JUCE `AudioProcessor`, with determinis
 
 ## New in 1.3.1.0
 
+- Imported-program loads now prepare on a background worker and publish on the message thread, so large sample/library imports no longer block the editor while stale jobs can be cancelled cleanly.
+- Current libraries can now be saved as DecentSampler `.dspreset` files, with round-trip coverage for grouped gain/pan/release defaults, documented round robins, and choke-group semantics.
+- The About, Generate, and Capture tabs have been split into standalone page components, reducing `PluginEditor` ownership while keeping the same UI behavior and snapshot coverage.
 - Preset saves now embed the currently loaded single-sample source, so Wave- and AIFF-backed `.acp` presets round-trip without depending on an external sample path.
 - Embedded preset restore now preserves multi-channel sample display data and restores the same loop, window, root-note, reverse, and playback-mode state on load.
 - Library instrument rows now render explicit library placeholders instead of blank waveform panes, use accurate format badges, and show detailed import diagnostics when a double-click load fails.
@@ -94,6 +97,7 @@ The content workflow is deterministic and test-backed:
 
 - Direct sample load: WAV, AIFF, REX, RX2, and NCW through an external converter command.
 - Imported instruments: SFZ, SF2, DecentSampler `.dspreset`, Bitwig `.multisample`, MPC `.xpm`, 1010music Bento, TAL Sampler, TX16Wx, Korg multisample ZIP, Korg `.kmp`, Ableton `.adv` and `.adg`, EXS24, and a validated legacy NKI subset.
+- Exported instruments: SFZ and DecentSampler `.dspreset`.
 - Detection-only diagnostics: protected or encrypted Kontakt content is identified and reported, but not imported.
 
 ## Support

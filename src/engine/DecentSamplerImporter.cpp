@@ -8,6 +8,7 @@
 #include <cmath>
 #include <map>
 #include <memory>
+#include <optional>
 
 namespace audiocity::engine::dspreset
 {
@@ -21,6 +22,9 @@ bool ImportResult::hasErrors() const noexcept
 
 namespace
 {
+constexpr auto kAudiocityChokeGroupAttribute = "audiocityChokeGroup";
+constexpr auto kAudiocityChokeGroupTagPrefix = "audiocity_choke_";
+
 void addDiagnostic(std::vector<ImportDiagnostic>& diagnostics,
                    const ImportDiagnostic::Severity severity,
                    const juce::String& message)
@@ -124,6 +128,68 @@ void addDiagnostic(std::vector<ImportDiagnostic>& diagnostics,
     return fallback;
 }
 
+[[nodiscard]] std::optional<RoundRobinMode> parseRoundRobinMode(const juce::String& value)
+{
+    if (value.isEmpty())
+        return std::nullopt;
+
+    const auto lower = value.toLowerCase();
+    if (lower == "round_robin")
+        return RoundRobinMode::ordered;
+    if (lower == "random" || lower == "true_random")
+        return RoundRobinMode::cycleRandom;
+    return std::nullopt;
+}
+
+[[nodiscard]] int parseChokeGroupFromTagList(const juce::String& value)
+{
+    if (value.isEmpty())
+        return 0;
+
+    juce::StringArray tokens;
+    tokens.addTokens(value, ",", "\"");
+    tokens.trim();
+    tokens.removeEmptyStrings();
+
+    for (const auto& token : tokens)
+    {
+        if (!token.startsWithIgnoreCase(kAudiocityChokeGroupTagPrefix))
+            continue;
+
+        const auto suffix = token.substring(static_cast<int>(std::strlen(kAudiocityChokeGroupTagPrefix))).trim();
+        const auto chokeGroup = suffix.getIntValue();
+        if (chokeGroup > 0)
+            return chokeGroup;
+    }
+
+    return 0;
+}
+
+[[nodiscard]] int parseChokeGroup(const juce::XmlElement& node, const bool allowTagFallback)
+{
+    const auto explicitChokeGroup = juce::jmax(0, node.getIntAttribute(kAudiocityChokeGroupAttribute, 0));
+    if (explicitChokeGroup > 0)
+        return explicitChokeGroup;
+
+    if (!allowTagFallback)
+        return 0;
+
+    const auto chokeFromTags = parseChokeGroupFromTagList(node.getStringAttribute("tags"));
+    if (chokeFromTags > 0)
+        return chokeFromTags;
+
+    return parseChokeGroupFromTagList(node.getStringAttribute("silencedByTags"));
+}
+
+struct RoundRobinDefaults
+{
+    int groupId = 0;
+    RoundRobinMode mode = RoundRobinMode::ordered;
+    int position = 0;
+    int length = 0;
+    bool active = false;
+};
+
 class Importer
 {
 public:
@@ -140,7 +206,7 @@ public:
             processGroup(*groupNode, result, /*defaultTrigger*/ ZoneTriggerMode::gate, 0.0f, 0.0f);
         // Some presets also place <sample> at root level.
         for (auto* sampleNode : root.getChildWithTagNameIterator("sample"))
-            processSample(*sampleNode, result, /*groupIndex*/ -1, /*defaultTrigger*/ ZoneTriggerMode::gate, 0.0f, 0.0f);
+            processSample(*sampleNode, result, /*groupIndex*/ -1, {});
 
         if (result.program.zones.empty())
             addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error, "No <sample> elements found in DecentSampler preset");
@@ -165,12 +231,35 @@ private:
         group.pan = groupPan;
         const auto groupTrigger = parseTrigger(groupNode.getStringAttribute("trigger"), parentTrigger);
         group.triggerMode = groupTrigger;
+        group.chokeGroup = parseChokeGroup(groupNode, true);
+        const auto groupRoundRobinMode = parseRoundRobinMode(groupNode.getStringAttribute("seqMode"));
+        const auto groupRoundRobinPosition = juce::jmax(0, groupNode.getIntAttribute("seqPosition", 0));
+        const auto groupRoundRobinLength = juce::jmax(0, groupNode.getIntAttribute("seqLength", 0));
+        const bool groupHasRoundRobin = groupRoundRobinMode.has_value()
+            || groupRoundRobinPosition > 0
+            || groupRoundRobinLength > 0;
+        if (groupRoundRobinMode.has_value())
+            group.roundRobinMode = *groupRoundRobinMode;
 
         result.program.groups.push_back(group);
         const auto groupIndex = static_cast<int>(result.program.groups.size() - 1);
 
+        RoundRobinDefaults roundRobinDefaults;
+        if (groupHasRoundRobin)
+        {
+            auto& storedGroup = result.program.groups[static_cast<std::size_t>(groupIndex)];
+            storedGroup.roundRobinGroup = groupIndex + 1;
+            roundRobinDefaults.groupId = storedGroup.roundRobinGroup;
+            roundRobinDefaults.mode = storedGroup.roundRobinMode;
+            roundRobinDefaults.position = groupRoundRobinPosition;
+            roundRobinDefaults.length = groupRoundRobinLength;
+            roundRobinDefaults.active = true;
+        }
+
+        const bool groupHasExplicitChokeGroup = groupNode.hasAttribute(kAudiocityChokeGroupAttribute);
+
         for (auto* sampleNode : groupNode.getChildWithTagNameIterator("sample"))
-            processSample(*sampleNode, result, groupIndex, groupTrigger, groupVolumeDb, groupPan);
+            processSample(*sampleNode, result, groupIndex, roundRobinDefaults, groupHasExplicitChokeGroup);
 
         // Nested groups (rare) - flatten.
         for (auto* nested : groupNode.getChildWithTagNameIterator("group"))
@@ -182,8 +271,9 @@ private:
     }
 
     void processSample(const juce::XmlElement& sampleNode, ImportResult& result,
-                       const int groupIndex, const ZoneTriggerMode parentTrigger,
-                       const float parentVolumeDb, const float parentPan)
+                       const int groupIndex,
+                       const RoundRobinDefaults& roundRobinDefaults,
+                       const bool parentHasExplicitChokeGroup = false)
     {
         const auto rawPath = sampleNode.getStringAttribute("path");
         if (rawPath.isEmpty())
@@ -232,10 +322,8 @@ private:
             zone.loopMode = ZoneLoopMode::continuous;
         }
 
-        const auto sampleVolumeDb = parentVolumeDb + parseVolume(sampleNode);
-        const auto samplePan = juce::jlimit(-1.0f, 1.0f, parentPan + parsePan(sampleNode));
-        zone.gainDb = sampleVolumeDb;
-        zone.pan = samplePan;
+        zone.gainDb = parseVolume(sampleNode);
+        zone.pan = parsePan(sampleNode);
 
         const auto tuning = static_cast<float>(sampleNode.getDoubleAttribute("tuning", 0.0));
         const auto coarse = static_cast<int>(std::trunc(tuning));
@@ -243,7 +331,29 @@ private:
         zone.tuneCents = cents;
         zone.rootMidiNote = clampMidiNote(rootNote - coarse);
 
-        zone.triggerMode = parseTrigger(sampleNode.getStringAttribute("trigger"), parentTrigger);
+        const auto sampleRoundRobinMode = parseRoundRobinMode(sampleNode.getStringAttribute("seqMode"));
+        const auto sampleRoundRobinPosition = sampleNode.hasAttribute("seqPosition")
+            ? juce::jmax(0, sampleNode.getIntAttribute("seqPosition", 0))
+            : roundRobinDefaults.position;
+        const auto sampleRoundRobinLength = sampleNode.hasAttribute("seqLength")
+            ? juce::jmax(0, sampleNode.getIntAttribute("seqLength", 0))
+            : roundRobinDefaults.length;
+        const bool sampleHasRoundRobin = roundRobinDefaults.active
+            || sampleRoundRobinMode.has_value()
+            || sampleNode.hasAttribute("seqPosition")
+            || sampleNode.hasAttribute("seqLength");
+        if (sampleHasRoundRobin)
+        {
+            zone.roundRobinGroup = roundRobinDefaults.groupId > 0
+                ? roundRobinDefaults.groupId
+                : (groupIndex >= 0 ? groupIndex + 1 : 1);
+            zone.roundRobinMode = sampleRoundRobinMode.value_or(roundRobinDefaults.mode);
+            zone.roundRobinPosition = sampleRoundRobinPosition;
+            zone.roundRobinLength = sampleRoundRobinLength;
+        }
+
+        zone.triggerMode = parseTrigger(sampleNode.getStringAttribute("trigger"), ZoneTriggerMode::gate);
+        zone.chokeGroup = parseChokeGroup(sampleNode, !parentHasExplicitChokeGroup);
 
         result.program.zones.push_back(zone);
     }

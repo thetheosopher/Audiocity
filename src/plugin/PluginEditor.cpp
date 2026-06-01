@@ -6,13 +6,8 @@
 #include "PluginProcessor.h"
 #include "ProgramMappingModel.h"
 #include "../engine/AudioFileSupport.h"
-#include "../engine/BinaryMultisampleImporters.h"
-#include "../engine/BitwigMultisampleImporter.h"
-#include "../engine/DecentSamplerImporter.h"
 #include "SampleBrowserTooltip.h"
 #include "../engine/LegacyNkiProbe.h"
-#include "../engine/Sf2Importer.h"
-#include "../engine/XmlMultisampleImporters.h"
 #include <BinaryData.h>
 
 #include <algorithm>
@@ -37,159 +32,6 @@ juce::Colour uiAccentGreenColour() { return juce::Colour(0xff6fd6ae); }
 
 constexpr auto kSampleBrowserDragPrefix = "audiocity-browser-sample:";
 constexpr auto kVerboseDragDropLogging = false;
-
-struct BackgroundImportResult
-{
-    audiocity::engine::Program program;
-    std::vector<juce::AudioBuffer<float>> sampleData;
-    juce::String summary;
-    audiocity::plugin::ImportedProgramFormat format = audiocity::plugin::ImportedProgramFormat::unknown;
-    int displayAssetIndex = -1;
-    int selectionIndex = -1;
-    bool ok = false;
-};
-
-template <typename ResultT>
-BackgroundImportResult prepareBackgroundImportResult(ResultT&& result,
-                                                     juce::String summary,
-                                                     const audiocity::plugin::ImportedProgramFormat format,
-                                                     const juce::String& failurePrefix,
-                                                     const int selectionIndex = -1)
-{
-    BackgroundImportResult prepared;
-    prepared.format = format;
-    prepared.selectionIndex = selectionIndex;
-
-    const auto hasPlayable = result.hasPlayableProgram();
-    const auto imported = !result.hasErrors() && hasPlayable;
-    if (!hasPlayable && !result.hasErrors())
-        summary = failurePrefix + " import failed: no playable zones";
-
-    if (!imported)
-    {
-        prepared.summary = std::move(summary);
-        return prepared;
-    }
-
-    for (std::size_t i = 0; i < result.sampleDataByAsset.size(); ++i)
-    {
-        if (result.sampleDataByAsset[i].getNumChannels() > 0
-            && result.sampleDataByAsset[i].getNumSamples() > 0)
-        {
-            prepared.displayAssetIndex = static_cast<int>(i);
-            break;
-        }
-    }
-
-    if (prepared.displayAssetIndex < 0)
-    {
-        prepared.summary = failurePrefix + " import failed: decoded samples were empty";
-        return prepared;
-    }
-
-    prepared.program = std::move(result.program);
-    prepared.sampleData = std::move(result.sampleDataByAsset);
-    prepared.summary = std::move(summary);
-    prepared.ok = true;
-    return prepared;
-}
-
-BackgroundImportResult prepareBackgroundInstrumentImport(const juce::File& file,
-                                                        const audiocity::plugin::ImportedProgramFormat format,
-                                                        const int selectedChoiceIndex)
-{
-    using audiocity::plugin::ImportedProgramFormat;
-
-    switch (format)
-    {
-        case ImportedProgramFormat::sf2:
-        {
-            auto r = audiocity::engine::sf2::importFilePreset(file, selectedChoiceIndex >= 0 ? selectedChoiceIndex : 0);
-            const auto selectionIndex = r.chosenPresetIndex;
-            auto s = audiocity::engine::sf2::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
-            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "SF2", selectionIndex);
-        }
-        case ImportedProgramFormat::decentSampler:
-        {
-            auto r = audiocity::engine::dspreset::importFile(file);
-            auto s = audiocity::engine::dspreset::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
-            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "DecentSampler");
-        }
-        case ImportedProgramFormat::bitwigMultisample:
-        {
-            auto r = audiocity::engine::bitwig::importFile(file);
-            auto s = audiocity::engine::bitwig::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
-            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "Bitwig multisample");
-        }
-        case ImportedProgramFormat::mpcKeygroup:
-        {
-            auto r = audiocity::engine::mpc::importFile(file);
-            auto s = audiocity::engine::mpc::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
-            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "MPC keygroup");
-        }
-        case ImportedProgramFormat::bento1010:
-        {
-            auto r = audiocity::engine::bento::importFile(file);
-            auto s = audiocity::engine::bento::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
-            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "1010music preset");
-        }
-        case ImportedProgramFormat::talSampler:
-        {
-            auto r = audiocity::engine::talsmpl::importFile(file);
-            auto s = audiocity::engine::talsmpl::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
-            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "TAL Sampler");
-        }
-        case ImportedProgramFormat::tx16wx:
-        {
-            auto r = audiocity::engine::tx16wx::importFile(file);
-            auto s = audiocity::engine::tx16wx::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
-            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "TX16Wx");
-        }
-        case ImportedProgramFormat::korgMultisample:
-        {
-            auto r = audiocity::engine::korgmulti::importFile(file);
-            auto s = audiocity::engine::korgmulti::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
-            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "Korg multisample");
-        }
-        case ImportedProgramFormat::abletonSampler:
-        {
-            auto r = audiocity::engine::ableton::importFile(file);
-            auto s = audiocity::engine::ableton::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
-            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "Ableton sampler");
-        }
-        case ImportedProgramFormat::distingExPreset:
-        {
-            auto r = audiocity::engine::distingex::importFile(file);
-            auto s = audiocity::engine::distingex::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
-            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "disting EX preset");
-        }
-        case ImportedProgramFormat::korgKmp:
-        {
-            auto r = audiocity::engine::korgkmp::importFile(file);
-            auto s = audiocity::engine::korgkmp::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
-            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "Korg KMP");
-        }
-        case ImportedProgramFormat::logicExs24:
-        {
-            auto r = audiocity::engine::exs24::importFile(file);
-            auto s = audiocity::engine::exs24::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
-            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "Logic EXS24");
-        }
-        case ImportedProgramFormat::nnxt:
-        {
-            auto r = audiocity::engine::nnxt::importFile(file);
-            auto s = audiocity::engine::nnxt::buildImportSummary(r, !r.hasErrors() && r.hasPlayableProgram());
-            return prepareBackgroundImportResult(std::move(r), std::move(s), format, "Reason NN-XT");
-        }
-        default:
-            break;
-    }
-
-    BackgroundImportResult failed;
-    failed.format = format;
-    failed.summary = "Background import is not available for this format";
-    return failed;
-}
 
 juce::var makeSampleBrowserDragDescription(const juce::File& file)
 {
@@ -3746,7 +3588,49 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     : AudioProcessorEditor(&processor),
     processor_(processor),
     modulationPanel_(processor),
-    mappingZoneListModel_(*this)
+    mappingZoneListModel_(*this),
+    generatePage_(generateWaveformView_,
+                  generateSineButton_,
+                  generateRampButton_,
+                  generateSquareButton_,
+                  generateSawtoothButton_,
+                  generateTriangleButton_,
+                  generatePulseButton_,
+                  generateRandomButton_,
+                  generateSamplesLabel_,
+                  generateSamplesCombo_,
+                  generateBitDepthLabel_,
+                  generateBitDepthCombo_,
+                  generateSketchSmoothingLabel_,
+                  generateSketchSmoothingCombo_,
+                  generatePulseWidthLabel_,
+                  generatePulseWidthSlider_,
+                  generatePreviewButton_,
+                  generateFrequencyLabel_,
+                  generateFrequencyCombo_,
+                  generateLoadAsSampleButton_),
+    capturePage_(captureWaveformView_,
+                 captureRecordButton_,
+                 captureClearButton_,
+                 captureCutButton_,
+                 captureTrimButton_,
+                 capturePlayButton_,
+                 captureNormalizeButton_,
+                 captureLoadAsSampleButton_,
+                 captureSourceLabel_,
+                 captureSampleRateLabel_,
+                 captureSampleRateCombo_,
+                 captureChannelLabel_,
+                 captureChannelCombo_,
+                 captureBitDepthLabel_,
+                 captureBitDepthCombo_,
+                 captureRootNoteLabel_,
+                 captureRootNoteCombo_,
+                 captureInputLevelLabel_,
+                 captureInputLevelSlider_,
+                 captureInputVuMeter_,
+                 captureStatusLabel_,
+                 dialLaf_)
 {
     setName("Audiocity");
     setSize(980, 860);
@@ -3773,6 +3657,13 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     sampleInspectorFilterModExpanded_ = processor_.getSampleInspectorFilterModExpanded();
     sampleInspectorEffectsExpanded_ = processor_.getSampleInspectorEffectsExpanded();
     tabBar_.setCurrentTabIndex(currentTabIndex_);
+
+    addAndMakeVisible(aboutPage_);
+    aboutPage_.setVisible(false);
+    addAndMakeVisible(generatePage_);
+    generatePage_.setVisible(false);
+    addAndMakeVisible(capturePage_);
+    capturePage_.setVisible(false);
 
     addAndMakeVisible(sampleControlsViewport_);
     sampleControlsViewport_.setScrollBarsShown(true, false);
@@ -3845,28 +3736,6 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     }
     refreshPlayerPadButtons();
     updatePerformanceStripStatus(0.0f, 0.0f);
-
-    // Generate pane
-    addAndMakeVisible(generateWaveformView_);
-    addAndMakeVisible(generateSineButton_);
-    addAndMakeVisible(generateRampButton_);
-    addAndMakeVisible(generateSquareButton_);
-    addAndMakeVisible(generateSawtoothButton_);
-    addAndMakeVisible(generateTriangleButton_);
-    addAndMakeVisible(generatePulseButton_);
-    addAndMakeVisible(generateRandomButton_);
-    addAndMakeVisible(generateSamplesLabel_);
-    addAndMakeVisible(generateSamplesCombo_);
-    addAndMakeVisible(generateBitDepthLabel_);
-    addAndMakeVisible(generateBitDepthCombo_);
-    addAndMakeVisible(generateSketchSmoothingLabel_);
-    addAndMakeVisible(generateSketchSmoothingCombo_);
-    addAndMakeVisible(generatePulseWidthLabel_);
-    addAndMakeVisible(generatePulseWidthSlider_);
-    addAndMakeVisible(generatePreviewButton_);
-    addAndMakeVisible(generateFrequencyLabel_);
-    addAndMakeVisible(generateFrequencyCombo_);
-    addAndMakeVisible(generateLoadAsSampleButton_);
 
     generateSamplesLabel_.setJustificationType(juce::Justification::centredLeft);
     generateBitDepthLabel_.setJustificationType(juce::Justification::centredLeft);
@@ -4020,28 +3889,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     regenerateWaveform();
 
     // Capture pane
-    addAndMakeVisible(captureWaveformView_);
-    addAndMakeVisible(captureRecordButton_);
-    addAndMakeVisible(captureClearButton_);
-    addAndMakeVisible(captureCutButton_);
-    addAndMakeVisible(captureTrimButton_);
-    addAndMakeVisible(captureLoadAsSampleButton_);
-    addAndMakeVisible(capturePlayButton_);
-    addAndMakeVisible(captureNormalizeButton_);
-    addAndMakeVisible(captureSourceLabel_);
-    addAndMakeVisible(captureSampleRateLabel_);
-    addAndMakeVisible(captureSampleRateCombo_);
-    addAndMakeVisible(captureChannelLabel_);
-    addAndMakeVisible(captureChannelCombo_);
-    addAndMakeVisible(captureBitDepthLabel_);
-    addAndMakeVisible(captureBitDepthCombo_);
-    addAndMakeVisible(captureRootNoteLabel_);
-    addAndMakeVisible(captureRootNoteCombo_);
-    addAndMakeVisible(captureInputLevelLabel_);
-    addAndMakeVisible(captureInputLevelSlider_);
-    addAndMakeVisible(captureInputVuMeter_);
     captureInputVuMeter_.setClipZoneEnabled(true);
-    addAndMakeVisible(captureStatusLabel_);
 
     captureSourceLabel_.setJustificationType(juce::Justification::centredLeft);
     captureSampleRateLabel_.setJustificationType(juce::Justification::centredLeft);
@@ -5334,20 +5182,6 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addToSampleControls(diagnosticsLabel_);
     addToSampleControls(copyImportDiagnosticsButton_);
 
-    // About pane
-    aboutIconImage_ = juce::ImageFileFormat::loadFrom(BinaryData::audiocity_icon_128_png,
-                                                       BinaryData::audiocity_icon_128_pngSize);
-    addAndMakeVisible(aboutGitHubButton_);
-    aboutGitHubButton_.onClick = []
-    {
-        juce::URL("https://github.com/thetheosopher/Audiocity").launchInDefaultBrowser();
-    };
-    addAndMakeVisible(aboutCoffeeButton_);
-    aboutCoffeeButton_.onClick = []
-    {
-        juce::URL("https://buymeacoffee.com/theosopher").launchInDefaultBrowser();
-    };
-
     setupTooltips();
     refreshSampleBrowserBookmarks();
     refreshMappingZoneRows();
@@ -6011,51 +5845,11 @@ void AudiocityAudioProcessorEditor::updateTabVisibility()
 
     refreshPlayerPadButtons();
 
-    generateWaveformView_.setVisible(showGenerateTab);
-    generateSineButton_.setVisible(showGenerateTab);
-    generateRampButton_.setVisible(showGenerateTab);
-    generateSquareButton_.setVisible(showGenerateTab);
-    generateSawtoothButton_.setVisible(showGenerateTab);
-    generateTriangleButton_.setVisible(showGenerateTab);
-    generatePulseButton_.setVisible(showGenerateTab);
-    generateRandomButton_.setVisible(showGenerateTab);
-    generateSamplesLabel_.setVisible(showGenerateTab);
-    generateSamplesCombo_.setVisible(showGenerateTab);
-    generateBitDepthLabel_.setVisible(showGenerateTab);
-    generateBitDepthCombo_.setVisible(showGenerateTab);
-    generateSketchSmoothingLabel_.setVisible(showGenerateTab);
-    generateSketchSmoothingCombo_.setVisible(showGenerateTab);
-    generatePulseWidthLabel_.setVisible(showGenerateTab);
-    generatePulseWidthSlider_.setVisible(showGenerateTab);
-    generatePreviewButton_.setVisible(showGenerateTab);
-    generateFrequencyLabel_.setVisible(showGenerateTab);
-    generateFrequencyCombo_.setVisible(showGenerateTab);
-    generateLoadAsSampleButton_.setVisible(showGenerateTab);
+    generatePage_.setVisible(showGenerateTab);
 
-    captureWaveformView_.setVisible(showCaptureTab);
-    captureRecordButton_.setVisible(showCaptureTab);
-    captureClearButton_.setVisible(showCaptureTab);
-    captureCutButton_.setVisible(showCaptureTab);
-    captureTrimButton_.setVisible(showCaptureTab);
-    captureLoadAsSampleButton_.setVisible(showCaptureTab);
-    capturePlayButton_.setVisible(showCaptureTab);
-    captureNormalizeButton_.setVisible(showCaptureTab);
-    captureSourceLabel_.setVisible(showCaptureTab);
-    captureSampleRateLabel_.setVisible(showCaptureTab);
-    captureSampleRateCombo_.setVisible(showCaptureTab);
-    captureChannelLabel_.setVisible(showCaptureTab);
-    captureChannelCombo_.setVisible(showCaptureTab);
-    captureBitDepthLabel_.setVisible(showCaptureTab);
-    captureBitDepthCombo_.setVisible(showCaptureTab);
-    captureRootNoteLabel_.setVisible(showCaptureTab);
-    captureRootNoteCombo_.setVisible(showCaptureTab);
-    captureInputLevelLabel_.setVisible(showCaptureTab);
-    captureInputLevelSlider_.setVisible(showCaptureTab);
-    captureInputVuMeter_.setVisible(showCaptureTab);
-    captureStatusLabel_.setVisible(showCaptureTab);
+    capturePage_.setVisible(showCaptureTab);
 
-    aboutGitHubButton_.setVisible(showAboutTab);
-    aboutCoffeeButton_.setVisible(showAboutTab);
+    aboutPage_.setVisible(showAboutTab);
 }
 
 int AudiocityAudioProcessorEditor::getNumRows()
@@ -7243,9 +7037,9 @@ void AudiocityAudioProcessorEditor::saveCurrentLibraryAs()
         (currentName.isEmpty() ? juce::String("Library") : currentName) + ".sfz");
 
     fileChooser_ = std::make_unique<juce::FileChooser>(
-        "Save Library as SFZ",
+        "Save Library as SFZ or DecentSampler",
         suggested,
-        "*.sfz");
+        "*.sfz;*.dspreset");
 
     const auto chooserFlags = juce::FileBrowserComponent::saveMode
                               | juce::FileBrowserComponent::canSelectFiles
@@ -7261,12 +7055,23 @@ void AudiocityAudioProcessorEditor::saveCurrentLibraryAs()
         if (file == juce::File{})
             return;
 
-        if (!file.hasFileExtension(".sfz"))
-            file = file.withFileExtension(".sfz");
-
+        const auto extension = file.getFileExtension().toLowerCase();
         juce::String errorMessage;
         juce::StringArray warnings;
-        const auto ok = safeThis->processor_.saveImportedProgramAsSfz(file, true, errorMessage, &warnings);
+        juce::String formatLabel = "SFZ";
+        bool ok = false;
+
+        if (extension == ".dspreset")
+        {
+            formatLabel = "DecentSampler";
+            ok = safeThis->processor_.saveImportedProgramAsDecentSampler(file, true, errorMessage, &warnings);
+        }
+        else
+        {
+            if (!file.hasFileExtension(".sfz"))
+                file = file.withFileExtension(".sfz");
+            ok = safeThis->processor_.saveImportedProgramAsSfz(file, true, errorMessage, &warnings);
+        }
 
         if (!ok)
         {
@@ -7276,7 +7081,7 @@ void AudiocityAudioProcessorEditor::saveCurrentLibraryAs()
             return;
         }
 
-        juce::String status = "Library saved: " + file.getFileName();
+        juce::String status = formatLabel + " saved: " + file.getFileName();
         if (!warnings.isEmpty())
             status += " (" + juce::String(warnings.size()) + " warning"
                 + (warnings.size() == 1 ? juce::String() : juce::String("s")) + ")";
@@ -8066,6 +7871,10 @@ bool AudiocityAudioProcessorEditor::canImportInstrumentInBackground(
     using audiocity::plugin::ImportedProgramFormat;
     switch (format)
     {
+        case ImportedProgramFormat::unknown:
+        case ImportedProgramFormat::sfz:
+        case ImportedProgramFormat::rex:
+        case ImportedProgramFormat::nki:
         case ImportedProgramFormat::sf2:
         case ImportedProgramFormat::decentSampler:
         case ImportedProgramFormat::bitwigMultisample:
@@ -8085,7 +7894,9 @@ bool AudiocityAudioProcessorEditor::canImportInstrumentInBackground(
     }
 }
 
-void AudiocityAudioProcessorEditor::setBackgroundImportUiActive(const bool active, const juce::File& file)
+void AudiocityAudioProcessorEditor::setBackgroundImportUiActive(const bool active,
+                                                               const juce::File& file,
+                                                               const juce::String& statusText)
 {
     backgroundImportInProgress_.store(active, std::memory_order_relaxed);
     loadButton_.setButtonText(active ? "Cancel" : "Load");
@@ -8095,7 +7906,10 @@ void AudiocityAudioProcessorEditor::setBackgroundImportUiActive(const bool activ
 
     if (active)
     {
-        diagnosticsLabel_.setText("Importing " + file.getFileName() + "...", juce::dontSendNotification);
+        diagnosticsLabel_.setText(statusText.isNotEmpty()
+                                      ? statusText
+                                      : ("Importing " + file.getFileName() + "..."),
+                                  juce::dontSendNotification);
         diagnosticsLabel_.setColour(juce::Label::textColourId, uiAccentAmberColour());
     }
     else
@@ -8122,7 +7936,8 @@ bool AudiocityAudioProcessorEditor::startBackgroundInstrumentLoad(
     const juce::File& file,
     const audiocity::plugin::ImportedProgramFormat format,
     const int selectedChoiceIndex,
-    std::function<void(bool)> completion)
+    std::function<void(bool)> completion,
+    const juce::File& searchFolder)
 {
     if (!canImportInstrumentInBackground(format))
         return false;
@@ -8133,12 +7948,13 @@ bool AudiocityAudioProcessorEditor::startBackgroundInstrumentLoad(
     backgroundImportFile_ = file;
     backgroundImportCompletion_ = completion;
     const auto generation = ++backgroundImportGeneration_;
-    setBackgroundImportUiActive(true, file);
+    setBackgroundImportUiActive(true, file, "Preparing " + file.getFileName() + "...");
 
     const auto safeThis = juce::Component::SafePointer<AudiocityAudioProcessorEditor>(this);
-    std::thread([safeThis, file, format, selectedChoiceIndex, generation]() mutable
+    auto* importProcessor = &processor_;
+    std::thread([safeThis, importProcessor, file, format, selectedChoiceIndex, searchFolder, generation]() mutable
     {
-        auto prepared = prepareBackgroundInstrumentImport(file, format, selectedChoiceIndex);
+        auto prepared = importProcessor->prepareBackgroundImport(file, format, selectedChoiceIndex, searchFolder);
 
         juce::MessageManager::callAsync([safeThis, file, generation, prepared = std::move(prepared)]() mutable
         {
@@ -8152,21 +7968,8 @@ bool AudiocityAudioProcessorEditor::startBackgroundInstrumentLoad(
             auto completion = std::move(self->backgroundImportCompletion_);
             self->backgroundImportCompletion_ = {};
 
-            bool loaded = false;
-            if (prepared.ok)
-            {
-                loaded = self->processor_.publishPreparedImportedProgram(file,
-                                                                         prepared.format,
-                                                                         std::move(prepared.program),
-                                                                         std::move(prepared.sampleData),
-                                                                         prepared.summary,
-                                                                         prepared.displayAssetIndex,
-                                                                         prepared.selectionIndex);
-            }
-            else
-            {
-                self->processor_.setImportDiagnosticSummary(prepared.summary);
-            }
+            self->setBackgroundImportUiActive(true, file, "Publishing " + file.getFileName() + "...");
+            const auto loaded = self->processor_.publishPreparedBackgroundImport(file, std::move(prepared));
 
             self->setBackgroundImportUiActive(false);
             self->completeInstrumentLoad(file, loaded, false, completion);
@@ -8344,6 +8147,14 @@ void AudiocityAudioProcessorEditor::promptForNkiSampleFolder(const juce::File& n
 
         processor_.panicAllAudio();
         updateGeneratePreviewButtonText();
+        if (startBackgroundInstrumentLoad(nkiFile,
+                                          audiocity::plugin::ImportedProgramFormat::nki,
+                                          -1,
+                                          {},
+                                          selected))
+        {
+            return;
+        }
 
         if (processor_.importLegacyNkiProgramWithSearchFolder(nkiFile, selected))
         {
@@ -9297,168 +9108,6 @@ void AudiocityAudioProcessorEditor::paintPlayerPane(juce::Graphics& g, juce::Rec
     paintPanel(padsPanel);
 }
 
-void AudiocityAudioProcessorEditor::paintAboutPane(juce::Graphics& g, juce::Rectangle<int> area) const
-{
-    area = area.reduced(14, 14);
-
-    constexpr int kIconSize = 96;
-    constexpr int kButtonHeight = 36;
-    constexpr int kButtonBottomPadding = 22;
-    constexpr int kFooterHeight = 26;
-    constexpr int kFooterGap = 14;
-    constexpr int kTableGap = 16;
-    constexpr int kTableTitleHeight = 28;
-    constexpr int kTableHeaderHeight = 28;
-    constexpr int kFeatureLabelWidth = 108;
-    constexpr int kShortcutLabelWidth = 90;
-
-    struct AboutRow
-    {
-        const char* label;
-        const char* detail;
-    };
-
-    constexpr std::array<AboutRow, 9> featureRows{{
-        { "Import", "Load WAV and AIFF plus SFZ, SoundFont, DecentSampler, Bitwig, XPM, TAL, TX16Wx, Korg, Ableton, EXS24, NKI, REX, RX2, and NCW" },
-        { "Preset Strip", "Multi-preset imports open a chooser, and the Sample header keeps a searchable preset strip in view" },
-        { "Browser Rail", "Persistent browser and preview controls stay visible on Sample, Mapping, Generate, and Capture" },
-        { "Mapping", "Batch edit, create, duplicate, split, merge, chromatic remap, key spread, and root-note tools" },
-        { "Slicing", "Transient slice imports, waveform overlays, and direct split or merge gestures for slice programs" },
-        { "Modulation", "Route mod wheel, aftertouch, velocity, Macro 1, and Macro 2 to pitch, filter, and amp" },
-        { "Performance", "Compact performance strip, external MIDI highlights, stereo output bars, and LED voice count" },
-        { "Quality", "CPU, Fidelity, and Ultra modes with disk streaming, preload control, and live diagnostics" },
-        { "Create", "Generate custom waves or capture audio while keeping the same browser and performance tools" }
-    }};
-
-    constexpr std::array<AboutRow, 9> workflowRows{{
-        { "Open Files", "Press Ctrl+O or drag a file in; multi-preset formats prompt for a preset before loading" },
-        { "NCW", "Set AUDIOCITY_NCW_CONVERTER_COMMAND before loading NCW-backed libraries" },
-        { "Preset Search", "Use the Sample top-bar search to filter preset names without leaving the current workflow" },
-        { "Browser", "Use the preview buttons, Enter to load the selected row, and Esc to panic audio" },
-        { "Mapping", "Ctrl+N creates a zone, Ctrl+A selects all, Ctrl+D duplicates, Ctrl+Shift+D splits, Delete removes" },
-        { "Waveform", "Double-click slice boundaries to split; waveform menus expose merge and chromatic actions" },
-        { "Performance", "Keys 1-7 switch tabs; Sample, Mapping, Generate, and Capture keep the compact keyboard visible" },
-        { "Undo", "Ctrl+Z and Ctrl+Y walk one shared history across sample, settings, and mapping edits" },
-        { "Inspect", "Wide Sample layouts show browser and inspector rails; Inspect mode enlarges the Output dials" }
-    }};
-
-    const int iconY = area.getY() + 20;
-    const int iconX = area.getCentreX() - kIconSize / 2;
-
-    if (aboutIconImage_.isValid())
-        g.drawImage(aboutIconImage_,
-                    juce::Rectangle<float>(static_cast<float>(iconX), static_cast<float>(iconY),
-                                           static_cast<float>(kIconSize), static_cast<float>(kIconSize)),
-                    juce::RectanglePlacement::centred);
-
-    int textY = iconY + kIconSize + 16;
-
-    g.setColour(juce::Colours::white);
-    g.setFont(juce::Font(juce::FontOptions(28.0f)).boldened());
-    g.drawText("Audiocity", area.getX(), textY, area.getWidth(), 34, juce::Justification::centredTop);
-    textY += 38;
-
-    g.setColour(juce::Colour(0xffaab0cc));
-    g.setFont(juce::Font(juce::FontOptions(15.0f)));
-    g.drawText("A hybrid sampler for import, slicing, modulation, and performance", area.getX(), textY, area.getWidth(), 22,
-               juce::Justification::centredTop);
-    textY += 28;
-
-    g.setFont(juce::Font(juce::FontOptions(13.0f)));
-    g.drawText("VST3 Plugin & Standalone Application", area.getX(), textY, area.getWidth(), 20,
-               juce::Justification::centredTop);
-    textY += 32;
-
-    // Version
-    g.setColour(juce::Colour(0xff61d9ff));
-    g.setFont(juce::Font(juce::FontOptions(13.0f)).boldened());
-    g.drawText("Version " + juce::String(JucePlugin_VersionString),
-               area.getX(), textY, area.getWidth(), 20,
-               juce::Justification::centredTop);
-    textY += 28;
-
-    auto lowerArea = area.withTrimmedTop(textY - area.getY());
-    lowerArea.removeFromBottom(kButtonHeight + kButtonBottomPadding);
-    auto footerArea = lowerArea.removeFromBottom(kFooterHeight);
-    lowerArea.removeFromBottom(kFooterGap);
-
-    auto drawTable = [&](juce::Rectangle<int> bounds,
-                         const juce::String& title,
-                         const juce::String& leftHeader,
-                         const juce::String& rightHeader,
-                         const int leftColumnWidth,
-                         const auto& rows)
-    {
-        g.setColour(juce::Colour(0xff2c2f45));
-        g.fillRoundedRectangle(bounds.toFloat(), 10.0f);
-        g.setColour(juce::Colour(0xff434a65));
-        g.drawRoundedRectangle(bounds.toFloat().reduced(0.5f), 10.0f, 1.0f);
-
-        auto content = bounds.reduced(12);
-        auto titleArea = content.removeFromTop(kTableTitleHeight);
-        g.setColour(juce::Colour(0xffdfe6ff));
-        g.setFont(juce::Font(juce::FontOptions(14.5f)).boldened());
-        g.drawText(title, titleArea, juce::Justification::centred, false);
-
-        content.removeFromTop(6);
-        auto headerArea = content.removeFromTop(kTableHeaderHeight);
-        g.setColour(juce::Colour(0xff23273a));
-        g.fillRoundedRectangle(headerArea.toFloat(), 6.0f);
-
-        auto headerLeft = headerArea.removeFromLeft(leftColumnWidth);
-        headerArea.removeFromLeft(8);
-        g.setColour(juce::Colour(0xff61d9ff));
-        g.setFont(juce::Font(juce::FontOptions(11.5f)).boldened());
-        g.drawText(leftHeader, headerLeft.reduced(8, 0), juce::Justification::centredLeft, false);
-        g.drawText(rightHeader, headerArea.reduced(8, 0), juce::Justification::centredLeft, false);
-
-        auto rowsArea = content;
-        const int dividerX = rowsArea.getX() + leftColumnWidth;
-        g.setColour(juce::Colour(0x30dfe6ff));
-        g.drawLine(static_cast<float>(dividerX), static_cast<float>(headerLeft.getY()),
-                   static_cast<float>(dividerX), static_cast<float>(rowsArea.getBottom()), 1.0f);
-
-        const auto rowCount = static_cast<int>(rows.size());
-        const int rowHeight = juce::jlimit(28, 40, rowsArea.getHeight() / juce::jmax(1, rowCount));
-
-        for (int rowIndex = 0; rowIndex < rowCount; ++rowIndex)
-        {
-            auto rowArea = rowsArea.removeFromTop(rowHeight);
-            if (rowIndex > 0)
-            {
-                g.setColour(juce::Colour(0x203f4762));
-                g.drawHorizontalLine(rowArea.getY(), static_cast<float>(rowArea.getX()),
-                                     static_cast<float>(rowArea.getRight()));
-            }
-
-            auto rowLeft = rowArea.removeFromLeft(leftColumnWidth).reduced(8, 4);
-            auto rowRight = rowArea.reduced(8, 4);
-
-            g.setColour(juce::Colour(0xfff4f6ff));
-            g.setFont(juce::Font(juce::FontOptions(11.5f)).boldened());
-            g.drawFittedText(rows[static_cast<std::size_t>(rowIndex)].label, rowLeft,
-                             juce::Justification::centredLeft, 1, 0.9f);
-
-            g.setColour(juce::Colour(0xff9ba5c3));
-            g.setFont(juce::Font(juce::FontOptions(11.5f)));
-            g.drawFittedText(rows[static_cast<std::size_t>(rowIndex)].detail, rowRight,
-                             juce::Justification::centredLeft, 2, 0.82f);
-        }
-    };
-
-    auto featuresArea = lowerArea.removeFromLeft((lowerArea.getWidth() - kTableGap) / 2);
-    lowerArea.removeFromLeft(kTableGap);
-    auto shortcutsArea = lowerArea;
-
-    drawTable(featuresArea, "Key Features", "Area", "Details", kFeatureLabelWidth, featureRows);
-    drawTable(shortcutsArea, "Workflow Tips", "Task", "How", kShortcutLabelWidth, workflowRows);
-
-    g.setColour(juce::Colour(0xffdfe6ff));
-    g.setFont(juce::Font(juce::FontOptions(14.0f)).boldened());
-    g.drawFittedText("Copyright (c) 2026 Michael A. McCloskey | Released under the MIT License",
-                     footerArea, juce::Justification::centred, 1, 0.82f);
-}
-
 // ─── Layout ────────────────────────────────────────────────────────────────────
 
 void AudiocityAudioProcessorEditor::resized()
@@ -9679,51 +9328,7 @@ void AudiocityAudioProcessorEditor::resized()
 
     if (currentTabIndex_ == 4)
     {
-        auto genArea = area.reduced(8, 6);
-
-        auto waveformArea = genArea.removeFromTop(juce::jmax(200, genArea.getHeight() / 2));
-        generateWaveformView_.setBounds(waveformArea);
-        genArea.removeFromTop(12);
-
-        auto waveButtons = genArea.removeFromTop(32).reduced(12, 0);
-        constexpr int kBtnW = 64;
-        constexpr int kBtnGap = 6;
-        generateLoadAsSampleButton_.setBounds(waveButtons.removeFromRight(140));
-        waveButtons.removeFromRight(kBtnGap);
-        generateSineButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
-        waveButtons.removeFromLeft(kBtnGap);
-        generateRampButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
-        waveButtons.removeFromLeft(kBtnGap);
-        generateSquareButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
-        waveButtons.removeFromLeft(kBtnGap);
-        generateSawtoothButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
-        waveButtons.removeFromLeft(kBtnGap);
-        generateTriangleButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
-        waveButtons.removeFromLeft(kBtnGap);
-        generatePulseButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
-        waveButtons.removeFromLeft(kBtnGap);
-        generateRandomButton_.setBounds(waveButtons.removeFromLeft(kBtnW));
-
-        genArea.removeFromTop(10);
-        auto settingsRow = genArea.removeFromTop(32).reduced(12, 0);
-        generateSamplesLabel_.setBounds(settingsRow.removeFromLeft(58));
-        generateSamplesCombo_.setBounds(settingsRow.removeFromLeft(98));
-        settingsRow.removeFromLeft(14);
-        generateBitDepthLabel_.setBounds(settingsRow.removeFromLeft(34));
-        generateBitDepthCombo_.setBounds(settingsRow.removeFromLeft(96));
-        settingsRow.removeFromLeft(14);
-        generateSketchSmoothingLabel_.setBounds(settingsRow.removeFromLeft(54));
-        generateSketchSmoothingCombo_.setBounds(settingsRow.removeFromLeft(96));
-        settingsRow.removeFromLeft(14);
-        generatePulseWidthLabel_.setBounds(settingsRow.removeFromLeft(36));
-        generatePulseWidthSlider_.setBounds(settingsRow);
-
-        genArea.removeFromTop(10);
-        auto actionsRow = genArea.removeFromTop(32).reduced(12, 0);
-        generatePreviewButton_.setBounds(actionsRow.removeFromLeft(96));
-        actionsRow.removeFromLeft(12);
-        generateFrequencyLabel_.setBounds(actionsRow.removeFromLeft(72));
-        generateFrequencyCombo_.setBounds(actionsRow.removeFromLeft(190));
+        generatePage_.setBounds(area.reduced(8, 6));
 
         if (showPerformanceStrip)
             layoutPlayerPerformanceArea(performanceStripArea, true);
@@ -9733,83 +9338,7 @@ void AudiocityAudioProcessorEditor::resized()
 
     if (currentTabIndex_ == 5)
     {
-        auto captureArea = area.reduced(8, 6);
-        auto waveformArea = captureArea.removeFromTop(juce::jmax(220, captureArea.getHeight() / 2));
-        captureWaveformView_.setBounds(waveformArea);
-
-        captureArea.removeFromTop(10);
-        auto controlsRow = captureArea.removeFromTop(32).reduced(10, 0);
-        const auto measureCaptureButtonWidth = [this, buttonHeight = controlsRow.getHeight()](juce::TextButton& button,
-                                                                                               const juce::StringArray& labels,
-                                                                                               const int minWidth,
-                                                                                               const int maxWidth)
-        {
-            const auto font = dialLaf_.getTextButtonFont(button, buttonHeight);
-            const auto measureTextWidth = [&font](const juce::String& text)
-            {
-                juce::GlyphArrangement glyphs;
-                glyphs.addLineOfText(font, text, 0.0f, 0.0f);
-                return static_cast<int>(std::ceil(glyphs.getBoundingBox(0, glyphs.getNumGlyphs(), true).getWidth()));
-            };
-
-            auto textWidth = measureTextWidth(button.getButtonText());
-            for (const auto& label : labels)
-                textWidth = juce::jmax(textWidth, measureTextWidth(label));
-
-            const auto preferredWidth = textWidth + 22;
-            return juce::jlimit(minWidth, maxWidth, preferredWidth);
-        };
-
-        constexpr int kCaptureButtonGap = 8;
-        const int loadAsSampleWidth = measureCaptureButtonWidth(captureLoadAsSampleButton_, {}, 112, 134);
-        const int recordWidth = measureCaptureButtonWidth(captureRecordButton_, { "Stop" }, 72, 96);
-        const int clearWidth = measureCaptureButtonWidth(captureClearButton_, {}, 62, 84);
-        const int cutWidth = measureCaptureButtonWidth(captureCutButton_, {}, 92, 116);
-        const int trimWidth = measureCaptureButtonWidth(captureTrimButton_, {}, 100, 124);
-        const int playWidth = measureCaptureButtonWidth(capturePlayButton_, { "Stop" }, 76, 92);
-        const int normalizeWidth = measureCaptureButtonWidth(captureNormalizeButton_, {}, 98, 116);
-
-        captureLoadAsSampleButton_.setBounds(controlsRow.removeFromRight(loadAsSampleWidth));
-        controlsRow.removeFromRight(kCaptureButtonGap);
-        captureRecordButton_.setBounds(controlsRow.removeFromLeft(recordWidth));
-        controlsRow.removeFromLeft(kCaptureButtonGap);
-        captureClearButton_.setBounds(controlsRow.removeFromLeft(clearWidth));
-        controlsRow.removeFromLeft(kCaptureButtonGap);
-        captureCutButton_.setBounds(controlsRow.removeFromLeft(cutWidth));
-        controlsRow.removeFromLeft(kCaptureButtonGap);
-        captureTrimButton_.setBounds(controlsRow.removeFromLeft(trimWidth));
-        controlsRow.removeFromLeft(kCaptureButtonGap);
-        capturePlayButton_.setBounds(controlsRow.removeFromLeft(playWidth));
-        controlsRow.removeFromLeft(kCaptureButtonGap);
-        captureNormalizeButton_.setBounds(controlsRow.removeFromLeft(normalizeWidth));
-
-        captureArea.removeFromTop(10);
-        auto sourceRow = captureArea.removeFromTop(20);
-        captureSourceLabel_.setBounds(sourceRow);
-
-        captureArea.removeFromTop(6);
-        auto settingsRow = captureArea.removeFromTop(30);
-        captureSampleRateLabel_.setBounds(settingsRow.removeFromLeft(28));
-        captureSampleRateCombo_.setBounds(settingsRow.removeFromLeft(96));
-        settingsRow.removeFromLeft(10);
-        captureChannelLabel_.setBounds(settingsRow.removeFromLeft(28));
-        captureChannelCombo_.setBounds(settingsRow.removeFromLeft(118));
-        settingsRow.removeFromLeft(10);
-        captureBitDepthLabel_.setBounds(settingsRow.removeFromLeft(34));
-        captureBitDepthCombo_.setBounds(settingsRow.removeFromLeft(96));
-
-        captureArea.removeFromTop(8);
-        auto levelRow = captureArea.removeFromTop(40);
-        captureRootNoteLabel_.setBounds(levelRow.removeFromLeft(72));
-        captureRootNoteCombo_.setBounds(levelRow.removeFromLeft(160));
-        levelRow.removeFromLeft(12);
-        captureInputLevelLabel_.setBounds(levelRow.removeFromLeft(80));
-        captureInputLevelSlider_.setBounds(levelRow.removeFromLeft(190).withSizeKeepingCentre(190, 28));
-        levelRow.removeFromLeft(12);
-        captureInputVuMeter_.setBounds(levelRow.removeFromLeft(180));
-
-        captureArea.removeFromTop(8);
-        captureStatusLabel_.setBounds(captureArea.removeFromTop(22));
+        capturePage_.setBounds(area.reduced(8, 6));
         if (showPerformanceStrip)
             layoutPlayerPerformanceArea(performanceStripArea, true);
         return;
@@ -9817,21 +9346,11 @@ void AudiocityAudioProcessorEditor::resized()
 
     if (currentTabIndex_ == 6)
     {
-        auto aboutArea = area.reduced(8, 6);
-        constexpr int kButtonW = 200;
-        constexpr int kButtonH = 36;
-        constexpr int kButtonGap = 16;
-        constexpr int kButtonBottomPadding = 22;
-
-        aboutArea.removeFromBottom(kButtonBottomPadding);
-        auto buttonStrip = aboutArea.removeFromBottom(kButtonH);
-
-        const int totalButtonsW = kButtonW * 2 + kButtonGap;
-        const int buttonX = buttonStrip.getX() + (buttonStrip.getWidth() - totalButtonsW) / 2;
-        aboutGitHubButton_.setBounds(buttonX, buttonStrip.getY(), kButtonW, kButtonH);
-        aboutCoffeeButton_.setBounds(buttonX + kButtonW + kButtonGap, buttonStrip.getY(), kButtonW, kButtonH);
+        aboutPage_.setBounds(area.reduced(8, 6));
         return;
     }
+
+    aboutPage_.setBounds({});
 
     // ── Top bar: load + presets + diagnostics toggle ──
     {
@@ -10806,11 +10325,6 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
         paintPlayerPane(g, content, false);
     else if (currentTabIndex_ == 4 || currentTabIndex_ == 5)
         paintContentCard(content);
-    else if (currentTabIndex_ == 6)
-    {
-        paintContentCard(content);
-        paintAboutPane(g, content);
-    }
 
     if (currentTabIndex_ == 0)
         paintSampleInspectorPane(g);

@@ -175,7 +175,31 @@ public:
 
     using VoicePlaybackStates = std::array<VoicePlaybackState, VoicePool::maxVoices>;
 
+    struct PreparedSampleFile
+    {
+        juce::AudioBuffer<float> sampleData;
+        double sampleRateHz = 0.0;
+        int rootMidiNote = 60;
+        int bitDepth = -1;
+        int metadataRootMidiNote = -1;
+        double metadataTempoBpm = 0.0;
+        juce::String loopFormatBadge;
+        juce::String samplePath;
+        juce::String backingFilePath;
+        int sampleWindowStart = 0;
+        int sampleWindowEnd = 0;
+        int loopStart = 0;
+        int loopEnd = 0;
+        PlaybackMode playbackMode = PlaybackMode::gate;
+        bool ok = false;
+        juce::String errorMessage;
+    };
+
     bool loadSampleFromFile(const juce::File& file);
+    [[nodiscard]] static PreparedSampleFile prepareSampleFile(const juce::File& file,
+                                                              int fallbackRootMidiNote = 60,
+                                                              PlaybackMode fallbackPlaybackMode = PlaybackMode::gate);
+    void loadPreparedSample(const PreparedSampleFile& prepared) noexcept;
     [[nodiscard]] bool isRexRuntimeAvailable() const noexcept;
     void setSampleData(const juce::AudioBuffer<float>& sampleData, double sampleRate, int rootNote) noexcept;
     void setProgram(const Program& program);

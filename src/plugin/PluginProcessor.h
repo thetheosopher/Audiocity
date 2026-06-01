@@ -77,6 +77,24 @@ public:
     bool importKorgKmpProgram(const juce::File& file);
     bool importLogicExs24Program(const juce::File& file);
     bool importNnxtProgram(const juce::File& file);
+    struct PreparedBackgroundImport
+    {
+        audiocity::plugin::ImportedProgramFormat format = audiocity::plugin::ImportedProgramFormat::unknown;
+        audiocity::engine::Program program;
+        std::vector<juce::AudioBuffer<float>> sampleData;
+        audiocity::engine::EngineCore::PreparedSampleFile displaySample;
+        juce::String diagnosticSummary;
+        int displayAssetIndex = -1;
+        int selectionIndex = -1;
+        bool importedProgram = false;
+        bool ok = false;
+    };
+    [[nodiscard]] PreparedBackgroundImport prepareBackgroundImport(
+        const juce::File& file,
+        audiocity::plugin::ImportedProgramFormat format,
+        int selectionIndex = -1,
+        const juce::File& searchFolder = {}) const;
+    bool publishPreparedBackgroundImport(const juce::File& file, PreparedBackgroundImport prepared);
     bool publishPreparedImportedProgram(const juce::File& file,
                                         audiocity::plugin::ImportedProgramFormat format,
                                         audiocity::engine::Program program,
@@ -120,13 +138,17 @@ public:
     bool spreadImportedProgramZonesAcrossKeyRange(const std::vector<int>& zoneIndices);
     bool deriveImportedProgramZoneRootsFromKeyRanges(const std::vector<int>& zoneIndices);
 
-    // Library authoring (create empty, add sample, save as SFZ). See docs/16-library-authoring-plan.md.
+    // Library authoring (create empty, add sample, save as SFZ or DecentSampler). See docs/16-library-authoring-plan.md.
     bool createEmptyImportedSfzProgram(const juce::String& libraryName);
     bool addSampleAssetToImportedProgram(const juce::File& sampleFile, juce::String& errorOut);
     bool saveImportedProgramAsSfz(const juce::File& destSfzFile,
                                   bool copySamples,
                                   juce::String& errorOut,
                                   juce::StringArray* warningsOut = nullptr);
+    bool saveImportedProgramAsDecentSampler(const juce::File& destPresetFile,
+                                            bool copySamples,
+                                            juce::String& errorOut,
+                                            juce::StringArray* warningsOut = nullptr);
 
     [[nodiscard]] juce::String getLastImportDiagnosticSummary() const;
     [[nodiscard]] bool isRexRuntimeAvailable() const noexcept { return engine_.isRexRuntimeAvailable(); }

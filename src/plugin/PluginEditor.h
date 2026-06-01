@@ -18,6 +18,9 @@
 #include "CcLearnDial.h"
 #include "DialLookAndFeel.h"
 #include "ImportedProgramState.h"
+#include "PluginAboutPage.h"
+#include "PluginCapturePage.h"
+#include "PluginGeneratePage.h"
 #include "PlayerPadState.h"
 #include "ProgramMappingModel.h"
 #include "ProgramMappingUndoHistory.h"
@@ -484,6 +487,7 @@ private:
     juce::Component tabGeneratePage_;
     juce::Component tabCapturePage_;
     juce::Component tabAboutPage_;
+    PluginAboutPage aboutPage_;
     int currentTabIndex_ = 0;
     bool showDiagnosticsPanel_ = false;
 
@@ -874,6 +878,7 @@ private:
     juce::Label generateFrequencyLabel_{ {}, "Frequency" };
     juce::ComboBox generateFrequencyCombo_;
     juce::TextButton generateLoadAsSampleButton_{ "Load as Sample" };
+    PluginGeneratePage generatePage_;
     std::vector<float> generatedWaveform_;
     enum class GeneratedWaveType
     {
@@ -956,6 +961,7 @@ private:
     juce::Slider captureInputLevelSlider_{ juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     StereoPeakMeter captureInputVuMeter_;
     juce::Label captureStatusLabel_{ {}, "No capture" };
+    PluginCapturePage capturePage_;
     int captureSelectionStart_ = 0;
     int captureSelectionEnd_ = 0;
     int captureDisplayTotalSamples_ = 0;
@@ -1069,11 +1075,6 @@ private:
     int importDiagnosticLogCount_ = 0;
     int nextImportDiagnosticLogIndex_ = 0;
 
-    // ── About ──
-    juce::TextButton aboutGitHubButton_{ "GitHub" };
-    juce::TextButton aboutCoffeeButton_{ "Buy Me a Coffee" };
-    juce::Image aboutIconImage_;
-
     // ── CC routing ──
     struct DialMapping
     {
@@ -1183,9 +1184,12 @@ private:
     bool startBackgroundInstrumentLoad(const juce::File& file,
                                        audiocity::plugin::ImportedProgramFormat format,
                                        int selectedChoiceIndex,
-                                       std::function<void(bool)> completion);
+                                       std::function<void(bool)> completion,
+                                       const juce::File& searchFolder = {});
     void cancelBackgroundInstrumentLoad();
-    void setBackgroundImportUiActive(bool active, const juce::File& file = {});
+    void setBackgroundImportUiActive(bool active,
+                                     const juce::File& file = {},
+                                     const juce::String& statusText = {});
     bool loadFileAsInstrument(const juce::File& file,
                               std::function<void(bool)> completion = {});
     bool importInstrumentFileByFormat(const juce::File& file,
@@ -1227,7 +1231,6 @@ private:
     void syncAutomatedControlsFromProcessor();
     void paintPlayerPane(juce::Graphics& g, juce::Rectangle<int> area, bool compactLayout) const;
     void paintSampleBrowserPane(juce::Graphics& g, juce::Rectangle<int> browserArea) const;
-    void paintAboutPane(juce::Graphics& g, juce::Rectangle<int> area) const;
     void handleSampleControlsMouseDown(const juce::MouseEvent& event);
     void updateTabVisibility();
     void updateGeneratePreviewButtonText();

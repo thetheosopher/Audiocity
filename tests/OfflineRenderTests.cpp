@@ -13,6 +13,7 @@
 #include "../src/engine/SfzExporter.h"
 #include "../src/engine/Sf2Importer.h"
 #include "../src/engine/DecentSamplerImporter.h"
+#include "../src/engine/DecentSamplerExporter.h"
 #include "../src/engine/BitwigMultisampleImporter.h"
 #include "../src/engine/XmlMultisampleImporters.h"
 #include "../src/engine/BinaryMultisampleImporters.h"
@@ -3584,6 +3585,7 @@ bool runSfzImporterDiagnosticsTest()
 bool runDecentSamplerImporterTest()
 {
     namespace ds = audiocity::engine::dspreset;
+    using namespace audiocity::engine;
 
     const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
         .getNonexistentChildFile("audiocity_dspreset_test", "");
@@ -3617,9 +3619,9 @@ bool runDecentSamplerImporterTest()
         R"(<?xml version="1.0" encoding="UTF-8"?>
 <DecentSampler>
   <groups>
-    <group volume="-6dB" pan="0">
-      <sample path="tone.wav" rootNote="60" loNote="48" hiNote="72" loVel="0" hiVel="127" volume="0dB" pan="-50" />
-      <sample path="tone.wav" rootNote="72" loNote="73" hiNote="84" loopStart="100" loopEnd="900" loopEnabled="true" trigger="release" />
+        <group volume="-6dB" pan="0" seqMode="round_robin" seqLength="2">
+            <sample path="tone.wav" rootNote="60" loNote="48" hiNote="72" loVel="0" hiVel="127" volume="0dB" pan="-50" seqPosition="1" />
+            <sample path="tone.wav" rootNote="72" loNote="73" hiNote="84" loopStart="100" loopEnd="900" loopEnabled="true" trigger="release" seqPosition="2" />
     </group>
   </groups>
 </DecentSampler>
@@ -3635,17 +3637,27 @@ bool runDecentSamplerImporterTest()
 
     if (result.hasErrors() || !result.hasPlayableProgram())
         return false;
-    if (result.program.zones.size() != 2 || result.program.sampleAssets.size() != 1)
+    if (result.program.zones.size() != 2 || result.program.sampleAssets.size() != 1 || result.program.groups.size() != 1)
+        return false;
+
+    const auto& group = result.program.groups[0];
+    if (std::abs(group.gainDb - (-6.0f)) > 0.5f || std::abs(group.pan) > 0.05f)
+        return false;
+    if (group.roundRobinGroup <= 0 || group.roundRobinMode != RoundRobinMode::ordered)
         return false;
 
     const auto& z0 = result.program.zones[0];
     if (z0.keyRange.low != 48 || z0.keyRange.high != 72 || z0.rootMidiNote != 60)
         return false;
-    // Sample-level pan -50 (percent) overlaid on group pan 0 -> -0.5.
+    if (z0.groupIndex != 0)
+        return false;
+    if (z0.roundRobinPosition != 1 || z0.roundRobinLength != 2)
+        return false;
+    // Sample-level pan -50 (percent) is stored locally on the zone.
     if (std::abs(z0.pan + 0.5f) > 0.05f)
         return false;
-    // Group volume -6 dB overlaid on sample volume 0 -> -6 dB.
-    if (std::abs(z0.gainDb + 6.0f) > 0.5f)
+    // Group volume stays on the group; sample volume 0 dB remains local on the zone.
+    if (std::abs(z0.gainDb) > 0.05f)
         return false;
 
     const auto& z1 = result.program.zones[1];
@@ -3654,6 +3666,20 @@ bool runDecentSamplerImporterTest()
         return false;
     if (z1.triggerMode != audiocity::engine::ZoneTriggerMode::release)
         return false;
+    if (z1.roundRobinPosition != 2 || z1.roundRobinLength != 2)
+        return false;
+
+    const auto snapshot = ProgramSnapshot::fromProgram(result.program);
+    const auto& snapshotZone0 = snapshot.zones[0];
+    if (std::abs(snapshot.getZoneGainDb(snapshotZone0) - (-6.0f)) > 0.5f)
+        return false;
+    if (std::abs(snapshot.getZonePan(snapshotZone0) - (-0.5f)) > 0.05f)
+        return false;
+    if (snapshot.getZoneRoundRobinGroup(snapshotZone0) <= 0
+        || snapshot.getZoneRoundRobinMode(snapshotZone0) != RoundRobinMode::ordered)
+    {
+        return false;
+    }
 
     return true;
 }
@@ -7416,15 +7442,180 @@ bool runBackgroundImportWorkerPublishContractTest()
     return headerText.contains("std::atomic<int> backgroundImportGeneration_")
         && headerText.contains("std::atomic<bool> backgroundImportInProgress_")
         && headerText.contains("void cancelBackgroundInstrumentLoad()")
-        && startFunctionBody.contains("std::thread([safeThis, file, format, selectedChoiceIndex, generation]() mutable")
-        && startFunctionBody.contains("prepareBackgroundInstrumentImport(file, format, selectedChoiceIndex)")
+        && headerText.contains("const juce::File& searchFolder = {}")
+        && sourceText.contains("case ImportedProgramFormat::unknown:")
+        && sourceText.contains("case ImportedProgramFormat::sfz:")
+        && sourceText.contains("case ImportedProgramFormat::rex:")
+        && sourceText.contains("case ImportedProgramFormat::nki:")
+        && startFunctionBody.contains("std::thread([safeThis, importProcessor, file, format, selectedChoiceIndex, searchFolder, generation]() mutable")
+        && startFunctionBody.contains("prepareBackgroundImport(file, format, selectedChoiceIndex, searchFolder)")
         && startFunctionBody.contains("juce::MessageManager::callAsync")
-        && startFunctionBody.contains("publishPreparedImportedProgram(file")
+        && startFunctionBody.contains("publishPreparedBackgroundImport(file, std::move(prepared))")
+        && startFunctionBody.contains("Preparing ")
+        && startFunctionBody.contains("Publishing ")
         && startFunctionBody.contains("generation != self->backgroundImportGeneration_.load")
         && loadFunctionBody.contains("startBackgroundInstrumentLoad(file, detectedFormat, -1, completion)")
+        && sourceText.contains("startBackgroundInstrumentLoad(nkiFile,")
         && processorHeaderText.contains("bool publishPreparedImportedProgram(const juce::File& file")
+        && processorHeaderText.contains("PreparedBackgroundImport prepareBackgroundImport(")
+        && processorHeaderText.contains("bool publishPreparedBackgroundImport(const juce::File& file, PreparedBackgroundImport prepared)")
+        && processorSourceText.contains("AudiocityAudioProcessor::PreparedBackgroundImport AudiocityAudioProcessor::prepareBackgroundImport(")
+        && processorSourceText.contains("bool AudiocityAudioProcessor::publishPreparedBackgroundImport(")
         && processorSourceText.contains("bool AudiocityAudioProcessor::publishPreparedImportedProgram(")
         && processorSourceText.contains("setImportedProgramMetadata(file,");
+}
+
+bool runAboutPageExtractionContractTest()
+{
+    const auto aboutHeader = fixtureFile("src/plugin/PluginAboutPage.h");
+    const auto aboutSource = fixtureFile("src/plugin/PluginAboutPage.cpp");
+    const auto editorHeader = fixtureFile("src/plugin/PluginEditor.h");
+    const auto editorSource = fixtureFile("src/plugin/PluginEditor.cpp");
+    const auto cmakeFile = fixtureFile("CMakeLists.txt");
+    const auto testsCmakeFile = fixtureFile("tests/CMakeLists.txt");
+    if (!aboutHeader.existsAsFile()
+        || !aboutSource.existsAsFile()
+        || !editorHeader.existsAsFile()
+        || !editorSource.existsAsFile()
+        || !cmakeFile.existsAsFile()
+        || !testsCmakeFile.existsAsFile())
+    {
+        return false;
+    }
+
+    const auto aboutHeaderText = aboutHeader.loadFileAsString();
+    const auto aboutSourceText = aboutSource.loadFileAsString();
+    const auto editorHeaderText = editorHeader.loadFileAsString();
+    const auto editorSourceText = editorSource.loadFileAsString();
+    const auto cmakeText = cmakeFile.loadFileAsString();
+    const auto testsCmakeText = testsCmakeFile.loadFileAsString();
+
+    return aboutHeaderText.contains("class PluginAboutPage final")
+        && aboutHeaderText.contains("juce::TextButton gitHubButton_{ \"GitHub\" };")
+        && aboutHeaderText.contains("juce::TextButton coffeeButton_{ \"Buy Me a Coffee\" };")
+        && aboutSourceText.contains("PluginAboutPage::PluginAboutPage()")
+        && aboutSourceText.contains("void PluginAboutPage::paint(juce::Graphics& g)")
+        && aboutSourceText.contains("void PluginAboutPage::resized()")
+        && aboutSourceText.contains("juce::URL(\"https://github.com/thetheosopher/Audiocity\")")
+        && aboutSourceText.contains("juce::URL(\"https://buymeacoffee.com/theosopher\")")
+        && editorHeaderText.contains("#include \"PluginAboutPage.h\"")
+        && editorHeaderText.contains("PluginAboutPage aboutPage_;")
+        && !editorHeaderText.contains("aboutGitHubButton_")
+        && !editorHeaderText.contains("aboutCoffeeButton_")
+        && !editorHeaderText.contains("aboutIconImage_")
+        && !editorHeaderText.contains("paintAboutPane(")
+        && editorSourceText.contains("addAndMakeVisible(aboutPage_);")
+        && editorSourceText.contains("aboutPage_.setVisible(showAboutTab);")
+        && editorSourceText.contains("aboutPage_.setBounds(area.reduced(8, 6));")
+        && !editorSourceText.contains("paintAboutPane(")
+        && cmakeText.contains("src/plugin/PluginAboutPage.cpp")
+        && testsCmakeText.contains("../src/plugin/PluginAboutPage.cpp");
+}
+
+bool runGeneratePageExtractionContractTest()
+{
+    const auto generateHeader = fixtureFile("src/plugin/PluginGeneratePage.h");
+    const auto generateSource = fixtureFile("src/plugin/PluginGeneratePage.cpp");
+    const auto editorHeader = fixtureFile("src/plugin/PluginEditor.h");
+    const auto editorSource = fixtureFile("src/plugin/PluginEditor.cpp");
+    const auto cmakeFile = fixtureFile("CMakeLists.txt");
+    const auto testsCmakeFile = fixtureFile("tests/CMakeLists.txt");
+    if (!generateHeader.existsAsFile()
+        || !generateSource.existsAsFile()
+        || !editorHeader.existsAsFile()
+        || !editorSource.existsAsFile()
+        || !cmakeFile.existsAsFile()
+        || !testsCmakeFile.existsAsFile())
+    {
+        return false;
+    }
+
+    const auto generateHeaderText = generateHeader.loadFileAsString();
+    const auto generateSourceText = generateSource.loadFileAsString();
+    const auto editorHeaderText = editorHeader.loadFileAsString();
+    const auto editorSourceText = editorSource.loadFileAsString();
+    const auto cmakeText = cmakeFile.loadFileAsString();
+    const auto testsCmakeText = testsCmakeFile.loadFileAsString();
+
+    return generateHeaderText.contains("class PluginGeneratePage final")
+        && generateSourceText.contains("PluginGeneratePage::PluginGeneratePage(")
+        && generateSourceText.contains("void PluginGeneratePage::resized()")
+        && generateSourceText.contains("addAndMakeVisible(waveformView_);")
+        && editorHeaderText.contains("#include \"PluginGeneratePage.h\"")
+        && editorHeaderText.contains("PluginGeneratePage generatePage_;")
+        && editorSourceText.contains("addAndMakeVisible(generatePage_);")
+        && editorSourceText.contains("generatePage_.setVisible(showGenerateTab);")
+        && editorSourceText.contains("generatePage_.setBounds(area.reduced(8, 6));")
+        && !editorSourceText.contains("generateWaveformView_.setVisible(showGenerateTab);")
+        && !editorSourceText.contains("generateWaveformView_.setBounds(waveformArea);")
+        && cmakeText.contains("src/plugin/PluginGeneratePage.cpp")
+        && testsCmakeText.contains("../src/plugin/PluginGeneratePage.cpp");
+}
+
+bool runCapturePageExtractionContractTest()
+{
+    const auto captureHeader = fixtureFile("src/plugin/PluginCapturePage.h");
+    const auto captureSource = fixtureFile("src/plugin/PluginCapturePage.cpp");
+    const auto editorHeader = fixtureFile("src/plugin/PluginEditor.h");
+    const auto editorSource = fixtureFile("src/plugin/PluginEditor.cpp");
+    const auto cmakeFile = fixtureFile("CMakeLists.txt");
+    const auto testsCmakeFile = fixtureFile("tests/CMakeLists.txt");
+    if (!captureHeader.existsAsFile()
+        || !captureSource.existsAsFile()
+        || !editorHeader.existsAsFile()
+        || !editorSource.existsAsFile()
+        || !cmakeFile.existsAsFile()
+        || !testsCmakeFile.existsAsFile())
+    {
+        return false;
+    }
+
+    const auto captureHeaderText = captureHeader.loadFileAsString();
+    const auto captureSourceText = captureSource.loadFileAsString();
+    const auto editorHeaderText = editorHeader.loadFileAsString();
+    const auto editorSourceText = editorSource.loadFileAsString();
+    const auto cmakeText = cmakeFile.loadFileAsString();
+    const auto testsCmakeText = testsCmakeFile.loadFileAsString();
+
+    return captureHeaderText.contains("class PluginCapturePage final")
+        && captureSourceText.contains("PluginCapturePage::PluginCapturePage(")
+        && captureSourceText.contains("void PluginCapturePage::resized()")
+        && captureSourceText.contains("int PluginCapturePage::measureButtonWidth(")
+        && editorHeaderText.contains("#include \"PluginCapturePage.h\"")
+        && editorHeaderText.contains("PluginCapturePage capturePage_;")
+        && editorSourceText.contains("addAndMakeVisible(capturePage_);")
+        && editorSourceText.contains("capturePage_.setVisible(showCaptureTab);")
+        && editorSourceText.contains("capturePage_.setBounds(area.reduced(8, 6));")
+        && !editorSourceText.contains("captureWaveformView_.setVisible(showCaptureTab);")
+        && !editorSourceText.contains("captureWaveformView_.setBounds(waveformArea);")
+        && cmakeText.contains("src/plugin/PluginCapturePage.cpp")
+        && testsCmakeText.contains("../src/plugin/PluginCapturePage.cpp");
+}
+
+bool runDecentSamplerSaveRoutingContractTest()
+{
+    const auto editorSource = fixtureFile("src/plugin/PluginEditor.cpp");
+    const auto processorHeader = fixtureFile("src/plugin/PluginProcessor.h");
+    const auto processorSource = fixtureFile("src/plugin/PluginProcessor.cpp");
+    if (!editorSource.existsAsFile()
+        || !processorHeader.existsAsFile()
+        || !processorSource.existsAsFile())
+    {
+        return false;
+    }
+
+    const auto editorSourceText = editorSource.loadFileAsString();
+    const auto processorHeaderText = processorHeader.loadFileAsString();
+    const auto processorSourceText = processorSource.loadFileAsString();
+
+    return editorSourceText.contains("Save Library as SFZ or DecentSampler")
+        && editorSourceText.contains("*.sfz;*.dspreset")
+        && editorSourceText.contains("saveImportedProgramAsDecentSampler(")
+        && processorHeaderText.contains("bool saveImportedProgramAsDecentSampler(")
+        && processorSourceText.contains("#include \"../engine/DecentSamplerExporter.h\"")
+        && processorSourceText.contains("bool AudiocityAudioProcessor::saveImportedProgramAsDecentSampler(")
+        && processorSourceText.contains("exportProgramToDecentSampler(")
+        && processorSourceText.contains("ImportedProgramFormat::decentSampler");
 }
 
 bool runPlaybackModesTest()
@@ -13044,6 +13235,238 @@ bool runSfzExporterRoundTripTest()
     return true;
 }
 
+bool runDecentSamplerExporterRoundTripTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 512;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_dspreset_export_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    auto cleanupAndFail = [&]()
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    };
+
+    Program program;
+    program.name = "Decent Round Trip";
+
+    SampleAsset asset;
+    asset.displayName = "RoundTripTone";
+    asset.lengthSamples = sampleLength;
+    asset.numChannels = 1;
+    asset.sampleRateHz = sampleRate;
+    asset.rootMidiNote = 60;
+    program.sampleAssets.push_back(asset);
+
+    Group releaseGroup;
+    releaseGroup.name = "Release Group";
+    releaseGroup.gainDb = -2.0f;
+    releaseGroup.pan = 0.25f;
+    releaseGroup.roundRobinGroup = 7;
+    releaseGroup.roundRobinMode = RoundRobinMode::ordered;
+    releaseGroup.triggerMode = ZoneTriggerMode::release;
+    releaseGroup.chokeGroup = 9;
+    program.groups.push_back(releaseGroup);
+
+    Zone groupedZoneA{};
+    groupedZoneA.sampleAssetIndex = 0;
+    groupedZoneA.groupIndex = 0;
+    groupedZoneA.keyRange = { 48, 67 };
+    groupedZoneA.velocityRange = { 1, 100 };
+    groupedZoneA.rootMidiNote = 60;
+    groupedZoneA.sampleStart = 16;
+    groupedZoneA.sampleEndExclusive = 400;
+    groupedZoneA.loopMode = ZoneLoopMode::continuous;
+    groupedZoneA.loopStart = 64;
+    groupedZoneA.loopEndExclusive = 300;
+    groupedZoneA.gainDb = 1.5f;
+    groupedZoneA.pan = -0.5f;
+    groupedZoneA.tuneCents = 12.0f;
+    groupedZoneA.roundRobinGroup = 7;
+    groupedZoneA.roundRobinPosition = 1;
+    groupedZoneA.roundRobinLength = 2;
+    program.zones.push_back(groupedZoneA);
+
+    Zone groupedZoneB = groupedZoneA;
+    groupedZoneB.sampleStart = 24;
+    groupedZoneB.sampleEndExclusive = 420;
+    groupedZoneB.loopStart = 80;
+    groupedZoneB.loopEndExclusive = 320;
+    groupedZoneB.gainDb = 0.5f;
+    groupedZoneB.pan = 0.15f;
+    groupedZoneB.tuneCents = -4.0f;
+    groupedZoneB.roundRobinPosition = 2;
+    program.zones.push_back(groupedZoneB);
+
+    Zone directZone{};
+    directZone.sampleAssetIndex = 0;
+    directZone.keyRange = { 68, 84 };
+    directZone.velocityRange = { 64, 127 };
+    directZone.rootMidiNote = 72;
+    directZone.sampleEndExclusive = sampleLength;
+    directZone.gainDb = 3.0f;
+    directZone.pan = 0.4f;
+    directZone.tuneCents = -7.0f;
+    directZone.chokeGroup = 11;
+    program.zones.push_back(directZone);
+
+    std::vector<juce::AudioBuffer<float>> sampleData;
+    sampleData.push_back(createTestSample(sampleLength));
+
+    const auto destPreset = tempDirectory.getChildFile("RoundTrip.dspreset");
+
+    dspreset_export::ExportOptions options;
+    options.copySamples = true;
+    options.libraryDisplayName = program.name;
+    const auto exportResult = dspreset_export::exportProgramToDecentSampler(destPreset,
+                                                                             program,
+                                                                             sampleData,
+                                                                             options);
+    if (exportResult.hasErrors() || exportResult.writtenSampleCount != 3)
+        return cleanupAndFail();
+    if (!destPreset.existsAsFile())
+        return cleanupAndFail();
+    if (exportResult.copiedSampleCount != 1
+        || !tempDirectory.getChildFile("Samples").isDirectory())
+    {
+        return cleanupAndFail();
+    }
+    for (const auto& diagnostic : exportResult.diagnostics)
+    {
+        if (diagnostic.message.find("round-robin") != std::string::npos)
+            return cleanupAndFail();
+        if (diagnostic.message.find("choke") != std::string::npos)
+            return cleanupAndFail();
+    }
+
+    const auto importResult = dspreset::importFile(destPreset);
+    if (importResult.hasErrors() || importResult.program.zones.size() != 3u || importResult.program.groups.size() != 1u)
+        return cleanupAndFail();
+
+    const auto& importedZones = importResult.program.zones;
+    const auto findZoneIndexBySampleStart = [&](const int sampleStart) -> int
+    {
+        for (int index = 0; index < static_cast<int>(importedZones.size()); ++index)
+        {
+            if (importedZones[static_cast<std::size_t>(index)].sampleStart == sampleStart)
+                return index;
+        }
+        return -1;
+    };
+
+    const auto groupedImportedAIndex = findZoneIndexBySampleStart(16);
+    const auto groupedImportedBIndex = findZoneIndexBySampleStart(24);
+    const auto directImportedIndex = findZoneIndexBySampleStart(0);
+    if (groupedImportedAIndex < 0 || groupedImportedBIndex < 0 || directImportedIndex < 0)
+        return cleanupAndFail();
+
+    const auto& groupedImportedA = importedZones[static_cast<std::size_t>(groupedImportedAIndex)];
+    const auto& groupedImportedB = importedZones[static_cast<std::size_t>(groupedImportedBIndex)];
+    const auto& directImported = importedZones[static_cast<std::size_t>(directImportedIndex)];
+    const auto& importedGroup = importResult.program.groups[0];
+
+    if (groupedImportedA.keyRange.low != 48 || groupedImportedA.keyRange.high != 67)
+        return cleanupAndFail();
+    if (groupedImportedA.velocityRange.low != 1 || groupedImportedA.velocityRange.high != 100)
+        return cleanupAndFail();
+    if (groupedImportedA.groupIndex != 0 || groupedImportedB.groupIndex != 0)
+        return cleanupAndFail();
+    if (groupedImportedA.sampleStart != 16 || groupedImportedA.sampleEndExclusive != 400)
+        return cleanupAndFail();
+    if (groupedImportedA.loopMode != ZoneLoopMode::continuous
+        || groupedImportedA.loopStart != 64
+        || groupedImportedA.loopEndExclusive != 300)
+    {
+        return cleanupAndFail();
+    }
+    if (groupedImportedA.triggerMode != ZoneTriggerMode::gate)
+        return cleanupAndFail();
+    if (std::abs(groupedImportedA.gainDb - 1.5f) > 0.1f)
+        return cleanupAndFail();
+    if (std::abs(groupedImportedA.pan - (-0.5f)) > 0.05f)
+        return cleanupAndFail();
+    if (std::abs(groupedImportedA.tuneCents - 12.0f) > 1.0f)
+        return cleanupAndFail();
+    if (groupedImportedA.roundRobinPosition != 1 || groupedImportedA.roundRobinLength != 2)
+        return cleanupAndFail();
+    if (groupedImportedB.sampleEndExclusive != 420
+        || groupedImportedB.loopStart != 80
+        || groupedImportedB.loopEndExclusive != 320)
+    {
+        return cleanupAndFail();
+    }
+    if (std::abs(groupedImportedB.gainDb - 0.5f) > 0.1f)
+        return cleanupAndFail();
+    if (std::abs(groupedImportedB.pan - 0.15f) > 0.05f)
+        return cleanupAndFail();
+    if (std::abs(groupedImportedB.tuneCents - (-4.0f)) > 1.0f)
+        return cleanupAndFail();
+    if (groupedImportedB.roundRobinPosition != 2 || groupedImportedB.roundRobinLength != 2)
+        return cleanupAndFail();
+    if (std::abs(importedGroup.gainDb - (-2.0f)) > 0.1f)
+        return cleanupAndFail();
+    if (std::abs(importedGroup.pan - 0.25f) > 0.05f)
+        return cleanupAndFail();
+    if (importedGroup.triggerMode != ZoneTriggerMode::release)
+        return cleanupAndFail();
+    if (importedGroup.roundRobinGroup <= 0 || importedGroup.roundRobinMode != RoundRobinMode::ordered)
+        return cleanupAndFail();
+    if (importedGroup.chokeGroup != 9)
+        return cleanupAndFail();
+    if (groupedImportedA.chokeGroup != 0 || groupedImportedB.chokeGroup != 0)
+        return cleanupAndFail();
+
+    if (directImported.keyRange.low != 68 || directImported.keyRange.high != 84)
+        return cleanupAndFail();
+    if (directImported.velocityRange.low != 64 || directImported.velocityRange.high != 127)
+        return cleanupAndFail();
+    if (directImported.groupIndex != -1)
+        return cleanupAndFail();
+    if (directImported.triggerMode != ZoneTriggerMode::gate)
+        return cleanupAndFail();
+    if (directImported.loopMode != ZoneLoopMode::noLoop)
+        return cleanupAndFail();
+    if (directImported.sampleEndExclusive != sampleLength)
+        return cleanupAndFail();
+    if (std::abs(directImported.gainDb - 3.0f) > 0.1f)
+        return cleanupAndFail();
+    if (std::abs(directImported.pan - 0.4f) > 0.05f)
+        return cleanupAndFail();
+    if (std::abs(directImported.tuneCents - (-7.0f)) > 1.0f)
+        return cleanupAndFail();
+    if (directImported.chokeGroup != 11)
+        return cleanupAndFail();
+
+    const auto snapshot = ProgramSnapshot::fromProgram(importResult.program);
+    const auto& groupedSnapshotZoneA = snapshot.zones[static_cast<std::size_t>(groupedImportedAIndex)];
+    const auto& groupedSnapshotZoneB = snapshot.zones[static_cast<std::size_t>(groupedImportedBIndex)];
+    const auto& directSnapshotZone = snapshot.zones[static_cast<std::size_t>(directImportedIndex)];
+    if (snapshot.getZoneTriggerMode(groupedSnapshotZoneA) != ZoneTriggerMode::release)
+        return cleanupAndFail();
+    if (std::abs(snapshot.getZoneGainDb(groupedSnapshotZoneA) - (-0.5f)) > 0.1f)
+        return cleanupAndFail();
+    if (std::abs(snapshot.getZonePan(groupedSnapshotZoneA) - (-0.25f)) > 0.05f)
+        return cleanupAndFail();
+    if (snapshot.getZoneRoundRobinGroup(groupedSnapshotZoneA) <= 0
+        || snapshot.getZoneRoundRobinGroup(groupedSnapshotZoneA)
+            != snapshot.getZoneRoundRobinGroup(groupedSnapshotZoneB)
+        || snapshot.getZoneRoundRobinMode(groupedSnapshotZoneA) != RoundRobinMode::ordered)
+        return cleanupAndFail();
+    if (snapshot.getZoneChokeGroup(groupedSnapshotZoneA) != 9
+        || snapshot.getZoneChokeGroup(groupedSnapshotZoneB) != 9
+        || snapshot.getZoneChokeGroup(directSnapshotZone) != 11)
+        return cleanupAndFail();
+
+    tempDirectory.deleteRecursively();
+    return true;
+}
+
 bool runSfzExporterCreateFromScratchTest()
 {
     using namespace audiocity::engine;
@@ -13186,6 +13609,7 @@ int main()
         AUDIOCITY_TEST(runSfzExporterRoundTripTest, 234),
         AUDIOCITY_TEST(runSfzExporterCreateFromScratchTest, 235),
         AUDIOCITY_TEST(runDecentSamplerImporterTest, 136),
+        AUDIOCITY_TEST(runDecentSamplerExporterRoundTripTest, 249),
         AUDIOCITY_TEST(runSf2ImporterMinimalTest, 137),
         AUDIOCITY_TEST(runSf2ImporterPresetSelectionTest, 224),
         AUDIOCITY_TEST(runSf2ImporterRejectsShortListChunkTest, 243),
@@ -13255,6 +13679,10 @@ int main()
         AUDIOCITY_TEST(runEditorFilterLfoPushPreservesAdvancedControlsTest, 180),
         AUDIOCITY_TEST(runEditorModulationPanelExtractionTest, 181),
         AUDIOCITY_TEST(runBackgroundImportWorkerPublishContractTest, 247),
+        AUDIOCITY_TEST(runAboutPageExtractionContractTest, 248),
+        AUDIOCITY_TEST(runGeneratePageExtractionContractTest, 251),
+        AUDIOCITY_TEST(runCapturePageExtractionContractTest, 252),
+        AUDIOCITY_TEST(runDecentSamplerSaveRoutingContractTest, 250),
         AUDIOCITY_TEST(runEditorSampleEditControlsTest, 5),
         AUDIOCITY_TEST(runPolyphonicDifferentNotesLayerWhenMonoOffTest, 43),
         AUDIOCITY_TEST(runMonoLegatoUsesSingleVoiceTest, 7),

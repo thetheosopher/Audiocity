@@ -939,41 +939,49 @@ int EngineCore::getLoadedStreamSamples() const noexcept
     return segments != nullptr ? segments->getStreamNumSamples() : 0;
 }
 
-bool EngineCore::loadSampleFromFile(const juce::File& file)
+EngineCore::PreparedSampleFile EngineCore::prepareSampleFile(const juce::File& file,
+                                                             const int fallbackRootMidiNote,
+                                                             const PlaybackMode fallbackPlaybackMode)
 {
+    PreparedSampleFile prepared;
+    prepared.rootMidiNote = juce::jlimit(kMidiNoteMin, kMidiNoteMax, fallbackRootMidiNote);
+    prepared.playbackMode = fallbackPlaybackMode;
+    prepared.samplePath = file.getFullPathName();
+
     if (!file.existsAsFile())
-        return false;
+    {
+        prepared.errorMessage = "Sample load failed: file not found";
+        return prepared;
+    }
 
     const auto ext = file.getFileExtension().toLowerCase();
     if (ext == ".rex" || ext == ".rx2")
     {
         rex::DecodedLoop decoded;
         if (!rex::decodeFile(file, decoded))
-            return false;
+        {
+            prepared.errorMessage = "Sample load failed: REX loop could not be decoded";
+            return prepared;
+        }
 
         if (decoded.audio.getNumSamples() <= 0 || decoded.audio.getNumChannels() <= 0)
-            return false;
+        {
+            prepared.errorMessage = "Sample load failed: REX loop was empty";
+            return prepared;
+        }
 
-        const auto rootNote = rootMidiNote_;
-        setSampleData(decoded.audio, decoded.sampleRateHz, rootNote);
-        setAmpEnvelope(defaultAmpEnvelopeForLoadedSample());
-        setAmpLfoSettings(defaultAmpLfoSettingsForLoadedSample());
-        setPitchLfoSettings(defaultPitchLfoSettingsForLoadedSample());
-        setFilterEnvelope(defaultFilterEnvelopeForLoadedSample());
-        setFilterSettings(defaultFilterSettingsForLoadedSample());
-        displaySampleData_ = decoded.audio;
-        loadedSampleBitDepth_ = -1;
-        loadedMetadataRootMidiNote_ = -1;
-        loadedMetadataTempoBpm_ = 0.0;
-        samplePath_ = file.getFullPathName();
-        loadedSampleLoopFormatBadge_ = "REX";
-        clearProgram();
-
-        const auto fullEnd = juce::jmax(0, getTotalSampleLength() - 1);
-        setSampleWindow(0, fullEnd);
-        setLoopPoints(0, fullEnd);
-        setPlaybackMode(PlaybackMode::loop);
-        return true;
+        const auto fullEnd = juce::jmax(0, decoded.audio.getNumSamples() - 1);
+        prepared.sampleData = std::move(decoded.audio);
+        prepared.sampleRateHz = decoded.sampleRateHz;
+        prepared.loopFormatBadge = "REX";
+        prepared.backingFilePath = file.getFullPathName();
+        prepared.sampleWindowStart = 0;
+        prepared.sampleWindowEnd = fullEnd;
+        prepared.loopStart = 0;
+        prepared.loopEnd = fullEnd;
+        prepared.playbackMode = PlaybackMode::loop;
+        prepared.ok = true;
+        return prepared;
     }
 
     juce::AudioFormatManager formatManager;
@@ -982,50 +990,49 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
     auto openResult = audio_file::openReaderForFile(formatManager, file);
     auto reader = std::move(openResult.reader);
     if (reader == nullptr)
-        return false;
-
-    const auto lengthInSamples = static_cast<int>(reader->lengthInSamples);
-    if (lengthInSamples <= 0)
-        return false;
-
-    juce::AudioBuffer<float> loaded(static_cast<int>(reader->numChannels), lengthInSamples);
-    if (!reader->read(&loaded, 0, lengthInSamples, 0, true, true))
-        return false;
-
-    juce::AudioBuffer<float> mono(1, lengthInSamples);
-
-    for (int sampleIndex = 0; sampleIndex < lengthInSamples; ++sampleIndex)
     {
-        float sum = 0.0f;
+        prepared.errorMessage = openResult.errorMessage.isNotEmpty()
+            ? ("Sample load failed: " + openResult.errorMessage)
+            : juce::String("Sample load failed: audio file could not be decoded");
+        return prepared;
+    }
 
-        for (int channel = 0; channel < static_cast<int>(reader->numChannels); ++channel)
-            sum += loaded.getSample(channel, sampleIndex);
+    const auto lengthInSamples = static_cast<int>(juce::jmin<juce::int64>(
+        reader->lengthInSamples,
+        static_cast<juce::int64>(std::numeric_limits<int>::max())));
+    if (lengthInSamples <= 0)
+    {
+        prepared.errorMessage = "Sample load failed: audio file was empty";
+        return prepared;
+    }
 
-        mono.setSample(0, sampleIndex, sum / static_cast<float>(reader->numChannels));
+    prepared.sampleData.setSize(juce::jmax(1, static_cast<int>(reader->numChannels)), lengthInSamples, false, true, true);
+    if (!reader->read(&prepared.sampleData, 0, lengthInSamples, 0, true, true))
+    {
+        prepared.errorMessage = "Sample load failed: audio file could not be read";
+        prepared.sampleData.setSize(0, 0);
+        return prepared;
     }
 
     // Read embedded root note from WAV smpl chunk or AIFF INST chunk
-    int embeddedRootNote = rootMidiNote_;
+    int embeddedRootNote = prepared.rootMidiNote;
     const auto& metadata = reader->metadataValues;
     const auto loadedLoopFormatBadge = detectLoopFormatBadge(file, metadata);
     const auto parsedRootNote = findEmbeddedRootMidiNote(metadata);
     if (parsedRootNote.has_value())
         embeddedRootNote = *parsedRootNote;
-    loadedMetadataRootMidiNote_ = parsedRootNote.has_value() ? *parsedRootNote : -1;
     const auto parsedTempoBpm = findEmbeddedTempoBpm(metadata);
-    loadedMetadataTempoBpm_ = parsedTempoBpm.has_value() ? *parsedTempoBpm : 0.0;
+    prepared.rootMidiNote = embeddedRootNote;
+    prepared.metadataRootMidiNote = parsedRootNote.has_value() ? *parsedRootNote : -1;
+    prepared.metadataTempoBpm = parsedTempoBpm.has_value() ? *parsedTempoBpm : 0.0;
+    prepared.sampleRateHz = juce::jmax(1.0, reader->sampleRate);
+    prepared.bitDepth = static_cast<int>(reader->bitsPerSample);
+    prepared.backingFilePath = openResult.readableFile.getFullPathName();
+    prepared.loopFormatBadge = {};
 
-    setSampleDataInternal(mono, reader->sampleRate, embeddedRootNote, openResult.readableFile);
-    setAmpEnvelope(defaultAmpEnvelopeForLoadedSample());
-    setAmpLfoSettings(defaultAmpLfoSettingsForLoadedSample());
-    setPitchLfoSettings(defaultPitchLfoSettingsForLoadedSample());
-    setFilterEnvelope(defaultFilterEnvelopeForLoadedSample());
-    setFilterSettings(defaultFilterSettingsForLoadedSample());
-    displaySampleData_ = loaded;
-    loadedSampleBitDepth_ = static_cast<int>(reader->bitsPerSample);
-    samplePath_ = file.getFullPathName();
-    loadedSampleLoopFormatBadge_ = {};
-    clearProgram();
+    const auto fullEnd = juce::jmax(0, lengthInSamples - 1);
+    prepared.sampleWindowStart = 0;
+    prepared.sampleWindowEnd = fullEnd;
 
     auto embeddedLoopRange = findEmbeddedLoopRange(metadata);
     if (!embeddedLoopRange.has_value() && ext == ".wav")
@@ -1034,20 +1041,53 @@ bool EngineCore::loadSampleFromFile(const juce::File& file)
     if (embeddedLoopRange.has_value())
     {
         const auto [embeddedLoopStart, embeddedLoopEnd] = *embeddedLoopRange;
-        const auto fullEnd = juce::jmax(0, getTotalSampleLength() - 1);
-        setSampleWindow(0, fullEnd);
-        setLoopPoints(embeddedLoopStart, embeddedLoopEnd);
-        setPlaybackMode(PlaybackMode::loop);
-        loadedSampleLoopFormatBadge_ = loadedLoopFormatBadge;
+        prepared.loopStart = embeddedLoopStart;
+        prepared.loopEnd = embeddedLoopEnd;
+        prepared.playbackMode = PlaybackMode::loop;
+        prepared.loopFormatBadge = loadedLoopFormatBadge;
     }
     else
     {
-        // No embedded loop metadata: reset loop region to full file
-        const auto fullEnd = juce::jmax(0, getTotalSampleLength() - 1);
-        setSampleWindow(0, fullEnd);
-        setLoopPoints(0, fullEnd);
+        prepared.loopStart = 0;
+        prepared.loopEnd = fullEnd;
     }
 
+    prepared.ok = true;
+    return prepared;
+}
+
+void EngineCore::loadPreparedSample(const PreparedSampleFile& prepared) noexcept
+{
+    if (!prepared.ok || prepared.sampleData.getNumChannels() <= 0 || prepared.sampleData.getNumSamples() <= 0)
+        return;
+
+    setSampleDataInternal(prepared.sampleData,
+                          prepared.sampleRateHz,
+                          prepared.rootMidiNote,
+                          prepared.backingFilePath.isNotEmpty() ? juce::File(prepared.backingFilePath) : juce::File{});
+    setAmpEnvelope(defaultAmpEnvelopeForLoadedSample());
+    setAmpLfoSettings(defaultAmpLfoSettingsForLoadedSample());
+    setPitchLfoSettings(defaultPitchLfoSettingsForLoadedSample());
+    setFilterEnvelope(defaultFilterEnvelopeForLoadedSample());
+    setFilterSettings(defaultFilterSettingsForLoadedSample());
+    loadedSampleBitDepth_ = prepared.bitDepth;
+    loadedMetadataRootMidiNote_ = prepared.metadataRootMidiNote;
+    loadedMetadataTempoBpm_ = prepared.metadataTempoBpm;
+    samplePath_ = prepared.samplePath;
+    loadedSampleLoopFormatBadge_ = prepared.loopFormatBadge;
+    clearProgram();
+    setSampleWindow(prepared.sampleWindowStart, prepared.sampleWindowEnd);
+    setLoopPoints(prepared.loopStart, prepared.loopEnd);
+    setPlaybackMode(prepared.playbackMode);
+}
+
+bool EngineCore::loadSampleFromFile(const juce::File& file)
+{
+    const auto prepared = prepareSampleFile(file, rootMidiNote_, playbackMode_);
+    if (!prepared.ok)
+        return false;
+
+    loadPreparedSample(prepared);
     return true;
 }
 

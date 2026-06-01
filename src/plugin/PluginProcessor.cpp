@@ -10,6 +10,7 @@
 #include "../engine/SfzExporter.h"
 #include "../engine/Sf2Importer.h"
 #include "../engine/DecentSamplerImporter.h"
+#include "../engine/DecentSamplerExporter.h"
 #include "../engine/BitwigMultisampleImporter.h"
 #include "../engine/XmlMultisampleImporters.h"
 #include "../engine/BinaryMultisampleImporters.h"
@@ -500,6 +501,53 @@ bool readAudioFileToBuffer(const juce::File& file,
 
     sampleRateHz = juce::jmax(1.0, reader->sampleRate);
     return true;
+}
+
+template <typename ResultT>
+AudiocityAudioProcessor::PreparedBackgroundImport prepareBackgroundImportedProgramResult(
+    ResultT&& result,
+    juce::String summary,
+    const audiocity::plugin::ImportedProgramFormat format,
+    const juce::String& failurePrefix,
+    const int selectionIndex = -1)
+{
+    AudiocityAudioProcessor::PreparedBackgroundImport prepared;
+    prepared.format = format;
+    prepared.selectionIndex = selectionIndex;
+    prepared.importedProgram = true;
+
+    const auto hasPlayable = result.hasPlayableProgram();
+    const auto imported = !result.hasErrors() && hasPlayable;
+    if (!hasPlayable && !result.hasErrors())
+        summary = failurePrefix + " import failed: no playable zones";
+
+    if (!imported)
+    {
+        prepared.diagnosticSummary = std::move(summary);
+        return prepared;
+    }
+
+    for (std::size_t i = 0; i < result.sampleDataByAsset.size(); ++i)
+    {
+        if (result.sampleDataByAsset[i].getNumChannels() > 0
+            && result.sampleDataByAsset[i].getNumSamples() > 0)
+        {
+            prepared.displayAssetIndex = static_cast<int>(i);
+            break;
+        }
+    }
+
+    if (prepared.displayAssetIndex < 0)
+    {
+        prepared.diagnosticSummary = failurePrefix + " import failed: decoded samples were empty";
+        return prepared;
+    }
+
+    prepared.program = std::move(result.program);
+    prepared.sampleData = std::move(result.sampleDataByAsset);
+    prepared.diagnosticSummary = std::move(summary);
+    prepared.ok = true;
+    return prepared;
 }
 
 using ModulationRoute = audiocity::engine::EngineCore::ModulationRoute;
@@ -2560,6 +2608,81 @@ bool AudiocityAudioProcessor::saveImportedProgramAsSfz(const juce::File& destSfz
     return true;
 }
 
+bool AudiocityAudioProcessor::saveImportedProgramAsDecentSampler(const juce::File& destPresetFile,
+                                                                 const bool copySamples,
+                                                                 juce::String& errorOut,
+                                                                 juce::StringArray* warningsOut)
+{
+    errorOut.clear();
+    if (warningsOut != nullptr)
+        warningsOut->clear();
+
+    if (!hasImportedProgram())
+    {
+        errorOut = "No library is currently loaded.";
+        return false;
+    }
+    if (destPresetFile == juce::File{})
+    {
+        errorOut = "Destination path is empty.";
+        return false;
+    }
+
+    audiocity::engine::Program snapshotProgram;
+    std::vector<juce::AudioBuffer<float>> snapshotSamples;
+    juce::String libraryDisplayName;
+    {
+        std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+        captureImportedProgramSnapshotLocked(snapshotProgram, snapshotSamples);
+        libraryDisplayName = importedProgramName_;
+    }
+
+    audiocity::engine::dspreset_export::ExportOptions options;
+    options.copySamples = copySamples;
+    options.libraryDisplayName = libraryDisplayName.toStdString();
+
+    auto result = audiocity::engine::dspreset_export::exportProgramToDecentSampler(destPresetFile,
+                                                                                    snapshotProgram,
+                                                                                    snapshotSamples,
+                                                                                    options);
+
+    if (warningsOut != nullptr)
+    {
+        for (const auto& d : result.diagnostics)
+        {
+            if (d.severity == audiocity::engine::dspreset_export::ExportDiagnostic::Severity::warning)
+                warningsOut->add(juce::String::fromUTF8(d.message.c_str()));
+        }
+    }
+
+    if (result.hasErrors())
+    {
+        for (const auto& d : result.diagnostics)
+        {
+            if (d.severity == audiocity::engine::dspreset_export::ExportDiagnostic::Severity::error)
+            {
+                errorOut = juce::String::fromUTF8(d.message.c_str());
+                break;
+            }
+        }
+        if (errorOut.isEmpty())
+            errorOut = "DecentSampler export failed.";
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(importedProgramStateMutex_);
+        importedProgramPath_ = destPresetFile.getFullPathName();
+        importedProgramFormat_ = audiocity::plugin::ImportedProgramFormat::decentSampler;
+        lastImportDiagnosticSummary_ = "Library saved to "
+            + destPresetFile.getFileName()
+            + " (" + juce::String(result.writtenSampleCount) + " zones, "
+            + juce::String(result.copiedSampleCount) + " samples copied)";
+    }
+
+    return true;
+}
+
 int AudiocityAudioProcessor::duplicateImportedProgramZone(const int zoneIndex)
 {
     audiocity::engine::Program programToPublish;
@@ -2838,124 +2961,14 @@ juce::String AudiocityAudioProcessor::getLastImportDiagnosticSummary() const
 
 bool AudiocityAudioProcessor::loadSampleFromFile(const juce::File& file)
 {
-    if (!file.existsAsFile())
-    {
-        setLastImportDiagnosticSummary("Sample load failed: file not found");
-        return false;
-    }
-
-    if (!engine_.loadSampleFromFile(file))
-    {
-        setLastImportDiagnosticSummary("Sample load failed: audio file could not be decoded");
-        return false;
-    }
-
-    engine_.clearProgram();
-    clearImportedProgramMetadata();
-    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
-    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
-    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
-    {
-        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
-        generatedWaveformState_.clear();
-        capturedSampleState_.clear();
-        capturedSampleRateState_ = 44100.0;
-        embeddedSampleState_.clear();
-        embeddedSampleNameState_.clear();
-        embeddedSampleRateState_ = 44100.0;
-        embeddedSampleRootMidiNoteState_ = 60;
-    }
-
-    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-
-    setAmpEnvelope(engine_.getAmpEnvelope());
-    setAmpLfoSettings(engine_.getAmpLfoSettings());
-    setPitchLfoSettings(engine_.getPitchLfoSettings());
-    setFilterEnvelope(engine_.getFilterEnvelope());
-    setFilterSettings(engine_.getFilterSettings());
-
-    syncSampleDerivedParametersFromEngine();
-
-    // Reset the stored waveform view range so the editor shows the full sample
-    setWaveformViewRange(0, engine_.getLoadedSampleLength());
-
-    return true;
+    auto prepared = prepareBackgroundImport(file, audiocity::plugin::ImportedProgramFormat::unknown);
+    return publishPreparedBackgroundImport(file, std::move(prepared));
 }
 
 bool AudiocityAudioProcessor::importSfzProgram(const juce::File& file)
 {
-    if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".sfz"))
-    {
-        setLastImportDiagnosticSummary("SFZ import failed: file not found or unsupported extension");
-        return false;
-    }
-
-    audiocity::engine::SfzImporter importer;
-    auto result = importer.importFile(file);
-    const auto hasPlayableProgram = result.program.hasPlayableZones() && !result.sampleDataByAsset.empty();
-    const auto imported = !result.hasErrors() && hasPlayableProgram;
-    auto summary = makeSfzImportSummary(result, imported);
-    if (!hasPlayableProgram && !result.hasErrors())
-        summary = "SFZ import failed: no playable zones";
-
-    if (!imported)
-    {
-        setLastImportDiagnosticSummary(summary);
-        return false;
-    }
-
-    int displayAssetIndex = -1;
-    for (std::size_t assetIndex = 0; assetIndex < result.sampleDataByAsset.size(); ++assetIndex)
-    {
-        const auto& sampleData = result.sampleDataByAsset[assetIndex];
-        if (sampleData.getNumChannels() > 0 && sampleData.getNumSamples() > 0)
-        {
-            displayAssetIndex = static_cast<int>(assetIndex);
-            break;
-        }
-    }
-
-    if (displayAssetIndex < 0)
-    {
-        setLastImportDiagnosticSummary("SFZ import failed: decoded samples were empty");
-        return false;
-    }
-
-    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
-    stopGeneratedWaveformPreview();
-    engine_.panic();
-
-    const auto& displaySample = result.sampleDataByAsset[static_cast<std::size_t>(displayAssetIndex)];
-    const auto& displayAsset = result.program.sampleAssets[static_cast<std::size_t>(displayAssetIndex)];
-    const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
-    engine_.setSampleData(displaySample, displaySampleRate, displayAsset.rootMidiNote);
-    engine_.clearSamplePath();
-    engine_.setProgram(result.program, result.sampleDataByAsset);
-
-    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
-    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
-    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
-    {
-        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
-        generatedWaveformState_.clear();
-        capturedSampleState_.clear();
-        capturedSampleRateState_ = 44100.0;
-        embeddedSampleState_.clear();
-        embeddedSampleNameState_.clear();
-        embeddedSampleRateState_ = 44100.0;
-        embeddedSampleRootMidiNoteState_ = 60;
-    }
-
-    setImportedProgramMetadata(file,
-                               audiocity::plugin::ImportedProgramFormat::sfz,
-                               result.program,
-                               result.sampleDataByAsset,
-                               summary,
-                               static_cast<int>(result.program.zones.size()));
-    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-    syncSampleDerivedParametersFromEngine();
-    setWaveformViewRange(0, engine_.getLoadedSampleLength());
-    return true;
+    auto prepared = prepareBackgroundImport(file, audiocity::plugin::ImportedProgramFormat::sfz);
+    return publishPreparedBackgroundImport(file, std::move(prepared));
 }
 
 bool AudiocityAudioProcessor::importSf2Program(const juce::File& file, const int presetIndex)
@@ -3270,6 +3283,323 @@ bool AudiocityAudioProcessor::publishXmlMultisampleImport(
     return true;
 }
 
+AudiocityAudioProcessor::PreparedBackgroundImport AudiocityAudioProcessor::prepareBackgroundImport(
+    const juce::File& file,
+    const audiocity::plugin::ImportedProgramFormat format,
+    const int selectionIndex,
+    const juce::File& searchFolder) const
+{
+    using audiocity::plugin::ImportedProgramFormat;
+
+    if (format == ImportedProgramFormat::unknown)
+    {
+        PreparedBackgroundImport prepared;
+        prepared.displaySample = audiocity::engine::EngineCore::prepareSampleFile(
+            file,
+            engine_.getRootMidiNote(),
+            engine_.getPlaybackMode());
+        prepared.diagnosticSummary = prepared.displaySample.errorMessage;
+        prepared.ok = prepared.displaySample.ok;
+        return prepared;
+    }
+
+    switch (format)
+    {
+        case ImportedProgramFormat::sfz:
+        {
+            audiocity::engine::SfzImporter importer;
+            auto result = importer.importFile(file);
+            const auto hasPlayableProgram = result.program.hasPlayableZones() && !result.sampleDataByAsset.empty();
+            const auto imported = !result.hasErrors() && hasPlayableProgram;
+            auto summary = makeSfzImportSummary(result, imported);
+            if (!hasPlayableProgram && !result.hasErrors())
+                summary = "SFZ import failed: no playable zones";
+
+            PreparedBackgroundImport prepared;
+            prepared.format = format;
+            prepared.importedProgram = true;
+            if (!imported)
+            {
+                prepared.diagnosticSummary = std::move(summary);
+                return prepared;
+            }
+
+            for (std::size_t assetIndex = 0; assetIndex < result.sampleDataByAsset.size(); ++assetIndex)
+            {
+                const auto& sampleData = result.sampleDataByAsset[assetIndex];
+                if (sampleData.getNumChannels() > 0 && sampleData.getNumSamples() > 0)
+                {
+                    prepared.displayAssetIndex = static_cast<int>(assetIndex);
+                    break;
+                }
+            }
+
+            if (prepared.displayAssetIndex < 0)
+            {
+                prepared.diagnosticSummary = "SFZ import failed: decoded samples were empty";
+                return prepared;
+            }
+
+            prepared.program = std::move(result.program);
+            prepared.sampleData = std::move(result.sampleDataByAsset);
+            prepared.diagnosticSummary = std::move(summary);
+            prepared.ok = true;
+            return prepared;
+        }
+        case ImportedProgramFormat::rex:
+        {
+            PreparedBackgroundImport prepared;
+            prepared.format = format;
+            prepared.importedProgram = true;
+
+            audiocity::engine::rex::DecodedLoop decoded;
+            if (!audiocity::engine::rex::decodeFile(file, decoded))
+            {
+                prepared.diagnosticSummary = "REX import failed: runtime unavailable or slices could not be decoded";
+                return prepared;
+            }
+
+            audiocity::engine::rex::ChromaticSliceProgram sliceProgram;
+            if (!audiocity::engine::rex::buildChromaticSliceProgram(file, decoded, sliceProgram))
+            {
+                prepared.diagnosticSummary = "REX import failed: no playable slices";
+                return prepared;
+            }
+
+            prepared.displaySample = audiocity::engine::EngineCore::prepareSampleFile(
+                file,
+                engine_.getRootMidiNote(),
+                engine_.getPlaybackMode());
+            if (!prepared.displaySample.ok)
+            {
+                prepared.diagnosticSummary = "REX import failed: display waveform could not be loaded";
+                return prepared;
+            }
+
+            prepared.program = std::move(sliceProgram.program);
+            prepared.sampleData = std::move(sliceProgram.sampleDataByAsset);
+            prepared.diagnosticSummary = makeRexSliceImportSummary(sliceProgram);
+            prepared.selectionIndex = selectionIndex;
+            prepared.ok = !prepared.program.zones.empty() && !prepared.sampleData.empty();
+            if (!prepared.ok)
+                prepared.diagnosticSummary = "REX import failed: no playable slices";
+            return prepared;
+        }
+        case ImportedProgramFormat::nki:
+        {
+            auto result = searchFolder.isDirectory()
+                ? audiocity::engine::nki::importFile(file, searchFolder)
+                : audiocity::engine::nki::importFile(file);
+            const auto hasPlayableProgram = result.hasPlayableProgram();
+            const auto imported = !result.hasErrors() && hasPlayableProgram;
+            auto summary = makeLegacyNkiImportSummary(result, imported);
+            if (result.probe.status == audiocity::engine::nki::ProbeStatus::legacyDiscreteSampleCandidate
+                && !hasPlayableProgram && !result.hasErrors())
+            {
+                summary = "NKI import failed: no playable legacy zones";
+            }
+            return prepareBackgroundImportedProgramResult(std::move(result),
+                                                         std::move(summary),
+                                                         format,
+                                                         "NKI");
+        }
+        case ImportedProgramFormat::sf2:
+        {
+            auto result = audiocity::engine::sf2::importFilePreset(file, selectionIndex >= 0 ? selectionIndex : 0);
+            const auto chosenSelection = result.chosenPresetIndex;
+            const auto imported = !result.hasErrors() && result.hasPlayableProgram();
+            auto summary = audiocity::engine::sf2::buildImportSummary(result, imported);
+            if (!result.hasPlayableProgram() && !result.hasErrors())
+                summary = "SF2 import failed: no playable zones in chosen preset";
+            return prepareBackgroundImportedProgramResult(std::move(result),
+                                                         std::move(summary),
+                                                         format,
+                                                         "SF2",
+                                                         chosenSelection);
+        }
+        case ImportedProgramFormat::decentSampler:
+        {
+            auto result = audiocity::engine::dspreset::importFile(file);
+            auto summary = audiocity::engine::dspreset::buildImportSummary(result,
+                !result.hasErrors() && result.hasPlayableProgram());
+            return prepareBackgroundImportedProgramResult(std::move(result), std::move(summary), format, "DecentSampler");
+        }
+        case ImportedProgramFormat::bitwigMultisample:
+        {
+            auto result = audiocity::engine::bitwig::importFile(file);
+            auto summary = audiocity::engine::bitwig::buildImportSummary(result,
+                !result.hasErrors() && result.hasPlayableProgram());
+            return prepareBackgroundImportedProgramResult(std::move(result), std::move(summary), format, "Bitwig multisample");
+        }
+        case ImportedProgramFormat::mpcKeygroup:
+        {
+            auto result = audiocity::engine::mpc::importFile(file);
+            auto summary = audiocity::engine::mpc::buildImportSummary(result,
+                !result.hasErrors() && result.hasPlayableProgram());
+            return prepareBackgroundImportedProgramResult(std::move(result), std::move(summary), format, "MPC keygroup");
+        }
+        case ImportedProgramFormat::bento1010:
+        {
+            auto result = audiocity::engine::bento::importFile(file);
+            auto summary = audiocity::engine::bento::buildImportSummary(result,
+                !result.hasErrors() && result.hasPlayableProgram());
+            return prepareBackgroundImportedProgramResult(std::move(result), std::move(summary), format, "1010music preset");
+        }
+        case ImportedProgramFormat::talSampler:
+        {
+            auto result = audiocity::engine::talsmpl::importFile(file);
+            auto summary = audiocity::engine::talsmpl::buildImportSummary(result,
+                !result.hasErrors() && result.hasPlayableProgram());
+            return prepareBackgroundImportedProgramResult(std::move(result), std::move(summary), format, "TAL Sampler");
+        }
+        case ImportedProgramFormat::tx16wx:
+        {
+            auto result = audiocity::engine::tx16wx::importFile(file);
+            auto summary = audiocity::engine::tx16wx::buildImportSummary(result,
+                !result.hasErrors() && result.hasPlayableProgram());
+            return prepareBackgroundImportedProgramResult(std::move(result), std::move(summary), format, "TX16Wx");
+        }
+        case ImportedProgramFormat::korgMultisample:
+        {
+            auto result = audiocity::engine::korgmulti::importFile(file);
+            auto summary = audiocity::engine::korgmulti::buildImportSummary(result,
+                !result.hasErrors() && result.hasPlayableProgram());
+            return prepareBackgroundImportedProgramResult(std::move(result), std::move(summary), format, "Korg multisample");
+        }
+        case ImportedProgramFormat::abletonSampler:
+        {
+            auto result = audiocity::engine::ableton::importFile(file);
+            auto summary = audiocity::engine::ableton::buildImportSummary(result,
+                !result.hasErrors() && result.hasPlayableProgram());
+            return prepareBackgroundImportedProgramResult(std::move(result), std::move(summary), format, "Ableton sampler");
+        }
+        case ImportedProgramFormat::distingExPreset:
+        {
+            auto result = audiocity::engine::distingex::importFile(file);
+            auto summary = audiocity::engine::distingex::buildImportSummary(result,
+                !result.hasErrors() && result.hasPlayableProgram());
+            return prepareBackgroundImportedProgramResult(std::move(result), std::move(summary), format, "disting EX preset");
+        }
+        case ImportedProgramFormat::korgKmp:
+        {
+            auto result = audiocity::engine::korgkmp::importFile(file);
+            auto summary = audiocity::engine::korgkmp::buildImportSummary(result,
+                !result.hasErrors() && result.hasPlayableProgram());
+            return prepareBackgroundImportedProgramResult(std::move(result), std::move(summary), format, "Korg KMP");
+        }
+        case ImportedProgramFormat::logicExs24:
+        {
+            auto result = audiocity::engine::exs24::importFile(file);
+            auto summary = audiocity::engine::exs24::buildImportSummary(result,
+                !result.hasErrors() && result.hasPlayableProgram());
+            return prepareBackgroundImportedProgramResult(std::move(result), std::move(summary), format, "Logic EXS24");
+        }
+        case ImportedProgramFormat::nnxt:
+        {
+            auto result = audiocity::engine::nnxt::importFile(file);
+            auto summary = audiocity::engine::nnxt::buildImportSummary(result,
+                !result.hasErrors() && result.hasPlayableProgram());
+            return prepareBackgroundImportedProgramResult(std::move(result), std::move(summary), format, "Reason NN-XT");
+        }
+        case ImportedProgramFormat::sampleSlices:
+        case ImportedProgramFormat::unknown:
+        default:
+            break;
+    }
+
+    PreparedBackgroundImport failed;
+    failed.format = format;
+    failed.diagnosticSummary = "Background import is not available for this format";
+    return failed;
+}
+
+bool AudiocityAudioProcessor::publishPreparedBackgroundImport(const juce::File& file,
+                                                             PreparedBackgroundImport prepared)
+{
+    if (!prepared.ok)
+    {
+        setLastImportDiagnosticSummary(prepared.diagnosticSummary);
+        return false;
+    }
+
+    if (!prepared.importedProgram)
+    {
+        samplePreviewPlaying_.store(false, std::memory_order_relaxed);
+        stopGeneratedWaveformPreview();
+        engine_.panic();
+        engine_.loadPreparedSample(prepared.displaySample);
+
+        clearImportedProgramMetadata();
+        generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+        capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+        embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+            generatedWaveformState_.clear();
+            capturedSampleState_.clear();
+            capturedSampleRateState_ = 44100.0;
+            embeddedSampleState_.clear();
+            embeddedSampleNameState_.clear();
+            embeddedSampleRateState_ = 44100.0;
+            embeddedSampleRootMidiNoteState_ = 60;
+        }
+
+        suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
+        setAmpEnvelope(engine_.getAmpEnvelope());
+        setAmpLfoSettings(engine_.getAmpLfoSettings());
+        setPitchLfoSettings(engine_.getPitchLfoSettings());
+        setFilterEnvelope(engine_.getFilterEnvelope());
+        setFilterSettings(engine_.getFilterSettings());
+        syncSampleDerivedParametersFromEngine();
+        setWaveformViewRange(0, engine_.getLoadedSampleLength());
+        setLastImportDiagnosticSummary(prepared.diagnosticSummary);
+        return true;
+    }
+
+    if (prepared.displaySample.ok)
+    {
+        samplePreviewPlaying_.store(false, std::memory_order_relaxed);
+        stopGeneratedWaveformPreview();
+        engine_.panic();
+        engine_.loadPreparedSample(prepared.displaySample);
+        engine_.setProgram(prepared.program, prepared.sampleData);
+
+        generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+        capturedAudioLoaded_.store(false, std::memory_order_relaxed);
+        embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+            generatedWaveformState_.clear();
+            capturedSampleState_.clear();
+            capturedSampleRateState_ = 44100.0;
+            embeddedSampleState_.clear();
+            embeddedSampleNameState_.clear();
+            embeddedSampleRateState_ = 44100.0;
+            embeddedSampleRootMidiNoteState_ = 60;
+        }
+
+        setImportedProgramMetadata(file,
+                                   prepared.format,
+                                   prepared.program,
+                                   prepared.sampleData,
+                                   prepared.diagnosticSummary,
+                                   static_cast<int>(prepared.program.zones.size()),
+                                   prepared.selectionIndex);
+        suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
+        syncSampleDerivedParametersFromEngine();
+        setWaveformViewRange(0, engine_.getLoadedSampleLength());
+        return true;
+    }
+
+    return publishPreparedImportedProgram(file,
+                                          prepared.format,
+                                          std::move(prepared.program),
+                                          std::move(prepared.sampleData),
+                                          prepared.diagnosticSummary,
+                                          prepared.displayAssetIndex,
+                                          prepared.selectionIndex);
+}
+
 bool AudiocityAudioProcessor::publishPreparedImportedProgram(
     const juce::File& file,
     const audiocity::plugin::ImportedProgramFormat format,
@@ -3463,80 +3793,8 @@ bool AudiocityAudioProcessor::importNnxtProgram(const juce::File& file)
 
 bool AudiocityAudioProcessor::importLegacyNkiProgram(const juce::File& file)
 {
-    if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".nki"))
-    {
-        setLastImportDiagnosticSummary("NKI import failed: file not found or unsupported extension");
-        return false;
-    }
-
-    auto result = audiocity::engine::nki::importFile(file);
-    const auto hasPlayableProgram = result.hasPlayableProgram();
-    const auto imported = !result.hasErrors() && hasPlayableProgram;
-    auto summary = makeLegacyNkiImportSummary(result, imported);
-    if (result.probe.status == audiocity::engine::nki::ProbeStatus::legacyDiscreteSampleCandidate
-        && !hasPlayableProgram && !result.hasErrors())
-    {
-        summary = "NKI import failed: no playable legacy zones";
-    }
-
-    if (!imported)
-    {
-        setLastImportDiagnosticSummary(summary);
-        return false;
-    }
-
-    int displayAssetIndex = -1;
-    for (std::size_t assetIndex = 0; assetIndex < result.sampleDataByAsset.size(); ++assetIndex)
-    {
-        const auto& sampleData = result.sampleDataByAsset[assetIndex];
-        if (sampleData.getNumChannels() > 0 && sampleData.getNumSamples() > 0)
-        {
-            displayAssetIndex = static_cast<int>(assetIndex);
-            break;
-        }
-    }
-
-    if (displayAssetIndex < 0)
-    {
-        setLastImportDiagnosticSummary("NKI import failed: decoded samples were empty");
-        return false;
-    }
-
-    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
-    stopGeneratedWaveformPreview();
-    engine_.panic();
-
-    const auto& displaySample = result.sampleDataByAsset[static_cast<std::size_t>(displayAssetIndex)];
-    const auto& displayAsset = result.program.sampleAssets[static_cast<std::size_t>(displayAssetIndex)];
-    const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
-    engine_.setSampleData(displaySample, displaySampleRate, displayAsset.rootMidiNote);
-    engine_.clearSamplePath();
-    engine_.setProgram(result.program, result.sampleDataByAsset);
-
-    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
-    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
-    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
-    {
-        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
-        generatedWaveformState_.clear();
-        capturedSampleState_.clear();
-        capturedSampleRateState_ = 44100.0;
-        embeddedSampleState_.clear();
-        embeddedSampleNameState_.clear();
-        embeddedSampleRateState_ = 44100.0;
-        embeddedSampleRootMidiNoteState_ = 60;
-    }
-
-    setImportedProgramMetadata(file,
-                               audiocity::plugin::ImportedProgramFormat::nki,
-                               result.program,
-                               result.sampleDataByAsset,
-                               summary,
-                               static_cast<int>(result.program.zones.size()));
-    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-    syncSampleDerivedParametersFromEngine();
-    setWaveformViewRange(0, engine_.getLoadedSampleLength());
-    return true;
+    auto prepared = prepareBackgroundImport(file, audiocity::plugin::ImportedProgramFormat::nki);
+    return publishPreparedBackgroundImport(file, std::move(prepared));
 }
 
 bool AudiocityAudioProcessor::probeLegacyNkiProgram(const juce::File& file)
@@ -3549,141 +3807,17 @@ bool AudiocityAudioProcessor::probeLegacyNkiProgram(const juce::File& file)
 bool AudiocityAudioProcessor::importLegacyNkiProgramWithSearchFolder(const juce::File& file,
                                                                       const juce::File& searchFolder)
 {
-    if (!file.existsAsFile() || !file.getFileExtension().equalsIgnoreCase(".nki"))
-    {
-        setLastImportDiagnosticSummary("NKI import failed: file not found or unsupported extension");
-        return false;
-    }
-
-    auto result = audiocity::engine::nki::importFile(file, searchFolder);
-    const auto hasPlayableProgram = result.hasPlayableProgram();
-    const auto imported = !result.hasErrors() && hasPlayableProgram;
-    auto summary = makeLegacyNkiImportSummary(result, imported);
-    if (result.probe.status == audiocity::engine::nki::ProbeStatus::legacyDiscreteSampleCandidate
-        && !hasPlayableProgram && !result.hasErrors())
-    {
-        summary = "NKI import failed: no playable legacy zones";
-    }
-
-    if (!imported)
-    {
-        setLastImportDiagnosticSummary(summary);
-        return false;
-    }
-
-    int displayAssetIndex = -1;
-    for (std::size_t assetIndex = 0; assetIndex < result.sampleDataByAsset.size(); ++assetIndex)
-    {
-        const auto& sampleData = result.sampleDataByAsset[assetIndex];
-        if (sampleData.getNumChannels() > 0 && sampleData.getNumSamples() > 0)
-        {
-            displayAssetIndex = static_cast<int>(assetIndex);
-            break;
-        }
-    }
-
-    if (displayAssetIndex < 0)
-    {
-        setLastImportDiagnosticSummary("NKI import failed: decoded samples were empty");
-        return false;
-    }
-
-    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
-    stopGeneratedWaveformPreview();
-    engine_.panic();
-
-    const auto& displaySample = result.sampleDataByAsset[static_cast<std::size_t>(displayAssetIndex)];
-    const auto& displayAsset = result.program.sampleAssets[static_cast<std::size_t>(displayAssetIndex)];
-    const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
-    engine_.setSampleData(displaySample, displaySampleRate, displayAsset.rootMidiNote);
-    engine_.clearSamplePath();
-    engine_.setProgram(result.program, result.sampleDataByAsset);
-
-    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
-    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
-    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
-    {
-        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
-        generatedWaveformState_.clear();
-        capturedSampleState_.clear();
-        capturedSampleRateState_ = 44100.0;
-        embeddedSampleState_.clear();
-        embeddedSampleNameState_.clear();
-        embeddedSampleRateState_ = 44100.0;
-        embeddedSampleRootMidiNoteState_ = 60;
-    }
-
-    setImportedProgramMetadata(file,
-                               audiocity::plugin::ImportedProgramFormat::nki,
-                               result.program,
-                               result.sampleDataByAsset,
-                               summary,
-                               static_cast<int>(result.program.zones.size()));
-    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-    syncSampleDerivedParametersFromEngine();
-    setWaveformViewRange(0, engine_.getLoadedSampleLength());
-    return true;
+    auto prepared = prepareBackgroundImport(file,
+                                            audiocity::plugin::ImportedProgramFormat::nki,
+                                            -1,
+                                            searchFolder);
+    return publishPreparedBackgroundImport(file, std::move(prepared));
 }
 
 bool AudiocityAudioProcessor::importRexSliceProgram(const juce::File& file)
 {
-    const auto extension = file.getFileExtension();
-    if (!file.existsAsFile()
-        || (!extension.equalsIgnoreCase(".rex") && !extension.equalsIgnoreCase(".rx2")))
-    {
-        setLastImportDiagnosticSummary("REX import failed: file not found or unsupported extension");
-        return false;
-    }
-
-    audiocity::engine::rex::ChromaticSliceProgram sliceProgram;
-    if (!audiocity::engine::rex::decodeFileAsChromaticSliceProgram(file, sliceProgram))
-    {
-        setLastImportDiagnosticSummary("REX import failed: runtime unavailable or slices could not be decoded");
-        return false;
-    }
-
-    if (sliceProgram.program.zones.empty() || sliceProgram.sampleDataByAsset.empty())
-    {
-        setLastImportDiagnosticSummary("REX import failed: no playable slices");
-        return false;
-    }
-
-    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
-    stopGeneratedWaveformPreview();
-    engine_.panic();
-
-    if (!engine_.loadSampleFromFile(file))
-    {
-        setLastImportDiagnosticSummary("REX import failed: display waveform could not be loaded");
-        return false;
-    }
-
-    engine_.setProgram(sliceProgram.program, sliceProgram.sampleDataByAsset);
-
-    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
-    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
-    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
-    {
-        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
-        generatedWaveformState_.clear();
-        capturedSampleState_.clear();
-        capturedSampleRateState_ = 44100.0;
-        embeddedSampleState_.clear();
-        embeddedSampleNameState_.clear();
-        embeddedSampleRateState_ = 44100.0;
-        embeddedSampleRootMidiNoteState_ = 60;
-    }
-
-    setImportedProgramMetadata(file,
-                               audiocity::plugin::ImportedProgramFormat::rex,
-                               sliceProgram.program,
-                               sliceProgram.sampleDataByAsset,
-                               makeRexSliceImportSummary(sliceProgram),
-                               static_cast<int>(sliceProgram.program.zones.size()));
-    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-    syncSampleDerivedParametersFromEngine();
-    setWaveformViewRange(0, engine_.getLoadedSampleLength());
-    return true;
+    auto prepared = prepareBackgroundImport(file, audiocity::plugin::ImportedProgramFormat::rex);
+    return publishPreparedBackgroundImport(file, std::move(prepared));
 }
 
 bool AudiocityAudioProcessor::importTransientSliceProgram(const juce::File& file)

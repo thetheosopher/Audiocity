@@ -345,6 +345,33 @@ int main()
         return 21;
     }
 
+    auto backgroundSampleProcessor = std::make_unique<AudiocityAudioProcessor>();
+    backgroundSampleProcessor->prepareToPlay(48000.0, 256);
+
+    auto preparedSampleImport = backgroundSampleProcessor->prepareBackgroundImport(
+        sampleFile,
+        audiocity::plugin::ImportedProgramFormat::unknown);
+    if (!preparedSampleImport.ok
+        || preparedSampleImport.importedProgram
+        || !preparedSampleImport.displaySample.ok)
+    {
+        std::fprintf(stderr, "Background sample preparation did not produce a publishable sample payload.\n");
+        tempDirectory.deleteRecursively();
+        return 22;
+    }
+
+    if (!backgroundSampleProcessor->publishPreparedBackgroundImport(sampleFile, std::move(preparedSampleImport))
+        || backgroundSampleProcessor->hasImportedProgram()
+        || backgroundSampleProcessor->getLoadedSamplePath() != sampleFile.getFullPathName()
+        || backgroundSampleProcessor->getLoadedSampleChannels() != 2
+        || backgroundSampleProcessor->getLoadedSampleLength() != 512
+        || !peaksMatch(sourcePeaks, backgroundSampleProcessor->getLoadedSamplePeaksByChannel(64), 1.0e-6f))
+    {
+        std::fprintf(stderr, "Background sample publish did not restore the expected loaded sample state.\n");
+        tempDirectory.deleteRecursively();
+        return 23;
+    }
+
     tempDirectory.deleteRecursively();
 
     return 0;

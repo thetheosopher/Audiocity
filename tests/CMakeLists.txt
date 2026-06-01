@@ -16,6 +16,7 @@ set(AUDIOCITY_ENGINE_TEST_COMMON_SOURCES
     ../src/engine/SfzExporter.cpp
     ../src/engine/Sf2Importer.cpp
     ../src/engine/DecentSamplerImporter.cpp
+    ../src/engine/DecentSamplerExporter.cpp
     ../src/engine/BitwigMultisampleImporter.cpp
     ../src/engine/XmlMultisampleImporterUtils.cpp
     ../src/engine/XmlMultisampleImporters.cpp
@@ -185,6 +186,9 @@ endif ()
 
 set(AUDIOCITY_UI_SNAPSHOT_SHARED_SOURCES
     ../src/plugin/PluginProcessor.cpp
+    ../src/plugin/PluginAboutPage.cpp
+    ../src/plugin/PluginCapturePage.cpp
+    ../src/plugin/PluginGeneratePage.cpp
     ../src/plugin/PluginEditor.cpp
     ../src/plugin/PeakPreviewCache.cpp
     ../src/plugin/ImportedProgramState.cpp
@@ -203,6 +207,7 @@ set(AUDIOCITY_UI_SNAPSHOT_SHARED_SOURCES
     ../src/engine/SfzExporter.cpp
     ../src/engine/Sf2Importer.cpp
     ../src/engine/DecentSamplerImporter.cpp
+    ../src/engine/DecentSamplerExporter.cpp
     ../src/engine/BitwigMultisampleImporter.cpp
     ../src/engine/XmlMultisampleImporterUtils.cpp
     ../src/engine/XmlMultisampleImporters.cpp
