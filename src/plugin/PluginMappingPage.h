@@ -1,0 +1,121 @@
+#pragma once
+
+#include <juce_gui_basics/juce_gui_basics.h>
+
+class PluginMappingPage final
+{
+public:
+    PluginMappingPage(juce::Label& summaryLabel,
+                      juce::TextButton& newLibraryButton,
+                      juce::TextButton& addSampleButton,
+                      juce::TextButton& saveLibraryButton,
+                      juce::TextButton& refreshButton,
+                      juce::TextButton& createZoneButton,
+                      juce::TextButton& duplicateZoneButton,
+                      juce::TextButton& splitZoneButton,
+                      juce::TextButton& deleteZoneButton,
+                      juce::Component& overview,
+                      juce::ListBox& zoneListBox,
+                      juce::TextEditor& detailsText,
+                      juce::Label& editKeyLowLabel,
+                      juce::Slider& editKeyLowSlider,
+                      juce::Label& editKeyHighLabel,
+                      juce::Slider& editKeyHighSlider,
+                      juce::Label& editVelocityLowLabel,
+                      juce::Slider& editVelocityLowSlider,
+                      juce::Label& editVelocityHighLabel,
+                      juce::Slider& editVelocityHighSlider,
+                      juce::Label& editVelocityFadeInLabel,
+                      juce::Slider& editVelocityFadeInLowSlider,
+                      juce::Slider& editVelocityFadeInHighSlider,
+                      juce::Label& editVelocityFadeOutLabel,
+                      juce::Slider& editVelocityFadeOutLowSlider,
+                      juce::Slider& editVelocityFadeOutHighSlider,
+                      juce::Label& editRootLabel,
+                      juce::Slider& editRootSlider,
+                      juce::Label& editSampleStartLabel,
+                      juce::Slider& editSampleStartSlider,
+                      juce::Label& editSampleEndLabel,
+                      juce::Slider& editSampleEndSlider,
+                      juce::Label& editLoopStartLabel,
+                      juce::Slider& editLoopStartSlider,
+                      juce::Label& editLoopEndLabel,
+                      juce::Slider& editLoopEndSlider,
+                      juce::Label& editGainLabel,
+                      juce::Slider& editGainSlider,
+                      juce::Label& editPanLabel,
+                      juce::Slider& editPanSlider,
+                      juce::Label& editRoundRobinGroupLabel,
+                      juce::Slider& editRoundRobinGroupSlider,
+                      juce::Label& editRoundRobinPositionLabel,
+                      juce::Slider& editRoundRobinPositionSlider,
+                      juce::Label& editRoundRobinModeLabel,
+                      juce::ComboBox& editRoundRobinModeCombo,
+                      juce::Label& editChokeLabel,
+                      juce::Slider& editChokeSlider,
+                      juce::Label& editTriggerLabel,
+                      juce::ComboBox& editTriggerCombo,
+                      juce::Label& editLoopLabel,
+                      juce::ComboBox& editLoopCombo,
+                      juce::TextButton& editApplyButton,
+                      juce::Label& editStatusLabel);
+
+    void layout(juce::Rectangle<int> area) const;
+
+private:
+    juce::Label& summaryLabel_;
+    juce::TextButton& newLibraryButton_;
+    juce::TextButton& addSampleButton_;
+    juce::TextButton& saveLibraryButton_;
+    juce::TextButton& refreshButton_;
+    juce::TextButton& createZoneButton_;
+    juce::TextButton& duplicateZoneButton_;
+    juce::TextButton& splitZoneButton_;
+    juce::TextButton& deleteZoneButton_;
+    juce::Component& overview_;
+    juce::ListBox& zoneListBox_;
+    juce::TextEditor& detailsText_;
+
+    juce::Label& editKeyLowLabel_;
+    juce::Slider& editKeyLowSlider_;
+    juce::Label& editKeyHighLabel_;
+    juce::Slider& editKeyHighSlider_;
+    juce::Label& editVelocityLowLabel_;
+    juce::Slider& editVelocityLowSlider_;
+    juce::Label& editVelocityHighLabel_;
+    juce::Slider& editVelocityHighSlider_;
+    juce::Label& editVelocityFadeInLabel_;
+    juce::Slider& editVelocityFadeInLowSlider_;
+    juce::Slider& editVelocityFadeInHighSlider_;
+    juce::Label& editVelocityFadeOutLabel_;
+    juce::Slider& editVelocityFadeOutLowSlider_;
+    juce::Slider& editVelocityFadeOutHighSlider_;
+    juce::Label& editRootLabel_;
+    juce::Slider& editRootSlider_;
+    juce::Label& editSampleStartLabel_;
+    juce::Slider& editSampleStartSlider_;
+    juce::Label& editSampleEndLabel_;
+    juce::Slider& editSampleEndSlider_;
+    juce::Label& editLoopStartLabel_;
+    juce::Slider& editLoopStartSlider_;
+    juce::Label& editLoopEndLabel_;
+    juce::Slider& editLoopEndSlider_;
+    juce::Label& editGainLabel_;
+    juce::Slider& editGainSlider_;
+    juce::Label& editPanLabel_;
+    juce::Slider& editPanSlider_;
+    juce::Label& editRoundRobinGroupLabel_;
+    juce::Slider& editRoundRobinGroupSlider_;
+    juce::Label& editRoundRobinPositionLabel_;
+    juce::Slider& editRoundRobinPositionSlider_;
+    juce::Label& editRoundRobinModeLabel_;
+    juce::ComboBox& editRoundRobinModeCombo_;
+    juce::Label& editChokeLabel_;
+    juce::Slider& editChokeSlider_;
+    juce::Label& editTriggerLabel_;
+    juce::ComboBox& editTriggerCombo_;
+    juce::Label& editLoopLabel_;
+    juce::ComboBox& editLoopCombo_;
+    juce::TextButton& editApplyButton_;
+    juce::Label& editStatusLabel_;
+};

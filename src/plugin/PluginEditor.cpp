@@ -161,11 +161,6 @@ int computeWaveformPeakResolution(const int waveformWidthPixels)
     return juce::jlimit(2048, 32768, juce::jmax(4096, width * 8));
 }
 
-int computePlayerKeyboardPanelHeight(const int availableWidth)
-{
-    return juce::jlimit(110, 190, availableWidth / 6);
-}
-
 juce::String formatHzAsKHz(const double sampleRate)
 {
     if (sampleRate <= 0.0)
@@ -3630,7 +3625,166 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
                  captureInputLevelSlider_,
                  captureInputVuMeter_,
                  captureStatusLabel_,
-                 dialLaf_)
+                 dialLaf_),
+    libraryPage_(sampleBrowserRootLabel_,
+                 sampleBrowserChooseRootButton_,
+                 sampleBrowserRefreshButton_,
+                 sampleBrowserCancelButton_,
+                 sampleBrowserBookmarkCombo_,
+                 sampleBrowserAddBookmarkButton_,
+                 sampleBrowserRemoveBookmarkButton_,
+                 sampleBrowserFilterEditor_,
+                 sampleBrowserSortCombo_,
+                 sampleBrowserFavoriteButton_,
+                 sampleBrowserFavoritesOnlyToggle_,
+                 sampleBrowserRecentOnlyToggle_,
+                 sampleBrowserTagFilterCombo_,
+                 sampleBrowserTagsEditor_,
+                 sampleBrowserApplyTagsButton_,
+                 sampleBrowserListBox_,
+                 sampleBrowserCountLabel_,
+                 sampleBrowserPreviewLabel_),
+    mappingPage_(mappingSummaryLabel_,
+                 mappingNewLibraryButton_,
+                 mappingAddSampleButton_,
+                 mappingSaveLibraryButton_,
+                 mappingRefreshButton_,
+                 mappingCreateZoneButton_,
+                 mappingDuplicateZoneButton_,
+                 mappingSplitZoneButton_,
+                 mappingDeleteZoneButton_,
+                 mappingOverview_,
+                 mappingZoneListBox_,
+                 mappingDetailsText_,
+                 mappingEditKeyLowLabel_,
+                 mappingEditKeyLowSlider_,
+                 mappingEditKeyHighLabel_,
+                 mappingEditKeyHighSlider_,
+                 mappingEditVelocityLowLabel_,
+                 mappingEditVelocityLowSlider_,
+                 mappingEditVelocityHighLabel_,
+                 mappingEditVelocityHighSlider_,
+                 mappingEditVelocityFadeInLabel_,
+                 mappingEditVelocityFadeInLowSlider_,
+                 mappingEditVelocityFadeInHighSlider_,
+                 mappingEditVelocityFadeOutLabel_,
+                 mappingEditVelocityFadeOutLowSlider_,
+                 mappingEditVelocityFadeOutHighSlider_,
+                 mappingEditRootLabel_,
+                 mappingEditRootSlider_,
+                 mappingEditSampleStartLabel_,
+                 mappingEditSampleStartSlider_,
+                 mappingEditSampleEndLabel_,
+                 mappingEditSampleEndSlider_,
+                 mappingEditLoopStartLabel_,
+                 mappingEditLoopStartSlider_,
+                 mappingEditLoopEndLabel_,
+                 mappingEditLoopEndSlider_,
+                 mappingEditGainLabel_,
+                 mappingEditGainSlider_,
+                 mappingEditPanLabel_,
+                 mappingEditPanSlider_,
+                 mappingEditRoundRobinGroupLabel_,
+                 mappingEditRoundRobinGroupSlider_,
+                 mappingEditRoundRobinPositionLabel_,
+                 mappingEditRoundRobinPositionSlider_,
+                 mappingEditRoundRobinModeLabel_,
+                 mappingEditRoundRobinModeCombo_,
+                 mappingEditChokeLabel_,
+                 mappingEditChokeSlider_,
+                 mappingEditTriggerLabel_,
+                 mappingEditTriggerCombo_,
+                 mappingEditLoopLabel_,
+                 mappingEditLoopCombo_,
+                 mappingEditApplyButton_,
+                 mappingEditStatusLabel_),
+    playerPage_(playerKeyboardLabel_,
+                playerStatusDisplay_,
+                [this](const bool enabled)
+                {
+                    playerStatusDisplay_.setCompactHeaderOverlayEnabled(enabled);
+                },
+                playerOpenButton_,
+                playerKeyboardViewport_,
+                playerPadsLabel_,
+                { { &playerPadButtons_[0], &playerPadButtons_[1], &playerPadButtons_[2], &playerPadButtons_[3],
+                    &playerPadButtons_[4], &playerPadButtons_[5], &playerPadButtons_[6], &playerPadButtons_[7] } },
+                { { &playerPadAssignButtons_[0], &playerPadAssignButtons_[1], &playerPadAssignButtons_[2], &playerPadAssignButtons_[3],
+                    &playerPadAssignButtons_[4], &playerPadAssignButtons_[5], &playerPadAssignButtons_[6], &playerPadAssignButtons_[7] } },
+                [this]
+                {
+                    updatePlayerKeyboardSizing();
+                }),
+    sampleHeaderPage_(loadButton_,
+                      presetFilterEditor_,
+                      presetCountLabel_,
+                      presetCombo_,
+                      presetSaveButton_,
+                      presetRenameButton_,
+                      presetDeleteButton_,
+                      sampleBrowserRailToggleButton_,
+                      sampleInspectorRailToggleButton_,
+                      diagnosticsToggleButton_),
+    sampleInfoMetricsLayout_(sampleInfoRateLabel_,
+                             sampleInfoRateValue_,
+                             sampleInfoBitDepthLabel_,
+                             sampleInfoBitDepthValue_,
+                             sampleInfoChannelsLabel_,
+                             sampleInfoChannelsValue_,
+                             sampleInfoSamplesLabel_,
+                             sampleInfoSamplesValue_,
+                             sampleInfoDurationLabel_,
+                             sampleInfoDurationValue_,
+                             sampleInfoFileSizeLabel_,
+                             sampleInfoFileSizeValue_,
+                             sampleInfoPlaybackLabel_,
+                             sampleInfoPlaybackValue_,
+                             sampleInfoPlaybackDurationLabel_,
+                             sampleInfoPlaybackDurationValue_,
+                             sampleInfoLoopLabel_,
+                             sampleInfoLoopValue_,
+                             sampleInfoLoopDurationLabel_,
+                             sampleInfoLoopDurationValue_,
+                             sampleInfoTempoLabel_,
+                             sampleInfoTempoValue_,
+                             sampleInfoMetaRootLabel_,
+                             sampleInfoMetaRootValue_),
+    sampleInspectorCardLayout_(fadeInDial_,
+                               fadeOutDial_,
+                               preloadDial_,
+                               masterVolumeDial_,
+                               panDial_,
+                               outputLevelMeter_,
+                               qualityLabel_,
+                               qualityCpuButton_,
+                               qualityFidelityButton_,
+                               qualityUltraButton_,
+                               reverbMixDial_,
+                               delayTimeDial_,
+                               delayFeedbackDial_,
+                               delayMixDial_,
+                               delayTempoSyncToggle_,
+                               dcFilterEnabledToggle_,
+                               dcFilterCutoffDial_,
+                               autopanRateDial_,
+                               autopanDepthDial_,
+                               saturationDriveDial_,
+                               saturationModeCombo_,
+                               filterAttackDial_,
+                               filterDecayDial_,
+                               filterSustainDial_,
+                               filterReleaseDial_,
+                               filterEnvelopeGraph_,
+                               filterKeytrackDial_,
+                               filterVelDial_,
+                               filterLfoRateDial_,
+                               filterLfoAmtDial_,
+                               filterLfoShapeLabel_,
+                               filterLfoShapeCombo_,
+                               filterLfoRetriggerToggle_,
+                               filterLfoTempoSyncToggle_,
+                               filterLfoDivisionLabel_,
+                               filterLfoDivisionCombo_)
 {
     setName("Audiocity");
     setSize(980, 860);
@@ -8685,10 +8839,7 @@ void AudiocityAudioProcessorEditor::previewSampleFromBrowserRow(const int row, c
 void AudiocityAudioProcessorEditor::paintSampleBrowserPane(
     juce::Graphics& g, const juce::Rectangle<int> browserArea) const
 {
-    g.setColour(juce::Colour(0xff252538));
-    g.fillRoundedRectangle(browserArea.toFloat(), 6.0f);
-    g.setColour(juce::Colour(0xff3a3a52));
-    g.drawRoundedRectangle(browserArea.toFloat().reduced(0.5f), 6.0f, 1.0f);
+    libraryPage_.paint(g, browserArea);
 }
 
 void AudiocityAudioProcessorEditor::updatePerformanceStripStatus(const float outputLeftPeak,
@@ -8836,276 +8987,7 @@ bool AudiocityAudioProcessorEditor::shouldShowSampleEffectsInspector() const noe
 void AudiocityAudioProcessorEditor::layoutSampleBrowserArea(juce::Rectangle<int> browserArea,
                                                             const bool compactLayout)
 {
-    browserArea = browserArea.reduced(8, 6);
-
-    if (compactLayout)
-    {
-        auto header = browserArea.removeFromTop(28);
-        if (sampleBrowserCancelButton_.isVisible())
-        {
-            sampleBrowserCancelButton_.setBounds(header.removeFromRight(62));
-            header.removeFromRight(6);
-        }
-        else
-        {
-            sampleBrowserCancelButton_.setBounds({});
-        }
-
-        sampleBrowserRefreshButton_.setBounds(header.removeFromRight(72));
-        header.removeFromRight(6);
-        sampleBrowserChooseRootButton_.setBounds(header.removeFromRight(30));
-        header.removeFromRight(6);
-        sampleBrowserRootLabel_.setBounds(header);
-
-        browserArea.removeFromTop(6);
-        sampleBrowserFilterEditor_.setBounds(browserArea.removeFromTop(28));
-
-        browserArea.removeFromTop(6);
-        auto quickRow = browserArea.removeFromTop(28);
-        auto quickLeft = quickRow.removeFromLeft((quickRow.getWidth() - 6) / 2);
-        sampleBrowserSortCombo_.setBounds(quickLeft);
-        quickRow.removeFromLeft(6);
-        sampleBrowserFavoriteButton_.setBounds(quickRow);
-
-        browserArea.removeFromTop(6);
-        auto toggleRow = browserArea.removeFromTop(28);
-        auto toggleLeft = toggleRow.removeFromLeft((toggleRow.getWidth() - 6) / 2);
-        sampleBrowserFavoritesOnlyToggle_.setBounds(toggleLeft);
-        toggleRow.removeFromLeft(6);
-        sampleBrowserRecentOnlyToggle_.setBounds(toggleRow);
-
-        browserArea.removeFromTop(6);
-        auto listArea = browserArea;
-        auto statusRow = listArea.removeFromBottom(20);
-        sampleBrowserCountLabel_.setBounds(statusRow.removeFromLeft(statusRow.getWidth() / 2));
-        sampleBrowserPreviewLabel_.setBounds(statusRow);
-        listArea.removeFromBottom(4);
-        sampleBrowserListBox_.setBounds(listArea);
-
-        sampleBrowserBookmarkCombo_.setBounds({});
-        sampleBrowserAddBookmarkButton_.setBounds({});
-        sampleBrowserRemoveBookmarkButton_.setBounds({});
-        sampleBrowserTagFilterCombo_.setBounds({});
-        sampleBrowserTagsEditor_.setBounds({});
-        sampleBrowserApplyTagsButton_.setBounds({});
-        return;
-    }
-
-    auto header = browserArea.removeFromTop(28);
-    if (sampleBrowserCancelButton_.isVisible())
-    {
-        sampleBrowserCancelButton_.setBounds(header.removeFromRight(76));
-        header.removeFromRight(6);
-    }
-    else
-    {
-        sampleBrowserCancelButton_.setBounds({});
-    }
-
-    sampleBrowserRefreshButton_.setBounds(header.removeFromRight(84));
-    header.removeFromRight(6);
-    sampleBrowserChooseRootButton_.setBounds(header.removeFromRight(30));
-    header.removeFromRight(6);
-    sampleBrowserRootLabel_.setBounds(header);
-
-    browserArea.removeFromTop(6);
-    auto bookmarkRow = browserArea.removeFromTop(28);
-    sampleBrowserRemoveBookmarkButton_.setBounds(bookmarkRow.removeFromRight(78));
-    bookmarkRow.removeFromRight(6);
-    sampleBrowserAddBookmarkButton_.setBounds(bookmarkRow.removeFromRight(98));
-    bookmarkRow.removeFromRight(6);
-    sampleBrowserBookmarkCombo_.setBounds(bookmarkRow);
-
-    browserArea.removeFromTop(6);
-    auto filterRow = browserArea.removeFromTop(28);
-    constexpr int sortWidth = 104;
-    constexpr int favoriteWidth = 86;
-    constexpr int favoritesOnlyWidth = 96;
-    constexpr int recentOnlyWidth = 78;
-    constexpr int filterControlGap = 6;
-    const auto controlWidth = sortWidth + favoriteWidth + favoritesOnlyWidth + recentOnlyWidth + (4 * filterControlGap);
-    auto filterWidth = juce::jmax(120, filterRow.getWidth() - controlWidth);
-    sampleBrowserFilterEditor_.setBounds(filterRow.removeFromLeft(filterWidth));
-    filterRow.removeFromLeft(filterControlGap);
-    sampleBrowserSortCombo_.setBounds(filterRow.removeFromLeft(sortWidth));
-    filterRow.removeFromLeft(filterControlGap);
-    sampleBrowserFavoriteButton_.setBounds(filterRow.removeFromLeft(favoriteWidth));
-    filterRow.removeFromLeft(filterControlGap);
-    sampleBrowserFavoritesOnlyToggle_.setBounds(filterRow.removeFromLeft(favoritesOnlyWidth));
-    filterRow.removeFromLeft(filterControlGap);
-    sampleBrowserRecentOnlyToggle_.setBounds(filterRow.removeFromLeft(recentOnlyWidth));
-
-    browserArea.removeFromTop(6);
-    auto tagRow = browserArea.removeFromTop(28);
-    sampleBrowserApplyTagsButton_.setBounds(tagRow.removeFromRight(96));
-    tagRow.removeFromRight(6);
-    sampleBrowserTagFilterCombo_.setBounds(tagRow.removeFromRight(132));
-    tagRow.removeFromRight(6);
-    sampleBrowserTagsEditor_.setBounds(tagRow);
-
-    browserArea.removeFromTop(6);
-    auto listArea = browserArea;
-    auto statusRow = listArea.removeFromBottom(20);
-    sampleBrowserCountLabel_.setBounds(statusRow.removeFromLeft(statusRow.getWidth() / 2));
-    sampleBrowserPreviewLabel_.setBounds(statusRow);
-    listArea.removeFromBottom(4);
-    sampleBrowserListBox_.setBounds(listArea);
-}
-
-void AudiocityAudioProcessorEditor::layoutPlayerPerformanceArea(juce::Rectangle<int> area, const bool compactLayout)
-{
-    if (compactLayout)
-    {
-        area = area.reduced(6, 4);
-
-        playerKeyboardLabel_.setText("Performance Strip", juce::dontSendNotification);
-        playerPadsLabel_.setText("Quick Pads", juce::dontSendNotification);
-
-        const int keyboardPanelHeight = juce::jlimit(100, 144, (area.getHeight() * 58) / 100);
-        auto keyboardPanel = area.removeFromTop(keyboardPanelHeight).reduced(8, 6);
-        auto keyboardHeader = keyboardPanel.removeFromTop(34);
-        const auto keyboardStatusBounds = keyboardHeader;
-        playerOpenButton_.setBounds({});
-        playerKeyboardLabel_.setBounds(keyboardHeader.removeFromTop(12).translated(0, 2));
-        playerStatusDisplay_.setCompactHeaderOverlayEnabled(true);
-        playerStatusDisplay_.setBounds(keyboardStatusBounds);
-        playerKeyboardLabel_.toFront(false);
-        keyboardPanel.removeFromTop(4);
-        playerKeyboardViewport_.setBounds(keyboardPanel.withTrimmedBottom(6));
-        updatePlayerKeyboardSizing();
-
-        area.removeFromTop(4);
-        auto padsPanel = area.reduced(8, 4);
-        playerPadsLabel_.setBounds(padsPanel.removeFromTop(14));
-        padsPanel.removeFromTop(4);
-        padsPanel = padsPanel.reduced(2, 0);
-
-        constexpr int kCompactPadGap = 8;
-        constexpr int kCompactPadMinSingleRowWidth = 92;
-        const bool useTwoRows = padsPanel.getHeight() >= 96
-            && padsPanel.getWidth() < ((kPlayerPadCount * kCompactPadMinSingleRowWidth)
-                + ((kPlayerPadCount - 1) * kCompactPadGap));
-        const int padCols = useTwoRows ? 4 : kPlayerPadCount;
-        const int padRows = (kPlayerPadCount + padCols - 1) / padCols;
-        const int verticalGap = useTwoRows ? 8 : 0;
-        const int padCellWidth = juce::jmax(1, (padsPanel.getWidth() - (padCols - 1) * kCompactPadGap) / padCols);
-        const int availablePadHeight = juce::jmax(1,
-            (padsPanel.getHeight() - (padRows - 1) * verticalGap) / padRows);
-        const int preferredPadHeight = useTwoRows ? 48 : 46;
-        const int minimumPadHeight = useTwoRows ? 34 : 32;
-        const int padCellHeight = availablePadHeight >= minimumPadHeight
-            ? juce::jmin(preferredPadHeight, availablePadHeight)
-            : availablePadHeight;
-        const int gridWidth = padCols * padCellWidth + (padCols - 1) * kCompactPadGap;
-        const int gridHeight = padRows * padCellHeight + (padRows - 1) * verticalGap;
-        auto gridArea = juce::Rectangle<int>(
-            padsPanel.getCentreX() - (gridWidth / 2),
-            padsPanel.getY() + juce::jmax(0, (padsPanel.getHeight() - gridHeight) / 2),
-            gridWidth,
-            gridHeight);
-
-        for (int i = 0; i < kPlayerPadCount; ++i)
-        {
-            const int row = i / padCols;
-            const int col = i % padCols;
-            auto cell = juce::Rectangle<int>(
-                gridArea.getX() + col * (padCellWidth + kCompactPadGap),
-                gridArea.getY() + row * (padCellHeight + verticalGap),
-                padCellWidth,
-                padCellHeight);
-            playerPadButtons_[static_cast<std::size_t>(i)].setBounds(cell);
-            playerPadAssignButtons_[static_cast<std::size_t>(i)].setBounds({});
-        }
-
-        return;
-    }
-
-    area = area.reduced(8, 6);
-
-    playerKeyboardLabel_.setText("Piano", juce::dontSendNotification);
-    playerPadsLabel_.setText("Drum Pads", juce::dontSendNotification);
-    playerOpenButton_.setBounds({});
-    playerStatusDisplay_.setCompactHeaderOverlayEnabled(false);
-
-    auto keyboardPanel = area.removeFromTop(computePlayerKeyboardPanelHeight(area.getWidth()) + 52);
-    keyboardPanel.reduce(10, 10);
-
-    auto keyboardHeader = keyboardPanel.removeFromTop(64);
-    auto keyboardTitleRow = keyboardHeader.removeFromTop(18);
-    playerKeyboardLabel_.setBounds(keyboardTitleRow);
-    keyboardHeader.removeFromTop(6);
-    playerStatusDisplay_.setBounds(keyboardHeader.removeFromTop(36));
-
-    keyboardPanel.removeFromTop(8);
-    playerKeyboardViewport_.setBounds(keyboardPanel);
-    updatePlayerKeyboardSizing();
-
-    area.removeFromTop(10);
-    auto padsPanel = area.reduced(10, 10);
-    playerPadsLabel_.setBounds(padsPanel.removeFromTop(22));
-    padsPanel.removeFromTop(6);
-
-    constexpr int kPadCols = 4;
-    const int kPadRows = (kPlayerPadCount + kPadCols - 1) / kPadCols;
-    const int padGap = 8;
-    const int padCellWidth = juce::jmax(80, (padsPanel.getWidth() - (kPadCols - 1) * padGap) / kPadCols);
-    constexpr int kPreferredPadHeight = 96;
-    const int availablePadHeight = (padsPanel.getHeight() - (kPadRows - 1) * padGap) / kPadRows;
-    const int padCellHeight = juce::jlimit(72, kPreferredPadHeight, availablePadHeight);
-
-    for (int i = 0; i < kPlayerPadCount; ++i)
-    {
-        const int row = i / kPadCols;
-        const int col = i % kPadCols;
-        auto cell = juce::Rectangle<int>(
-            padsPanel.getX() + col * (padCellWidth + padGap),
-            padsPanel.getY() + row * (padCellHeight + padGap),
-            padCellWidth,
-            padCellHeight);
-
-        playerPadButtons_[static_cast<std::size_t>(i)].setBounds(cell);
-
-        constexpr int kAssignW = 28;
-        constexpr int kAssignH = 20;
-        constexpr int kAssignPad = 6;
-        const auto assignBounds = juce::Rectangle<int>(
-            cell.getRight() - kAssignW - kAssignPad,
-            cell.getBottom() - kAssignH - kAssignPad,
-            kAssignW,
-            kAssignH);
-        playerPadAssignButtons_[static_cast<std::size_t>(i)].setBounds(assignBounds);
-        playerPadAssignButtons_[static_cast<std::size_t>(i)].toFront(false);
-    }
-}
-
-void AudiocityAudioProcessorEditor::paintPlayerPane(juce::Graphics& g, juce::Rectangle<int> area, const bool compactLayout) const
-{
-    area = area.reduced(8, 6);
-
-    auto paintPanel = [&g](juce::Rectangle<int> bounds)
-    {
-        g.setColour(uiPanelColour());
-        g.fillRoundedRectangle(bounds.toFloat(), 8.0f);
-        g.setColour(uiBorderColour());
-        g.drawRoundedRectangle(bounds.toFloat().reduced(0.5f), 8.0f, 1.0f);
-    };
-
-    if (compactLayout)
-    {
-        auto keyboardPanel = area.removeFromTop(juce::jlimit(78, 116, (area.getHeight() * 53) / 100));
-        area.removeFromTop(6);
-        auto padsPanel = area;
-
-        paintPanel(keyboardPanel);
-        paintPanel(padsPanel);
-        return;
-    }
-
-    auto keyboardPanel = area.removeFromTop(computePlayerKeyboardPanelHeight(area.getWidth()));
-    auto padsPanel = area.withTrimmedTop(10);
-
-    paintPanel(keyboardPanel);
-    paintPanel(padsPanel);
+    libraryPage_.layout(browserArea, compactLayout);
 }
 
 // ─── Layout ────────────────────────────────────────────────────────────────────
@@ -9160,7 +9042,7 @@ void AudiocityAudioProcessorEditor::resized()
     {
         layoutSampleBrowserArea(area, false);
         if (showPerformanceStrip)
-            layoutPlayerPerformanceArea(performanceStripArea, true);
+            playerPage_.layout(performanceStripArea, true);
         return;
     }
 
@@ -9185,144 +9067,15 @@ void AudiocityAudioProcessorEditor::resized()
 
     if (currentTabIndex_ == 2)
     {
-        auto mappingArea = area.reduced(8, 6);
-        constexpr int kMappingOverviewPreferredHeight = 150;
-        constexpr int kMappingOverviewMinimumHeight = 72;
-        constexpr int kMappingEditRowHeight = 18;
-        constexpr int kMappingEditRowGap = 2;
-        constexpr int kMappingEditRowCount = 19;
-        constexpr int kMappingEditApplyRowHeight = 24;
-        constexpr int kMappingOverviewGap = 4;
-        const int kMappingEditRequiredHeight =
-            (kMappingEditRowCount * (kMappingEditRowHeight + kMappingEditRowGap)) + kMappingEditApplyRowHeight;
-
-        auto header = mappingArea.removeFromTop(60);
-        constexpr int kMappingHeaderGap = 6;
-        constexpr int kMappingHeaderRowHeight = 27;
-        constexpr int kMappingHeaderRowGap = 6;
-        auto getMappingHeaderButtonWidth = [](juce::TextButton& button,
-                                              const int buttonHeight,
-                                              const int minWidth,
-                                              const int horizontalPadding,
-                                              const int maxWidth)
-        {
-            const auto font = button.getLookAndFeel().getTextButtonFont(button, buttonHeight);
-            return juce::jlimit(minWidth,
-                                maxWidth,
-                                juce::GlyphArrangement::getStringWidthInt(font, button.getButtonText()) + horizontalPadding);
-        };
-
-        auto libraryRow = header.removeFromTop(kMappingHeaderRowHeight);
-        header.removeFromTop(kMappingHeaderRowGap);
-        auto zoneRow = header.removeFromTop(kMappingHeaderRowHeight);
-
-        const auto newLibraryWidth = getMappingHeaderButtonWidth(mappingNewLibraryButton_, libraryRow.getHeight(), 104, 32, 132);
-        const auto addSampleWidth = getMappingHeaderButtonWidth(mappingAddSampleButton_, libraryRow.getHeight(), 100, 32, 128);
-        const auto saveLibraryWidth = getMappingHeaderButtonWidth(mappingSaveLibraryButton_, libraryRow.getHeight(), 112, 34, 142);
-
-        mappingNewLibraryButton_.setBounds(libraryRow.removeFromLeft(newLibraryWidth));
-        libraryRow.removeFromLeft(kMappingHeaderGap);
-        mappingAddSampleButton_.setBounds(libraryRow.removeFromLeft(addSampleWidth));
-        libraryRow.removeFromLeft(kMappingHeaderGap);
-        mappingSaveLibraryButton_.setBounds(libraryRow.removeFromLeft(saveLibraryWidth));
-        libraryRow.removeFromLeft(kMappingHeaderGap + 2);
-        mappingSummaryLabel_.setBounds(libraryRow);
-
-        const auto newZoneWidth = getMappingHeaderButtonWidth(mappingCreateZoneButton_, zoneRow.getHeight(), 82, 28, 100);
-        const auto duplicateWidth = getMappingHeaderButtonWidth(mappingDuplicateZoneButton_, zoneRow.getHeight(), 84, 30, 104);
-        const auto splitWidth = getMappingHeaderButtonWidth(mappingSplitZoneButton_, zoneRow.getHeight(), 60, 26, 78);
-        const auto deleteWidth = getMappingHeaderButtonWidth(mappingDeleteZoneButton_, zoneRow.getHeight(), 68, 26, 86);
-        const auto refreshWidth = getMappingHeaderButtonWidth(mappingRefreshButton_, zoneRow.getHeight(), 78, 28, 96);
-
-        mappingCreateZoneButton_.setBounds(zoneRow.removeFromLeft(newZoneWidth));
-        zoneRow.removeFromLeft(kMappingHeaderGap);
-        mappingDuplicateZoneButton_.setBounds(zoneRow.removeFromLeft(duplicateWidth));
-        zoneRow.removeFromLeft(kMappingHeaderGap);
-        mappingSplitZoneButton_.setBounds(zoneRow.removeFromLeft(splitWidth));
-        zoneRow.removeFromLeft(kMappingHeaderGap);
-        mappingDeleteZoneButton_.setBounds(zoneRow.removeFromLeft(deleteWidth));
-        zoneRow.removeFromLeft(kMappingHeaderGap);
-        mappingRefreshButton_.setBounds(zoneRow.removeFromLeft(refreshWidth));
-
-        mappingArea.removeFromTop(4);
-        const auto mappingOverviewHeight = juce::jlimit(
-            kMappingOverviewMinimumHeight,
-            kMappingOverviewPreferredHeight,
-            juce::jmax(kMappingOverviewMinimumHeight, mappingArea.getHeight() - kMappingEditRequiredHeight - kMappingOverviewGap));
-        mappingOverview_.setBounds(mappingArea.removeFromTop(mappingOverviewHeight));
-        mappingArea.removeFromTop(kMappingOverviewGap);
-
-        const auto detailWidth = juce::jlimit(220, 360, mappingArea.getWidth() / 3);
-        auto details = mappingArea.removeFromRight(detailWidth);
-        mappingArea.removeFromRight(10);
-        mappingZoneListBox_.setBounds(mappingArea);
-
-        auto editPanel = details.removeFromTop(details.getHeight());
-        auto layoutEditRow = [](juce::Rectangle<int>& panel, juce::Label& label, juce::Slider& slider)
-        {
-            auto row = panel.removeFromTop(18);
-            label.setBounds(row.removeFromLeft(72));
-            row.removeFromLeft(6);
-            slider.setBounds(row);
-            panel.removeFromTop(2);
-        };
-        auto layoutPairedEditRow = [](juce::Rectangle<int>& panel,
-                                      juce::Label& label,
-                                      juce::Slider& leftSlider,
-                                      juce::Slider& rightSlider)
-        {
-            auto row = panel.removeFromTop(18);
-            label.setBounds(row.removeFromLeft(72));
-            row.removeFromLeft(6);
-            auto left = row.removeFromLeft(row.getWidth() / 2);
-            rightSlider.setBounds(row.withTrimmedLeft(4));
-            leftSlider.setBounds(left.withTrimmedRight(4));
-            panel.removeFromTop(2);
-        };
-        auto layoutEditComboRow = [](juce::Rectangle<int>& panel, juce::Label& label, juce::ComboBox& combo)
-        {
-            auto row = panel.removeFromTop(18);
-            label.setBounds(row.removeFromLeft(72));
-            row.removeFromLeft(6);
-            combo.setBounds(row);
-            panel.removeFromTop(2);
-        };
-
-        layoutEditRow(editPanel, mappingEditKeyLowLabel_, mappingEditKeyLowSlider_);
-        layoutEditRow(editPanel, mappingEditKeyHighLabel_, mappingEditKeyHighSlider_);
-        layoutEditRow(editPanel, mappingEditVelocityLowLabel_, mappingEditVelocityLowSlider_);
-        layoutEditRow(editPanel, mappingEditVelocityHighLabel_, mappingEditVelocityHighSlider_);
-        layoutPairedEditRow(editPanel, mappingEditVelocityFadeInLabel_, mappingEditVelocityFadeInLowSlider_, mappingEditVelocityFadeInHighSlider_);
-        layoutPairedEditRow(editPanel, mappingEditVelocityFadeOutLabel_, mappingEditVelocityFadeOutLowSlider_, mappingEditVelocityFadeOutHighSlider_);
-        layoutEditRow(editPanel, mappingEditRootLabel_, mappingEditRootSlider_);
-        layoutEditRow(editPanel, mappingEditSampleStartLabel_, mappingEditSampleStartSlider_);
-        layoutEditRow(editPanel, mappingEditSampleEndLabel_, mappingEditSampleEndSlider_);
-        layoutEditRow(editPanel, mappingEditLoopStartLabel_, mappingEditLoopStartSlider_);
-        layoutEditRow(editPanel, mappingEditLoopEndLabel_, mappingEditLoopEndSlider_);
-        layoutEditRow(editPanel, mappingEditGainLabel_, mappingEditGainSlider_);
-        layoutEditRow(editPanel, mappingEditPanLabel_, mappingEditPanSlider_);
-        layoutEditRow(editPanel, mappingEditRoundRobinGroupLabel_, mappingEditRoundRobinGroupSlider_);
-        layoutEditRow(editPanel, mappingEditRoundRobinPositionLabel_, mappingEditRoundRobinPositionSlider_);
-        layoutEditComboRow(editPanel, mappingEditRoundRobinModeLabel_, mappingEditRoundRobinModeCombo_);
-        layoutEditRow(editPanel, mappingEditChokeLabel_, mappingEditChokeSlider_);
-        layoutEditComboRow(editPanel, mappingEditTriggerLabel_, mappingEditTriggerCombo_);
-        layoutEditComboRow(editPanel, mappingEditLoopLabel_, mappingEditLoopCombo_);
-
-        auto applyRow = editPanel.removeFromTop(24);
-        mappingEditApplyButton_.setBounds(applyRow.removeFromLeft(110));
-        applyRow.removeFromLeft(8);
-        mappingEditStatusLabel_.setBounds(applyRow);
-
-        details.removeFromTop(4);
-        mappingDetailsText_.setBounds(details);
+        mappingPage_.layout(area);
         if (showPerformanceStrip)
-            layoutPlayerPerformanceArea(performanceStripArea, true);
+            playerPage_.layout(performanceStripArea, true);
         return;
     }
 
     if (currentTabIndex_ == 3)
     {
-        layoutPlayerPerformanceArea(area, false);
+        playerPage_.layout(area, false);
         return;
     }
 
@@ -9331,7 +9084,7 @@ void AudiocityAudioProcessorEditor::resized()
         generatePage_.setBounds(area.reduced(8, 6));
 
         if (showPerformanceStrip)
-            layoutPlayerPerformanceArea(performanceStripArea, true);
+            playerPage_.layout(performanceStripArea, true);
 
         return;
     }
@@ -9340,7 +9093,7 @@ void AudiocityAudioProcessorEditor::resized()
     {
         capturePage_.setBounds(area.reduced(8, 6));
         if (showPerformanceStrip)
-            layoutPlayerPerformanceArea(performanceStripArea, true);
+            playerPage_.layout(performanceStripArea, true);
         return;
     }
 
@@ -9352,32 +9105,7 @@ void AudiocityAudioProcessorEditor::resized()
 
     aboutPage_.setBounds({});
 
-    // ── Top bar: load + presets + diagnostics toggle ──
-    {
-        auto topRow = area.removeFromTop(kSamplePresetBarHeight);
-        auto controlRow = topRow.withSizeKeepingCentre(topRow.getWidth(), kSamplePresetControlHeight);
-        loadButton_.setBounds(controlRow.removeFromLeft(74));
-        controlRow.removeFromLeft(10);
-
-        diagnosticsToggleButton_.setBounds(controlRow.removeFromRight(58));
-        controlRow.removeFromRight(6);
-        sampleInspectorRailToggleButton_.setBounds(controlRow.removeFromRight(60));
-        controlRow.removeFromRight(6);
-        sampleBrowserRailToggleButton_.setBounds(controlRow.removeFromRight(60));
-        controlRow.removeFromRight(8);
-        presetDeleteButton_.setBounds(controlRow.removeFromRight(68));
-        controlRow.removeFromRight(6);
-        presetRenameButton_.setBounds(controlRow.removeFromRight(76));
-        controlRow.removeFromRight(6);
-        presetSaveButton_.setBounds(controlRow.removeFromRight(60));
-        controlRow.removeFromRight(10);
-        const auto presetComboWidth = juce::jmin(190, juce::jmax(160, controlRow.getWidth() / 3));
-        presetCombo_.setBounds(controlRow.removeFromRight(presetComboWidth));
-        controlRow.removeFromRight(8);
-        presetCountLabel_.setBounds(controlRow.removeFromRight(96));
-        controlRow.removeFromRight(8);
-        presetFilterEditor_.setBounds(controlRow);
-    }
+    sampleHeaderPage_.layout(area);
 
     area.removeFromTop(kGrpGap);
 
@@ -9398,31 +9126,7 @@ void AudiocityAudioProcessorEditor::resized()
             target.addAndMakeVisible(component);
     };
 
-    const auto countVisibleSampleInfoMetrics = [&]()
-    {
-        int count = 0;
-        const auto countMetric = [&count](const juce::Label& keyLabel, const juce::Label& valueLabel)
-        {
-            if (keyLabel.isVisible() && valueLabel.isVisible())
-                ++count;
-        };
-
-        countMetric(sampleInfoRateLabel_, sampleInfoRateValue_);
-        countMetric(sampleInfoBitDepthLabel_, sampleInfoBitDepthValue_);
-        countMetric(sampleInfoChannelsLabel_, sampleInfoChannelsValue_);
-        countMetric(sampleInfoSamplesLabel_, sampleInfoSamplesValue_);
-        countMetric(sampleInfoDurationLabel_, sampleInfoDurationValue_);
-        countMetric(sampleInfoFileSizeLabel_, sampleInfoFileSizeValue_);
-        countMetric(sampleInfoPlaybackLabel_, sampleInfoPlaybackValue_);
-        countMetric(sampleInfoPlaybackDurationLabel_, sampleInfoPlaybackDurationValue_);
-        countMetric(sampleInfoLoopLabel_, sampleInfoLoopValue_);
-        countMetric(sampleInfoLoopDurationLabel_, sampleInfoLoopDurationValue_);
-        countMetric(sampleInfoTempoLabel_, sampleInfoTempoValue_);
-        countMetric(sampleInfoMetaRootLabel_, sampleInfoMetaRootValue_);
-        return count;
-    };
-
-    const int visibleMetricCount = countVisibleSampleInfoMetrics();
+    const int visibleMetricCount = sampleInfoMetricsLayout_.countVisibleMetrics();
     const int metricRows = juce::jmax(1, (visibleMetricCount + 1) / 2);
     const int infoCardHeight = 74 + metricRows * 34;
     const bool useOutputInspector = useSampleInspectorRail;
@@ -9537,50 +9241,7 @@ void AudiocityAudioProcessorEditor::resized()
         sampleInfoSourceLabel_.setBounds(row1.removeFromLeft(40));
         sampleInfoSourceValue_.setBounds(row1);
         infoInner.removeFromTop(4);
-        auto row2 = infoInner.removeFromTop(22);
-        auto layoutInlinePair = [](juce::Rectangle<int>& row,
-                                   juce::Label& keyLabel,
-                                   juce::Label& valueLabel,
-                                   int keyWidth,
-                                   int valueWidth)
-        {
-            keyLabel.setBounds(row.removeFromLeft(keyWidth));
-            valueLabel.setBounds(row.removeFromLeft(valueWidth));
-            row.removeFromLeft(10);
-        };
-
-        layoutInlinePair(row2, sampleInfoRateLabel_, sampleInfoRateValue_, 72, 98);
-        layoutInlinePair(row2, sampleInfoBitDepthLabel_, sampleInfoBitDepthValue_, 60, 68);
-        layoutInlinePair(row2, sampleInfoChannelsLabel_, sampleInfoChannelsValue_, 56, 30);
-        layoutInlinePair(row2, sampleInfoSamplesLabel_, sampleInfoSamplesValue_, 66, 86);
-        layoutInlinePair(row2, sampleInfoDurationLabel_, sampleInfoDurationValue_, 56, 72);
-        layoutInlinePair(row2, sampleInfoFileSizeLabel_, sampleInfoFileSizeValue_, 48, 86);
-
-        infoInner.removeFromTop(2);
-        auto row3 = infoInner.removeFromTop(22);
-        auto layoutInlinePairIfVisible = [&layoutInlinePair](juce::Rectangle<int>& row,
-                                                             juce::Label& keyLabel,
-                                                             juce::Label& valueLabel,
-                                                             int keyWidth,
-                                                             int valueWidth)
-        {
-            if (keyLabel.isVisible() && valueLabel.isVisible())
-                layoutInlinePair(row, keyLabel, valueLabel, keyWidth, valueWidth);
-            else
-            {
-                keyLabel.setBounds({});
-                valueLabel.setBounds({});
-            }
-        };
-
-        layoutInlinePairIfVisible(row3, sampleInfoPlaybackLabel_, sampleInfoPlaybackValue_, 120, 150);
-        layoutInlinePairIfVisible(row3, sampleInfoPlaybackDurationLabel_, sampleInfoPlaybackDurationValue_, 124, 90);
-        layoutInlinePairIfVisible(row3, sampleInfoLoopLabel_, sampleInfoLoopValue_, 74, 150);
-        layoutInlinePairIfVisible(row3, sampleInfoLoopDurationLabel_, sampleInfoLoopDurationValue_, 94, 90);
-        if (sampleInfoTempoLabel_.isVisible())
-            layoutInlinePair(row3, sampleInfoTempoLabel_, sampleInfoTempoValue_, 52, 72);
-        if (sampleInfoMetaRootLabel_.isVisible())
-            layoutInlinePair(row3, sampleInfoMetaRootLabel_, sampleInfoMetaRootValue_, 68, 110);
+        sampleInfoMetricsLayout_.layoutInline(infoInner);
     };
 
     const auto layoutSampleInfoInspector = [&](juce::Rectangle<int> inspectorBounds)
@@ -9604,211 +9265,14 @@ void AudiocityAudioProcessorEditor::resized()
         sampleInfoSourceValue_.setBounds(infoInner.removeFromTop(22));
         infoInner.removeFromTop(8);
 
-        auto layoutMetricCell = [](juce::Rectangle<int> cell,
-                                   juce::Label& keyLabel,
-                                   juce::Label& valueLabel)
-        {
-            keyLabel.setBounds(cell.removeFromTop(11));
-            cell.removeFromTop(2);
-            valueLabel.setBounds(cell.removeFromTop(16));
-        };
-
-        std::vector<std::pair<juce::Label*, juce::Label*>> metrics;
-        metrics.reserve(12);
-        auto addMetric = [&metrics](juce::Label& keyLabel, juce::Label& valueLabel)
-        {
-            if (keyLabel.isVisible() && valueLabel.isVisible())
-                metrics.push_back({ &keyLabel, &valueLabel });
-            else
-            {
-                keyLabel.setBounds({});
-                valueLabel.setBounds({});
-            }
-        };
-
-        addMetric(sampleInfoRateLabel_, sampleInfoRateValue_);
-        addMetric(sampleInfoBitDepthLabel_, sampleInfoBitDepthValue_);
-        addMetric(sampleInfoChannelsLabel_, sampleInfoChannelsValue_);
-        addMetric(sampleInfoSamplesLabel_, sampleInfoSamplesValue_);
-        addMetric(sampleInfoDurationLabel_, sampleInfoDurationValue_);
-        addMetric(sampleInfoFileSizeLabel_, sampleInfoFileSizeValue_);
-        addMetric(sampleInfoPlaybackLabel_, sampleInfoPlaybackValue_);
-        addMetric(sampleInfoPlaybackDurationLabel_, sampleInfoPlaybackDurationValue_);
-        addMetric(sampleInfoLoopLabel_, sampleInfoLoopValue_);
-        addMetric(sampleInfoLoopDurationLabel_, sampleInfoLoopDurationValue_);
-        addMetric(sampleInfoTempoLabel_, sampleInfoTempoValue_);
-        addMetric(sampleInfoMetaRootLabel_, sampleInfoMetaRootValue_);
-
-        constexpr int kMetricGap = 8;
-        const int columnWidth = (infoInner.getWidth() - kMetricGap) / 2;
-        for (std::size_t index = 0; index < metrics.size(); index += 2)
-        {
-            auto row = infoInner.removeFromTop(30);
-            auto leftCell = row.removeFromLeft(columnWidth);
-            layoutMetricCell(leftCell, *metrics[index].first, *metrics[index].second);
-
-            if (index + 1 < metrics.size())
-            {
-                row.removeFromLeft(kMetricGap);
-                layoutMetricCell(row, *metrics[index + 1].first, *metrics[index + 1].second);
-            }
-
-            infoInner.removeFromTop(4);
-        }
-    };
-
-    const auto layoutOutputInspector = [&](juce::Rectangle<int> inspectorBounds)
-    {
-        auto outputInner = inspectorBounds.withTrimmedTop(30).reduced(12, 10);
-        constexpr int kInspectorDialGap = 6;
-        constexpr int kCompactRowHeight = 68;
-        constexpr int kSmallDialWidth = 68;
-
-        auto row1 = outputInner.removeFromTop(kCompactRowHeight);
-        fadeInDial_.setBounds(row1.removeFromLeft(kSmallDialWidth));
-        row1.removeFromLeft(kInspectorDialGap);
-        fadeOutDial_.setBounds(row1.removeFromLeft(kSmallDialWidth));
-        row1.removeFromLeft(kInspectorDialGap);
-        preloadDial_.setBounds(row1);
-
-        outputInner.removeFromTop(6);
-        auto row2 = outputInner.removeFromTop(kCompactRowHeight);
-        masterVolumeDial_.setBounds(row2.removeFromLeft(kSmallDialWidth));
-        row2.removeFromLeft(kInspectorDialGap);
-        panDial_.setBounds(row2.removeFromLeft(kSmallDialWidth));
-        row2.removeFromLeft(kInspectorDialGap);
-        outputLevelMeter_.setBounds(row2.reduced(0, 10));
-
-        outputInner.removeFromTop(8);
-        qualityLabel_.setBounds({});
-        auto qualityRow = outputInner.removeFromTop(24);
-        const int qualityButtonWidth = (qualityRow.getWidth() - kInspectorDialGap * 2) / 3;
-        qualityCpuButton_.setBounds(qualityRow.removeFromLeft(qualityButtonWidth));
-        qualityRow.removeFromLeft(kInspectorDialGap);
-        qualityFidelityButton_.setBounds(qualityRow.removeFromLeft(qualityButtonWidth));
-        qualityRow.removeFromLeft(kInspectorDialGap);
-        qualityUltraButton_.setBounds(qualityRow);
-    };
-
-    const auto layoutEffectsInspector = [&](juce::Rectangle<int> inspectorBounds)
-    {
-        auto effectsInner = inspectorBounds.withTrimmedTop(30).reduced(12, 10);
-        constexpr int kInspectorGap = 6;
-
-        auto topRow = effectsInner.removeFromTop(68);
-        const int topCellWidth = (topRow.getWidth() - kInspectorGap * 3) / 4;
-        reverbMixDial_.setBounds(topRow.removeFromLeft(topCellWidth));
-        topRow.removeFromLeft(kInspectorGap);
-        delayTimeDial_.setBounds(topRow.removeFromLeft(topCellWidth));
-        topRow.removeFromLeft(kInspectorGap);
-        delayFeedbackDial_.setBounds(topRow.removeFromLeft(topCellWidth));
-        topRow.removeFromLeft(kInspectorGap);
-        delayMixDial_.setBounds(topRow);
-
-        effectsInner.removeFromTop(8);
-        auto middleRow = effectsInner.removeFromTop(24);
-        delayTempoSyncToggle_.setBounds(middleRow.removeFromLeft(132));
-        middleRow.removeFromLeft(8);
-        saturationModeCombo_.setBounds(middleRow.removeFromRight(96));
-
-        effectsInner.removeFromTop(8);
-        auto bottomRow = effectsInner.removeFromTop(68);
-        const int bottomCellWidth = (bottomRow.getWidth() - kInspectorGap * 3) / 4;
-        dcFilterCutoffDial_.setBounds(bottomRow.removeFromLeft(bottomCellWidth));
-        bottomRow.removeFromLeft(kInspectorGap);
-        autopanRateDial_.setBounds(bottomRow.removeFromLeft(bottomCellWidth));
-        bottomRow.removeFromLeft(kInspectorGap);
-        autopanDepthDial_.setBounds(bottomRow.removeFromLeft(bottomCellWidth));
-        bottomRow.removeFromLeft(kInspectorGap);
-        saturationDriveDial_.setBounds(bottomRow);
-
-        effectsInner.removeFromTop(8);
-        dcFilterEnabledToggle_.setBounds(effectsInner.removeFromTop(24));
-    };
-
-    const auto layoutFilterModInspector = [&](juce::Rectangle<int> inspectorBounds)
-    {
-        auto filterModInner = inspectorBounds.withTrimmedTop(30).reduced(12, 10);
-        constexpr int kInspectorGap = 6;
-
-        auto graphRow = filterModInner.removeFromTop(40);
-        filterEnvelopeGraph_.setBounds(graphRow);
-
-        filterModInner.removeFromTop(6);
-        auto envRow = filterModInner.removeFromTop(54);
-        const int envCellWidth = (envRow.getWidth() - kInspectorGap * 3) / 4;
-        filterAttackDial_.setBounds(envRow.removeFromLeft(envCellWidth));
-        envRow.removeFromLeft(kInspectorGap);
-        filterDecayDial_.setBounds(envRow.removeFromLeft(envCellWidth));
-        envRow.removeFromLeft(kInspectorGap);
-        filterSustainDial_.setBounds(envRow.removeFromLeft(envCellWidth));
-        envRow.removeFromLeft(kInspectorGap);
-        filterReleaseDial_.setBounds(envRow);
-
-        filterModInner.removeFromTop(6);
-        auto modRow = filterModInner.removeFromTop(54);
-        const int modCellWidth = (modRow.getWidth() - kInspectorGap * 3) / 4;
-        filterKeytrackDial_.setBounds(modRow.removeFromLeft(modCellWidth));
-        modRow.removeFromLeft(kInspectorGap);
-        filterVelDial_.setBounds(modRow.removeFromLeft(modCellWidth));
-        modRow.removeFromLeft(kInspectorGap);
-        filterLfoRateDial_.setBounds(modRow.removeFromLeft(modCellWidth));
-        modRow.removeFromLeft(kInspectorGap);
-        filterLfoAmtDial_.setBounds(modRow);
-
-        filterModInner.removeFromTop(6);
-        auto comboRow = filterModInner.removeFromTop(40);
-        auto shapeArea = comboRow.removeFromLeft((comboRow.getWidth() - 8) / 2);
-        filterLfoShapeLabel_.setBounds(shapeArea.removeFromTop(11));
-        shapeArea.removeFromTop(2);
-        filterLfoShapeCombo_.setBounds(shapeArea.removeFromTop(24));
-        comboRow.removeFromLeft(8);
-        filterLfoDivisionLabel_.setBounds(comboRow.removeFromTop(11));
-        comboRow.removeFromTop(2);
-        filterLfoDivisionCombo_.setBounds(comboRow.removeFromTop(24));
-
-        filterModInner.removeFromTop(6);
-        auto toggleRow = filterModInner.removeFromTop(24);
-        const int toggleWidth = (toggleRow.getWidth() - 8) / 2;
-        filterLfoRetriggerToggle_.setBounds(toggleRow.removeFromLeft(toggleWidth));
-        toggleRow.removeFromLeft(8);
-        filterLfoTempoSyncToggle_.setBounds(toggleRow);
-    };
-
-    const auto clearEffectsInspectorControls = [&]()
-    {
-        reverbMixDial_.setBounds({});
-        delayTimeDial_.setBounds({});
-        delayFeedbackDial_.setBounds({});
-        delayMixDial_.setBounds({});
-        delayTempoSyncToggle_.setBounds({});
-        dcFilterEnabledToggle_.setBounds({});
-        dcFilterCutoffDial_.setBounds({});
-        autopanRateDial_.setBounds({});
-        autopanDepthDial_.setBounds({});
-        saturationDriveDial_.setBounds({});
-        saturationModeCombo_.setBounds({});
-    };
-
-    const auto clearOutputInspectorControls = [&]()
-    {
-        fadeInDial_.setBounds({});
-        fadeOutDial_.setBounds({});
-        preloadDial_.setBounds({});
-        masterVolumeDial_.setBounds({});
-        panDial_.setBounds({});
-        outputLevelMeter_.setBounds({});
-        qualityLabel_.setBounds({});
-        qualityCpuButton_.setBounds({});
-        qualityFidelityButton_.setBounds({});
-        qualityUltraButton_.setBounds({});
+        sampleInfoMetricsLayout_.layoutInspector(infoInner);
     };
 
     const auto layoutOutputInspectorCard = [&](juce::Rectangle<int>& inspectorArea)
     {
         if (!useOutputInspector)
         {
-            clearOutputInspectorControls();
+            sampleInspectorCardLayout_.clearOutput();
             return;
         }
 
@@ -9816,12 +9280,12 @@ void AudiocityAudioProcessorEditor::resized()
         const int outputCardHeight = juce::jmin(kSampleOutputInspectorCardHeight, inspectorArea.getHeight());
         if (outputCardHeight <= 0)
         {
-            clearOutputInspectorControls();
+            sampleInspectorCardLayout_.clearOutput();
             return;
         }
 
         sampleInspectorOutputBounds_ = inspectorArea.removeFromTop(outputCardHeight);
-        layoutOutputInspector(sampleInspectorOutputBounds_);
+        sampleInspectorCardLayout_.layoutOutput(sampleInspectorOutputBounds_);
     };
 
     const auto clearFilterModInspectorControls = [&]()
@@ -9872,13 +9336,13 @@ void AudiocityAudioProcessorEditor::resized()
                     inspectorArea.getHeight());
                 sampleInspectorEffectsBounds_ = inspectorArea.removeFromTop(effectsCardHeight);
                 if (sampleInspectorEffectsExpanded_)
-                    layoutEffectsInspector(sampleInspectorEffectsBounds_);
+                    sampleInspectorCardLayout_.layoutEffects(sampleInspectorEffectsBounds_);
                 else
-                    clearEffectsInspectorControls();
+                    sampleInspectorCardLayout_.clearEffects();
             }
             else
             {
-                clearEffectsInspectorControls();
+                sampleInspectorCardLayout_.clearEffects();
             }
 
             if (useFilterModInspector)
@@ -9889,9 +9353,9 @@ void AudiocityAudioProcessorEditor::resized()
                     inspectorArea.getHeight());
                 sampleInspectorFilterModBounds_ = inspectorArea.removeFromTop(filterModCardHeight);
                 if (sampleInspectorFilterModExpanded_)
-                    layoutFilterModInspector(sampleInspectorFilterModBounds_);
+                    sampleInspectorCardLayout_.layoutFilterMod(sampleInspectorFilterModBounds_);
                 else
-                    clearFilterModInspectorControls();
+                    sampleInspectorCardLayout_.clearFilterMod();
             }
         }
         else
@@ -9907,13 +9371,13 @@ void AudiocityAudioProcessorEditor::resized()
                     inspectorArea.getHeight());
                 sampleInspectorEffectsBounds_ = inspectorArea.removeFromTop(effectsCardHeight);
                 if (sampleInspectorEffectsExpanded_)
-                    layoutEffectsInspector(sampleInspectorEffectsBounds_);
+                    sampleInspectorCardLayout_.layoutEffects(sampleInspectorEffectsBounds_);
                 else
-                    clearEffectsInspectorControls();
+                    sampleInspectorCardLayout_.clearEffects();
             }
             else
             {
-                clearEffectsInspectorControls();
+                sampleInspectorCardLayout_.clearEffects();
             }
 
             if (useFilterModInspector)
@@ -9924,16 +9388,16 @@ void AudiocityAudioProcessorEditor::resized()
                     inspectorArea.getHeight());
                 sampleInspectorFilterModBounds_ = inspectorArea.removeFromTop(filterModCardHeight);
                 if (sampleInspectorFilterModExpanded_)
-                    layoutFilterModInspector(sampleInspectorFilterModBounds_);
+                    sampleInspectorCardLayout_.layoutFilterMod(sampleInspectorFilterModBounds_);
                 else
-                    clearFilterModInspectorControls();
+                    sampleInspectorCardLayout_.clearFilterMod();
             }
         }
     }
     else
     {
         programMapText_.setBounds({});
-        clearOutputInspectorControls();
+        sampleInspectorCardLayout_.clearOutput();
     }
 
     const auto waveformHeight = juce::jlimit(180, 320, workspaceArea.getHeight() / 3);
@@ -10266,7 +9730,7 @@ void AudiocityAudioProcessorEditor::resized()
     sampleControlsContent_.setSize(viewportWidth, juce::jmax(sampleControlsViewport_.getHeight(), scrollY + 4));
 
     if (showPerformanceStrip)
-        layoutPlayerPerformanceArea(performanceStripArea, true);
+        playerPage_.layout(performanceStripArea, true);
 }
 
 void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
@@ -10322,7 +9786,7 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
     if (currentTabIndex_ == 2)
         paintContentCard(content);
     else if (currentTabIndex_ == 3)
-        paintPlayerPane(g, content, false);
+        playerPage_.paint(g, content, false);
     else if (currentTabIndex_ == 4 || currentTabIndex_ == 5)
         paintContentCard(content);
 
@@ -10330,7 +9794,7 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
         paintSampleInspectorPane(g);
 
     if (showPerformanceStrip)
-        paintPlayerPane(g, performanceStripArea, true);
+        playerPage_.paint(g, performanceStripArea, true);
 
     if (!isHoveringValidDrop_)
         return;

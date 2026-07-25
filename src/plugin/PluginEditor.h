@@ -21,6 +21,12 @@
 #include "PluginAboutPage.h"
 #include "PluginCapturePage.h"
 #include "PluginGeneratePage.h"
+#include "PluginLibraryPage.h"
+#include "PluginMappingPage.h"
+#include "PluginPlayerPage.h"
+#include "PluginSampleHeaderPage.h"
+#include "PluginSampleInfoMetricsLayout.h"
+#include "PluginSampleInspectorCardLayout.h"
 #include "PlayerPadState.h"
 #include "ProgramMappingModel.h"
 #include "ProgramMappingUndoHistory.h"
@@ -587,6 +593,7 @@ private:
     SampleBrowserListBox sampleBrowserListBox_{ *this };
     juce::Label sampleBrowserCountLabel_;
     juce::Label sampleBrowserPreviewLabel_{ {}, "" };
+    PluginLibraryPage libraryPage_;
 
     // ── Mapping ──
     std::vector<audiocity::plugin::ProgramZoneListRow> mappingZoneRows_;
@@ -645,6 +652,7 @@ private:
     juce::ComboBox mappingEditLoopCombo_;
     juce::TextButton mappingEditApplyButton_{ "Apply Zone" };
     juce::Label mappingEditStatusLabel_{ {}, "" };
+    PluginMappingPage mappingPage_;
 
     // ── Player ──
     juce::Label playerKeyboardLabel_{ {}, "Piano" };
@@ -660,6 +668,7 @@ private:
     static constexpr int kPlayerPadCount = audiocity::plugin::kPlayerPadCount;
     std::array<PlayerPadButton, kPlayerPadCount> playerPadButtons_;
     std::array<juce::TextButton, kPlayerPadCount> playerPadAssignButtons_;
+    PluginPlayerPage playerPage_;
     std::array<bool, kPlayerPadCount> playerPadHeld_{};
     std::array<audiocity::plugin::PlayerPadAssignment, kPlayerPadCount> playerPadAssignments_{};
 
@@ -675,6 +684,9 @@ private:
     juce::TextButton sampleBrowserRailToggleButton_{ "Browse" };
     juce::TextButton sampleInspectorRailToggleButton_{ "Inspect" };
     juce::TextButton diagnosticsToggleButton_{ "Tech" };
+    PluginSampleHeaderPage sampleHeaderPage_;
+    PluginSampleInfoMetricsLayout sampleInfoMetricsLayout_;
+    PluginSampleInspectorCardLayout sampleInspectorCardLayout_;
     juce::TextButton waveformResetRangesButton_{ "Reset" };
     juce::Label waveformInteractionSummaryLabel_{ {}, "" };
     juce::Label sampleInfoSourceLabel_{ {}, "Source" };
@@ -1216,7 +1228,6 @@ private:
     [[nodiscard]] bool shouldShowSampleFilterModInspector() const noexcept;
     [[nodiscard]] bool shouldShowSampleEffectsInspector() const noexcept;
     void layoutSampleBrowserArea(juce::Rectangle<int> area, bool compactLayout);
-    void layoutPlayerPerformanceArea(juce::Rectangle<int> area, bool compactLayout);
     std::vector<int> mappingBatchTrackedSelectionRows_;
     bool suppressMappingBatchEditTracking_ = false;
     bool mappingBatchVelocityFadeEdited_ = false;
@@ -1229,7 +1240,6 @@ private:
     bool mappingBatchLoopEdited_ = false;
     void showPadAssignmentDialog(int padIndex);
     void syncAutomatedControlsFromProcessor();
-    void paintPlayerPane(juce::Graphics& g, juce::Rectangle<int> area, bool compactLayout) const;
     void paintSampleBrowserPane(juce::Graphics& g, juce::Rectangle<int> browserArea) const;
     void handleSampleControlsMouseDown(const juce::MouseEvent& event);
     void updateTabVisibility();

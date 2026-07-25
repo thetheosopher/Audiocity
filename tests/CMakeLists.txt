@@ -189,6 +189,12 @@ set(AUDIOCITY_UI_SNAPSHOT_SHARED_SOURCES
     ../src/plugin/PluginAboutPage.cpp
     ../src/plugin/PluginCapturePage.cpp
     ../src/plugin/PluginGeneratePage.cpp
+    ../src/plugin/PluginLibraryPage.cpp
+    ../src/plugin/PluginMappingPage.cpp
+    ../src/plugin/PluginPlayerPage.cpp
+    ../src/plugin/PluginSampleHeaderPage.cpp
+    ../src/plugin/PluginSampleInfoMetricsLayout.cpp
+    ../src/plugin/PluginSampleInspectorCardLayout.cpp
     ../src/plugin/PluginEditor.cpp
     ../src/plugin/PeakPreviewCache.cpp
     ../src/plugin/ImportedProgramState.cpp
