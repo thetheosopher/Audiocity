@@ -23,6 +23,7 @@
 #include "../src/plugin/PeakPreviewCache.h"
 #include "../src/plugin/PresetJson.h"
 #include "../src/plugin/ImportedProgramState.h"
+#include "../src/plugin/ImportedProgramStore.h"
 #include "../src/plugin/PlayerPadState.h"
 #include "../src/plugin/ProgramMappingModel.h"
 #include "../src/plugin/ProgramMappingUndoHistory.h"
@@ -30,12 +31,15 @@
 
 #include <cmath>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <set>
+#include <thread>
 #include <utility>
 
 namespace
@@ -9470,6 +9474,155 @@ bool runProgramStreamLookaheadPrimingTest()
     return passed;
 }
 
+bool runDiskStreamCacheStaysResponsiveUnderContentionTest()
+{
+    // std::atomic<std::shared_ptr<T>>::load() takes an internal spinlock on every standard library
+    // implementation (is_always_lock_free is always false) -- so a reader on the audio thread can be
+    // made to wait behind a writer on another thread. A plain pointer atomic carries no such
+    // obligation. This is the type-level fact EngineCore's disk-stream cache now depends on.
+    static_assert(!std::atomic<std::shared_ptr<int>>::is_always_lock_free,
+                 "This assumption is what made the old cache-state publish unsafe for the audio thread.");
+    static_assert(std::atomic<const int*>::is_always_lock_free,
+                 "The fix relies on a raw pointer atomic being lock-free, which is guaranteed by the standard "
+                 "on every platform this project targets.");
+
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+    constexpr int sampleLength = 200000;
+
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_stream_contention_test", "");
+    if (!tempDirectory.createDirectory())
+        return false;
+
+    const auto sampleFile = tempDirectory.getChildFile("contention.wav");
+    const auto sample = createTestSample(sampleLength);
+
+    auto writeWavFile = [&](const juce::File& fileToWrite) -> bool
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> output(fileToWrite.createOutputStream());
+        if (output == nullptr)
+            return false;
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(output.get(), sampleRate, 1, 16, {}, 0));
+        if (writer == nullptr)
+            return false;
+
+        output.release();
+        return writer->writeFromAudioSampleBuffer(sample, 0, sample.getNumSamples());
+    };
+
+    if (!writeWavFile(sampleFile))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setPreloadSamples(128);
+
+    Program program;
+    SampleAsset asset;
+    asset.sourcePath = sampleFile.getFullPathName().toStdString();
+    asset.displayName = "contention.wav";
+    asset.lengthSamples = sample.getNumSamples();
+    asset.numChannels = sample.getNumChannels();
+    asset.sampleRateHz = sampleRate;
+    asset.rootMidiNote = 60;
+    program.sampleAssets.push_back(asset);
+
+    Zone zone;
+    zone.sampleAssetIndex = 0;
+    zone.keyRange = MidiRange::single(60);
+    zone.rootMidiNote = 60;
+    zone.sampleStart = 0;
+    zone.sampleEndExclusive = sample.getNumSamples();
+    zone.loopMode = ZoneLoopMode::continuous;
+    zone.loopStart = 0;
+    zone.loopEndExclusive = sample.getNumSamples();
+    program.zones.push_back(zone);
+
+    std::vector<juce::AudioBuffer<float>> sampleDataByAsset;
+    sampleDataByAsset.push_back(sample);
+    engine.setProgram(program, sampleDataByAsset);
+
+    const auto baseServices = engine.getStreamPrimeServiceCount();
+
+    // Hammer servicePendingPrime() (via serviceStreamPriming()) from a second thread with no
+    // throttling at all -- far more aggressively than the real ~2ms stream-prime worker -- while the
+    // "audio thread" renders continuously. This is a liveness/contention regression guard, not a
+    // reliable reproduction of the original bug: the old lock's critical section was only a handful
+    // of instructions, so tripping real priority inversion needs an unlucky OS preemption of the lock
+    // holder, which a short-lived unit test cannot force. What this test does prove deterministically
+    // is that the two threads can pound the same cache state concurrently without the render loop
+    // ever stalling past a generous bound, and without producing corrupted (NaN/Inf) audio.
+    std::atomic<bool> stopRequested{ false };
+    std::thread primingThread([&engine, &stopRequested]
+    {
+        while (!stopRequested.load(std::memory_order_relaxed))
+            engine.serviceStreamPriming();
+    });
+
+    auto worstBlockDuration = std::chrono::steady_clock::duration::zero();
+    auto sawNonFiniteSample = false;
+
+    const auto testStart = std::chrono::steady_clock::now();
+    constexpr auto testDuration = std::chrono::milliseconds(150);
+    auto firstBlock = true;
+
+    // One continuous, looping note keeps the stream advancing (and, thanks to the loop wrapping
+    // back over pages the small cache has since evicted, keeps missing) for the whole test window,
+    // rather than settling into a steady state where the cache is never touched again.
+    while (std::chrono::steady_clock::now() - testStart < testDuration)
+    {
+        juce::AudioBuffer<float> block(channels, blockSize);
+        juce::MidiBuffer midi;
+
+        if (firstBlock)
+        {
+            midi.addEvent(juce::MidiMessage::noteOn(1, 60, 0.8f), 0);
+            firstBlock = false;
+        }
+
+        const auto blockStart = std::chrono::steady_clock::now();
+        engine.render(block, midi);
+        const auto blockDuration = std::chrono::steady_clock::now() - blockStart;
+        worstBlockDuration = std::max(worstBlockDuration, blockDuration);
+
+        for (int channel = 0; channel < channels && !sawNonFiniteSample; ++channel)
+        {
+            const auto* data = block.getReadPointer(channel);
+            for (int sampleIndex = 0; sampleIndex < blockSize; ++sampleIndex)
+            {
+                if (!std::isfinite(data[sampleIndex]))
+                {
+                    sawNonFiniteSample = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    stopRequested.store(true, std::memory_order_relaxed);
+    primingThread.join();
+
+    tempDirectory.deleteRecursively();
+
+    if (sawNonFiniteSample)
+        return false;
+
+    if (engine.getStreamPrimeServiceCount() == baseServices)
+        return false; // The contention scenario never actually exercised the cache-state publish.
+
+    constexpr auto worstAcceptableBlockDuration = std::chrono::milliseconds(50);
+    return worstBlockDuration < worstAcceptableBlockDuration;
+}
+
 bool runQualityTierDifferenceTest()
 {
     constexpr int channels = 2;
@@ -13536,6 +13689,394 @@ bool runSfzExporterCreateFromScratchTest()
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// ImportedProgramStore
+// ---------------------------------------------------------------------------
+
+class RecordingProgramSink final : public audiocity::plugin::ProgramSink
+{
+public:
+    void republishProgram(const audiocity::engine::Program& program,
+                          const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset) override
+    {
+        ++publishCount;
+        lastProgram = program;
+        lastSampleAssetCount = static_cast<int>(sampleDataByAsset.size());
+    }
+
+    bool republishProgramMetadata(const audiocity::engine::Program& program) override
+    {
+        ++metadataPublishCount;
+        if (!acceptMetadataPublish)
+            return false;
+
+        ++publishCount;
+        lastProgram = program;
+        return true;
+    }
+
+    bool acceptMetadataPublish = true;
+    int publishCount = 0;
+    int metadataPublishCount = 0;
+    int lastSampleAssetCount = 0;
+    audiocity::engine::Program lastProgram;
+};
+
+audiocity::engine::Program createStoreTestProgram(const int zoneCount)
+{
+    audiocity::engine::Program program;
+    program.name = "StoreTest";
+
+    audiocity::engine::SampleAsset asset;
+    asset.displayName = "Asset";
+    asset.lengthSamples = 512;
+    asset.numChannels = 1;
+    asset.sampleRateHz = 48000.0;
+    asset.rootMidiNote = 60;
+    program.sampleAssets.push_back(asset);
+
+    for (int index = 0; index < zoneCount; ++index)
+    {
+        audiocity::engine::Zone zone;
+        zone.sampleAssetIndex = 0;
+        zone.rootMidiNote = 60 + index;
+        zone.keyRange = audiocity::engine::MidiRange::single(60 + index);
+        zone.velocityRange = audiocity::engine::VelocityRange::full();
+        zone.sampleStart = 0;
+        zone.sampleEndExclusive = asset.lengthSamples;
+        program.zones.push_back(zone);
+    }
+
+    return program;
+}
+
+void loadStoreTestProgram(audiocity::plugin::ImportedProgramStore& store, const int zoneCount)
+{
+    const auto program = createStoreTestProgram(zoneCount);
+    std::vector<juce::AudioBuffer<float>> sampleData;
+    sampleData.push_back(createTestSample(512));
+
+    store.loadProgram(juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("StoreTest.sfz"),
+                      audiocity::plugin::ImportedProgramFormat::sfz,
+                      program,
+                      sampleData,
+                      "Loaded",
+                      static_cast<int>(program.zones.size()),
+                      -1);
+}
+
+bool runImportedProgramStoreEditPublishesCommittedProgramTest()
+{
+    RecordingProgramSink sink;
+    audiocity::plugin::ImportedProgramStore store(sink);
+    loadStoreTestProgram(store, 2);
+
+    if (!store.isLoaded() || store.getZoneCount() != 2 || sink.publishCount != 0)
+        return false;
+
+    const auto outcome = store.edit([](audiocity::plugin::ImportedProgramEdit& edit)
+    {
+        audiocity::plugin::ImportedProgramEditOutcome result;
+        edit.program.zones[0].keyRange = audiocity::engine::MidiRange::fromUnordered(24, 36);
+        result.ok = true;
+        result.resultIndex = 0;
+        result.label = "Mapping updated: zone 1";
+        return result;
+    });
+
+    if (!outcome.ok || outcome.resultIndex != 0)
+        return false;
+
+    // Publishing happens once, with the committed program.
+    if (sink.publishCount != 1)
+        return false;
+
+    if (sink.lastProgram.zones[0].keyRange.low != 24 || sink.lastProgram.zones[0].keyRange.high != 36)
+        return false;
+
+    // Derived state follows the commit without the caller asking for it.
+    if (store.getLastDiagnosticSummary() != "Mapping updated: zone 1")
+        return false;
+
+    const auto rows = store.getZoneRows();
+    if (rows.size() != 2u)
+        return false;
+
+    audiocity::engine::Program stored;
+    std::vector<juce::AudioBuffer<float>> storedSamples;
+    store.captureSnapshot(stored, storedSamples);
+    return stored.zones[0].keyRange.low == 24 && storedSamples.size() == 1u;
+}
+
+bool runImportedProgramStoreRejectedEditLeavesStateUntouchedTest()
+{
+    RecordingProgramSink sink;
+    audiocity::plugin::ImportedProgramStore store(sink);
+    loadStoreTestProgram(store, 2);
+
+    const auto outcome = store.edit([](audiocity::plugin::ImportedProgramEdit& edit)
+    {
+        audiocity::plugin::ImportedProgramEditOutcome result;
+        // Mutate the working copy, then fail: neither change may survive.
+        edit.program.zones.clear();
+        result.appendedSampleData.push_back(juce::AudioBuffer<float>(1, 64));
+        result.ok = false;
+        result.resultIndex = 7;
+        result.label = "Rejected";
+        return result;
+    });
+
+    if (outcome.ok || outcome.resultIndex != -1 || !outcome.appendedSampleData.empty())
+        return false;
+
+    if (sink.publishCount != 0 || store.getZoneCount() != 2)
+        return false;
+
+    if (store.getLastDiagnosticSummary() != "Loaded")
+        return false;
+
+    audiocity::engine::Program stored;
+    std::vector<juce::AudioBuffer<float>> storedSamples;
+    store.captureSnapshot(stored, storedSamples);
+    return stored.zones.size() == 2u && storedSamples.size() == 1u;
+}
+
+bool runImportedProgramStoreAppendsSampleDataOnCommitTest()
+{
+    RecordingProgramSink sink;
+    audiocity::plugin::ImportedProgramStore store(sink);
+    loadStoreTestProgram(store, 1);
+
+    const auto outcome = store.edit([](audiocity::plugin::ImportedProgramEdit& edit)
+    {
+        audiocity::plugin::ImportedProgramEditOutcome result;
+        if (edit.sampleDataByAsset.empty())
+            return result;
+
+        audiocity::engine::SampleAsset asset;
+        asset.displayName = "Added";
+        asset.lengthSamples = 128;
+        asset.numChannels = 1;
+        asset.sampleRateHz = 48000.0;
+        asset.rootMidiNote = 60;
+        edit.program.sampleAssets.push_back(asset);
+
+        result.appendedSampleData.push_back(juce::AudioBuffer<float>(1, 128));
+        result.ok = true;
+        result.resultIndex = static_cast<int>(edit.program.sampleAssets.size()) - 1;
+        result.label = "Sample added";
+        return result;
+    });
+
+    if (!outcome.ok || outcome.resultIndex != 1)
+        return false;
+
+    if (sink.publishCount != 1 || sink.lastSampleAssetCount != 2)
+        return false;
+
+    audiocity::engine::Program stored;
+    std::vector<juce::AudioBuffer<float>> storedSamples;
+    store.captureSnapshot(stored, storedSamples);
+    return stored.sampleAssets.size() == 2u && storedSamples.size() == 2u;
+}
+
+bool runImportedProgramStoreRejectsEditWithoutLoadedProgramTest()
+{
+    RecordingProgramSink sink;
+    audiocity::plugin::ImportedProgramStore store(sink);
+
+    auto mutate = [](audiocity::plugin::ImportedProgramEdit& edit)
+    {
+        audiocity::plugin::ImportedProgramEditOutcome result;
+        edit.program.zones.clear();
+        result.ok = true;
+        result.label = "Should not run";
+        return result;
+    };
+
+    if (store.edit(mutate).ok || sink.publishCount != 0)
+        return false;
+
+    loadStoreTestProgram(store, 1);
+    if (!store.edit(mutate).ok || sink.publishCount != 1)
+        return false;
+
+    store.clear();
+    if (store.isLoaded() || store.getZoneCount() != 0 || store.getZoneRows().size() != 0u)
+        return false;
+
+    if (store.getProgramPath().isNotEmpty()
+        || store.getFormat() != audiocity::plugin::ImportedProgramFormat::unknown)
+    {
+        return false;
+    }
+
+    return !store.edit(mutate).ok && sink.publishCount == 1;
+}
+
+bool runImportedProgramStoreLoadProgramPublishesNothingTest()
+{
+    RecordingProgramSink sink;
+    audiocity::plugin::ImportedProgramStore store(sink);
+    loadStoreTestProgram(store, 3);
+
+    if (sink.publishCount != 0)
+        return false;
+
+    if (store.getFormat() != audiocity::plugin::ImportedProgramFormat::sfz
+        || store.getSelectionIndex() != -1
+        || store.getProgramName() != "StoreTest"
+        || store.getLastDiagnosticSummary() != "Loaded")
+    {
+        return false;
+    }
+
+    if (store.getMapSummary().isEmpty() || store.getZoneRows().size() != 3u)
+        return false;
+
+    int observedZones = 0;
+    int observedAssets = 0;
+    store.read([&observedZones, &observedAssets](const audiocity::engine::Program& program,
+                                                 const std::vector<juce::AudioBuffer<float>>& sampleData)
+    {
+        observedZones = static_cast<int>(program.zones.size());
+        observedAssets = static_cast<int>(sampleData.size());
+    });
+
+    return observedZones == 3 && observedAssets == 1;
+}
+
+bool runImportedProgramStoreZoneEditSkipsSampleDataTest()
+{
+    RecordingProgramSink sink;
+    audiocity::plugin::ImportedProgramStore store(sink);
+    loadStoreTestProgram(store, 2);
+
+    const auto outcome = store.edit([](audiocity::plugin::ImportedProgramEdit& edit)
+    {
+        audiocity::plugin::ImportedProgramEditOutcome result;
+        if (edit.program.zones.empty())
+            return result;
+
+        edit.program.zones.front().keyRange = audiocity::engine::MidiRange::fromUnordered(48, 52);
+        result.ok = true;
+        result.label = "Mapping updated";
+        return result;
+    });
+
+    if (!outcome.ok)
+        return false;
+
+    // A zone edit leaves the audio alone, so the sink is asked to adopt the program on its own.
+    if (sink.metadataPublishCount != 1 || sink.publishCount != 1)
+        return false;
+
+    if (sink.lastProgram.zones.empty() || sink.lastProgram.zones.front().keyRange.low != 48)
+        return false;
+
+    return sink.lastSampleAssetCount == 0;
+}
+
+bool runImportedProgramStoreFallsBackWhenMetadataPublishRefusedTest()
+{
+    RecordingProgramSink sink;
+    sink.acceptMetadataPublish = false;
+
+    audiocity::plugin::ImportedProgramStore store(sink);
+    loadStoreTestProgram(store, 2);
+
+    const auto outcome = store.edit([](audiocity::plugin::ImportedProgramEdit& edit)
+    {
+        audiocity::plugin::ImportedProgramEditOutcome result;
+        if (edit.program.zones.empty())
+            return result;
+
+        edit.program.zones.front().rootMidiNote = 55;
+        result.ok = true;
+        result.label = "Mapping updated";
+        return result;
+    });
+
+    if (!outcome.ok)
+        return false;
+
+    if (sink.metadataPublishCount != 1 || sink.publishCount != 1)
+        return false;
+
+    if (sink.lastSampleAssetCount != 1)
+        return false;
+
+    return !sink.lastProgram.zones.empty() && sink.lastProgram.zones.front().rootMidiNote == 55;
+}
+
+bool runProgramMetadataUpdateReusesLoadedAudioTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int channels = 2;
+    constexpr int blockSize = 128;
+    constexpr double sampleRate = 48000.0;
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, channels);
+    engine.setPreloadSamples(1024);
+
+    Program program;
+
+    SampleAsset asset;
+    asset.displayName = "metadata.wav";
+    asset.sampleRateHz = sampleRate;
+    asset.rootMidiNote = 60;
+    program.sampleAssets.push_back(asset);
+
+    Zone zone;
+    zone.sampleAssetIndex = 0;
+    zone.keyRange = MidiRange::single(60);
+    zone.rootMidiNote = 60;
+    program.zones.push_back(zone);
+
+    std::vector<juce::AudioBuffer<float>> sampleDataByAsset;
+    sampleDataByAsset.push_back(createTestSample(4096));
+
+    engine.setProgram(program, sampleDataByAsset);
+
+    const auto preloadAfterLoad = engine.getLoadedPreloadSamples();
+    const auto streamAfterLoad = engine.getLoadedStreamSamples();
+    if (preloadAfterLoad <= 0 || streamAfterLoad <= 0)
+        return false;
+
+    // Move the zone to another key. Only the mapping changed, so the loaded audio must be reused.
+    auto remapped = program;
+    remapped.zones[0].keyRange = MidiRange::single(65);
+    remapped.zones[0].rootMidiNote = 65;
+
+    if (!engine.setProgramMetadata(remapped))
+        return false;
+
+    if (engine.getLoadedPreloadSamples() != preloadAfterLoad
+        || engine.getLoadedStreamSamples() != streamAfterLoad)
+    {
+        return false;
+    }
+
+    if (!engine.hasProgram() || engine.getProgramZoneCount() != 1)
+        return false;
+
+    // The remapped zone still sounds, which is what proves the audio survived the publish.
+    juce::AudioBuffer<float> block(channels, blockSize);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 65, 0.9f), 0);
+    engine.render(block, midi);
+
+    if (block.getMagnitude(0, blockSize) <= 0.0f)
+        return false;
+
+    // Adding an asset changes the audio, so a metadata-only publish has to refuse.
+    auto withExtraAsset = remapped;
+    withExtraAsset.sampleAssets.push_back(asset);
+    return !engine.setProgramMetadata(withExtraAsset);
+}
+
 struct OfflineTestCase
 {
     const char* name = nullptr;
@@ -13699,6 +14240,7 @@ int main()
         AUDIOCITY_TEST(runSingleSampleFileStreamingPreloadMetricsTest, 170),
         AUDIOCITY_TEST(runProgramStreamPrimingAndCacheMetricsTest, 171),
         AUDIOCITY_TEST(runProgramStreamLookaheadPrimingTest, 172),
+        AUDIOCITY_TEST(runDiskStreamCacheStaysResponsiveUnderContentionTest, 253),
         AUDIOCITY_TEST(runProgramMappingCreateZoneTest, 176),
         AUDIOCITY_TEST(runQualityTierDifferenceTest, 15),
         AUDIOCITY_TEST(runQualityTierDeterminismTest, 16),
@@ -13760,6 +14302,14 @@ int main()
         AUDIOCITY_TEST(runModulationRoutingRealtimeTest, 179),
         AUDIOCITY_TEST(runVoicePlaybackStateSnapshotTest, 54),
         AUDIOCITY_TEST(runLoopCrossfadeSmoothsBoundaryTest, 29),
+        AUDIOCITY_TEST(runImportedProgramStoreEditPublishesCommittedProgramTest, 241),
+        AUDIOCITY_TEST(runImportedProgramStoreRejectedEditLeavesStateUntouchedTest, 242),
+        AUDIOCITY_TEST(runImportedProgramStoreAppendsSampleDataOnCommitTest, 243),
+        AUDIOCITY_TEST(runImportedProgramStoreRejectsEditWithoutLoadedProgramTest, 244),
+        AUDIOCITY_TEST(runImportedProgramStoreLoadProgramPublishesNothingTest, 245),
+        AUDIOCITY_TEST(runImportedProgramStoreZoneEditSkipsSampleDataTest, 246),
+        AUDIOCITY_TEST(runImportedProgramStoreFallsBackWhenMetadataPublishRefusedTest, 247),
+        AUDIOCITY_TEST(runProgramMetadataUpdateReusesLoadedAudioTest, 248),
     };
 #undef AUDIOCITY_TEST
 

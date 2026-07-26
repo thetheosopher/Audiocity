@@ -114,6 +114,7 @@ target_sources(Audiocity
         src/plugin/PluginEditor.cpp
         src/plugin/PeakPreviewCache.cpp
         src/plugin/ImportedProgramState.cpp
+        src/plugin/ImportedProgramStore.cpp
         src/plugin/PresetJson.cpp
         src/plugin/ProgramMappingModel.cpp
         src/plugin/PlayerPadState.cpp

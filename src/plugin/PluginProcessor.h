@@ -4,7 +4,9 @@
 #include <juce_core/juce_core.h>
 
 #include "../engine/EngineCore.h"
+#include "EngineProgramSink.h"
 #include "ImportedProgramState.h"
+#include "ImportedProgramStore.h"
 #include "PlayerPadState.h"
 #include "LibraryMetadata.h"
 #include "ProgramMappingModel.h"
@@ -105,11 +107,11 @@ public:
     void setImportDiagnosticSummary(const juce::String& diagnosticSummary);
     [[nodiscard]] bool hasImportedProgram() const noexcept
     {
-        return importedProgramLoaded_.load(std::memory_order_relaxed);
+        return importedProgramStore_.isLoaded();
     }
     [[nodiscard]] int getImportedProgramZoneCount() const noexcept
     {
-        return importedProgramZoneCount_.load(std::memory_order_relaxed);
+        return importedProgramStore_.getZoneCount();
     }
     [[nodiscard]] juce::String getImportedProgramPath() const;
     [[nodiscard]] audiocity::plugin::ImportedProgramFormat getImportedProgramFormat() const;
@@ -458,9 +460,6 @@ private:
                                     int zoneCount,
                                     int selectionIndex = -1);
     void setLastImportDiagnosticSummary(const juce::String& diagnosticSummary);
-    void refreshImportedProgramDerivedStateLocked(const juce::String& diagnosticSummary);
-    void captureImportedProgramSnapshotLocked(audiocity::engine::Program& programToPublish,
-                                             std::vector<juce::AudioBuffer<float>>& sampleDataToPublish) const;
 
     struct UiMidiEvent
     {
@@ -480,6 +479,8 @@ private:
     static constexpr int kExternalMidiDisplayFifoSize = 256;
 
     audiocity::engine::EngineCore engine_;
+    audiocity::plugin::EngineProgramSink programSink_{ engine_ };
+    audiocity::plugin::ImportedProgramStore importedProgramStore_{ programSink_ };
     juce::AudioProcessorValueTreeState apvts_;
     std::thread streamPrimeWorker_;
     std::atomic<bool> stopStreamPrimeWorkerRequested_{ false };
@@ -509,26 +510,14 @@ private:
     std::atomic<bool> generatedWaveformLoaded_{ false };
     std::atomic<bool> capturedAudioLoaded_{ false };
     std::atomic<bool> embeddedSampleLoaded_{ false };
-    std::atomic<bool> importedProgramLoaded_{ false };
-    std::atomic<int> importedProgramZoneCount_{ 0 };
     std::atomic<int> lastStateRestoreSource_{ 0 }; // 0=none, 1=file, 2=generated, 3=captured, 4=imported-program, 5=embedded-sample
     mutable std::mutex generatedWaveformStateMutex_;
-    mutable std::mutex importedProgramStateMutex_;
     std::vector<float> generatedWaveformState_;
     std::vector<float> capturedSampleState_;
     std::vector<float> embeddedSampleState_;
     double embeddedSampleRateState_ = 44100.0;
     int embeddedSampleRootMidiNoteState_ = 60;
     juce::String embeddedSampleNameState_;
-    juce::String importedProgramPath_;
-    audiocity::plugin::ImportedProgramFormat importedProgramFormat_ = audiocity::plugin::ImportedProgramFormat::unknown;
-    int importedProgramSelectionIndex_ = -1;
-    juce::String importedProgramName_;
-    juce::String importedProgramMapSummary_;
-    audiocity::engine::Program importedProgram_;
-    std::vector<juce::AudioBuffer<float>> importedProgramSampleDataByAsset_;
-    std::vector<audiocity::plugin::ProgramZoneListRow> importedProgramZoneRows_;
-    juce::String lastImportDiagnosticSummary_;
     double capturedSampleRateState_ = 44100.0;
     std::atomic<int> waveformViewStartSample_{ 0 };
     std::atomic<int> waveformViewSampleCount_{ 0 };

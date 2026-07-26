@@ -204,6 +204,10 @@ public:
     void setSampleData(const juce::AudioBuffer<float>& sampleData, double sampleRate, int rootNote) noexcept;
     void setProgram(const Program& program);
     void setProgram(const Program& program, const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset);
+    /** Publishes a program whose audio is already loaded, reusing the sample segments rather
+        than rebuilding and re-priming them. Returns false when the loaded audio cannot back the
+        given program, in which case the caller must publish the sample data too. */
+    [[nodiscard]] bool setProgramMetadata(const Program& program);
     void clearProgram() noexcept;
     [[nodiscard]] bool hasProgram() const noexcept;
     [[nodiscard]] int getProgramZoneCount() const noexcept;

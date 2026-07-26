@@ -1,6 +1,7 @@
 set(AUDIOCITY_ENGINE_TEST_COMMON_SOURCES
     ../src/plugin/PeakPreviewCache.cpp
     ../src/plugin/ImportedProgramState.cpp
+    ../src/plugin/ImportedProgramStore.cpp
     ../src/plugin/PresetJson.cpp
     ../src/plugin/ProgramMappingModel.cpp
     ../src/plugin/CcLearnDial.cpp
@@ -198,6 +199,7 @@ set(AUDIOCITY_UI_SNAPSHOT_SHARED_SOURCES
     ../src/plugin/PluginEditor.cpp
     ../src/plugin/PeakPreviewCache.cpp
     ../src/plugin/ImportedProgramState.cpp
+    ../src/plugin/ImportedProgramStore.cpp
     ../src/plugin/PresetJson.cpp
     ../src/plugin/ProgramMappingModel.cpp
     ../src/plugin/PlayerPadState.cpp

@@ -372,6 +372,217 @@ int main()
         return 23;
     }
 
+    // The imported-program edit protocol used to be retyped in every mutation method. These
+    // checks exercise it through the processor: derived state must follow every accepted edit,
+    // and a rejected edit must leave the program exactly as it was.
+    auto editProcessor = std::make_unique<AudiocityAudioProcessor>();
+    editProcessor->prepareToPlay(48000.0, 256);
+
+    // Every mutation must refuse to do anything at all before a program is loaded.
+    if (editProcessor->updateImportedProgramZoneMapping({})
+        || editProcessor->duplicateImportedProgramZone(0) >= 0
+        || editProcessor->splitImportedProgramZone(0) >= 0
+        || editProcessor->deleteImportedProgramZone(0)
+        || editProcessor->mapImportedProgramZonesToRootNotes({ 0 })
+        || editProcessor->spreadImportedProgramZonesAcrossKeyRange({ 0 })
+        || editProcessor->deriveImportedProgramZoneRootsFromKeyRanges({ 0 })
+        || editProcessor->remapImportedProgramZonesChromatically({ 0 })
+        || editProcessor->applyImportedProgramMappingState({})
+        || editProcessor->createImportedProgramMappingState().isValid()
+        || !editProcessor->getImportedProgramZoneRows().empty()
+        || editProcessor->getImportedProgramZoneCount() != 0)
+    {
+        std::fprintf(stderr, "Imported-program edits were accepted with no program loaded.\n");
+        tempDirectory.deleteRecursively();
+        return 24;
+    }
+
+    audiocity::engine::Program editProgram;
+    editProgram.name = "Edit Protocol Program";
+
+    audiocity::engine::SampleAsset editAsset;
+    editAsset.sourcePath = tempDirectory.getChildFile("EditProtocol.wav").getFullPathName().toStdString();
+    editAsset.displayName = "EditProtocol.wav";
+    editAsset.lengthSamples = 256;
+    editAsset.numChannels = 2;
+    editAsset.sampleRateHz = 48000.0;
+    editAsset.rootMidiNote = 60;
+    editProgram.sampleAssets.push_back(editAsset);
+
+    for (int index = 0; index < 2; ++index)
+    {
+        audiocity::engine::Zone zone;
+        zone.sampleAssetIndex = 0;
+        zone.rootMidiNote = 60 + index;
+        zone.keyRange = audiocity::engine::MidiRange::single(60 + index);
+        zone.sampleEndExclusive = editAsset.lengthSamples;
+        editProgram.zones.push_back(zone);
+    }
+
+    std::vector<juce::AudioBuffer<float>> editSampleData;
+    editSampleData.emplace_back(editAsset.numChannels, editAsset.lengthSamples);
+    editSampleData[0].clear();
+
+    if (!editProcessor->publishPreparedImportedProgram(
+            tempDirectory.getChildFile("EditProtocol.dspreset"),
+            audiocity::plugin::ImportedProgramFormat::decentSampler,
+            std::move(editProgram),
+            std::move(editSampleData),
+            "Edit protocol import",
+            0)
+        || editProcessor->getImportedProgramZoneCount() != 2)
+    {
+        std::fprintf(stderr, "Failed to publish the edit-protocol test program.\n");
+        tempDirectory.deleteRecursively();
+        return 24;
+    }
+
+    // An accepted edit refreshes the zone rows and the diagnostic summary without being asked.
+    audiocity::plugin::ProgramZoneEdit keyRangeEdit;
+    keyRangeEdit.zoneIndex = 0;
+    keyRangeEdit.keyLow = 24;
+    keyRangeEdit.keyHigh = 36;
+    keyRangeEdit.rootMidiNote = 30;
+
+    if (!editProcessor->updateImportedProgramZoneMapping(keyRangeEdit))
+    {
+        std::fprintf(stderr, "Imported-program zone mapping edit was rejected.\n");
+        tempDirectory.deleteRecursively();
+        return 25;
+    }
+
+    const auto editedRows = editProcessor->getImportedProgramZoneRows();
+    if (editedRows.size() != 2
+        || editedRows[0].keyLow != 24
+        || editedRows[0].keyHigh != 36
+        || editedRows[0].rootMidiNote != 30
+        || editProcessor->getImportedProgramMapSummary().isEmpty()
+        || !editProcessor->getLastImportDiagnosticSummary().contains("Mapping updated"))
+    {
+        std::fprintf(stderr, "Zone mapping edit did not refresh derived state.\n");
+        tempDirectory.deleteRecursively();
+        return 25;
+    }
+
+    // A rejected edit must not disturb the program, the derived state, or the summary.
+    const auto rowsBeforeRejectedEdit = editProcessor->getImportedProgramZoneRows();
+    const auto summaryBeforeRejectedEdit = editProcessor->getLastImportDiagnosticSummary();
+
+    audiocity::plugin::ProgramZoneEdit outOfRangeEdit;
+    outOfRangeEdit.zoneIndex = 99;
+
+    if (editProcessor->updateImportedProgramZoneMapping(outOfRangeEdit)
+        || editProcessor->duplicateImportedProgramZone(99) >= 0
+        || editProcessor->splitImportedProgramZone(99) >= 0
+        || editProcessor->deleteImportedProgramZones({ 0, 99 })
+        || editProcessor->mapImportedProgramZonesToRootNotes({ 99 })
+        || editProcessor->remapImportedProgramZonesChromatically({ 99 }))
+    {
+        std::fprintf(stderr, "Out-of-range imported-program edits were accepted.\n");
+        tempDirectory.deleteRecursively();
+        return 26;
+    }
+
+    const auto rowsAfterRejectedEdit = editProcessor->getImportedProgramZoneRows();
+    if (editProcessor->getImportedProgramZoneCount() != 2
+        || rowsAfterRejectedEdit.size() != rowsBeforeRejectedEdit.size()
+        || rowsAfterRejectedEdit[0].keyLow != rowsBeforeRejectedEdit[0].keyLow
+        || rowsAfterRejectedEdit[0].keyHigh != rowsBeforeRejectedEdit[0].keyHigh
+        || rowsAfterRejectedEdit[0].rootMidiNote != rowsBeforeRejectedEdit[0].rootMidiNote
+        || editProcessor->getLastImportDiagnosticSummary() != summaryBeforeRejectedEdit)
+    {
+        std::fprintf(stderr, "A rejected imported-program edit changed the stored program.\n");
+        tempDirectory.deleteRecursively();
+        return 26;
+    }
+
+    // Structural edits keep the zone count and the derived rows in step.
+    const auto duplicatedZoneIndex = editProcessor->duplicateImportedProgramZone(0);
+    if (duplicatedZoneIndex < 0
+        || editProcessor->getImportedProgramZoneCount() != 3
+        || editProcessor->getImportedProgramZoneRows().size() != 3
+        || !editProcessor->getLastImportDiagnosticSummary().contains("duplicated"))
+    {
+        std::fprintf(stderr, "Duplicating an imported-program zone did not update derived state.\n");
+        tempDirectory.deleteRecursively();
+        return 27;
+    }
+
+    if (!editProcessor->deleteImportedProgramZone(duplicatedZoneIndex)
+        || editProcessor->getImportedProgramZoneCount() != 2
+        || editProcessor->getImportedProgramZoneRows().size() != 2
+        || !editProcessor->getLastImportDiagnosticSummary().contains("deleted"))
+    {
+        std::fprintf(stderr, "Deleting an imported-program zone did not update derived state.\n");
+        tempDirectory.deleteRecursively();
+        return 27;
+    }
+
+    // Slice edits are only meaningful for slice programs, and must decline other formats.
+    if (editProcessor->splitImportedProgramSliceAtSample(64) >= 0
+        || editProcessor->mergeImportedProgramSlicesAtSampleBoundary(64) >= 0
+        || editProcessor->getImportedProgramZoneCount() != 2)
+    {
+        std::fprintf(stderr, "Slice edits were accepted for a non-slice program.\n");
+        tempDirectory.deleteRecursively();
+        return 28;
+    }
+
+    // Adding a sample asset commits the decoded audio alongside the program, and asking for the
+    // same file twice reuses the asset that is already held.
+    const auto addedSampleFile = tempDirectory.getChildFile("AddedAsset.wav");
+    if (!writeStereoToneWav(addedSampleFile, 48000, 256))
+    {
+        std::fprintf(stderr, "Failed to write the sample used for asset-add coverage.\n");
+        tempDirectory.deleteRecursively();
+        return 29;
+    }
+
+    auto addedAssetIndex = -1;
+    juce::String addAssetError;
+    if (!editProcessor->ensureImportedProgramSampleAsset(addedSampleFile, addedAssetIndex, addAssetError)
+        || addedAssetIndex != 1
+        || editProcessor->getImportedProgramSampleAssetNames().size() != 2)
+    {
+        std::fprintf(stderr, "Adding an imported-program sample asset failed: %s\n", addAssetError.toRawUTF8());
+        tempDirectory.deleteRecursively();
+        return 29;
+    }
+
+    auto repeatedAssetIndex = -1;
+    if (!editProcessor->ensureImportedProgramSampleAsset(addedSampleFile, repeatedAssetIndex, addAssetError)
+        || repeatedAssetIndex != addedAssetIndex
+        || editProcessor->getImportedProgramSampleAssetNames().size() != 2)
+    {
+        std::fprintf(stderr, "Re-adding an existing sample asset did not reuse the existing entry.\n");
+        tempDirectory.deleteRecursively();
+        return 30;
+    }
+
+    // A mapping state round-trip must reproduce the rows it was captured from.
+    const auto capturedMappingState = editProcessor->createImportedProgramMappingState();
+    const auto rowsBeforeMappingRestore = editProcessor->getImportedProgramZoneRows();
+    if (!capturedMappingState.isValid()
+        || !editProcessor->spreadImportedProgramZonesAcrossKeyRange({ 0, 1 })
+        || !editProcessor->applyImportedProgramMappingState(capturedMappingState))
+    {
+        std::fprintf(stderr, "Imported-program mapping state round-trip failed.\n");
+        tempDirectory.deleteRecursively();
+        return 31;
+    }
+
+    const auto rowsAfterMappingRestore = editProcessor->getImportedProgramZoneRows();
+    if (rowsAfterMappingRestore.size() != rowsBeforeMappingRestore.size()
+        || rowsAfterMappingRestore[0].keyLow != rowsBeforeMappingRestore[0].keyLow
+        || rowsAfterMappingRestore[0].keyHigh != rowsBeforeMappingRestore[0].keyHigh
+        || rowsAfterMappingRestore[1].keyLow != rowsBeforeMappingRestore[1].keyLow
+        || rowsAfterMappingRestore[1].keyHigh != rowsBeforeMappingRestore[1].keyHigh)
+    {
+        std::fprintf(stderr, "Restoring a captured mapping state did not reproduce the zone rows.\n");
+        tempDirectory.deleteRecursively();
+        return 31;
+    }
+
     tempDirectory.deleteRecursively();
 
     return 0;

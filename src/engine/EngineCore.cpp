@@ -519,8 +519,8 @@ struct DiskSampleStreamSource final : SampleStreamSource
     {
         formatManager.registerBasicFormats();
 
-        if (const auto initialState = seedInitialCacheState(seedTail))
-            cacheState.store(initialState, std::memory_order_release);
+        if (auto initialState = seedInitialCacheState(seedTail))
+            publishCacheState(std::move(initialState));
     }
 
     [[nodiscard]] int getNumChannels() const noexcept override
@@ -539,7 +539,10 @@ struct DiskSampleStreamSource final : SampleStreamSource
             return 0.0f;
 
         const auto clampedChannel = juce::jlimit(0, totalChannels - 1, channel);
-        const auto currentCache = cacheState.load(std::memory_order_acquire);
+        // Lock-free: readSample() runs on the audio thread, potentially per output sample, so this
+        // may never take the internal spinlock that std::atomic<std::shared_ptr<T>>::load() does on
+        // MSVC. See cacheStatePtr_ for the lifetime scheme that makes a raw pointer safe here.
+        const auto* currentCache = cacheStatePtr_.load(std::memory_order_acquire);
         if (currentCache != nullptr)
             if (const auto* page = currentCache->findPageContainingSample(index); page != nullptr)
                 return page->data.getSample(juce::jmin(clampedChannel, page->data.getNumChannels() - 1),
@@ -556,7 +559,7 @@ struct DiskSampleStreamSource final : SampleStreamSource
         ++primeRequestCount;
 
         const auto clampedIndex = juce::jlimit(0, totalSamples - 1, streamIndex);
-        const auto currentCache = cacheState.load(std::memory_order_acquire);
+        const auto* currentCache = cacheStatePtr_.load(std::memory_order_acquire);
         if (currentCache != nullptr && currentCache->contains(clampedIndex))
         {
             ++primeCacheHitCount;
@@ -573,7 +576,7 @@ struct DiskSampleStreamSource final : SampleStreamSource
         if (requestedWindowStart < 0)
             return false;
 
-        const auto currentCache = cacheState.load(std::memory_order_acquire);
+        const auto* currentCache = cacheStatePtr_.load(std::memory_order_acquire);
         if (currentCache != nullptr && currentCache->contains(requestedWindowStart))
             return false;
 
@@ -581,7 +584,7 @@ struct DiskSampleStreamSource final : SampleStreamSource
         if (nextCache == nullptr)
             return false;
 
-        cacheState.store(mergeCacheWindow(currentCache, *nextCache), std::memory_order_release);
+        publishCacheState(mergeCacheWindow(currentCache, *nextCache));
         ++primeServiceCount;
         return true;
     }
@@ -704,7 +707,7 @@ private:
     }
 
     [[nodiscard]] std::shared_ptr<const StreamCacheState> mergeCacheWindow(
-        const std::shared_ptr<const StreamCacheState>& currentState,
+        const StreamCacheState* currentState,
         const StreamCacheWindow& nextWindow) const
     {
         auto merged = std::make_shared<StreamCacheState>();
@@ -728,6 +731,29 @@ private:
         return merged;
     }
 
+    // Publishes a new cache state without ever taking a lock on the reader side.
+    //
+    // std::atomic<std::shared_ptr<T>>::load() takes an internal spinlock on MSVC (and is not
+    // lock-free on any standard library), which readSample()/requestPrime() cannot afford: they run
+    // on the audio thread, potentially once per output sample. Only one thread ever calls
+    // publishCacheState() on a given instance at a time -- construction happens-before the first
+    // call from the stream-prime worker thread (via the acquire/release pair around
+    // programAudioSnapshot_), and the worker thread itself is the single serialized caller of
+    // servicePendingPrime() thereafter -- so cacheStateOwners_ needs no synchronization of its own.
+    // cacheStateOwners_ keeps kCacheStateGenerations retired states alive so that a reader which
+    // already loaded a pointer keeps something valid to dereference. The worker publishes at least
+    // every couple of milliseconds (see AudiocityAudioProcessor::startStreamPrimeWorker) while a
+    // reader's use of the pointer is a handful of instructions, so even two generations would be
+    // safe in practice; four is kept for margin at negligible cost.
+    static constexpr int kCacheStateGenerations = 4;
+
+    void publishCacheState(std::shared_ptr<const StreamCacheState> state) const noexcept
+    {
+        cacheStateGenerationIndex = (cacheStateGenerationIndex + 1) % kCacheStateGenerations;
+        cacheStatePtr_.store(state.get(), std::memory_order_release);
+        cacheStateOwners_[static_cast<std::size_t>(cacheStateGenerationIndex)] = std::move(state);
+    }
+
     juce::File file;
     int totalChannels = 0;
     int totalSamples = 0;
@@ -741,7 +767,9 @@ private:
     mutable std::atomic<int> primeCacheHitCount{ 0 };
     mutable std::atomic<int> primeCacheMissCount{ 0 };
     mutable std::atomic<int> primeServiceCount{ 0 };
-    mutable std::atomic<std::shared_ptr<const StreamCacheState>> cacheState{};
+    mutable std::atomic<const StreamCacheState*> cacheStatePtr_{ nullptr };
+    mutable std::array<std::shared_ptr<const StreamCacheState>, kCacheStateGenerations> cacheStateOwners_{};
+    mutable int cacheStateGenerationIndex = -1;
 };
 
 struct EngineCore::SampleSegments
@@ -1197,6 +1225,57 @@ void EngineCore::setProgram(const Program& program, const std::vector<juce::Audi
 
     programAudioSnapshot_.store(audio, std::memory_order_release);
     programSnapshot_.store(std::make_shared<const ProgramSnapshot>(metadata), std::memory_order_release);
+}
+
+bool EngineCore::setProgramMetadata(const Program& program)
+{
+    const auto audio = programAudioSnapshot_.load(std::memory_order_acquire);
+    if (audio == nullptr)
+        return false;
+
+    auto metadata = ProgramSnapshot::fromProgram(program);
+
+    // The loaded audio is what makes this program playable, so it has to describe the same set
+    // of assets. Anything else means the sample data changed and must be published with it.
+    if (metadata.sampleAssetCount != audio->sampleAssetCount)
+        return false;
+
+    for (std::size_t assetIndex = 0; assetIndex < metadata.sampleAssetCount; ++assetIndex)
+    {
+        const auto* segments = audio->getSampleSegments(static_cast<int>(assetIndex));
+        if (segments == nullptr)
+            continue;
+
+        // Take the shape of the audio actually held, exactly as a full publish would.
+        auto& asset = metadata.sampleAssets[assetIndex];
+        asset.lengthSamples = segments->preloadData.getNumSamples() + segments->getStreamNumSamples();
+        asset.numChannels = juce::jmax(segments->preloadData.getNumChannels(),
+                                       segments->getStreamNumChannels());
+        if (asset.sampleRateHz <= 0.0)
+            asset.sampleRateHz = sampleDataRate_ > 0.0 ? sampleDataRate_ : sampleRate_;
+    }
+
+    resetRoundRobinCursors();
+
+    // Zone starts may have moved even though the audio did not, so the streaming windows still
+    // need priming; only the segment rebuild is skipped.
+    for (std::size_t zoneIndex = 0; zoneIndex < metadata.zoneCount; ++zoneIndex)
+    {
+        const auto& zone = metadata.zones[zoneIndex];
+        if (!metadata.isZoneSampleIndexValid(zone))
+            continue;
+
+        const auto* segments = audio->getSampleSegments(zone.sampleAssetIndex);
+        if (segments == nullptr)
+            continue;
+
+        segments->requestPrimeForAbsoluteSample(zone.sampleStart);
+        const auto primed = segments->servicePendingPrime();
+        juce::ignoreUnused(primed);
+    }
+
+    programSnapshot_.store(std::make_shared<const ProgramSnapshot>(metadata), std::memory_order_release);
+    return true;
 }
 
 void EngineCore::clearProgram() noexcept
