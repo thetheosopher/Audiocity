@@ -1,7 +1,7 @@
 #define MyAppName "Audiocity"
 
 #ifndef MyAppVersion
-  #define MyAppVersion "1.3.1.0"
+  #define MyAppVersion "1.3.2.0"
 #endif
 
 #ifndef SourceRoot
