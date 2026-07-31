@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "ProgramSnapshot.h"
+#include "RtSnapshotCell.h"
 #include "VoicePool.h"
 
 namespace audiocity::engine
@@ -524,7 +525,9 @@ private:
     void rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData) noexcept;
     void rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData,
                                const juce::File& backingFile) noexcept;
-    [[nodiscard]] std::shared_ptr<const SampleSegments> getSampleSegmentsSnapshot() const noexcept;
+    // `role` identifies the calling thread so the lock-free snapshot cell can protect the
+    // returned guard without contending with the other two roles. See RtSnapshotCell.h.
+    [[nodiscard]] RtSnapshotCell<SampleSegments>::Reader getSampleSegmentsSnapshot(RtReaderRole role) const noexcept;
     [[nodiscard]] static std::shared_ptr<const SampleSegments> buildSampleSegments(const juce::AudioBuffer<float>& monoSampleData,
         int preloadSamples,
         const juce::File& backingFile = {}) noexcept;
@@ -612,9 +615,9 @@ private:
     std::array<RoundRobinCursor, ProgramSnapshot::maxGroups> roundRobinCursors_{};
     int pendingEventCount_ = 0;
 
-    std::atomic<std::shared_ptr<const ProgramSnapshot>> programSnapshot_{};
-    std::atomic<std::shared_ptr<const ProgramAudioSnapshot>> programAudioSnapshot_{};
-    std::atomic<std::shared_ptr<const SampleSegments>> sampleSegments_{};
+    RtSnapshotCell<ProgramSnapshot> programSnapshot_{};
+    RtSnapshotCell<ProgramAudioSnapshot> programAudioSnapshot_{};
+    RtSnapshotCell<SampleSegments> sampleSegments_{};
     juce::AudioBuffer<float> displaySampleData_;
     juce::String loadedSampleLoopFormatBadge_;
     int loadedSampleBitDepth_ = -1;

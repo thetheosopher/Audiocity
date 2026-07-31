@@ -37,7 +37,9 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <limits>
+#include <mutex>
 #include <set>
 #include <thread>
 #include <utility>
@@ -9623,6 +9625,88 @@ bool runDiskStreamCacheStaysResponsiveUnderContentionTest()
     return worstBlockDuration < worstAcceptableBlockDuration;
 }
 
+bool runRtSnapshotCellProtectsHeldReaderAcrossPublishesTest()
+{
+    // EngineCore's top-level programSnapshot_/programAudioSnapshot_/sampleSegments_ differ from
+    // DiskSampleStreamSource::cacheState: render() can hold a Reader guard for an entire
+    // host-controlled block (which can be large), and the message thread can publish faster than
+    // that block takes to render -- so a small fixed-size retirement ring is not automatically safe
+    // here (see RtSnapshotCell.h). This test proves the actual property RtSnapshotCell relies on
+    // instead: a generation held by a live Reader survives ANY number of subsequent publishes from
+    // another thread, and is reclaimed only after the guard is released. It needs no EngineCore or
+    // audio rendering at all -- just the cell in isolation.
+    using audiocity::engine::RtReaderRole;
+    using audiocity::engine::RtSnapshotCell;
+
+    struct Payload
+    {
+        int id = 0;
+        std::function<void(int)> onDestroy;
+
+        // A real (non-aggregate) constructor is essential here: Payload has a user-declared
+        // destructor, which suppresses the implicit move constructor, so
+        // make_shared<const Payload>(Payload{id, cb}) would fall back to *copying* the temporary --
+        // leaving the short-lived temporary with its own live `onDestroy`, which then fires
+        // spuriously when that temporary is destroyed at the end of the full expression, regardless
+        // of whether the real managed object was ever reclaimed. Constructing in place via this
+        // constructor avoids creating any such temporary.
+        Payload(const int id_, std::function<void(int)> cb) : id(id_), onDestroy(std::move(cb)) {}
+        ~Payload()
+        {
+            if (onDestroy)
+                onDestroy(id);
+        }
+    };
+
+    std::mutex destroyedMutex;
+    std::set<int> destroyedIds;
+    const auto recordDestroyed = [&](const int id)
+    {
+        std::lock_guard<std::mutex> lock(destroyedMutex);
+        destroyedIds.insert(id);
+    };
+    const auto wasDestroyed = [&](const int id)
+    {
+        std::lock_guard<std::mutex> lock(destroyedMutex);
+        return destroyedIds.count(id) != 0;
+    };
+
+    RtSnapshotCell<Payload> cell;
+    cell.publish(std::make_shared<const Payload>(0, recordDestroyed));
+
+    {
+        // Acquire and hold a Reader guard for generation 0, exactly like render() holds its
+        // top-level snapshots for the whole block.
+        const auto heldReader = cell.read(RtReaderRole::audio);
+        if (!heldReader || heldReader->id != 0)
+            return false;
+
+        // Flood far more publishes through than any small fixed-size ring could survive, from a
+        // different thread (the message-thread role), while the guard above is still alive.
+        constexpr int floodCount = 5000;
+        std::thread writer([&]
+        {
+            for (int index = 1; index <= floodCount; ++index)
+                cell.publish(std::make_shared<const Payload>(index, recordDestroyed));
+        });
+        writer.join();
+
+        // The held generation must still be exactly what we captured -- not freed, not reused.
+        if (!heldReader || heldReader->id != 0)
+            return false;
+
+        if (wasDestroyed(0))
+            return false; // Freed while still protected by a live Reader -- unsafe.
+    }
+
+    // Once the guard is released, one more publish must let generation 0 finally be reclaimed --
+    // otherwise this is a leak (an unconditional "never touch anything a hazard once pointed at"
+    // fix), not a correct one.
+    cell.publish(std::make_shared<const Payload>(-1, recordDestroyed));
+
+    return wasDestroyed(0);
+}
+
 bool runQualityTierDifferenceTest()
 {
     constexpr int channels = 2;
@@ -14241,6 +14325,7 @@ int main()
         AUDIOCITY_TEST(runProgramStreamPrimingAndCacheMetricsTest, 171),
         AUDIOCITY_TEST(runProgramStreamLookaheadPrimingTest, 172),
         AUDIOCITY_TEST(runDiskStreamCacheStaysResponsiveUnderContentionTest, 253),
+        AUDIOCITY_TEST(runRtSnapshotCellProtectsHeldReaderAcrossPublishesTest, 254),
         AUDIOCITY_TEST(runProgramMappingCreateZoneTest, 176),
         AUDIOCITY_TEST(runQualityTierDifferenceTest, 15),
         AUDIOCITY_TEST(runQualityTierDeterminismTest, 16),

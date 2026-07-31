@@ -947,24 +947,24 @@ void EngineCore::setSaturationSettings(const SaturationSettings& settings) noexc
 
 int EngineCore::getLoadedPreloadSamples() const noexcept
 {
-    const auto programSnapshot = programSnapshot_.load(std::memory_order_acquire);
-    const auto programAudioSnapshot = programAudioSnapshot_.load(std::memory_order_acquire);
-    if (programSnapshot != nullptr)
-        return programAudioSnapshot != nullptr ? countProgramSegmentSamples(*programAudioSnapshot, true) : 0;
+    const auto programSnapshot = programSnapshot_.read(RtReaderRole::message);
+    const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::message);
+    if (programSnapshot)
+        return programAudioSnapshot ? countProgramSegmentSamples(*programAudioSnapshot, true) : 0;
 
-    const auto segments = getSampleSegmentsSnapshot();
-    return segments != nullptr ? segments->preloadData.getNumSamples() : 0;
+    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::message);
+    return segments ? segments->preloadData.getNumSamples() : 0;
 }
 
 int EngineCore::getLoadedStreamSamples() const noexcept
 {
-    const auto programSnapshot = programSnapshot_.load(std::memory_order_acquire);
-    const auto programAudioSnapshot = programAudioSnapshot_.load(std::memory_order_acquire);
-    if (programSnapshot != nullptr)
-        return programAudioSnapshot != nullptr ? countProgramSegmentSamples(*programAudioSnapshot, false) : 0;
+    const auto programSnapshot = programSnapshot_.read(RtReaderRole::message);
+    const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::message);
+    if (programSnapshot)
+        return programAudioSnapshot ? countProgramSegmentSamples(*programAudioSnapshot, false) : 0;
 
-    const auto segments = getSampleSegmentsSnapshot();
-    return segments != nullptr ? segments->getStreamNumSamples() : 0;
+    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::message);
+    return segments ? segments->getStreamNumSamples() : 0;
 }
 
 EngineCore::PreparedSampleFile EngineCore::prepareSampleFile(const juce::File& file,
@@ -1175,10 +1175,9 @@ void EngineCore::setSampleDataInternal(const juce::AudioBuffer<float>& sampleDat
 void EngineCore::setProgram(const Program& program)
 {
     resetRoundRobinCursors();
-    programAudioSnapshot_.store(nullptr, std::memory_order_release);
-    programSnapshot_.store(
-        std::make_shared<const ProgramSnapshot>(ProgramSnapshot::fromProgram(program)),
-        std::memory_order_release);
+    programAudioSnapshot_.publish(nullptr);
+    programSnapshot_.publish(
+        std::make_shared<const ProgramSnapshot>(ProgramSnapshot::fromProgram(program)));
 }
 
 void EngineCore::setProgram(const Program& program, const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset)
@@ -1223,14 +1222,14 @@ void EngineCore::setProgram(const Program& program, const std::vector<juce::Audi
         juce::ignoreUnused(primed);
     }
 
-    programAudioSnapshot_.store(audio, std::memory_order_release);
-    programSnapshot_.store(std::make_shared<const ProgramSnapshot>(metadata), std::memory_order_release);
+    programAudioSnapshot_.publish(audio);
+    programSnapshot_.publish(std::make_shared<const ProgramSnapshot>(metadata));
 }
 
 bool EngineCore::setProgramMetadata(const Program& program)
 {
-    const auto audio = programAudioSnapshot_.load(std::memory_order_acquire);
-    if (audio == nullptr)
+    const auto audio = programAudioSnapshot_.read(RtReaderRole::message);
+    if (!audio)
         return false;
 
     auto metadata = ProgramSnapshot::fromProgram(program);
@@ -1274,26 +1273,26 @@ bool EngineCore::setProgramMetadata(const Program& program)
         juce::ignoreUnused(primed);
     }
 
-    programSnapshot_.store(std::make_shared<const ProgramSnapshot>(metadata), std::memory_order_release);
+    programSnapshot_.publish(std::make_shared<const ProgramSnapshot>(metadata));
     return true;
 }
 
 void EngineCore::clearProgram() noexcept
 {
     resetRoundRobinCursors();
-    programSnapshot_.store(nullptr, std::memory_order_release);
-    programAudioSnapshot_.store(nullptr, std::memory_order_release);
+    programSnapshot_.publish(nullptr);
+    programAudioSnapshot_.publish(nullptr);
 }
 
 bool EngineCore::hasProgram() const noexcept
 {
-    return programSnapshot_.load(std::memory_order_acquire) != nullptr;
+    return static_cast<bool>(programSnapshot_.read(RtReaderRole::message));
 }
 
 int EngineCore::getProgramZoneCount() const noexcept
 {
-    const auto snapshot = programSnapshot_.load(std::memory_order_acquire);
-    return snapshot != nullptr ? static_cast<int>(snapshot->zoneCount) : 0;
+    const auto snapshot = programSnapshot_.read(RtReaderRole::message);
+    return snapshot ? static_cast<int>(snapshot->zoneCount) : 0;
 }
 
 void EngineCore::setPreloadSamples(const int preloadSamples) noexcept
@@ -1301,18 +1300,18 @@ void EngineCore::setPreloadSamples(const int preloadSamples) noexcept
     preloadSamples_ = juce::jmax(256, preloadSamples);
     auto rebuiltSingleSampleSegments = false;
 
-    const auto segments = getSampleSegmentsSnapshot();
-    if (segments != nullptr && getTotalSampleLength(*segments) > 0)
+    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::message);
+    if (segments && getTotalSampleLength(*segments) > 0)
     {
         rebuildSampleSegments(materializeSampleData(*segments), juce::File(segments->backingFilePath));
         rebuiltSingleSampleSegments = true;
     }
 
-    const auto programAudioSnapshot = programAudioSnapshot_.load(std::memory_order_acquire);
-    if (programAudioSnapshot != nullptr)
+    const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::message);
+    if (programAudioSnapshot)
     {
         ++segmentRebuildCount_;
-        programAudioSnapshot_.store(rebuildProgramAudioSnapshot(*programAudioSnapshot), std::memory_order_release);
+        programAudioSnapshot_.publish(rebuildProgramAudioSnapshot(*programAudioSnapshot));
     }
 
     if (rebuiltSingleSampleSegments)
@@ -1325,11 +1324,11 @@ void EngineCore::setPreloadSamples(const int preloadSamples) noexcept
 
 void EngineCore::serviceStreamPriming()
 {
-    const auto programSnapshot = programSnapshot_.load(std::memory_order_acquire);
-    if (programSnapshot != nullptr)
+    const auto programSnapshot = programSnapshot_.read(RtReaderRole::worker);
+    if (programSnapshot)
     {
-        const auto programAudioSnapshot = programAudioSnapshot_.load(std::memory_order_acquire);
-        if (programAudioSnapshot == nullptr)
+        const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::worker);
+        if (!programAudioSnapshot)
             return;
 
         for (std::size_t assetIndex = 0; assetIndex < programAudioSnapshot->sampleAssetCount; ++assetIndex)
@@ -1344,7 +1343,7 @@ void EngineCore::serviceStreamPriming()
         return;
     }
 
-    if (const auto segments = getSampleSegmentsSnapshot())
+    if (const auto segments = getSampleSegmentsSnapshot(RtReaderRole::worker))
     {
         const auto serviced = segments->servicePendingPrime();
         juce::ignoreUnused(serviced);
@@ -1353,12 +1352,12 @@ void EngineCore::serviceStreamPriming()
 
 int EngineCore::getStreamPrimeRequestCount() const noexcept
 {
-    const auto programSnapshot = programSnapshot_.load(std::memory_order_acquire);
-    if (programSnapshot != nullptr)
+    const auto programSnapshot = programSnapshot_.read(RtReaderRole::message);
+    if (programSnapshot)
     {
         auto total = 0;
-        const auto programAudioSnapshot = programAudioSnapshot_.load(std::memory_order_acquire);
-        if (programAudioSnapshot == nullptr)
+        const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::message);
+        if (!programAudioSnapshot)
             return 0;
 
         for (std::size_t assetIndex = 0; assetIndex < programAudioSnapshot->sampleAssetCount; ++assetIndex)
@@ -1370,18 +1369,18 @@ int EngineCore::getStreamPrimeRequestCount() const noexcept
         return total;
     }
 
-    const auto segments = getSampleSegmentsSnapshot();
-    return segments != nullptr ? segments->getPrimeRequestCount() : 0;
+    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::message);
+    return segments ? segments->getPrimeRequestCount() : 0;
 }
 
 int EngineCore::getStreamPrimeCacheHitCount() const noexcept
 {
-    const auto programSnapshot = programSnapshot_.load(std::memory_order_acquire);
-    if (programSnapshot != nullptr)
+    const auto programSnapshot = programSnapshot_.read(RtReaderRole::message);
+    if (programSnapshot)
     {
         auto total = 0;
-        const auto programAudioSnapshot = programAudioSnapshot_.load(std::memory_order_acquire);
-        if (programAudioSnapshot == nullptr)
+        const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::message);
+        if (!programAudioSnapshot)
             return 0;
 
         for (std::size_t assetIndex = 0; assetIndex < programAudioSnapshot->sampleAssetCount; ++assetIndex)
@@ -1393,18 +1392,18 @@ int EngineCore::getStreamPrimeCacheHitCount() const noexcept
         return total;
     }
 
-    const auto segments = getSampleSegmentsSnapshot();
-    return segments != nullptr ? segments->getPrimeCacheHitCount() : 0;
+    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::message);
+    return segments ? segments->getPrimeCacheHitCount() : 0;
 }
 
 int EngineCore::getStreamPrimeCacheMissCount() const noexcept
 {
-    const auto programSnapshot = programSnapshot_.load(std::memory_order_acquire);
-    if (programSnapshot != nullptr)
+    const auto programSnapshot = programSnapshot_.read(RtReaderRole::message);
+    if (programSnapshot)
     {
         auto total = 0;
-        const auto programAudioSnapshot = programAudioSnapshot_.load(std::memory_order_acquire);
-        if (programAudioSnapshot == nullptr)
+        const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::message);
+        if (!programAudioSnapshot)
             return 0;
 
         for (std::size_t assetIndex = 0; assetIndex < programAudioSnapshot->sampleAssetCount; ++assetIndex)
@@ -1416,18 +1415,18 @@ int EngineCore::getStreamPrimeCacheMissCount() const noexcept
         return total;
     }
 
-    const auto segments = getSampleSegmentsSnapshot();
-    return segments != nullptr ? segments->getPrimeCacheMissCount() : 0;
+    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::message);
+    return segments ? segments->getPrimeCacheMissCount() : 0;
 }
 
 int EngineCore::getStreamPrimeServiceCount() const noexcept
 {
-    const auto programSnapshot = programSnapshot_.load(std::memory_order_acquire);
-    if (programSnapshot != nullptr)
+    const auto programSnapshot = programSnapshot_.read(RtReaderRole::message);
+    if (programSnapshot)
     {
         auto total = 0;
-        const auto programAudioSnapshot = programAudioSnapshot_.load(std::memory_order_acquire);
-        if (programAudioSnapshot == nullptr)
+        const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::message);
+        if (!programAudioSnapshot)
             return 0;
 
         for (std::size_t assetIndex = 0; assetIndex < programAudioSnapshot->sampleAssetCount; ++assetIndex)
@@ -1439,8 +1438,8 @@ int EngineCore::getStreamPrimeServiceCount() const noexcept
         return total;
     }
 
-    const auto segments = getSampleSegmentsSnapshot();
-    return segments != nullptr ? segments->getPrimeServiceCount() : 0;
+    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::message);
+    return segments ? segments->getPrimeServiceCount() : 0;
 }
 
 int EngineCore::getLoadedSampleLength() const noexcept
@@ -1514,8 +1513,8 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     if (outputs == nullptr || numChannels <= 0 || numSamples <= 0)
         return;
 
-    const auto segments = getSampleSegmentsSnapshot();
-    if (segments == nullptr)
+    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::audio);
+    if (!segments)
         return;
 
     for (int channel = 0; channel < numChannels; ++channel)
@@ -1533,11 +1532,11 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     juce::FloatVectorOperations::clear(mixLeft, numSamples);
     juce::FloatVectorOperations::clear(mixRight, numSamples);
 
-    const auto programSnapshot = programSnapshot_.load(std::memory_order_acquire);
-    const auto* program = programSnapshot != nullptr && programSnapshot->hasPlayableZones()
+    const auto programSnapshot = programSnapshot_.read(RtReaderRole::audio);
+    const auto* program = programSnapshot && programSnapshot->hasPlayableZones()
         ? programSnapshot.get()
         : nullptr;
-    const auto programAudioSnapshot = programAudioSnapshot_.load(std::memory_order_acquire);
+    const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::audio);
     const auto* programAudio = programAudioSnapshot.get();
 
     sortPendingEventsByOffset();
@@ -2652,11 +2651,11 @@ bool EngineCore::isNoteActive(const int noteNumber) const noexcept
 EngineCore::VoicePlaybackStates EngineCore::getVoicePlaybackStates() const noexcept
 {
     VoicePlaybackStates states{};
-    const auto segments = getSampleSegmentsSnapshot();
-    if (segments == nullptr)
+    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::audio);
+    if (!segments)
         return states;
 
-    const auto programAudioSnapshot = programAudioSnapshot_.load(std::memory_order_acquire);
+    const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::audio);
     const auto* programAudio = programAudioSnapshot.get();
 
     for (int voiceIndex = 0; voiceIndex < static_cast<int>(VoicePool::maxVoices); ++voiceIndex)
@@ -2967,7 +2966,7 @@ void EngineCore::flushPendingEventsAtOffset(const int offset,
                     if (const auto* streamSegments = programAudioSnapshot->getSampleSegments(voiceContext.sampleAssetIndex); streamSegments != nullptr)
                         streamSegments->requestPrimeForAbsoluteSample(voiceContext.sampleStart);
             }
-            else if (const auto streamSegments = getSampleSegmentsSnapshot())
+            else if (const auto streamSegments = getSampleSegmentsSnapshot(RtReaderRole::audio))
             {
                 streamSegments->requestPrimeForAbsoluteSample(sampleWindowStart_);
             }
@@ -3557,8 +3556,8 @@ float EngineCore::readSampleWindowedSinc(const SampleSegments& segments,
 
 float EngineCore::readSampleLinear(const float position) const noexcept
 {
-    const auto segments = getSampleSegmentsSnapshot();
-    if (segments == nullptr)
+    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::message);
+    if (!segments)
         return 0.0f;
 
     return readSampleLinear(*segments, position);
@@ -3574,12 +3573,12 @@ void EngineCore::rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampl
 {
     ++segmentRebuildCount_;
 
-    sampleSegments_.store(buildSampleSegments(monoSampleData, preloadSamples_, backingFile), std::memory_order_release);
+    sampleSegments_.publish(buildSampleSegments(monoSampleData, preloadSamples_, backingFile));
 }
 
-std::shared_ptr<const EngineCore::SampleSegments> EngineCore::getSampleSegmentsSnapshot() const noexcept
+RtSnapshotCell<EngineCore::SampleSegments>::Reader EngineCore::getSampleSegmentsSnapshot(const RtReaderRole role) const noexcept
 {
-    return sampleSegments_.load(std::memory_order_acquire);
+    return sampleSegments_.read(role);
 }
 
 std::shared_ptr<const EngineCore::SampleSegments> EngineCore::buildSampleSegments(
@@ -3756,8 +3755,8 @@ int EngineCore::getTotalSampleLength(const SampleSegments& segments) const noexc
 
 int EngineCore::getTotalSampleLength() const noexcept
 {
-    const auto segments = getSampleSegmentsSnapshot();
-    return segments != nullptr ? getTotalSampleLength(*segments) : 0;
+    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::message);
+    return segments ? getTotalSampleLength(*segments) : 0;
 }
 
 int EngineCore::getEffectivePlaybackLength(const SampleSegments& segments) const noexcept
@@ -3783,8 +3782,8 @@ int EngineCore::getEffectivePlaybackLength(const SampleSegments& segments,
 
 int EngineCore::getEffectivePlaybackLength() const noexcept
 {
-    const auto segments = getSampleSegmentsSnapshot();
-    return segments != nullptr ? getEffectivePlaybackLength(*segments) : 0;
+    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::message);
+    return segments ? getEffectivePlaybackLength(*segments) : 0;
 }
 
 int EngineCore::mapPlaybackIndexToSampleIndex(const SampleSegments& segments, const int playbackIndex) const noexcept
@@ -3888,8 +3887,8 @@ float EngineCore::readSampleAt(const SampleSegments& segments, const int index, 
 
 float EngineCore::readSampleAt(const int index) const noexcept
 {
-    const auto segments = getSampleSegmentsSnapshot();
-    if (segments == nullptr)
+    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::message);
+    if (!segments)
         return 0.0f;
 
     return readSampleAt(*segments, index);
