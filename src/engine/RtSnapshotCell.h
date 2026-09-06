@@ -14,8 +14,8 @@ namespace audiocity::engine
 // the real-time audio thread (inside render() and its private helpers), the dedicated
 // stream-priming worker thread (AudiocityAudioProcessor::streamPrimeWorker_), and the message
 // thread (everything else -- UI-driven setters/getters, ImportedProgramStore, etc). Each role gets
-// its own hazard slot in RtSnapshotCell so all three can read concurrently without contending with
-// each other or with the writer.
+// its own active-reader counter in RtSnapshotCell so all three can read concurrently without
+// contending with each other or with the writer.
 enum class RtReaderRole : std::size_t
 {
     audio = 0,
@@ -31,12 +31,12 @@ enum class RtReaderRole : std::size_t
 // and load() takes an internal spinlock (_Lock_and_load) -- which would violate
 // docs/02-real-time-rules.md's "no locks on the audio thread" rule.
 //
-// This is a minimal hazard-pointer scheme: a reader publishes which raw pointer it is about to use
-// *before* dereferencing it (with a re-check to close the obvious race), and the writer defers
-// freeing any generation still protected by a hazard slot. Unlike a fixed-size retirement ring
-// (see DiskSampleStreamSource::cacheStatePtr_/cacheStateOwners_), this is safe no matter how long a
-// reader holds the returned Reader guard (e.g. an entire host-controlled render() block, which can
-// be arbitrarily large) or how many times the writer publishes while that guard is alive.
+// Each fixed reader role announces an active read epoch before loading current_. The writer keeps
+// every retired owner while any role is active and reclaims old generations only at a quiescent
+// point. Sequentially consistent operations provide the cross-atomic ordering needed here: a
+// reader either announces before publication (so reclamation observes it) or loads the new current
+// pointer after publication. This is safe no matter how long a Reader guard remains alive or how
+// many generations the writer publishes during that read.
 template <class T>
 class RtSnapshotCell
 {
@@ -78,25 +78,14 @@ public:
         Reader(const RtSnapshotCell& cell, const RtReaderRole role) noexcept
             : cell_(&cell), slot_(static_cast<std::size_t>(role))
         {
-            const T* candidate;
-            for (;;)
-            {
-                candidate = cell_->current_.load(std::memory_order_acquire);
-                cell_->hazards_[slot_].store(candidate, std::memory_order_release);
-
-                // The writer could have retired `candidate` in the window between our two loads
-                // above; re-read current_ and retry until it agrees with what we just protected,
-                // so the hazard is guaranteed published before the writer could possibly free it.
-                if (cell_->current_.load(std::memory_order_acquire) == candidate)
-                    break;
-            }
-            ptr_ = candidate;
+            cell_->activeReaders_[slot_].fetch_add(1, std::memory_order_seq_cst);
+            ptr_ = cell_->current_.load(std::memory_order_seq_cst);
         }
 
         void release() noexcept
         {
             if (cell_ != nullptr)
-                cell_->hazards_[slot_].store(nullptr, std::memory_order_release);
+                cell_->activeReaders_[slot_].fetch_sub(1, std::memory_order_seq_cst);
         }
 
         const RtSnapshotCell* cell_ = nullptr;
@@ -112,7 +101,7 @@ public:
     // concurrent publish() calls on the same cell.
     void publish(std::shared_ptr<const T> next)
     {
-        current_.store(next.get(), std::memory_order_release);
+        current_.store(next.get(), std::memory_order_seq_cst);
         limbo_.push_back(std::move(next));
         reclaim();
     }
@@ -120,26 +109,25 @@ public:
 private:
     void reclaim()
     {
+        for (const auto& readerCount : activeReaders_)
+        {
+            if (readerCount.load(std::memory_order_seq_cst) != 0)
+                return;
+        }
+
         limbo_.erase(std::remove_if(limbo_.begin(), limbo_.end(),
             [this](const std::shared_ptr<const T>& owner)
             {
                 const auto* raw = owner.get();
-                if (raw == current_.load(std::memory_order_acquire))
+                if (raw == current_.load(std::memory_order_seq_cst))
                     return false;
-
-                for (auto& hazard : hazards_)
-                {
-                    if (hazard.load(std::memory_order_acquire) == raw)
-                        return false;
-                }
-
                 return true;
             }),
             limbo_.end());
     }
 
     mutable std::atomic<const T*> current_{ nullptr };
-    mutable std::array<std::atomic<const T*>, static_cast<std::size_t>(RtReaderRole::count)> hazards_{};
+    mutable std::array<std::atomic<std::size_t>, static_cast<std::size_t>(RtReaderRole::count)> activeReaders_{};
     std::vector<std::shared_ptr<const T>> limbo_;
 };
 

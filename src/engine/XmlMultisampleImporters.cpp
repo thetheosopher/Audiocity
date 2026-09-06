@@ -1,4 +1,5 @@
 #include "XmlMultisampleImporters.h"
+#include "ImportCancellation.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -121,7 +122,7 @@ ImportResult importFile(const juce::File& file)
         return result;
     }
 
-    auto xml = juce::parseXML(file);
+    auto xml = parseXmlFileCancellable(file);
     if (xml == nullptr)
     {
         addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
@@ -160,6 +161,9 @@ ImportResult importFile(const juce::File& file)
 
     for (auto* inst : childrenCi(*instruments, "Instrument"))
     {
+        if (isImportCancellationRequested())
+            return result;
+
         Group g;
         g.name = "Instrument " + juce::String(inst->getIntAttribute("number", static_cast<int>(result.program.groups.size() + 1))).toStdString();
 
@@ -175,6 +179,9 @@ ImportResult importFile(const juce::File& file)
 
         for (auto* layer : childrenCi(*layers, "Layer"))
         {
+            if (isImportCancellationRequested())
+                return result;
+
             const auto sampleFile = firstChildCi(*layer, "SampleFile") ? firstChildCi(*layer, "SampleFile")->getAllSubText() : juce::String();
             const auto sampleName = firstChildCi(*layer, "SampleName") ? firstChildCi(*layer, "SampleName")->getAllSubText() : juce::String();
             auto refName = sampleFile;
@@ -276,7 +283,7 @@ ImportResult importFile(const juce::File& file)
         return result;
     }
 
-    auto xml = juce::parseXML(file);
+    auto xml = parseXmlFileCancellable(file);
     if (xml == nullptr)
     {
         addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
@@ -298,6 +305,9 @@ ImportResult importFile(const juce::File& file)
     std::vector<juce::XmlElement*> stack { xml.get() };
     while (!stack.empty())
     {
+        if (isImportCancellationRequested())
+            return result;
+
         auto* el = stack.back(); stack.pop_back();
         for (auto* c : el->getChildIterator())
             stack.push_back(c);
@@ -388,7 +398,7 @@ ImportResult importFile(const juce::File& file)
                       "TAL Sampler preset not found: " + file.getFullPathName());
         return result;
     }
-    auto xml = juce::parseXML(file);
+    auto xml = parseXmlFileCancellable(file);
     if (xml == nullptr)
     {
         addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
@@ -410,6 +420,9 @@ ImportResult importFile(const juce::File& file)
 
     while (!stack.empty())
     {
+        if (isImportCancellationRequested())
+            return result;
+
         auto* el = stack.back(); stack.pop_back();
         for (auto* c : el->getChildIterator())
             stack.push_back(c);
@@ -500,7 +513,7 @@ ImportResult importFile(const juce::File& file)
                       "TX16Wx preset not found: " + file.getFullPathName());
         return result;
     }
-    auto xml = juce::parseXML(file);
+    auto xml = parseXmlFileCancellable(file);
     if (xml == nullptr)
     {
         addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
@@ -670,7 +683,8 @@ ImportResult importFile(const juce::File& file)
     }
 
     juce::MemoryBlock manifestBlob;
-    mstream->readIntoMemoryBlock(manifestBlob, static_cast<int>(kMaxArchiveManifestBytes + 1));
+    if (!readStreamInCancellableChunks(*mstream, manifestBlob, kMaxArchiveManifestBytes + 1))
+        return result;
     if (static_cast<juce::int64>(manifestBlob.getSize()) > kMaxArchiveManifestBytes)
     {
         addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
@@ -680,7 +694,7 @@ ImportResult importFile(const juce::File& file)
 
     const auto manifestText = juce::String::fromUTF8(static_cast<const char*>(manifestBlob.getData()),
                                                     static_cast<int>(manifestBlob.getSize()));
-    auto xml = juce::parseXML(manifestText);
+    auto xml = parseXmlTextCancellable(manifestText);
     if (xml == nullptr)
     {
         addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
@@ -751,7 +765,8 @@ ImportResult importFile(const juce::File& file)
             return -1;
         }
         juce::MemoryBlock blob;
-        raw->readIntoMemoryBlock(blob, static_cast<int>(kMaxArchiveAudioBytes + 1));
+        if (!readStreamInCancellableChunks(*raw, blob, kMaxArchiveAudioBytes + 1))
+            return -1;
         if (static_cast<juce::int64>(blob.getSize()) > kMaxArchiveAudioBytes)
         {
             addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
@@ -781,7 +796,7 @@ ImportResult importFile(const juce::File& file)
             return -1;
         }
         juce::AudioBuffer<float> buf(asset.numChannels, asset.lengthSamples);
-        if (!reader->read(&buf, 0, asset.lengthSamples, 0, true, true))
+        if (!readAudioInCancellableChunks(*reader, buf, asset.lengthSamples))
         {
             addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
                           "Korg multisample decode failed: " + humanLabel);
@@ -796,6 +811,9 @@ ImportResult importFile(const juce::File& file)
     std::vector<juce::XmlElement*> stack { xml.get() };
     while (!stack.empty())
     {
+        if (isImportCancellationRequested())
+            return result;
+
         auto* el = stack.back(); stack.pop_back();
         for (auto* c : el->getChildIterator()) stack.push_back(c);
 
@@ -914,15 +932,13 @@ namespace
     }
     juce::GZIPDecompressorInputStream gz(&raw, false, juce::GZIPDecompressorInputStream::gzipFormat);
     juce::MemoryBlock mem;
+    if (!readStreamInCancellableChunks(gz, mem, kMaxAbletonXmlBytes + 1))
+        return {};
+    if (mem.isEmpty())
     {
-        juce::MemoryOutputStream mos(mem, false);
-        const auto bytesRead = mos.writeFromInputStream(gz, kMaxAbletonXmlBytes + 1);
-        if (bytesRead <= 0)
-        {
-            addDiagnostic(diagnostics, Diagnostic::Severity::error,
-                          "Could not gzip-decompress: " + file.getFullPathName());
-            return {};
-        }
+        addDiagnostic(diagnostics, Diagnostic::Severity::error,
+                      "Could not gzip-decompress: " + file.getFullPathName());
+        return {};
     }
     if (static_cast<juce::int64>(mem.getSize()) > kMaxAbletonXmlBytes)
     {
@@ -931,7 +947,7 @@ namespace
         return {};
     }
     auto xmlText = juce::String::fromUTF8(static_cast<const char*>(mem.getData()), (int) mem.getSize());
-    auto xml = juce::parseXML(xmlText);
+    auto xml = parseXmlTextCancellable(xmlText);
     if (xml == nullptr)
     {
         addDiagnostic(diagnostics, Diagnostic::Severity::error,
@@ -997,6 +1013,9 @@ namespace
     std::vector<juce::XmlElement*> stack { &root };
     while (!stack.empty())
     {
+        if (isImportCancellationRequested())
+            break;
+
         auto* el = stack.back(); stack.pop_back();
         if (el->getTagName().equalsIgnoreCase(tag)) out.push_back(el);
         for (auto* c : el->getChildIterator())
@@ -1039,6 +1058,9 @@ ImportResult importFile(const juce::File& file)
 
     for (auto* part : parts)
     {
+        if (isImportCancellationRequested())
+            return result;
+
         const auto rawPath = readAbletonSamplePath(part);
         if (rawPath.isEmpty())
         {

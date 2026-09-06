@@ -18,6 +18,7 @@
 #include "CcLearnDial.h"
 #include "DialLookAndFeel.h"
 #include "ImportedProgramState.h"
+#include "OwnedJobWorker.h"
 #include "PluginAboutPage.h"
 #include "PluginCapturePage.h"
 #include "PluginGeneratePage.h"
@@ -481,8 +482,10 @@ private:
     int sampleListColumnWidth_ = 360;
     std::atomic<int> sampleScanGeneration_{ 0 };
     std::atomic<bool> sampleScanInProgress_{ false };
+    audiocity::plugin::OwnedJobWorker sampleScanWorker_;
     std::atomic<int> backgroundImportGeneration_{ 0 };
     std::atomic<bool> backgroundImportInProgress_{ false };
+    audiocity::plugin::OwnedJobWorker backgroundImportWorker_;
     juce::File backgroundImportFile_;
     std::function<void(bool)> backgroundImportCompletion_;
     juce::TabbedComponent tabBar_{ juce::TabbedButtonBar::TabsAtTop };

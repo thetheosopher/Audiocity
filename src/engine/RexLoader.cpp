@@ -1,9 +1,12 @@
 #include "RexLoader.h"
+#include "ImportCancellation.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 #include "REX.h"
@@ -98,20 +101,41 @@ bool isRuntimeAvailable() noexcept
 
 bool decodeFile(const juce::File& file, DecodedLoop& out) noexcept
 {
-    if (!file.existsAsFile())
+    if (!file.existsAsFile() || isImportCancellationRequested())
         return false;
 
     auto& state = runtimeState();
-    std::lock_guard<std::mutex> lock(state.mutex);
+    std::unique_lock<std::mutex> lock(state.mutex, std::defer_lock);
+    while (!lock.try_lock())
+    {
+        if (isImportCancellationRequested())
+            return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     if (!ensureInitializedLocked())
         return false;
 
-    juce::MemoryBlock fileData;
-    if (!file.loadFileAsData(fileData))
+    auto fileInput = file.createInputStream();
+    if (fileInput == nullptr)
         return false;
 
-    if (fileData.getSize() == 0 || fileData.getSize() > static_cast<size_t>((std::numeric_limits<REX::REX_int32_t>::max)()))
+    const auto fileSize = fileInput->getTotalLength();
+    if (fileSize <= 0 || fileSize > static_cast<juce::int64>((std::numeric_limits<REX::REX_int32_t>::max)()))
         return false;
+
+    juce::MemoryBlock fileData(static_cast<std::size_t>(fileSize), false);
+    auto* fileBytes = static_cast<char*>(fileData.getData());
+    constexpr int kFileReadChunkBytes = 1024 * 1024;
+    for (juce::int64 position = 0; position < fileSize;)
+    {
+        if (isImportCancellationRequested())
+            return false;
+
+        const auto bytesThisChunk = static_cast<int>(juce::jmin<juce::int64>(kFileReadChunkBytes, fileSize - position));
+        if (fileInput->read(fileBytes + position, bytesThisChunk) != bytesThisChunk)
+            return false;
+        position += bytesThisChunk;
+    }
 
     RexHandleScope rexHandle;
     auto result = REX::REXCreate(
@@ -141,6 +165,9 @@ bool decodeFile(const juce::File& file, DecodedLoop& out) noexcept
     int64_t totalFrames = 0;
     for (int sliceIndex = 0; sliceIndex < info.fSliceCount; ++sliceIndex)
     {
+        if (isImportCancellationRequested())
+            return false;
+
         auto& sliceInfo = slices[static_cast<std::size_t>(sliceIndex)];
         result = REX::REXGetSliceInfo(
             rexHandle.handle,
@@ -165,6 +192,9 @@ bool decodeFile(const juce::File& file, DecodedLoop& out) noexcept
     int frameOffset = 0;
     for (int sliceIndex = 0; sliceIndex < info.fSliceCount; ++sliceIndex)
     {
+        if (isImportCancellationRequested())
+            return false;
+
         const auto frameCount = slices[static_cast<std::size_t>(sliceIndex)].fSampleLength;
         std::vector<float> left(static_cast<std::size_t>(frameCount), 0.0f);
         std::vector<float> right;
@@ -184,6 +214,9 @@ bool decodeFile(const juce::File& file, DecodedLoop& out) noexcept
             renderBuffers);
 
         if (result != REX::kREXError_NoError)
+            return false;
+
+        if (isImportCancellationRequested())
             return false;
 
         out.audio.copyFrom(0, frameOffset, left.data(), frameCount);

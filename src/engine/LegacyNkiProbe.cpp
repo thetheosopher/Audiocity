@@ -1,6 +1,7 @@
 #include "LegacyNkiProbe.h"
 
 #include "AudioFileSupport.h"
+#include "ImportCancellation.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -41,6 +42,9 @@ std::vector<juce::String> extractPrintableStrings(const juce::MemoryBlock& data,
 
     for (std::size_t index = 0; index < data.getSize(); ++index)
     {
+        if ((index & 0xffffu) == 0u && isImportCancellationRequested())
+            return {};
+
         const auto value = bytes[index];
         if (isPrintableAscii(value))
         {
@@ -446,11 +450,17 @@ juce::File resolveSampleReference(const juce::File& nkiFile, const juce::String&
 
     for (const auto& root : recursiveSearchRoots)
     {
+        if (isImportCancellationRequested())
+            return {};
+
         if (!root.isDirectory())
             continue;
 
         for (const auto& item : juce::RangedDirectoryIterator(root, true, "*", juce::File::findFiles))
         {
+            if (isImportCancellationRequested())
+                return {};
+
             const auto candidate = item.getFile();
             if (candidate.getFileName().equalsIgnoreCase(sampleName))
                 return candidate;
@@ -557,7 +567,7 @@ int getOrAddSampleAsset(ImportResult& result,
     }
 
     juce::AudioBuffer<float> sampleData(static_cast<int>(reader->numChannels), sampleLength);
-    if (!reader->read(&sampleData, 0, sampleLength, 0, true, true))
+    if (!readAudioInCancellableChunks(*reader, sampleData, sampleLength))
     {
         addDiagnostic(result.probe,
             DiagnosticSeverity::warning,
@@ -612,7 +622,7 @@ ProbeResult probeFile(const juce::File& file)
     }
 
     juce::MemoryBlock fileData;
-    if (!file.loadFileAsData(fileData) || fileData.getSize() == 0)
+    if (!readFileInCancellableChunks(file, fileData) || fileData.getSize() == 0)
     {
         addDiagnostic(result, DiagnosticSeverity::error, "NKI probe failed: file could not be read");
         return result;
@@ -628,6 +638,9 @@ ProbeResult probeFile(const juce::File& file)
 
     for (const auto& printable : printableStrings)
     {
+        if (isImportCancellationRequested())
+            return result;
+
         if (const auto sampleReference = normaliseCandidateReference(printable, sampleExtensions);
             sampleReference.isNotEmpty())
         {
@@ -645,6 +658,9 @@ ProbeResult probeFile(const juce::File& file)
 
     for (const auto& sampleReference : result.sampleReferences)
     {
+        if (isImportCancellationRequested())
+            return result;
+
         if (const auto resolvedSample = resolveSampleReference(file, sampleReference); resolvedSample.existsAsFile())
         {
             addUniqueIgnoreCase(result.resolvedSampleFiles,
@@ -807,6 +823,9 @@ ImportResult importFile(const juce::File& file, const juce::File& extraSearchFol
 
     for (const auto& zoneMetadata : result.probe.zoneMetadata)
     {
+        if (isImportCancellationRequested())
+            return result;
+
         if (zoneMetadata.sampleReference.isEmpty())
             continue;
 
@@ -828,6 +847,9 @@ ImportResult importFile(const juce::File& file, const juce::File& extraSearchFol
                     for (const auto& item : juce::RangedDirectoryIterator(
                              extraSearchFolder, true, "*", juce::File::findFiles))
                     {
+                        if (isImportCancellationRequested())
+                            return result;
+
                         if (item.getFile().getFileName().equalsIgnoreCase(sampleName))
                         {
                             sampleFile = item.getFile();

@@ -1,6 +1,7 @@
 #include "SfzImporter.h"
 
 #include "AudioFileSupport.h"
+#include "ImportCancellation.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -218,6 +219,9 @@ void preprocessFile(const juce::File& file,
                     std::vector<PreprocessedLine>& output,
                     std::vector<SfzDiagnostic>& diagnostics)
 {
+    if (isImportCancellationRequested())
+        return;
+
     for (const auto& stacked : includeStack)
     {
         if (stacked == file)
@@ -244,10 +248,20 @@ void preprocessFile(const juce::File& file,
     includeStack.push_back(file);
 
     juce::StringArray lines;
-    lines.addLines(file.loadFileAsString());
+    juce::MemoryBlock fileBytes;
+    if (!readFileInCancellableChunks(file, fileBytes))
+    {
+        includeStack.pop_back();
+        return;
+    }
+    lines.addLines(juce::String::fromUTF8(static_cast<const char*>(fileBytes.getData()),
+                                          static_cast<int>(fileBytes.getSize())));
 
     for (int lineIndex = 0; lineIndex < lines.size(); ++lineIndex)
     {
+        if (isImportCancellationRequested())
+            break;
+
         const auto lineNumber = lineIndex + 1;
         const auto rawLine = stripLineComment(lines[lineIndex]);
         const auto trimmed = rawLine.trim();
@@ -573,6 +587,9 @@ struct ParserState
 
     [[nodiscard]] int getOrAddSampleAsset(const juce::File& sampleFile, const int rootMidiNote, const PreprocessedLine& line)
     {
+        if (isImportCancellationRequested())
+            return -1;
+
         auto openResult = audio_file::openReaderForFile(formatManager, sampleFile);
         auto reader = std::move(openResult.reader);
         const auto path = openResult.readableFile.existsAsFile()
@@ -615,7 +632,7 @@ struct ParserState
         }
 
         juce::AudioBuffer<float> sampleData(asset.numChannels, asset.lengthSamples);
-        if (!reader->read(&sampleData, 0, asset.lengthSamples, 0, true, true))
+        if (!readAudioInCancellableChunks(*reader, sampleData, asset.lengthSamples))
         {
             addDiagnostic(diagnostics,
                 SfzDiagnostic::Severity::error,
@@ -867,6 +884,9 @@ void parsePreprocessedLines(ParserState& state, const std::vector<PreprocessedLi
 
     for (const auto& line : lines)
     {
+        if (isImportCancellationRequested())
+            break;
+
         lastLine = line;
         auto text = stripLineComment(line.text).trim();
         while (!text.isEmpty())

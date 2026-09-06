@@ -1,6 +1,7 @@
 #include "EngineCore.h"
 
 #include "AudioFileSupport.h"
+#include "ImportCancellation.h"
 
 #include "RexLoader.h"
 
@@ -307,7 +308,7 @@ std::uint32_t readLeU32(const std::uint8_t* data) noexcept
 std::optional<std::pair<int, int>> findEmbeddedLoopRangeFromWavSmplChunk(const juce::File& file)
 {
     juce::MemoryBlock bytes;
-    if (!file.loadFileAsData(bytes))
+    if (!readFileInCancellableChunks(file, bytes))
         return std::nullopt;
 
     const auto* data = static_cast<const std::uint8_t*>(bytes.getData());
@@ -321,6 +322,9 @@ std::optional<std::pair<int, int>> findEmbeddedLoopRangeFromWavSmplChunk(const j
     std::size_t cursor = 12;
     while (cursor + 8 <= size)
     {
+        if (isImportCancellationRequested())
+            return std::nullopt;
+
         const auto* chunkHeader = data + cursor;
         const auto chunkSize = static_cast<std::size_t>(readLeU32(chunkHeader + 4));
         const auto chunkDataOffset = cursor + 8;
@@ -777,6 +781,8 @@ struct EngineCore::SampleSegments
     juce::AudioBuffer<float> preloadData;
     std::shared_ptr<const SampleStreamSource> streamSource;
     juce::String backingFilePath;
+    double sampleRateHz = 44100.0;
+    std::uint64_t generation = 0;
 
     [[nodiscard]] int getStreamNumChannels() const noexcept
     {
@@ -976,6 +982,12 @@ EngineCore::PreparedSampleFile EngineCore::prepareSampleFile(const juce::File& f
     prepared.playbackMode = fallbackPlaybackMode;
     prepared.samplePath = file.getFullPathName();
 
+    if (isImportCancellationRequested())
+    {
+        prepared.errorMessage = "Sample load cancelled";
+        return prepared;
+    }
+
     if (!file.existsAsFile())
     {
         prepared.errorMessage = "Sample load failed: file not found";
@@ -989,6 +1001,11 @@ EngineCore::PreparedSampleFile EngineCore::prepareSampleFile(const juce::File& f
         if (!rex::decodeFile(file, decoded))
         {
             prepared.errorMessage = "Sample load failed: REX loop could not be decoded";
+            return prepared;
+        }
+        if (isImportCancellationRequested())
+        {
+            prepared.errorMessage = "Sample load cancelled";
             return prepared;
         }
 
@@ -1024,6 +1041,11 @@ EngineCore::PreparedSampleFile EngineCore::prepareSampleFile(const juce::File& f
             : juce::String("Sample load failed: audio file could not be decoded");
         return prepared;
     }
+    if (isImportCancellationRequested())
+    {
+        prepared.errorMessage = "Sample load cancelled";
+        return prepared;
+    }
 
     const auto lengthInSamples = static_cast<int>(juce::jmin<juce::int64>(
         reader->lengthInSamples,
@@ -1035,8 +1057,15 @@ EngineCore::PreparedSampleFile EngineCore::prepareSampleFile(const juce::File& f
     }
 
     prepared.sampleData.setSize(juce::jmax(1, static_cast<int>(reader->numChannels)), lengthInSamples, false, true, true);
-    if (!reader->read(&prepared.sampleData, 0, lengthInSamples, 0, true, true))
+    if (!readAudioInCancellableChunks(*reader, prepared.sampleData, lengthInSamples))
     {
+        if (isImportCancellationRequested())
+        {
+            prepared.errorMessage = "Sample load cancelled";
+            prepared.sampleData.setSize(0, 0);
+            return prepared;
+        }
+
         prepared.errorMessage = "Sample load failed: audio file could not be read";
         prepared.sampleData.setSize(0, 0);
         return prepared;
@@ -1089,10 +1118,12 @@ void EngineCore::loadPreparedSample(const PreparedSampleFile& prepared) noexcept
     if (!prepared.ok || prepared.sampleData.getNumChannels() <= 0 || prepared.sampleData.getNumSamples() <= 0)
         return;
 
+    const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
     setSampleDataInternal(prepared.sampleData,
                           prepared.sampleRateHz,
                           prepared.rootMidiNote,
-                          prepared.backingFilePath.isNotEmpty() ? juce::File(prepared.backingFilePath) : juce::File{});
+                          prepared.backingFilePath.isNotEmpty() ? juce::File(prepared.backingFilePath) : juce::File{},
+                          true);
     setAmpEnvelope(defaultAmpEnvelopeForLoadedSample());
     setAmpLfoSettings(defaultAmpLfoSettingsForLoadedSample());
     setPitchLfoSettings(defaultPitchLfoSettingsForLoadedSample());
@@ -1107,6 +1138,25 @@ void EngineCore::loadPreparedSample(const PreparedSampleFile& prepared) noexcept
     setSampleWindow(prepared.sampleWindowStart, prepared.sampleWindowEnd);
     setLoopPoints(prepared.loopStart, prepared.loopEnd);
     setPlaybackMode(prepared.playbackMode);
+}
+
+void EngineCore::publishPreparedSample(const PreparedSampleFile& prepared) noexcept
+{
+    if (!prepared.ok || prepared.sampleData.getNumChannels() <= 0 || prepared.sampleData.getNumSamples() <= 0)
+        return;
+
+    const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
+    setSampleDataInternal(prepared.sampleData,
+                          prepared.sampleRateHz,
+                          prepared.rootMidiNote,
+                          prepared.backingFilePath.isNotEmpty() ? juce::File(prepared.backingFilePath) : juce::File{},
+                          false);
+    loadedSampleBitDepth_ = prepared.bitDepth;
+    loadedMetadataRootMidiNote_ = prepared.metadataRootMidiNote;
+    loadedMetadataTempoBpm_ = prepared.metadataTempoBpm;
+    samplePath_ = prepared.samplePath;
+    loadedSampleLoopFormatBadge_ = prepared.loopFormatBadge;
+    clearProgram();
 }
 
 bool EngineCore::loadSampleFromFile(const juce::File& file)
@@ -1126,13 +1176,21 @@ bool EngineCore::isRexRuntimeAvailable() const noexcept
 
 void EngineCore::setSampleData(const juce::AudioBuffer<float>& sampleData, const double sampleRate, const int rootNote) noexcept
 {
-    setSampleDataInternal(sampleData, sampleRate, rootNote, {});
+    const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
+    setSampleDataInternal(sampleData, sampleRate, rootNote, {}, true);
+}
+
+void EngineCore::publishSampleData(const juce::AudioBuffer<float>& sampleData, const double sampleRate) noexcept
+{
+    const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
+    setSampleDataInternal(sampleData, sampleRate, 60, {}, false);
 }
 
 void EngineCore::setSampleDataInternal(const juce::AudioBuffer<float>& sampleData,
                                       const double sampleRate,
                                       const int rootNote,
-                                      const juce::File& backingFile) noexcept
+                                      const juce::File& backingFile,
+                                      const bool applyPlaybackControls) noexcept
 {
     displaySampleData_ = sampleData;
     loadedSampleLoopFormatBadge_ = {};
@@ -1141,8 +1199,9 @@ void EngineCore::setSampleDataInternal(const juce::AudioBuffer<float>& sampleDat
     loadedMetadataTempoBpm_ = 0.0;
 
     auto monoSample = sampleData;
-    sampleDataRate_ = sampleRate > 0.0 ? sampleRate : sampleRate_;
-    setRootMidiNote(rootNote);
+    sampleDataRate_.store(sampleRate > 0.0 ? sampleRate : sampleRate_, std::memory_order_release);
+    if (applyPlaybackControls)
+        setRootMidiNote(rootNote);
 
     if (monoSample.getNumChannels() > 1)
     {
@@ -1161,28 +1220,33 @@ void EngineCore::setSampleDataInternal(const juce::AudioBuffer<float>& sampleDat
         monoSample = mono;
     }
 
-    rebuildSampleSegments(monoSample, backingFile);
+    rebuildSampleSegments(monoSample, backingFile, !applyPlaybackControls);
 
     if (getTotalSampleLength() <= 0)
         generateFallbackSample();
 
-    setSampleWindow(0, getTotalSampleLength() - 1);
-    setFadeSamples(0, 0);
-    reversePlayback_ = false;
-    setLoopPoints(0, getTotalSampleLength() - 1);
+    if (applyPlaybackControls)
+    {
+        setSampleWindow(0, getTotalSampleLength() - 1);
+        setFadeSamples(0, 0);
+        reversePlayback_ = false;
+        setLoopPoints(0, getTotalSampleLength() - 1);
+    }
 }
 
 void EngineCore::setProgram(const Program& program)
 {
-    resetRoundRobinCursors();
+    const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
+    programPublishSequence_.fetch_add(1, std::memory_order_acq_rel);
     programAudioSnapshot_.publish(nullptr);
     programSnapshot_.publish(
         std::make_shared<const ProgramSnapshot>(ProgramSnapshot::fromProgram(program)));
+    programPublishSequence_.fetch_add(1, std::memory_order_release);
 }
 
 void EngineCore::setProgram(const Program& program, const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset)
 {
-    resetRoundRobinCursors();
+    const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
     auto metadata = ProgramSnapshot::fromProgram(program);
     auto audio = std::make_shared<ProgramAudioSnapshot>();
     audio->sampleAssetCount = metadata.sampleAssetCount;
@@ -1201,7 +1265,10 @@ void EngineCore::setProgram(const Program& program, const std::vector<juce::Audi
         asset.lengthSamples = source.getNumSamples();
         asset.numChannels = source.getNumChannels();
         if (asset.sampleRateHz <= 0.0)
-            asset.sampleRateHz = sampleDataRate_ > 0.0 ? sampleDataRate_ : sampleRate_;
+        {
+            const auto loadedSampleRate = sampleDataRate_.load(std::memory_order_acquire);
+            asset.sampleRateHz = loadedSampleRate > 0.0 ? loadedSampleRate : sampleRate_;
+        }
 
         const auto backingFilePath = juce::String::fromUTF8(program.sampleAssets[assetIndex].sourcePath.c_str());
         audio->sampleSegments[assetIndex] = buildSampleSegments(source, preloadSamples_, juce::File(backingFilePath));
@@ -1222,12 +1289,15 @@ void EngineCore::setProgram(const Program& program, const std::vector<juce::Audi
         juce::ignoreUnused(primed);
     }
 
+    programPublishSequence_.fetch_add(1, std::memory_order_acq_rel);
     programAudioSnapshot_.publish(audio);
     programSnapshot_.publish(std::make_shared<const ProgramSnapshot>(metadata));
+    programPublishSequence_.fetch_add(1, std::memory_order_release);
 }
 
 bool EngineCore::setProgramMetadata(const Program& program)
 {
+    const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
     const auto audio = programAudioSnapshot_.read(RtReaderRole::message);
     if (!audio)
         return false;
@@ -1251,10 +1321,11 @@ bool EngineCore::setProgramMetadata(const Program& program)
         asset.numChannels = juce::jmax(segments->preloadData.getNumChannels(),
                                        segments->getStreamNumChannels());
         if (asset.sampleRateHz <= 0.0)
-            asset.sampleRateHz = sampleDataRate_ > 0.0 ? sampleDataRate_ : sampleRate_;
+        {
+            const auto loadedSampleRate = sampleDataRate_.load(std::memory_order_acquire);
+            asset.sampleRateHz = loadedSampleRate > 0.0 ? loadedSampleRate : sampleRate_;
+        }
     }
-
-    resetRoundRobinCursors();
 
     // Zone starts may have moved even though the audio did not, so the streaming windows still
     // need priming; only the segment rebuild is skipped.
@@ -1273,15 +1344,19 @@ bool EngineCore::setProgramMetadata(const Program& program)
         juce::ignoreUnused(primed);
     }
 
+    programPublishSequence_.fetch_add(1, std::memory_order_acq_rel);
     programSnapshot_.publish(std::make_shared<const ProgramSnapshot>(metadata));
+    programPublishSequence_.fetch_add(1, std::memory_order_release);
     return true;
 }
 
 void EngineCore::clearProgram() noexcept
 {
-    resetRoundRobinCursors();
+    const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
+    programPublishSequence_.fetch_add(1, std::memory_order_acq_rel);
     programSnapshot_.publish(nullptr);
     programAudioSnapshot_.publish(nullptr);
+    programPublishSequence_.fetch_add(1, std::memory_order_release);
 }
 
 bool EngineCore::hasProgram() const noexcept
@@ -1297,15 +1372,12 @@ int EngineCore::getProgramZoneCount() const noexcept
 
 void EngineCore::setPreloadSamples(const int preloadSamples) noexcept
 {
+    const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
     preloadSamples_ = juce::jmax(256, preloadSamples);
-    auto rebuiltSingleSampleSegments = false;
 
     const auto segments = getSampleSegmentsSnapshot(RtReaderRole::message);
     if (segments && getTotalSampleLength(*segments) > 0)
-    {
         rebuildSampleSegments(materializeSampleData(*segments), juce::File(segments->backingFilePath));
-        rebuiltSingleSampleSegments = true;
-    }
 
     const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::message);
     if (programAudioSnapshot)
@@ -1314,12 +1386,6 @@ void EngineCore::setPreloadSamples(const int preloadSamples) noexcept
         programAudioSnapshot_.publish(rebuildProgramAudioSnapshot(*programAudioSnapshot));
     }
 
-    if (rebuiltSingleSampleSegments)
-    {
-        setSampleWindow(sampleWindowStart_, sampleWindowEnd_);
-        setFadeSamples(fadeInSamples_, fadeOutSamples_);
-        setLoopPoints(loopStartSample_, loopEndSample_);
-    }
 }
 
 void EngineCore::serviceStreamPriming()
@@ -1454,7 +1520,8 @@ int EngineCore::getLoadedSampleChannels() const noexcept
 
 void EngineCore::setSampleWindow(const int startSample, const int endSample) noexcept
 {
-    const auto totalSamples = getTotalSampleLength();
+    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::audio);
+    const auto totalSamples = segments ? getTotalSampleLength(*segments) : 0;
     const auto maxValid = juce::jmax(0, totalSamples - 1);
 
     sampleWindowStart_ = juce::jlimit(0, maxValid, startSample);
@@ -1466,7 +1533,9 @@ void EngineCore::setSampleWindow(const int startSample, const int endSample) noe
 
 void EngineCore::setFadeSamples(const int fadeInSamples, const int fadeOutSamples) noexcept
 {
-    const auto maxFade = juce::jmax(0, getEffectivePlaybackLength() - 1);
+    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::audio);
+    const auto playbackLength = segments ? getEffectivePlaybackLength(*segments) : 0;
+    const auto maxFade = juce::jmax(0, playbackLength - 1);
     fadeInSamples_ = juce::jlimit(0, maxFade, fadeInSamples);
     fadeOutSamples_ = juce::jlimit(0, maxFade, fadeOutSamples);
 }
@@ -1517,6 +1586,12 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     if (!segments)
         return;
 
+    if (segments->generation != appliedSamplePublishGeneration_)
+    {
+        stopAllVoicesImmediate();
+        appliedSamplePublishGeneration_ = segments->generation;
+    }
+
     for (int channel = 0; channel < numChannels; ++channel)
         juce::FloatVectorOperations::clear(outputs[channel], numSamples);
 
@@ -1532,12 +1607,24 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     juce::FloatVectorOperations::clear(mixLeft, numSamples);
     juce::FloatVectorOperations::clear(mixRight, numSamples);
 
+    const auto programSequenceBefore = programPublishSequence_.load(std::memory_order_acquire);
     const auto programSnapshot = programSnapshot_.read(RtReaderRole::audio);
-    const auto* program = programSnapshot && programSnapshot->hasPlayableZones()
+    const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::audio);
+    const auto programSequenceAfter = programPublishSequence_.load(std::memory_order_acquire);
+    const auto programPublicationIsStable = (programSequenceBefore & 1u) == 0u
+        && programSequenceBefore == programSequenceAfter;
+
+    if (programPublicationIsStable && programSequenceAfter != appliedProgramPublishSequence_)
+    {
+        stopAllVoicesImmediate();
+        resetRoundRobinCursors();
+        appliedProgramPublishSequence_ = programSequenceAfter;
+    }
+
+    const auto* program = programPublicationIsStable && programSnapshot && programSnapshot->hasPlayableZones()
         ? programSnapshot.get()
         : nullptr;
-    const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::audio);
-    const auto* programAudio = programAudioSnapshot.get();
+    const auto* programAudio = programPublicationIsStable ? programAudioSnapshot.get() : nullptr;
 
     sortPendingEventsByOffset();
 
@@ -1545,7 +1632,7 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     auto pendingEventCursor = 0;
     while (segmentStart < numSamples)
     {
-        flushPendingEventsAtOffset(segmentStart, program, programAudio);
+        flushPendingEventsAtOffset(segmentStart, program, programAudio, segments->sampleRateHz);
 
         const auto segmentEnd = findNextPendingEventOffset(segmentStart, numSamples, pendingEventCursor);
         const auto segmentSamples = segmentEnd - segmentStart;
@@ -2521,7 +2608,8 @@ void EngineCore::setRootMidiNote(const int rootMidiNote) noexcept
 
 void EngineCore::setLoopPoints(const int loopStart, const int loopEnd) noexcept
 {
-    const auto sampleLength = getTotalSampleLength();
+    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::audio);
+    const auto sampleLength = segments ? getTotalSampleLength(*segments) : 0;
     const auto maxValid = juce::jmax(0, sampleLength - 1);
 
     loopStartSample_ = juce::jlimit(0, maxValid, loopStart);
@@ -2906,7 +2994,8 @@ int EngineCore::chooseProgramZoneIndices(const ProgramSnapshot& programSnapshot,
 
 void EngineCore::flushPendingEventsAtOffset(const int offset,
                                            const ProgramSnapshot* const programSnapshot,
-                                           const ProgramAudioSnapshot* const programAudioSnapshot) noexcept
+                                           const ProgramAudioSnapshot* const programAudioSnapshot,
+                                           const double singleSampleRateHz) noexcept
 {
     for (int eventIndex = 0; eventIndex < pendingEventCount_; ++eventIndex)
     {
@@ -2922,7 +3011,7 @@ void EngineCore::flushPendingEventsAtOffset(const int offset,
             voiceContext.velocity = event.value;
             voiceContext.rootMidiNote = rootMidiNote_;
             voiceContext.releaseOnNoteOff = playbackMode_ != PlaybackMode::oneShot;
-            voiceContext.sourceSampleRateHz = sampleDataRate_;
+            voiceContext.sourceSampleRateHz = singleSampleRateHz;
             const auto midiVelocity = juce::jlimit(0, 127, static_cast<int>(std::round(event.value * 127.0f)));
 
             if (programSnapshot != nullptr)
@@ -3371,7 +3460,9 @@ float EngineCore::computeSampleIncrementForNote(const int noteNumber) const noex
 
 float EngineCore::computeSampleIncrementForNote(const int noteNumber, const int rootMidiNote) const noexcept
 {
-    return computeSampleIncrementForNote(noteNumber, rootMidiNote, sampleDataRate_);
+    return computeSampleIncrementForNote(noteNumber,
+                                         rootMidiNote,
+                                         sampleDataRate_.load(std::memory_order_acquire));
 }
 
 float EngineCore::computeSampleIncrementForNote(const int noteNumber,
@@ -3565,15 +3656,22 @@ float EngineCore::readSampleLinear(const float position) const noexcept
 
 void EngineCore::rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData) noexcept
 {
-    rebuildSampleSegments(monoSampleData, {});
+    rebuildSampleSegments(monoSampleData, {}, true);
 }
 
 void EngineCore::rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData,
-                                       const juce::File& backingFile) noexcept
+                                       const juce::File& backingFile,
+                                       const bool beginNewGeneration) noexcept
 {
     ++segmentRebuildCount_;
+    if (beginNewGeneration || currentSamplePublishGeneration_ == 0)
+        currentSamplePublishGeneration_ = ++nextSamplePublishGeneration_;
 
-    sampleSegments_.publish(buildSampleSegments(monoSampleData, preloadSamples_, backingFile));
+    sampleSegments_.publish(buildSampleSegments(monoSampleData,
+                                                preloadSamples_,
+                                                backingFile,
+                                                sampleDataRate_.load(std::memory_order_acquire),
+                                                currentSamplePublishGeneration_));
 }
 
 RtSnapshotCell<EngineCore::SampleSegments>::Reader EngineCore::getSampleSegmentsSnapshot(const RtReaderRole role) const noexcept
@@ -3584,9 +3682,13 @@ RtSnapshotCell<EngineCore::SampleSegments>::Reader EngineCore::getSampleSegments
 std::shared_ptr<const EngineCore::SampleSegments> EngineCore::buildSampleSegments(
     const juce::AudioBuffer<float>& monoSampleData,
     const int preloadSamples,
-    const juce::File& backingFile) noexcept
+    const juce::File& backingFile,
+    const double sampleRateHz,
+    const std::uint64_t generation) noexcept
 {
     auto segments = std::make_shared<SampleSegments>();
+    segments->sampleRateHz = juce::jmax(1.0, sampleRateHz);
+    segments->generation = generation;
 
     const auto totalSamples = monoSampleData.getNumSamples();
     const auto sourceChannels = monoSampleData.getNumChannels();

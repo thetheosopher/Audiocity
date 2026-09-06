@@ -35,6 +35,39 @@ This document is Phase 4 of the review. Dependencies are intentional: complete Q
 | SI-3 Modular editor/processor architecture | DX / Reliability | Engineering | L | High | large translation units, services |
 | SI-4 Expressive sampler evolution | Feature | Product | XL | Medium | MPE, multi-output, time-stretch |
 
+## Progress update — 2026-09-06
+
+Status meanings:
+
+- **Complete:** implementation and the acceptance checks available in this workspace passed.
+- **Implemented — release gate pending:** implementation and local regressions passed, but an external or extended release check remains.
+- **Partial:** useful portions landed, but the roadmap acceptance criteria are not yet satisfied.
+- **Not started:** no implementation progress was recorded during this pass.
+
+| Item | Status | Evidence / next gate |
+| --- | --- | --- |
+| QW-1 Repair CI/toolchain contract | **Implemented — release gate pending** | Added the ASIO-disabled VS 2022 `ci-windows` configure/build/test path and aligned both workflows, bootstrap, snapshot export, README, and toolchain reporting. Local VS 2022 configure, full product build, and CTest passed. A pushed GitHub-hosted `windows-2022` run remains the external gate. |
+| QW-2 Re-establish UI golden truth | **Complete** | Reviewed and updated all 19 baselines, aligned documentation to 64 presets, and added manifest/directory-backed count assertions. Two clean zero-difference exports and the final snapshot CTest passed. |
+| QW-3 Remove duplicate CTest entry | **Not started** | `ctest -N` still lists the duplicate `c:/projects/other/audiocity` entry; address separately. |
+| QW-4 Compile the shipped products in CI | **Partial** | CI now builds `Audiocity_All`, and local VS 2022 builds produced Standalone and VST3 artifacts. The job still uses the Debug CI preset, lacks `installer/**` path filters, and does not explicitly assert artifact/resource paths. |
+| QW-5 Make snapshot limits explicit | **Not started** | No capacity-policy implementation recorded. |
+| QW-6 Centralize supported formats | **Not started** | No descriptor-registry implementation recorded. |
+| QW-7 Debounce preload changes | **Not started** | No preload debounce/no-op implementation recorded. |
+| MP-1 Audio-thread-owned control plane | **Implemented — release gate pending** | UI/host controls now flow through APVTS; one block-start snapshot applies changed groups on the audio thread. Structural data uses serialized immutable publication and quiescent reader reclamation. Panic is a lossless atomic latch consumed on the audio thread. Full CTest and 25 consecutive Debug stress runs passed; the one-hour soak/profiling sign-off remains. |
+| MP-2 Owned cancellable import jobs | **Complete** | Replaced detached import/scan threads with editor-owned single workers holding at most one replacement. Jobs use immutable captures, `SafePointer` callbacks, cooperative cancellation through traversal/decode/container/peak paths, documented cancellation boundaries, and teardown joins. Replacement, cancel/join, and cancelled-import tests passed; no product `.detach()` remains. |
+| MP-3 Scalable library index and peaks | **Not started** | MP-2 cancellation is available as a prerequisite; indexing/lazy-peak redesign remains. |
+| MP-4 Lazy capture/preview memory and compact state | **Not started** | No storage/state-codec implementation recorded. |
+| MP-5 Scalable program snapshots | **Not started** | Immutable publication was strengthened under MP-1, but scalable capacity work remains. |
+| MP-6 Linear event scheduler and safe overflow | **Not started** | No scheduler redesign recorded. The MP-1 panic latch now remains effective under saturated UI-note traffic. |
+| MP-7 Test/build consolidation and hardening | **Not started** | Regression coverage was expanded, but suite consolidation, sanitizers, fuzzing, coverage, and host validation remain. |
+| MP-8 Missing-asset resolver | **Not started** | No resolver implementation recorded. |
+| SI-1 Cross-platform and wrapper expansion | **Not started** | No cross-platform implementation recorded. |
+| SI-2 Portable instrument packaging | **Not started** | No package/asset-lifecycle implementation recorded. |
+| SI-3 Modular editor/processor architecture | **Not started** | Owned job services were introduced, but the planned feature decomposition remains. |
+| SI-4 Expressive sampler evolution | **Not started** | No discovery/prototype implementation recorded. |
+
+Current totals: **2 complete**, **2 implemented with release gates pending**, **1 partial**, and **14 not started**.
+
 ## 1. Quick wins — less than one day each
 
 ### QW-1 — Repair the CI/toolchain contract
@@ -47,6 +80,7 @@ This document is Phase 4 of the review. Dependencies are intentional: complete Q
 - **Problem:** `windows-2022` has VS 2022, while `default` requires the VS 2026 generator. The latest public build fails in 17 seconds and the UI workflow has never run.
 - **Recommendation:** Add `ci-windows-ninja` (preferred) or `ci-vs2022` with ASIO off, retain VS 2026 as a developer preset, and point both workflows/scripts at the CI preset. Print tool versions. Do not silently make VS 2026 a requirement while README says VS 2022.
 - **Acceptance:** A clean GitHub-hosted `windows-2022` run configures successfully, and a clean documented VS 2022 setup follows the same supported path.
+- **Progress (2026-09-06):** Implemented locally. The `ci-windows` preset targets Visual Studio 2022 with ASIO disabled; build/test and UI workflows, bootstrap, snapshot export, README commands, and toolchain-version output use that path. Local configuration, `Audiocity_All`, and CTest passed. A pushed GitHub-hosted run is still required to close the external acceptance gate.
 
 ### QW-2 — Re-establish UI golden truth and release metadata
 
@@ -58,6 +92,7 @@ This document is Phase 4 of the review. Dependencies are intentional: complete Q
 - **Problem:** All 19 snapshots currently fail. Baselines and the guide say 128 presets while the shipped bank/current harness has 64.
 - **Recommendation:** Review each actual/baseline/diff visually; correct unintended changes, then update only approved goldens. Correct the guide and regenerate public screenshots. Add a release assertion that the documented count equals the preset manifest/directory count.
 - **Acceptance:** Zero unexpected diffs on two clean runs; docs and screenshots show 64; a future count mismatch fails an automated check.
+- **Progress (2026-09-06):** Complete. All 19 actual/baseline/diff sets were reviewed, approved baselines and their manifest were regenerated, README/user-guide metadata now says 64, and packaging tests derive and enforce the count. Two clean zero-difference exports passed, followed by a passing final snapshot CTest.
 
 ### QW-3 — Remove the duplicate, path-named CTest registration
 
@@ -80,6 +115,7 @@ This document is Phase 4 of the review. Dependencies are intentional: complete Q
 - **Problem:** CI compiles test executables but not Standalone/VST3. Installer-only changes do not trigger it.
 - **Recommendation:** Add `installer/**`, release scripts, and dependency docs to path filters; build `Audiocity_All` in Release with ASIO off; retain fast non-UI tests as a separate step. At minimum inspect expected executable/VST3/resource paths.
 - **Acceptance:** A wrapper compile/link/resource-copy regression fails CI, and an installer-only PR receives the packaging check.
+- **Progress (2026-09-06):** Partial. The main workflow builds `Audiocity_All` plus non-UI regression targets, and the local VS 2022 path produced both `Audiocity.exe` and the VST3 bundle. Remaining work: switch/add a Release lane, include `installer/**` and relevant documentation in path filters, and assert expected wrapper/resource/installer-input paths.
 
 ### QW-5 — Make fixed program limits visible before publish
 
@@ -132,6 +168,7 @@ This document is Phase 4 of the review. Dependencies are intentional: complete Q
   5. Make UI reads use APVTS or audio-to-UI snapshots, never live mutable engine fields.
 - **Risks/open questions:** host state callbacks may occur on non-message threads; ADSR updates on active voices need defined smoothing; structural publishes must remain allocation-free for the reader.
 - **Acceptance/success metrics:** thread-ownership document matches code; high-rate automation + UI drag + MIDI stress runs for an hour without race symptoms; no locks/allocations/I/O in `processBlock`; unchanged-block parameter apply cost drops materially in the profiling harness.
+- **Progress (2026-09-06):** Implemented and locally regression-tested. Public control setters update APVTS only; `processBlock()` loads and diffs `EngineControlSnapshot`, applying only changed groups. Program/sample structures publish through a serialized writer and `RtSnapshotCell` active-reader epochs, with generation checks preventing mixed structural state. UI voice state comes from audio-to-UI atomics. Panic is a coalescing atomic latch consumed after queued UI notes on the audio thread, and program edits rely on publication generations rather than direct message-thread panic. The full Debug CTest suite passed, including unchanged-block, 512-note FIFO-saturation panic, concurrent control/publication/MIDI, and finite-output assertions; the runtime smoke then passed 25 consecutive Debug runs. Remaining release gate: the specified one-hour soak and profiling record.
 
 ### MP-2 — Replace detached workers with owned, cancellable jobs
 
@@ -144,6 +181,7 @@ This document is Phase 4 of the review. Dependencies are intentional: complete Q
 - **Approach:** Add a processor/service-owned bounded executor or `std::jthread`; jobs own immutable inputs and report progress through a lifetime-safe queue. Use `stop_token`/shared cancellation probes in file traversal, container parsing, audio decoding, and peak generation. Join all workers before processor destruction. Keep one active import and one scan generation.
 - **Risks/open questions:** JUCE decoders may not be interruptible during one large read; host teardown must not block indefinitely; UI callbacks must never retain components.
 - **Acceptance/success metrics:** close/unload during a blocked import is safe; rapid import replacement never runs more than the configured job limit; cancel reaches terminal state within a documented bound; no detached threads remain in product code.
+- **Progress (2026-09-06):** Complete for the current Windows product. `OwnedJobWorker` owns and joins one worker thread, permits one active job plus one replacement, and cooperatively cancels superseded work. Import jobs capture immutable inputs rather than a raw processor pointer; UI completions use `SafePointer` plus generation checks. Cancellation probes cover directory traversal, 4,096-frame peak reads, 65,536-frame audio reads, 1 MiB file/container reads, bounded XML parsing/traversal, importer record loops, and REX mutex/slice boundaries. Editor destruction cancels and joins import and scan workers before component teardown. Replacement serialization, destructor cancel/join, chunk-boundary cancellation, and cancelled-import terminal-state tests passed; recursive source checks confirm that product code contains no `.detach()`.
 
 ### MP-3 — Build a scalable, persistent library index with lazy peaks
 

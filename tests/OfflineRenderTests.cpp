@@ -3,6 +3,7 @@
 #include <juce_dsp/juce_dsp.h>
 
 #include "../src/engine/EngineCore.h"
+#include "../src/engine/ImportCancellation.h"
 #include "../src/engine/LegacyNkiProbe.h"
 #include "../src/engine/ProgramModel.h"
 #include "../src/engine/ProgramSnapshot.h"
@@ -20,6 +21,7 @@
 #include "../src/plugin/CcLearnDial.h"
 #include "../src/plugin/LibraryFileIndex.h"
 #include "../src/plugin/LibraryMetadata.h"
+#include "../src/plugin/OwnedJobWorker.h"
 #include "../src/plugin/PeakPreviewCache.h"
 #include "../src/plugin/PresetJson.h"
 #include "../src/plugin/ImportedProgramState.h"
@@ -46,6 +48,118 @@
 
 namespace
 {
+bool waitUntil(const std::function<bool()>& predicate, const std::chrono::milliseconds timeout)
+{
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!predicate())
+    {
+        if (std::chrono::steady_clock::now() >= deadline)
+            return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
+bool runOwnedJobWorkerReplacementIsSerialTest()
+{
+    audiocity::plugin::OwnedJobWorker worker;
+    std::atomic<int> activeJobs{ 0 };
+    std::atomic<int> maximumActiveJobs{ 0 };
+    std::atomic<bool> firstStarted{ false };
+    std::atomic<bool> firstCancelled{ false };
+    std::atomic<bool> replacementFinished{ false };
+
+    if (!worker.submit([&](const audiocity::plugin::OwnedJobWorker::CancellationFlag& cancelled)
+        {
+            const auto active = activeJobs.fetch_add(1, std::memory_order_acq_rel) + 1;
+            maximumActiveJobs.store(juce::jmax(maximumActiveJobs.load(), active));
+            firstStarted.store(true, std::memory_order_release);
+            while (!cancelled.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            firstCancelled.store(true, std::memory_order_release);
+            activeJobs.fetch_sub(1, std::memory_order_acq_rel);
+        }))
+        return false;
+
+    if (!waitUntil([&] { return firstStarted.load(std::memory_order_acquire); }, std::chrono::seconds(1)))
+        return false;
+
+    if (!worker.submit([&](const audiocity::plugin::OwnedJobWorker::CancellationFlag& cancelled)
+        {
+            if (cancelled.load(std::memory_order_acquire))
+                return;
+            const auto active = activeJobs.fetch_add(1, std::memory_order_acq_rel) + 1;
+            maximumActiveJobs.store(juce::jmax(maximumActiveJobs.load(), active));
+            activeJobs.fetch_sub(1, std::memory_order_acq_rel);
+            replacementFinished.store(true, std::memory_order_release);
+        }))
+        return false;
+
+    if (!waitUntil([&] { return replacementFinished.load(std::memory_order_acquire); }, std::chrono::seconds(1)))
+        return false;
+
+    worker.shutdown();
+    if (!firstCancelled.load(std::memory_order_acquire))
+        return false;
+    if (maximumActiveJobs.load(std::memory_order_acquire) != 1)
+        return false;
+    return true;
+}
+
+bool runOwnedJobWorkerDestructorCancelsAndJoinsTest()
+{
+    std::atomic<bool> started{ false };
+    std::atomic<bool> exited{ false };
+    {
+        audiocity::plugin::OwnedJobWorker worker;
+        if (!worker.submit([&](const audiocity::plugin::OwnedJobWorker::CancellationFlag& cancelled)
+            {
+                started.store(true, std::memory_order_release);
+                while (!cancelled.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                exited.store(true, std::memory_order_release);
+            }))
+            return false;
+
+        if (!waitUntil([&] { return started.load(std::memory_order_acquire); }, std::chrono::seconds(1)))
+            return false;
+    }
+
+    return exited.load(std::memory_order_acquire);
+}
+
+bool runCancellableAudioReadStopsAtChunkBoundaryTest()
+{
+    struct Reader
+    {
+        std::atomic<bool>& cancellation;
+        int calls = 0;
+
+        bool read(juce::AudioBuffer<float>* destination,
+                  const int destinationStart,
+                  const int sampleCount,
+                  const juce::int64 sourceStart,
+                  const bool,
+                  const bool)
+        {
+            juce::ignoreUnused(sourceStart);
+            ++calls;
+            destination->clear(destinationStart, sampleCount);
+            cancellation.store(true, std::memory_order_release);
+            return true;
+        }
+    };
+
+    std::atomic<bool> cancellation{ false };
+    Reader reader{ cancellation };
+    juce::AudioBuffer<float> destination(1, 200000);
+    const audiocity::engine::ImportCancellationScope scope(&cancellation);
+    const auto completed = audiocity::engine::readAudioInCancellableChunks(
+        reader, destination, destination.getNumSamples(), 65536);
+
+    return !completed && reader.calls == 1;
+}
+
 juce::File fixtureFile(const juce::String& relativePath)
 {
     return juce::File(AUDIOCITY_SOURCE_DIR).getChildFile(relativePath);
@@ -7447,14 +7561,21 @@ bool runBackgroundImportWorkerPublishContractTest()
 
     return headerText.contains("std::atomic<int> backgroundImportGeneration_")
         && headerText.contains("std::atomic<bool> backgroundImportInProgress_")
+        && headerText.contains("OwnedJobWorker backgroundImportWorker_")
         && headerText.contains("void cancelBackgroundInstrumentLoad()")
         && headerText.contains("const juce::File& searchFolder = {}")
         && sourceText.contains("case ImportedProgramFormat::unknown:")
         && sourceText.contains("case ImportedProgramFormat::sfz:")
         && sourceText.contains("case ImportedProgramFormat::rex:")
         && sourceText.contains("case ImportedProgramFormat::nki:")
-        && startFunctionBody.contains("std::thread([safeThis, importProcessor, file, format, selectedChoiceIndex, searchFolder, generation]() mutable")
-        && startFunctionBody.contains("prepareBackgroundImport(file, format, selectedChoiceIndex, searchFolder)")
+        && startFunctionBody.contains("backgroundImportWorker_.submit(")
+        && startFunctionBody.contains("CancellationFlag& cancelled")
+        && startFunctionBody.contains("cancelled.load(std::memory_order_acquire)")
+        && startFunctionBody.contains("prepareBackgroundImportJob(")
+        && startFunctionBody.contains("fallbackRootMidiNote")
+        && startFunctionBody.contains("fallbackPlaybackMode")
+        && startFunctionBody.contains("&cancelled)")
+        && !startFunctionBody.contains("importProcessor")
         && startFunctionBody.contains("juce::MessageManager::callAsync")
         && startFunctionBody.contains("publishPreparedBackgroundImport(file, std::move(prepared))")
         && startFunctionBody.contains("Preparing ")
@@ -7464,11 +7585,13 @@ bool runBackgroundImportWorkerPublishContractTest()
         && sourceText.contains("startBackgroundInstrumentLoad(nkiFile,")
         && processorHeaderText.contains("bool publishPreparedImportedProgram(const juce::File& file")
         && processorHeaderText.contains("PreparedBackgroundImport prepareBackgroundImport(")
+        && processorHeaderText.contains("static PreparedBackgroundImport prepareBackgroundImportJob(")
         && processorHeaderText.contains("bool publishPreparedBackgroundImport(const juce::File& file, PreparedBackgroundImport prepared)")
         && processorSourceText.contains("AudiocityAudioProcessor::PreparedBackgroundImport AudiocityAudioProcessor::prepareBackgroundImport(")
         && processorSourceText.contains("bool AudiocityAudioProcessor::publishPreparedBackgroundImport(")
         && processorSourceText.contains("bool AudiocityAudioProcessor::publishPreparedImportedProgram(")
-        && processorSourceText.contains("setImportedProgramMetadata(file,");
+        && processorSourceText.contains("setImportedProgramMetadata(file,")
+        && !sourceText.contains(".detach()");
 }
 
 bool runAboutPageExtractionContractTest()
@@ -14304,6 +14427,9 @@ int main()
         AUDIOCITY_TEST(runEditorFilterLfoPushPreservesAdvancedControlsTest, 180),
         AUDIOCITY_TEST(runEditorModulationPanelExtractionTest, 181),
         AUDIOCITY_TEST(runBackgroundImportWorkerPublishContractTest, 247),
+        AUDIOCITY_TEST(runOwnedJobWorkerReplacementIsSerialTest, 255),
+        AUDIOCITY_TEST(runOwnedJobWorkerDestructorCancelsAndJoinsTest, 256),
+        AUDIOCITY_TEST(runCancellableAudioReadStopsAtChunkBoundaryTest, 257),
         AUDIOCITY_TEST(runAboutPageExtractionContractTest, 248),
         AUDIOCITY_TEST(runGeneratePageExtractionContractTest, 251),
         AUDIOCITY_TEST(runCapturePageExtractionContractTest, 252),

@@ -7,8 +7,8 @@ namespace audiocity::plugin
 {
 /** Publishes programs to the audio engine.
 
-    Silencing sounding voices before adopting a new program is part of publishing, so it
-    lives here rather than at the call sites.
+    EngineCore publication generations silence sounding voices on the audio thread before a
+    new program is rendered. This sink therefore publishes immutable structure only.
 */
 class EngineProgramSink final : public ProgramSink
 {
@@ -21,13 +21,11 @@ public:
     void republishProgram(const audiocity::engine::Program& program,
                           const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset) override
     {
-        engine_.panic();
         engine_.setProgram(program, sampleDataByAsset);
     }
 
     bool republishProgramMetadata(const audiocity::engine::Program& program) override
     {
-        engine_.panic();
         return engine_.setProgramMetadata(program);
     }
 

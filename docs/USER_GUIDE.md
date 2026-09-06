@@ -119,7 +119,7 @@ The **Sample** tab is the heart of Audiocity. It is divided vertically into thre
 
 #### Factory presets
 
-Audiocity ships with a **stock bank of 128 factory presets** organised into eight families (Bass, Lead, Pad, Pluck, Keys, Bell, Ensemble, FX). Each factory preset embeds its own pre‑synthesized sample inside the `.acp` file, so the bank is fully self‑contained and portable across machines — no separate sample library is required.
+Audiocity ships with a **stock bank of 64 factory presets** organised into eight families (Bass, Lead, Pad, Pluck, Keys, Bell, Ensemble, FX). Each factory preset embeds its own pre‑synthesized sample inside the `.acp` file, so the bank is fully self‑contained and portable across machines — no separate sample library is required.
 
 The preset combo merges the factory bank with your personal user presets:
 

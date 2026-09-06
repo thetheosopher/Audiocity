@@ -1,4 +1,5 @@
 #include "Sf2Importer.h"
+#include "ImportCancellation.h"
 
 #include <algorithm>
 #include <array>
@@ -144,7 +145,7 @@ bool loadSf2File(const juce::File& sf2File,
         return false;
     }
 
-    if (!sf2File.loadFileAsData(blob))
+    if (!readFileInCancellableChunks(sf2File, blob))
     {
         addDiagnostic(diagnostics, ImportDiagnostic::Severity::error,
                       "Could not read SoundFont 2 file: " + sf2File.getFullPathName());
@@ -173,6 +174,9 @@ bool parseSf2Container(const juce::uint8* base, const size_t size, Sf2File& file
     const size_t end = static_cast<size_t>(riffSize) + 8;
     while (cursor + 8 <= end)
     {
+        if (isImportCancellationRequested())
+            return false;
+
         const auto chunkId = readU32LE(base + cursor);
         const auto chunkSize = readU32LE(base + cursor + 4);
         cursor += 8;
@@ -192,6 +196,9 @@ bool parseSf2Container(const juce::uint8* base, const size_t size, Sf2File& file
             const size_t innerEnd = chunkSize;
             while (inner + 8 <= innerEnd)
             {
+                if (isImportCancellationRequested())
+                    return false;
+
                 const auto subId = readU32LE(chunkPayload + inner);
                 const auto subSize = readU32LE(chunkPayload + inner + 4);
                 inner += 8;
@@ -440,6 +447,9 @@ void collectZoneGens(const Sf2File& f, const bool isPreset, const size_t bagStar
     constexpr float scale24 = 1.0f / 8388608.0f;
     for (size_t i = 0; i < sampleCount; ++i)
     {
+        if ((i & 0xffffu) == 0u && isImportCancellationRequested())
+            return {};
+
         const auto s16 = static_cast<juce::int16>(static_cast<juce::uint16>(src16[i * 2])
                                                   | (static_cast<juce::uint16>(src16[i * 2 + 1]) << 8));
         if (has24)
@@ -478,6 +488,9 @@ void importSinglePreset(const Sf2File& f, const size_t presetIndex, ImportResult
 
     for (const auto& presetZone : presetZones)
     {
+        if (isImportCancellationRequested())
+            return;
+
         if (!presetZone.hasInstId) continue;
         const auto instId = presetZone.instId;
         if (instId < 0 || static_cast<size_t>(instId) + 1 >= f.instCount) continue;
@@ -498,6 +511,9 @@ void importSinglePreset(const Sf2File& f, const size_t presetIndex, ImportResult
 
         for (auto& zoneGens : instZones)
         {
+            if (isImportCancellationRequested())
+                return;
+
             if (!zoneGens.hasSampleId) continue;
 
             // Merge instrument global generators as defaults below the zone.

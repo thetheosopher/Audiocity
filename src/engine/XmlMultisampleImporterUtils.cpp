@@ -1,6 +1,7 @@
 #include "XmlMultisampleImporterUtils.h"
 
 #include "AudioFileSupport.h"
+#include "ImportCancellation.h"
 
 #include <algorithm>
 #include <limits>
@@ -108,6 +109,9 @@ int loadSampleAssetFromFile(juce::AudioFormatManager& fm,
                             std::vector<Diagnostic>& diagnostics,
                             const juce::String& humanLabel)
 {
+    if (isImportCancellationRequested())
+        return -1;
+
     if (!audioFile.existsAsFile())
     {
         addDiagnostic(diagnostics, Diagnostic::Severity::error,
@@ -143,7 +147,7 @@ int loadSampleAssetFromFile(juce::AudioFormatManager& fm,
     }
 
     juce::AudioBuffer<float> buffer(asset.numChannels, asset.lengthSamples);
-    if (!reader->read(&buffer, 0, asset.lengthSamples, 0, true, true))
+    if (!readAudioInCancellableChunks(*reader, buffer, asset.lengthSamples))
     {
         addDiagnostic(diagnostics, Diagnostic::Severity::error,
                       "Could not decode audio sample: " + humanLabel);

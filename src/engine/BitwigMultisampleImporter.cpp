@@ -1,6 +1,7 @@
 #include "BitwigMultisampleImporter.h"
 
 #include "XmlMultisampleImporterUtils.h"
+#include "ImportCancellation.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -58,6 +59,9 @@ public:
         int implicitGroupIndex = -1;
         for (auto* sampleNode : root.getChildWithTagNameIterator("sample"))
         {
+            if (isImportCancellationRequested())
+                return;
+
             if (implicitGroupIndex < 0)
             {
                 Group g;
@@ -70,12 +74,19 @@ public:
 
         for (auto* layerNode : root.getChildWithTagNameIterator("layer"))
         {
+            if (isImportCancellationRequested())
+                return;
+
             Group g;
             g.name = layerNode->getStringAttribute("name", "Layer " + juce::String(static_cast<int>(result.program.groups.size() + 1))).toStdString();
             result.program.groups.push_back(g);
             const auto groupIndex = static_cast<int>(result.program.groups.size() - 1);
             for (auto* sampleNode : layerNode->getChildWithTagNameIterator("sample"))
+            {
+                if (isImportCancellationRequested())
+                    return;
                 processSample(*sampleNode, groupIndex, result);
+            }
         }
 
         if (result.program.zones.empty())
@@ -86,6 +97,9 @@ public:
 private:
     void processSample(const juce::XmlElement& sampleNode, const int groupIndex, ImportResult& result)
     {
+        if (isImportCancellationRequested())
+            return;
+
         const auto fileAttr = sampleNode.getStringAttribute("file");
         if (fileAttr.isEmpty())
         {
@@ -184,7 +198,8 @@ private:
 
         // Buffer entire entry to memory so JUCE can seek for WAV header parsing.
         juce::MemoryBlock blob;
-        raw->readIntoMemoryBlock(blob, static_cast<int>(kMaxArchiveAudioBytes + 1));
+        if (!readStreamInCancellableChunks(*raw, blob, kMaxArchiveAudioBytes + 1))
+            return -1;
         if (static_cast<juce::int64>(blob.getSize()) > kMaxArchiveAudioBytes)
         {
             addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error,
@@ -220,7 +235,7 @@ private:
         }
 
         juce::AudioBuffer<float> sampleData(asset.numChannels, asset.lengthSamples);
-        if (!reader->read(&sampleData, 0, asset.lengthSamples, 0, true, true))
+        if (!readAudioInCancellableChunks(*reader, sampleData, asset.lengthSamples))
         {
             addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error,
                           "Could not decode Bitwig multisample audio: " + fileName);
@@ -318,7 +333,8 @@ ImportResult importFile(const juce::File& multisampleFile)
         return result;
     }
     juce::MemoryBlock manifestBlob;
-    manifestStream->readIntoMemoryBlock(manifestBlob, static_cast<int>(kMaxArchiveManifestBytes + 1));
+    if (!readStreamInCancellableChunks(*manifestStream, manifestBlob, kMaxArchiveManifestBytes + 1))
+        return result;
     if (static_cast<juce::int64>(manifestBlob.getSize()) > kMaxArchiveManifestBytes)
     {
         addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error,
@@ -327,7 +343,7 @@ ImportResult importFile(const juce::File& multisampleFile)
     }
     const auto manifestText = juce::String::fromUTF8(static_cast<const char*>(manifestBlob.getData()),
                                                     static_cast<int>(manifestBlob.getSize()));
-    auto xml = juce::parseXML(manifestText);
+    auto xml = parseXmlTextCancellable(manifestText);
     if (xml == nullptr || !xml->hasTagName("multisample"))
     {
         addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error,

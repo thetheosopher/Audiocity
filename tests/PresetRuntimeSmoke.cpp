@@ -1,6 +1,8 @@
 #include <cstdio>
+#include <atomic>
 #include <cmath>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -136,6 +138,15 @@ int main()
     }
 
     processor->loadGeneratedWaveformAsSample(waveform, 60);
+    processor->setSampleWindow(0, static_cast<int>(waveform.size()));
+    processor->setLoopPoints(0, static_cast<int>(waveform.size()));
+    if (processor->getSampleWindowEnd() != static_cast<int>(waveform.size()) - 1
+        || processor->getLoopEnd() != static_cast<int>(waveform.size()) - 1)
+    {
+        std::fprintf(stderr, "Processor sample-relative controls did not clamp to the inclusive final sample.\n");
+        return 35;
+    }
+
     processor->setSampleWindow(32, 255);
 
     if (processor->getSampleWindowStart() != 32 || processor->getSampleWindowEnd() != 255)
@@ -583,6 +594,135 @@ int main()
         return 31;
     }
 
+    std::atomic<bool> cancelledImport{ true };
+    const auto cancelledPreparation = backgroundSampleProcessor->prepareBackgroundImport(
+        sampleFile,
+        audiocity::plugin::ImportedProgramFormat::unknown,
+        -1,
+        {},
+        &cancelledImport);
+    if (cancelledPreparation.ok || !cancelledPreparation.diagnosticSummary.containsIgnoreCase("cancelled"))
+    {
+        std::fprintf(stderr, "Cancelled background import did not reach a terminal cancelled state.\n");
+        tempDirectory.deleteRecursively();
+        return 32;
+    }
+
+    // MP-1 contract: controls are applied once at block start by the audio thread, and an
+    // unchanged block does not replay the setter graph.
+    auto controlProcessor = std::make_unique<AudiocityAudioProcessor>();
+    controlProcessor->prepareToPlay(48000.0, 128);
+    controlProcessor->loadGeneratedWaveformAsSample(waveform, 60);
+    controlProcessor->setPan(0.25f);
+    controlProcessor->setMasterVolume(0.8f);
+
+    juce::AudioBuffer<float> controlBuffer(2, 128);
+    juce::MidiBuffer controlMidi;
+    controlMidi.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 0);
+    const auto applyCountBeforeFirstBlock = controlProcessor->getAppliedControlGroupCount();
+    controlProcessor->processBlock(controlBuffer, controlMidi);
+    const auto applyCountAfterFirstBlock = controlProcessor->getAppliedControlGroupCount();
+    controlMidi.clear();
+    controlProcessor->processBlock(controlBuffer, controlMidi);
+    if (applyCountAfterFirstBlock <= applyCountBeforeFirstBlock
+        || controlProcessor->getAppliedControlGroupCount() != applyCountAfterFirstBlock)
+    {
+        std::fprintf(stderr, "Audio-thread control snapshot reapplied unchanged control groups.\n");
+        tempDirectory.deleteRecursively();
+        return 33;
+    }
+
+    // Panic is a lossless atomic latch rather than another FIFO entry. Saturating the UI note
+    // queue before requesting panic must still clear both the queued requests and live voices.
+    for (int noteIndex = 0; noteIndex < 512; ++noteIndex)
+        controlProcessor->enqueueUiMidiNoteOn(36 + (noteIndex % 48), 100);
+    controlProcessor->panicAllAudio();
+    controlBuffer.clear();
+    controlMidi.clear();
+    controlProcessor->processBlock(controlBuffer, controlMidi);
+    if (controlProcessor->getActiveVoiceCount() != 0)
+    {
+        std::fprintf(stderr, "Panic was lost or reordered behind saturated UI note traffic.\n");
+        tempDirectory.deleteRecursively();
+        return 35;
+    }
+
+    // Exercise UI/automation-style writes and immutable sample publication concurrently with
+    // MIDI rendering. This is intentionally short in CI; the same loop count can be raised for
+    // soak runs without changing the test topology.
+    std::atomic<bool> writerFinished{ false };
+    std::thread controlWriter([&]
+    {
+        for (int iteration = 0; iteration < 300; ++iteration)
+        {
+            controlProcessor->setPan(static_cast<float>((iteration % 201) - 100) / 100.0f);
+            controlProcessor->setMasterVolume(0.2f + 0.8f * static_cast<float>(iteration % 101) / 100.0f);
+            controlProcessor->setRootMidiNote(36 + (iteration % 49));
+            controlProcessor->setSampleWindow(iteration % 64, 512 + (iteration % 1024));
+
+            if ((iteration % 125) == 0)
+                controlProcessor->loadGeneratedWaveformAsSample(waveform, 48 + (iteration % 24));
+        }
+        writerFinished.store(true, std::memory_order_release);
+    });
+
+    auto renderedBlocks = 0;
+    auto finiteOutput = true;
+    auto firstInvalidBlock = -1;
+    auto firstInvalidChannel = -1;
+    auto firstInvalidSample = -1;
+    while (!writerFinished.load(std::memory_order_acquire) || renderedBlocks < 300)
+    {
+        controlBuffer.clear();
+        controlMidi.clear();
+        const auto note = 48 + (renderedBlocks % 24);
+        controlMidi.addEvent(juce::MidiMessage::noteOn(1, note, static_cast<juce::uint8>(100)), 0);
+        controlMidi.addEvent(juce::MidiMessage::noteOff(1, note), 96);
+        controlProcessor->processBlock(controlBuffer, controlMidi);
+
+        for (int channel = 0; channel < controlBuffer.getNumChannels(); ++channel)
+        {
+            const auto* samples = controlBuffer.getReadPointer(channel);
+            for (int sample = 0; sample < controlBuffer.getNumSamples(); ++sample)
+            {
+                if (!std::isfinite(samples[sample]) && firstInvalidBlock < 0)
+                {
+                    finiteOutput = false;
+                    firstInvalidBlock = renderedBlocks;
+                    firstInvalidChannel = channel;
+                    firstInvalidSample = sample;
+                }
+            }
+        }
+        ++renderedBlocks;
+    }
+    controlWriter.join();
+
+    if (!finiteOutput || controlProcessor->getAppliedControlGroupCount() <= applyCountAfterFirstBlock)
+    {
+        std::fprintf(stderr,
+            "Concurrent control/publication/MIDI stress failed: finite=%d, first invalid=%d/%d/%d, applied before=%llu, applied after=%llu.\n",
+            finiteOutput ? 1 : 0,
+            firstInvalidBlock,
+            firstInvalidChannel,
+            firstInvalidSample,
+            static_cast<unsigned long long>(applyCountAfterFirstBlock),
+            static_cast<unsigned long long>(controlProcessor->getAppliedControlGroupCount()));
+        tempDirectory.deleteRecursively();
+        return 34;
+    }
+
+    // Release every stream source and join each processor-owned priming worker before removing
+    // the WAV fixtures. Deleting an open streamed file is nondeterministic on Windows and can
+    // otherwise make the concurrency smoke appear to hang during teardown.
+    controlProcessor.reset();
+    editProcessor.reset();
+    backgroundSampleProcessor.reset();
+    preparedProcessor.reset();
+    invalidPreparedProcessor.reset();
+    restoredProcessor.reset();
+    sourceProcessor.reset();
+    processor.reset();
     tempDirectory.deleteRecursively();
 
     return 0;

@@ -1,4 +1,5 @@
 #include "BinaryMultisampleImporters.h"
+#include "ImportCancellation.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -97,6 +98,8 @@ void flushZone(PendingZone& zone, juce::AudioFormatManager& fm, const juce::File
 ImportResult importFile(const juce::File& file)
 {
     ImportResult result;
+    if (isImportCancellationRequested())
+        return result;
     if (!file.existsAsFile())
     {
         addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
@@ -105,7 +108,11 @@ ImportResult importFile(const juce::File& file)
     }
 
     juce::StringArray lines;
-    file.readLines(lines);
+    juce::MemoryBlock textBytes;
+    if (!readFileInCancellableChunks(file, textBytes))
+        return result;
+    lines.addLines(juce::String::fromUTF8(static_cast<const char*>(textBytes.getData()),
+                                          static_cast<int>(textBytes.getSize())));
     if (lines.isEmpty())
     {
         addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
@@ -154,6 +161,9 @@ ImportResult importFile(const juce::File& file)
 
     for (auto rawLine : lines)
     {
+        if (isImportCancellationRequested())
+            return result;
+
         auto line = rawLine.trim();
         if (line.isEmpty() || line.startsWithChar('#') || line.startsWithChar(';'))
             continue;
@@ -244,7 +254,7 @@ ImportResult importFile(const juce::File& file)
     }
 
     juce::MemoryBlock data;
-    if (!file.loadFileAsData(data) || data.getSize() < 16)
+    if (!readFileInCancellableChunks(file, data) || data.getSize() < 16)
     {
         addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
                       "Korg KMP read failed or file too short");
@@ -279,6 +289,9 @@ ImportResult importFile(const juce::File& file)
     size_t pos = 0;
     while (pos + 8 <= totalSize)
     {
+        if (isImportCancellationRequested())
+            return result;
+
         char id[5] = {};
         std::memcpy(id, bytes + pos, 4);
         const auto chunkSize = readBE32(bytes + pos + 4);
@@ -311,6 +324,9 @@ ImportResult importFile(const juce::File& file)
                               "KMP RLP1 entry count exceeds declared sample count - extra entries ignored");
             for (int i = 0; i < count; ++i)
             {
+                if (isImportCancellationRequested())
+                    return result;
+
                 const auto* e = p + i * 18;
                 KmpEntry k;
                 k.topKey   = juce::jlimit(0, 127, static_cast<int>(e[0]));
@@ -337,6 +353,9 @@ ImportResult importFile(const juce::File& file)
     int prevTop = -1;
     for (const auto& e : entries)
     {
+        if (isImportCancellationRequested())
+            return result;
+
         if (e.filename.isEmpty())
         {
             addDiagnostic(result.diagnostics, Diagnostic::Severity::warning,
@@ -442,6 +461,11 @@ struct ExsSample
 ImportResult importFile(const juce::File& file)
 {
     ImportResult result;
+    if (isImportCancellationRequested())
+        return result;
+
+    if (isImportCancellationRequested())
+        return result;
     if (!file.existsAsFile())
     {
         addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
@@ -450,7 +474,7 @@ ImportResult importFile(const juce::File& file)
     }
 
     juce::MemoryBlock data;
-    if (!file.loadFileAsData(data) || data.getSize() < kExsHeaderSize)
+    if (!readFileInCancellableChunks(file, data) || data.getSize() < kExsHeaderSize)
     {
         addDiagnostic(result.diagnostics, Diagnostic::Severity::error,
                       "EXS24 read failed or file too short");
@@ -475,6 +499,9 @@ ImportResult importFile(const juce::File& file)
     size_t pos = 0;
     while (pos + kExsHeaderSize <= total)
     {
+        if (isImportCancellationRequested())
+            return result;
+
         const uint32_t size = readLE32(bytes + pos + 4);
         const uint32_t type = readLE32(bytes + pos + 8);
         const auto chunkPayloadSize = static_cast<size_t>(size);
@@ -577,6 +604,9 @@ ImportResult importFile(const juce::File& file)
 
     for (const auto& z : zones)
     {
+        if (isImportCancellationRequested())
+            return result;
+
         if (z.sampleIndex < 0 || static_cast<size_t>(z.sampleIndex) >= samples.size())
         {
             addDiagnostic(result.diagnostics, Diagnostic::Severity::warning,
@@ -641,6 +671,9 @@ namespace nnxt
 ImportResult importFile(const juce::File& file)
 {
     ImportResult result;
+    if (isImportCancellationRequested())
+        return result;
+
     if (!file.existsAsFile())
     {
         addDiagnostic(result.diagnostics, Diagnostic::Severity::error,

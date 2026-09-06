@@ -610,8 +610,12 @@ struct SamplePreviewData
     juce::String loopMetadataLine;
 };
 
-auto buildPreviewAndMetadata(const juce::File& file) -> SamplePreviewData
+auto buildPreviewAndMetadata(const juce::File& file,
+                             const std::atomic<bool>& cancelled) -> SamplePreviewData
 {
+    if (cancelled.load(std::memory_order_acquire))
+        return {};
+
     auto getMetadataValueCaseInsensitive = [](const juce::StringPairArray& metadata,
                                               const juce::String& key) -> juce::String
     {
@@ -701,7 +705,7 @@ auto buildPreviewAndMetadata(const juce::File& file) -> SamplePreviewData
         return {};
     };
 
-    auto buildData = [&detectLoopFormatBadge, &parseEmbeddedRootNote, &parseLoopPoint, &parseTempo](
+    auto buildData = [&detectLoopFormatBadge, &parseEmbeddedRootNote, &parseLoopPoint, &parseTempo, &cancelled](
         const juce::File& sampleFile) -> SamplePreviewData
     {
         constexpr int kPeakCount = 256;
@@ -710,6 +714,8 @@ auto buildPreviewAndMetadata(const juce::File& file) -> SamplePreviewData
 
         juce::AudioFormatManager formatManager;
         audiocity::engine::audio_file::registerAudioFormats(formatManager);
+        if (cancelled.load(std::memory_order_acquire))
+            return out;
         auto openResult = audiocity::engine::audio_file::openReaderForFile(formatManager, sampleFile);
         auto reader = std::move(openResult.reader);
         if (reader == nullptr || reader->lengthInSamples <= 0)
@@ -754,6 +760,9 @@ auto buildPreviewAndMetadata(const juce::File& file) -> SamplePreviewData
         juce::AudioBuffer<float> scratchBuffer(1, 4096);
         for (int i = 0; i < kPeakCount; ++i)
         {
+            if (cancelled.load(std::memory_order_acquire))
+                return {};
+
             const auto start = (static_cast<int64_t>(i) * totalSamples) / kPeakCount;
             const auto end = juce::jmax(start + 1, (static_cast<int64_t>(i + 1) * totalSamples) / kPeakCount);
 
@@ -761,6 +770,9 @@ auto buildPreviewAndMetadata(const juce::File& file) -> SamplePreviewData
             int64_t position = start;
             while (position < end)
             {
+                if (cancelled.load(std::memory_order_acquire))
+                    return {};
+
                 const auto chunk = static_cast<int>(juce::jmin<int64_t>(scratchBuffer.getNumSamples(), end - position));
                 if (!reader->read(&scratchBuffer, 0, chunk, position, true, true))
                     break;
@@ -5365,6 +5377,10 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
 AudiocityAudioProcessorEditor::~AudiocityAudioProcessorEditor()
 {
     stopTimer();
+    ++backgroundImportGeneration_;
+    ++sampleScanGeneration_;
+    backgroundImportWorker_.shutdown();
+    sampleScanWorker_.shutdown();
     playerKeyboardState_.removeListener(this);
     tabBar_.setLookAndFeel(nullptr);
     setLookAndFeel(nullptr);
@@ -8081,6 +8097,7 @@ void AudiocityAudioProcessorEditor::cancelBackgroundInstrumentLoad()
     auto completion = std::move(backgroundImportCompletion_);
     backgroundImportCompletion_ = {};
     ++backgroundImportGeneration_;
+    backgroundImportWorker_.cancelAll();
     processor_.setImportDiagnosticSummary("Import cancelled: " + file.getFileName());
     setBackgroundImportUiActive(false);
     completeInstrumentLoad(file, false, true, completion);
@@ -8105,10 +8122,26 @@ bool AudiocityAudioProcessorEditor::startBackgroundInstrumentLoad(
     setBackgroundImportUiActive(true, file, "Preparing " + file.getFileName() + "...");
 
     const auto safeThis = juce::Component::SafePointer<AudiocityAudioProcessorEditor>(this);
-    auto* importProcessor = &processor_;
-    std::thread([safeThis, importProcessor, file, format, selectedChoiceIndex, searchFolder, generation]() mutable
+    const auto fallbackRootMidiNote = processor_.getRootMidiNote();
+    const auto fallbackPlaybackMode = processor_.getPlaybackMode();
+    const auto submitted = backgroundImportWorker_.submit(
+        [safeThis, file, format, selectedChoiceIndex, searchFolder, generation,
+         fallbackRootMidiNote, fallbackPlaybackMode](
+            const audiocity::plugin::OwnedJobWorker::CancellationFlag& cancelled) mutable
     {
-        auto prepared = importProcessor->prepareBackgroundImport(file, format, selectedChoiceIndex, searchFolder);
+        if (cancelled.load(std::memory_order_acquire))
+            return;
+
+        auto prepared = AudiocityAudioProcessor::prepareBackgroundImportJob(
+            file,
+            format,
+            selectedChoiceIndex,
+            searchFolder,
+            fallbackRootMidiNote,
+            fallbackPlaybackMode,
+            &cancelled);
+        if (cancelled.load(std::memory_order_acquire))
+            return;
 
         juce::MessageManager::callAsync([safeThis, file, generation, prepared = std::move(prepared)]() mutable
         {
@@ -8128,7 +8161,14 @@ bool AudiocityAudioProcessorEditor::startBackgroundInstrumentLoad(
             self->setBackgroundImportUiActive(false);
             self->completeInstrumentLoad(file, loaded, false, completion);
         });
-    }).detach();
+    });
+
+    if (!submitted)
+    {
+        backgroundImportCompletion_ = {};
+        setBackgroundImportUiActive(false);
+        return false;
+    }
 
     return true;
 }
@@ -8330,6 +8370,7 @@ void AudiocityAudioProcessorEditor::cancelSampleRootScan()
         return;
 
     ++sampleScanGeneration_;
+    sampleScanWorker_.cancelAll();
     sampleScanInProgress_.store(false, std::memory_order_relaxed);
 }
 
@@ -8364,15 +8405,17 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
     const auto includeRexFiles = processor_.isRexRuntimeAvailable();
     auto safeThis = juce::Component::SafePointer<AudiocityAudioProcessorEditor>(this);
 
-    std::thread([safeThis, rootFolder, scanGeneration, includeRexFiles, peakCacheStore, cacheEntries = std::move(peakCacheData.entries)]() mutable
+    const auto submitted = sampleScanWorker_.submit(
+        [safeThis, rootFolder, scanGeneration, includeRexFiles, peakCacheStore, cacheEntries = std::move(peakCacheData.entries)](
+            const audiocity::plugin::OwnedJobWorker::CancellationFlag& cancelled) mutable
     {
         std::vector<SampleListEntry> batch;
         batch.reserve(24);
         std::unordered_map<std::string, audiocity::plugin::PeakPreviewCacheEntry> updatedCacheEntries;
 
-        auto flushBatchToUi = [safeThis, scanGeneration](std::vector<SampleListEntry>& batchToFlush)
+        auto flushBatchToUi = [safeThis, scanGeneration, &cancelled](std::vector<SampleListEntry>& batchToFlush)
         {
-            if (batchToFlush.empty())
+            if (batchToFlush.empty() || cancelled.load(std::memory_order_acquire))
                 return;
 
             auto uiBatch = std::move(batchToFlush);
@@ -8396,11 +8439,7 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
 
         for (const auto& entry : juce::RangedDirectoryIterator(rootFolder, true, "*", juce::File::findFiles))
         {
-            if (safeThis == nullptr)
-                return;
-
-            auto* self = safeThis.getComponent();
-            if (scanGeneration != self->sampleScanGeneration_.load())
+            if (cancelled.load(std::memory_order_acquire))
                 return;
 
             const auto indexedEntry = audiocity::plugin::LibraryFileIndex::createEntryForFile(
@@ -8438,7 +8477,9 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
             }
             else
             {
-                previewData = buildPreviewAndMetadata(indexedFile.file);
+                previewData = buildPreviewAndMetadata(indexedFile.file, cancelled);
+                if (cancelled.load(std::memory_order_acquire))
+                    return;
             }
 
             updatedCacheEntries[cacheKey] = {
@@ -8461,11 +8502,7 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
 
         flushBatchToUi(batch);
 
-        if (safeThis == nullptr)
-            return;
-
-        auto* self = safeThis.getComponent();
-        if (scanGeneration != self->sampleScanGeneration_.load())
+        if (cancelled.load(std::memory_order_acquire))
             return;
 
         audiocity::plugin::PeakPreviewCacheData newCacheData;
@@ -8484,7 +8521,10 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
 
             self->sampleScanInProgress_.store(false, std::memory_order_relaxed);
         });
-    }).detach();
+    });
+
+    if (!submitted)
+        sampleScanInProgress_.store(false, std::memory_order_relaxed);
 }
 
 void AudiocityAudioProcessorEditor::refreshSampleBrowserBookmarks()

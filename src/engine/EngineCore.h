@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include "ProgramSnapshot.h"
@@ -46,6 +47,8 @@ public:
         float decaySeconds = 0.150f;
         float sustainLevel = 0.85f;
         float releaseSeconds = 0.150f;
+
+        bool operator==(const AdsrSettings&) const = default;
     };
 
     struct FilterSettings
@@ -89,6 +92,8 @@ public:
         bool lfoTempoSync = false;
         bool lfoRateKeytrackInTempoSync = true;
         int lfoSyncDivision = 6;
+
+        bool operator==(const FilterSettings&) const = default;
     };
 
     struct AmpLfoSettings
@@ -96,12 +101,16 @@ public:
         float rateHz = 0.0f;
         float depth = 0.0f;
         FilterSettings::LfoShape shape = FilterSettings::LfoShape::sine;
+
+        bool operator==(const AmpLfoSettings&) const = default;
     };
 
     struct PitchLfoSettings
     {
         float rateHz = 0.0f;
         float depthCents = 0.0f;
+
+        bool operator==(const PitchLfoSettings&) const = default;
     };
 
     static constexpr int kMacroControlCount = 2;
@@ -111,6 +120,8 @@ public:
         float toPitchCents = 0.0f;
         float toFilterHz = 0.0f;
         float toAmp = 0.0f;
+
+        bool operator==(const ModulationRoute&) const = default;
     };
 
     using MacroControlValues = std::array<float, kMacroControlCount>;
@@ -121,6 +132,8 @@ public:
         ModulationRoute aftertouch;
         ModulationRoute velocity;
         std::array<ModulationRoute, kMacroControlCount> macros{};
+
+        bool operator==(const ModulationRoutingSettings&) const = default;
     };
 
     struct DelaySettings
@@ -129,18 +142,24 @@ public:
         float feedback = 0.35f;
         float mix = 0.0f;
         bool tempoSync = false;
+
+        bool operator==(const DelaySettings&) const = default;
     };
 
     struct DcFilterSettings
     {
         bool enabled = true;
         float cutoffHz = 10.0f;
+
+        bool operator==(const DcFilterSettings&) const = default;
     };
 
     struct AutopanSettings
     {
         float rateHz = 0.5f;
         float depth = 0.0f;
+
+        bool operator==(const AutopanSettings&) const = default;
     };
 
     struct SaturationSettings
@@ -155,6 +174,8 @@ public:
 
         float drive = 0.0f;
         Mode mode = Mode::softClip;
+
+        bool operator==(const SaturationSettings&) const = default;
     };
 
     void prepare(double sampleRate, int maxSamplesPerBlock, int outputChannels) noexcept;
@@ -201,8 +222,12 @@ public:
                                                               int fallbackRootMidiNote = 60,
                                                               PlaybackMode fallbackPlaybackMode = PlaybackMode::gate);
     void loadPreparedSample(const PreparedSampleFile& prepared) noexcept;
+    /** Publishes immutable sample/display data without touching audio-thread-owned controls. */
+    void publishPreparedSample(const PreparedSampleFile& prepared) noexcept;
     [[nodiscard]] bool isRexRuntimeAvailable() const noexcept;
     void setSampleData(const juce::AudioBuffer<float>& sampleData, double sampleRate, int rootNote) noexcept;
+    /** Publishes immutable sample/display data without touching audio-thread-owned controls. */
+    void publishSampleData(const juce::AudioBuffer<float>& sampleData, double sampleRate) noexcept;
     void setProgram(const Program& program);
     void setProgram(const Program& program, const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset);
     /** Publishes a program whose audio is already loaded, reusing the sample segments rather
@@ -219,7 +244,7 @@ public:
     [[nodiscard]] int getLoadedSampleLength() const noexcept;
     [[nodiscard]] int getLoadedSampleChannels() const noexcept;
     [[nodiscard]] juce::AudioBuffer<float> copyLoadedSampleDisplayData() const { return displaySampleData_; }
-    [[nodiscard]] double getLoadedSampleRateHz() const noexcept { return sampleDataRate_; }
+    [[nodiscard]] double getLoadedSampleRateHz() const noexcept { return sampleDataRate_.load(std::memory_order_acquire); }
     [[nodiscard]] int getLoadedSampleBitDepth() const noexcept { return loadedSampleBitDepth_; }
     [[nodiscard]] int getLoadedMetadataRootMidiNote() const noexcept { return loadedMetadataRootMidiNote_; }
     [[nodiscard]] double getLoadedMetadataTempoBpm() const noexcept { return loadedMetadataTempoBpm_; }
@@ -501,7 +526,8 @@ private:
     void sortPendingEventsByOffset() noexcept;
     void flushPendingEventsAtOffset(int offset,
                                     const ProgramSnapshot* programSnapshot,
-                                    const ProgramAudioSnapshot* programAudioSnapshot) noexcept;
+                                    const ProgramAudioSnapshot* programAudioSnapshot,
+                                    double singleSampleRateHz) noexcept;
     void startVoice(int voiceIndex, const VoiceStartContext& context) noexcept;
     void retargetVoiceLegato(int voiceIndex, const VoiceStartContext& context) noexcept;
     void applyVoiceStartContext(VoiceState& voice, const VoiceStartContext& context) noexcept;
@@ -521,16 +547,20 @@ private:
     void setSampleDataInternal(const juce::AudioBuffer<float>& sampleData,
                                double sampleRate,
                                int rootNote,
-                               const juce::File& backingFile) noexcept;
+                               const juce::File& backingFile,
+                               bool applyPlaybackControls) noexcept;
     void rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData) noexcept;
     void rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData,
-                               const juce::File& backingFile) noexcept;
+                               const juce::File& backingFile,
+                               bool beginNewGeneration = false) noexcept;
     // `role` identifies the calling thread so the lock-free snapshot cell can protect the
     // returned guard without contending with the other two roles. See RtSnapshotCell.h.
     [[nodiscard]] RtSnapshotCell<SampleSegments>::Reader getSampleSegmentsSnapshot(RtReaderRole role) const noexcept;
     [[nodiscard]] static std::shared_ptr<const SampleSegments> buildSampleSegments(const juce::AudioBuffer<float>& monoSampleData,
         int preloadSamples,
-        const juce::File& backingFile = {}) noexcept;
+        const juce::File& backingFile = {},
+        double sampleRateHz = 44100.0,
+        std::uint64_t generation = 0) noexcept;
     [[nodiscard]] static juce::AudioBuffer<float> materializeSampleData(const SampleSegments& segments) noexcept;
     [[nodiscard]] std::shared_ptr<const ProgramAudioSnapshot> rebuildProgramAudioSnapshot(
         const ProgramAudioSnapshot& snapshot) const noexcept;
@@ -618,13 +648,20 @@ private:
     RtSnapshotCell<ProgramSnapshot> programSnapshot_{};
     RtSnapshotCell<ProgramAudioSnapshot> programAudioSnapshot_{};
     RtSnapshotCell<SampleSegments> sampleSegments_{};
+    // Structural writers serialize here. The audio thread only observes the sequence counter.
+    mutable std::recursive_mutex structuralWriterMutex_;
+    std::atomic<std::uint64_t> programPublishSequence_{ 0 };
+    std::uint64_t appliedProgramPublishSequence_ = 0;
+    std::uint64_t nextSamplePublishGeneration_ = 0;
+    std::uint64_t currentSamplePublishGeneration_ = 0;
+    std::uint64_t appliedSamplePublishGeneration_ = 0;
     juce::AudioBuffer<float> displaySampleData_;
     juce::String loadedSampleLoopFormatBadge_;
     int loadedSampleBitDepth_ = -1;
     int loadedMetadataRootMidiNote_ = -1;
     double loadedMetadataTempoBpm_ = 0.0;
     juce::String samplePath_;
-    double sampleDataRate_ = 44100.0;
+    std::atomic<double> sampleDataRate_{ 44100.0 };
     int rootMidiNote_ = 60;
     float coarseTuneSemitones_ = 0.0f;
     float fineTuneCents_ = 0.0f;

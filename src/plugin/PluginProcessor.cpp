@@ -4,6 +4,7 @@
 #include "PluginEditor.h"
 #include "PresetJson.h"
 #include "../engine/AudioFileSupport.h"
+#include "../engine/ImportCancellation.h"
 #include "../engine/LegacyNkiProbe.h"
 #include "../engine/RexSliceProgram.h"
 #include "../engine/SfzImporter.h"
@@ -496,7 +497,7 @@ bool readAudioFileToBuffer(const juce::File& file,
         return false;
 
     buffer.setSize(juce::jmax(1, static_cast<int>(reader->numChannels)), totalSamples, false, true, true);
-    if (!reader->read(&buffer, 0, totalSamples, 0, true, true))
+    if (!audiocity::engine::readAudioInCancellableChunks(*reader, buffer, totalSamples))
         return false;
 
     sampleRateHz = juce::jmax(1.0, reader->sampleRate);
@@ -515,6 +516,12 @@ AudiocityAudioProcessor::PreparedBackgroundImport prepareBackgroundImportedProgr
     prepared.format = format;
     prepared.selectionIndex = selectionIndex;
     prepared.importedProgram = true;
+
+    if (audiocity::engine::isImportCancellationRequested())
+    {
+        prepared.diagnosticSummary = "Import cancelled";
+        return prepared;
+    }
 
     const auto hasPlayable = result.hasPlayableProgram();
     const auto imported = !result.hasErrors() && hasPlayable;
@@ -667,7 +674,7 @@ void addModulationParameters(std::vector<std::unique_ptr<juce::RangedAudioParame
     }
 }
 
-void loadModulationRoutesFromParameters(juce::AudioProcessorValueTreeState& apvts,
+void loadModulationRoutesFromParameters(const juce::AudioProcessorValueTreeState& apvts,
                                         ModulationRoutingSettings& settings) noexcept
 {
     for (const auto& descriptor : kModulationRouteDescriptors)
@@ -679,7 +686,7 @@ void loadModulationRoutesFromParameters(juce::AudioProcessorValueTreeState& apvt
     }
 }
 
-void loadMacroControlsFromParameters(juce::AudioProcessorValueTreeState& apvts,
+void loadMacroControlsFromParameters(const juce::AudioProcessorValueTreeState& apvts,
                                      MacroControlValues& values) noexcept
 {
     for (const auto& descriptor : kMacroControlDescriptors)
@@ -928,133 +935,215 @@ void AudiocityAudioProcessor::updateParameterFromPlainValue(const juce::String& 
     {
         const auto normalised = parameter->convertTo0to1(plainValue);
         parameter->setValueNotifyingHost(normalised);
-
-        const auto current = suspendParamSyncBlocks_.load(std::memory_order_relaxed);
-        if (current < 2)
-            suspendParamSyncBlocks_.store(2, std::memory_order_relaxed);
     }
+}
+
+float AudiocityAudioProcessor::getParameterPlainValue(const char* const parameterId) const noexcept
+{
+    if (const auto* value = apvts_.getRawParameterValue(parameterId))
+        return value->load(std::memory_order_relaxed);
+    return 0.0f;
+}
+
+AudiocityAudioProcessor::EngineControlSnapshot AudiocityAudioProcessor::loadEngineControlSnapshot() const noexcept
+{
+    EngineControlSnapshot controls;
+    controls.hostTempoBpm = hostBpm_.load(std::memory_order_relaxed);
+
+    controls.ampEnvelope.attackSeconds = getParameterPlainValue(kParamAmpAttack);
+    controls.ampEnvelope.decaySeconds = getParameterPlainValue(kParamAmpDecay);
+    controls.ampEnvelope.sustainLevel = getParameterPlainValue(kParamAmpSustain);
+    controls.ampEnvelope.releaseSeconds = getParameterPlainValue(kParamAmpRelease);
+
+    controls.ampLfo.rateHz = getParameterPlainValue(kParamAmpLfoRate);
+    controls.ampLfo.depth = getParameterPlainValue(kParamAmpLfoDepth);
+    controls.ampLfo.shape = static_cast<FilterSettings::LfoShape>(juce::jlimit(0, 4,
+        static_cast<int>(std::round(getParameterPlainValue(kParamAmpLfoShape)))));
+
+    controls.filter.baseCutoffHz = getParameterPlainValue(kParamFilterCutoff);
+    controls.filter.resonance = getParameterPlainValue(kParamFilterRes);
+    controls.filter.envAmountHz = getParameterPlainValue(kParamFilterEnvAmt);
+    controls.filter.mode = static_cast<FilterSettings::Mode>(juce::jlimit(0, 5,
+        static_cast<int>(std::round(getParameterPlainValue(kParamFilterMode)))));
+    controls.filter.keyTracking = getParameterPlainValue(kParamFilterKeytrack);
+    controls.filter.velocityAmountHz = getParameterPlainValue(kParamFilterVel);
+    controls.filter.lfoRateHz = getParameterPlainValue(kParamFilterLfoRate);
+    controls.filter.lfoRateKeyTracking = getParameterPlainValue(kParamFilterLfoRateKeytrack);
+    controls.filter.lfoAmountHz = getParameterPlainValue(kParamFilterLfoAmount);
+    controls.filter.lfoAmountKeyTracking = getParameterPlainValue(kParamFilterLfoAmountKeytrack);
+    controls.filter.lfoStartPhaseDegrees = getParameterPlainValue(kParamFilterLfoStartPhase);
+    controls.filter.lfoStartPhaseRandomDegrees = getParameterPlainValue(kParamFilterLfoStartPhaseRandom);
+    controls.filter.lfoFadeInMs = getParameterPlainValue(kParamFilterLfoFadeIn);
+    controls.filter.lfoShape = static_cast<FilterSettings::LfoShape>(juce::jlimit(0, 4,
+        static_cast<int>(std::round(getParameterPlainValue(kParamFilterLfoShape)))));
+    controls.filter.lfoRetrigger = getParameterPlainValue(kParamFilterLfoRetrigger) >= 0.5f;
+    controls.filter.lfoTempoSync = getParameterPlainValue(kParamFilterLfoTempoSync) >= 0.5f;
+    controls.filter.lfoRateKeytrackInTempoSync = getParameterPlainValue(kParamFilterLfoRateKeytrackInTempoSync) >= 0.5f;
+    controls.filter.lfoKeytrackLinear = getParameterPlainValue(kParamFilterLfoKeytrackLinear) >= 0.5f;
+    controls.filter.lfoUnipolar = getParameterPlainValue(kParamFilterLfoUnipolar) >= 0.5f;
+    controls.filter.lfoSyncDivision = juce::jlimit(0, 11,
+        static_cast<int>(std::round(getParameterPlainValue(kParamFilterLfoSyncDivision))));
+    if (controls.filter.lfoTempoSync)
+        controls.filter.lfoRateHz = lfoRateHzFromTempoSync(controls.filter.lfoSyncDivision);
+
+    controls.filterEnvelope.attackSeconds = getParameterPlainValue(kParamFilterAttack);
+    controls.filterEnvelope.decaySeconds = getParameterPlainValue(kParamFilterDecay);
+    controls.filterEnvelope.sustainLevel = getParameterPlainValue(kParamFilterSustain);
+    controls.filterEnvelope.releaseSeconds = getParameterPlainValue(kParamFilterRelease);
+
+    controls.playbackMode = static_cast<PlaybackMode>(juce::jlimit(0, 2,
+        static_cast<int>(std::round(getParameterPlainValue(kParamPlaybackMode)))));
+    controls.monoMode = getParameterPlainValue(kParamMonoMode) >= 0.5f;
+    controls.legatoMode = getParameterPlainValue(kParamLegatoMode) >= 0.5f;
+    controls.glideSeconds = getParameterPlainValue(kParamGlideSeconds);
+    controls.polyphonyLimit = static_cast<int>(std::round(getParameterPlainValue(kParamPolyphonyLimit)));
+    controls.fadeInSamples = static_cast<int>(std::round(getParameterPlainValue(kParamFadeIn)));
+    controls.fadeOutSamples = static_cast<int>(std::round(getParameterPlainValue(kParamFadeOut)));
+    controls.reversePlayback = getParameterPlainValue(kParamReversePlayback) >= 0.5f;
+    controls.rootMidiNote = static_cast<int>(std::round(getParameterPlainValue(kParamRootMidiNote)));
+    controls.coarseTuneSemitones = getParameterPlainValue(kParamTuneCoarse);
+    controls.fineTuneCents = getParameterPlainValue(kParamTuneFine);
+    controls.pitchBendRangeSemitones = getParameterPlainValue(kParamPitchBendRange);
+    controls.pitchLfo.rateHz = getParameterPlainValue(kParamPitchLfoRate);
+    controls.pitchLfo.depthCents = getParameterPlainValue(kParamPitchLfoDepth);
+
+    loadModulationRoutesFromParameters(apvts_, controls.modulationRouting);
+    loadMacroControlsFromParameters(apvts_, controls.macroControls);
+
+    controls.sampleWindowStart = static_cast<int>(std::round(getParameterPlainValue(kParamPlaybackStart)));
+    controls.sampleWindowEnd = static_cast<int>(std::round(getParameterPlainValue(kParamPlaybackEnd)));
+    controls.loopStart = static_cast<int>(std::round(getParameterPlainValue(kParamLoopStart)));
+    controls.loopEnd = static_cast<int>(std::round(getParameterPlainValue(kParamLoopEnd)));
+    controls.loopCrossfadeSamples = static_cast<int>(std::round(getParameterPlainValue(kParamLoopCrossfade)));
+
+    controls.velocityCurve = static_cast<VelocityCurve>(juce::jlimit(0, 2,
+        static_cast<int>(std::round(getParameterPlainValue(kParamVelocityCurve)))));
+    controls.qualityTier = static_cast<QualityTier>(juce::jlimit(0, 2,
+        static_cast<int>(std::round(getParameterPlainValue(kParamQualityTier)))));
+    controls.reverbMix = getParameterPlainValue(kParamReverbMix);
+
+    controls.delay.timeMs = getParameterPlainValue(kParamDelayTime);
+    controls.delay.feedback = getParameterPlainValue(kParamDelayFeedback);
+    controls.delay.mix = getParameterPlainValue(kParamDelayMix);
+    controls.delay.tempoSync = getParameterPlainValue(kParamDelayTempoSync) >= 0.5f;
+
+    controls.dcFilter.enabled = getParameterPlainValue(kParamDcFilterEnabled) >= 0.5f;
+    controls.dcFilter.cutoffHz = getParameterPlainValue(kParamDcFilterCutoff);
+
+    controls.autopan.rateHz = getParameterPlainValue(kParamAutopanRate);
+    controls.autopan.depth = getParameterPlainValue(kParamAutopanDepth);
+
+    controls.saturation.drive = getParameterPlainValue(kParamSaturationDrive);
+    controls.saturation.mode = static_cast<SaturationSettings::Mode>(juce::jlimit(0, 3,
+        static_cast<int>(std::round(getParameterPlainValue(kParamSaturationMode)))));
+    controls.pan = getParameterPlainValue(kParamPan);
+    controls.masterVolume = getParameterPlainValue(kParamMasterVolume);
+    return controls;
 }
 
 void AudiocityAudioProcessor::syncEngineFromAutomatableParameters() noexcept
 {
-    engine_.setHostTempoBpm(hostBpm_.load(std::memory_order_relaxed));
+    const auto controls = loadEngineControlSnapshot();
+    const auto firstApply = !hasAppliedControls_;
+    std::uint64_t appliedGroups = 0;
 
-    auto amp = engine_.getAmpEnvelope();
-    amp.attackSeconds = apvts_.getRawParameterValue(kParamAmpAttack)->load();
-    amp.decaySeconds = apvts_.getRawParameterValue(kParamAmpDecay)->load();
-    amp.sustainLevel = apvts_.getRawParameterValue(kParamAmpSustain)->load();
-    amp.releaseSeconds = apvts_.getRawParameterValue(kParamAmpRelease)->load();
-    engine_.setAmpEnvelope(amp);
+    const auto applyIfChanged = [&appliedGroups, firstApply](const auto& current,
+                                                             const auto& previous,
+                                                             auto&& apply)
+    {
+        if (firstApply || current != previous)
+        {
+            apply();
+            ++appliedGroups;
+        }
+    };
 
-    auto ampLfo = engine_.getAmpLfoSettings();
-    ampLfo.rateHz = apvts_.getRawParameterValue(kParamAmpLfoRate)->load();
-    ampLfo.depth = apvts_.getRawParameterValue(kParamAmpLfoDepth)->load();
-    ampLfo.shape = static_cast<FilterSettings::LfoShape>(juce::jlimit(0, 4,
-        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamAmpLfoShape)->load()))));
-    engine_.setAmpLfoSettings(ampLfo);
+    applyIfChanged(controls.hostTempoBpm, lastAppliedControls_.hostTempoBpm,
+        [&] { engine_.setHostTempoBpm(controls.hostTempoBpm); });
+    applyIfChanged(controls.ampEnvelope, lastAppliedControls_.ampEnvelope,
+        [&] { engine_.setAmpEnvelope(controls.ampEnvelope); });
+    applyIfChanged(controls.ampLfo, lastAppliedControls_.ampLfo,
+        [&] { engine_.setAmpLfoSettings(controls.ampLfo); });
+    applyIfChanged(controls.filter, lastAppliedControls_.filter,
+        [&] { engine_.setFilterSettings(controls.filter); });
+    applyIfChanged(controls.filterEnvelope, lastAppliedControls_.filterEnvelope,
+        [&] { engine_.setFilterEnvelope(controls.filterEnvelope); });
+    applyIfChanged(controls.playbackMode, lastAppliedControls_.playbackMode,
+        [&] { engine_.setPlaybackMode(controls.playbackMode); });
+    applyIfChanged(controls.monoMode, lastAppliedControls_.monoMode,
+        [&] { engine_.setMonoMode(controls.monoMode); });
+    applyIfChanged(controls.legatoMode, lastAppliedControls_.legatoMode,
+        [&] { engine_.setLegatoMode(controls.legatoMode); });
+    applyIfChanged(controls.glideSeconds, lastAppliedControls_.glideSeconds,
+        [&] { engine_.setGlideSeconds(controls.glideSeconds); });
+    applyIfChanged(controls.polyphonyLimit, lastAppliedControls_.polyphonyLimit,
+        [&] { engine_.setPolyphonyLimit(controls.polyphonyLimit); });
+    const auto fadesChanged = firstApply
+        || controls.fadeInSamples != lastAppliedControls_.fadeInSamples
+        || controls.fadeOutSamples != lastAppliedControls_.fadeOutSamples;
+    if (fadesChanged)
+    {
+        engine_.setFadeSamples(controls.fadeInSamples, controls.fadeOutSamples);
+        ++appliedGroups;
+    }
+    applyIfChanged(controls.reversePlayback, lastAppliedControls_.reversePlayback,
+        [&] { engine_.setReversePlayback(controls.reversePlayback); });
+    applyIfChanged(controls.rootMidiNote, lastAppliedControls_.rootMidiNote,
+        [&] { engine_.setRootMidiNote(controls.rootMidiNote); });
+    applyIfChanged(controls.coarseTuneSemitones, lastAppliedControls_.coarseTuneSemitones,
+        [&] { engine_.setCoarseTuneSemitones(controls.coarseTuneSemitones); });
+    applyIfChanged(controls.fineTuneCents, lastAppliedControls_.fineTuneCents,
+        [&] { engine_.setFineTuneCents(controls.fineTuneCents); });
+    applyIfChanged(controls.pitchBendRangeSemitones, lastAppliedControls_.pitchBendRangeSemitones,
+        [&] { engine_.setPitchBendRangeSemitones(controls.pitchBendRangeSemitones); });
+    applyIfChanged(controls.pitchLfo, lastAppliedControls_.pitchLfo,
+        [&] { engine_.setPitchLfoSettings(controls.pitchLfo); });
+    applyIfChanged(controls.modulationRouting, lastAppliedControls_.modulationRouting,
+        [&] { engine_.setModulationRoutingSettings(controls.modulationRouting); });
+    applyIfChanged(controls.macroControls, lastAppliedControls_.macroControls,
+        [&] { engine_.setMacroControlValues(controls.macroControls); });
 
-    auto filter = engine_.getFilterSettings();
-    filter.baseCutoffHz = apvts_.getRawParameterValue(kParamFilterCutoff)->load();
-    filter.resonance = apvts_.getRawParameterValue(kParamFilterRes)->load();
-    filter.envAmountHz = apvts_.getRawParameterValue(kParamFilterEnvAmt)->load();
-    filter.mode = static_cast<FilterSettings::Mode>(juce::jlimit(0, 5,
-        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamFilterMode)->load()))));
-    filter.keyTracking = apvts_.getRawParameterValue(kParamFilterKeytrack)->load();
-    filter.velocityAmountHz = apvts_.getRawParameterValue(kParamFilterVel)->load();
-    filter.lfoRateHz = apvts_.getRawParameterValue(kParamFilterLfoRate)->load();
-    filter.lfoRateKeyTracking = apvts_.getRawParameterValue(kParamFilterLfoRateKeytrack)->load();
-    filter.lfoAmountHz = apvts_.getRawParameterValue(kParamFilterLfoAmount)->load();
-    filter.lfoAmountKeyTracking = apvts_.getRawParameterValue(kParamFilterLfoAmountKeytrack)->load();
-    filter.lfoStartPhaseDegrees = apvts_.getRawParameterValue(kParamFilterLfoStartPhase)->load();
-    filter.lfoStartPhaseRandomDegrees = apvts_.getRawParameterValue(kParamFilterLfoStartPhaseRandom)->load();
-    filter.lfoFadeInMs = apvts_.getRawParameterValue(kParamFilterLfoFadeIn)->load();
-    filter.lfoShape = static_cast<FilterSettings::LfoShape>(juce::jlimit(0, 4,
-        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamFilterLfoShape)->load()))));
-    filter.lfoRetrigger = apvts_.getRawParameterValue(kParamFilterLfoRetrigger)->load() >= 0.5f;
-    filter.lfoTempoSync = apvts_.getRawParameterValue(kParamFilterLfoTempoSync)->load() >= 0.5f;
-    filter.lfoRateKeytrackInTempoSync = apvts_.getRawParameterValue(kParamFilterLfoRateKeytrackInTempoSync)->load() >= 0.5f;
-    filter.lfoKeytrackLinear = apvts_.getRawParameterValue(kParamFilterLfoKeytrackLinear)->load() >= 0.5f;
-    filter.lfoUnipolar = apvts_.getRawParameterValue(kParamFilterLfoUnipolar)->load() >= 0.5f;
-    filter.lfoSyncDivision = juce::jlimit(0, 11,
-        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamFilterLfoSyncDivision)->load())));
-    if (filter.lfoTempoSync)
-        filter.lfoRateHz = lfoRateHzFromTempoSync(filter.lfoSyncDivision);
-    engine_.setFilterSettings(filter);
+    const auto sampleWindowChanged = firstApply
+        || controls.sampleWindowStart != lastAppliedControls_.sampleWindowStart
+        || controls.sampleWindowEnd != lastAppliedControls_.sampleWindowEnd;
+    if (sampleWindowChanged)
+    {
+        engine_.setSampleWindow(controls.sampleWindowStart, controls.sampleWindowEnd);
+        ++appliedGroups;
+    }
+    const auto loopChanged = firstApply
+        || controls.loopStart != lastAppliedControls_.loopStart
+        || controls.loopEnd != lastAppliedControls_.loopEnd;
+    if (loopChanged)
+    {
+        engine_.setLoopPoints(controls.loopStart, controls.loopEnd);
+        ++appliedGroups;
+    }
+    applyIfChanged(controls.loopCrossfadeSamples, lastAppliedControls_.loopCrossfadeSamples,
+        [&] { engine_.setLoopCrossfadeSamples(controls.loopCrossfadeSamples); });
+    applyIfChanged(controls.velocityCurve, lastAppliedControls_.velocityCurve,
+        [&] { engine_.setVelocityCurve(controls.velocityCurve); });
+    applyIfChanged(controls.qualityTier, lastAppliedControls_.qualityTier,
+        [&] { engine_.setQualityTier(controls.qualityTier); });
+    applyIfChanged(controls.reverbMix, lastAppliedControls_.reverbMix,
+        [&] { engine_.setReverbMix(controls.reverbMix); });
+    applyIfChanged(controls.delay, lastAppliedControls_.delay,
+        [&] { engine_.setDelaySettings(controls.delay); });
+    applyIfChanged(controls.dcFilter, lastAppliedControls_.dcFilter,
+        [&] { engine_.setDcFilterSettings(controls.dcFilter); });
+    applyIfChanged(controls.autopan, lastAppliedControls_.autopan,
+        [&] { engine_.setAutopanSettings(controls.autopan); });
+    applyIfChanged(controls.saturation, lastAppliedControls_.saturation,
+        [&] { engine_.setSaturationSettings(controls.saturation); });
+    applyIfChanged(controls.pan, lastAppliedControls_.pan,
+        [&] { engine_.setPan(controls.pan); });
+    applyIfChanged(controls.masterVolume, lastAppliedControls_.masterVolume,
+        [&] { engine_.setMasterVolume(controls.masterVolume); });
 
-    auto filterEnv = engine_.getFilterEnvelope();
-    filterEnv.attackSeconds = apvts_.getRawParameterValue(kParamFilterAttack)->load();
-    filterEnv.decaySeconds = apvts_.getRawParameterValue(kParamFilterDecay)->load();
-    filterEnv.sustainLevel = apvts_.getRawParameterValue(kParamFilterSustain)->load();
-    filterEnv.releaseSeconds = apvts_.getRawParameterValue(kParamFilterRelease)->load();
-    engine_.setFilterEnvelope(filterEnv);
-
-    engine_.setPlaybackMode(static_cast<PlaybackMode>(juce::jlimit(0, 2,
-        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamPlaybackMode)->load())))));
-    engine_.setMonoMode(apvts_.getRawParameterValue(kParamMonoMode)->load() >= 0.5f);
-    engine_.setLegatoMode(apvts_.getRawParameterValue(kParamLegatoMode)->load() >= 0.5f);
-    engine_.setGlideSeconds(apvts_.getRawParameterValue(kParamGlideSeconds)->load());
-    engine_.setPolyphonyLimit(static_cast<int>(std::round(apvts_.getRawParameterValue(kParamPolyphonyLimit)->load())));
-    engine_.setFadeSamples(
-        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamFadeIn)->load())),
-        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamFadeOut)->load())));
-    engine_.setReversePlayback(apvts_.getRawParameterValue(kParamReversePlayback)->load() >= 0.5f);
-    engine_.setRootMidiNote(static_cast<int>(std::round(apvts_.getRawParameterValue(kParamRootMidiNote)->load())));
-    engine_.setCoarseTuneSemitones(apvts_.getRawParameterValue(kParamTuneCoarse)->load());
-    engine_.setFineTuneCents(apvts_.getRawParameterValue(kParamTuneFine)->load());
-    engine_.setPitchBendRangeSemitones(apvts_.getRawParameterValue(kParamPitchBendRange)->load());
-    auto pitchLfo = engine_.getPitchLfoSettings();
-    pitchLfo.rateHz = apvts_.getRawParameterValue(kParamPitchLfoRate)->load();
-    pitchLfo.depthCents = apvts_.getRawParameterValue(kParamPitchLfoDepth)->load();
-    engine_.setPitchLfoSettings(pitchLfo);
-
-    auto modulationRouting = engine_.getModulationRoutingSettings();
-    loadModulationRoutesFromParameters(apvts_, modulationRouting);
-    engine_.setModulationRoutingSettings(modulationRouting);
-
-    auto macroValues = engine_.getMacroControlValues();
-    loadMacroControlsFromParameters(apvts_, macroValues);
-    engine_.setMacroControlValues(macroValues);
-
-    engine_.setSampleWindow(
-        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamPlaybackStart)->load())),
-        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamPlaybackEnd)->load())));
-    engine_.setLoopPoints(
-        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamLoopStart)->load())),
-        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamLoopEnd)->load())));
-    engine_.setLoopCrossfadeSamples(
-        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamLoopCrossfade)->load())));
-
-    engine_.setVelocityCurve(static_cast<VelocityCurve>(juce::jlimit(0, 2,
-        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamVelocityCurve)->load())))));
-    engine_.setQualityTier(static_cast<QualityTier>(juce::jlimit(0, 2,
-        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamQualityTier)->load())))));
-    engine_.setReverbMix(apvts_.getRawParameterValue(kParamReverbMix)->load());
-
-    DelaySettings delay;
-    delay.timeMs = apvts_.getRawParameterValue(kParamDelayTime)->load();
-    delay.feedback = apvts_.getRawParameterValue(kParamDelayFeedback)->load();
-    delay.mix = apvts_.getRawParameterValue(kParamDelayMix)->load();
-    delay.tempoSync = apvts_.getRawParameterValue(kParamDelayTempoSync)->load() >= 0.5f;
-    engine_.setDelaySettings(delay);
-
-    DcFilterSettings dcFilter;
-    dcFilter.enabled = apvts_.getRawParameterValue(kParamDcFilterEnabled)->load() >= 0.5f;
-    dcFilter.cutoffHz = apvts_.getRawParameterValue(kParamDcFilterCutoff)->load();
-    engine_.setDcFilterSettings(dcFilter);
-
-    AutopanSettings autopan;
-    autopan.rateHz = apvts_.getRawParameterValue(kParamAutopanRate)->load();
-    autopan.depth = apvts_.getRawParameterValue(kParamAutopanDepth)->load();
-    engine_.setAutopanSettings(autopan);
-
-    SaturationSettings saturation;
-    saturation.drive = apvts_.getRawParameterValue(kParamSaturationDrive)->load();
-    saturation.mode = static_cast<SaturationSettings::Mode>(juce::jlimit(0, 3,
-        static_cast<int>(std::round(apvts_.getRawParameterValue(kParamSaturationMode)->load()))));
-    engine_.setSaturationSettings(saturation);
-
-    engine_.setPan(apvts_.getRawParameterValue(kParamPan)->load());
-    engine_.setMasterVolume(apvts_.getRawParameterValue(kParamMasterVolume)->load());
+    lastAppliedControls_ = controls;
+    hasAppliedControls_ = true;
+    if (appliedGroups > 0)
+        appliedControlGroupCount_.fetch_add(appliedGroups, std::memory_order_relaxed);
 }
 
 void AudiocityAudioProcessor::prepareToPlay(const double sampleRate, const int samplesPerBlock)
@@ -1134,11 +1223,9 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         capturedThisBlock = captureInputAudio(buffer, numInputChannels);
 
     updateHostTempoFromPlayHead();
-    const auto suspendedBlocks = suspendParamSyncBlocks_.load(std::memory_order_relaxed);
-    if (suspendedBlocks > 0)
-        suspendParamSyncBlocks_.store(suspendedBlocks - 1, std::memory_order_relaxed);
-    else
-        syncEngineFromAutomatableParameters();
+    if (controlResyncRequested_.exchange(false, std::memory_order_acq_rel))
+        hasAppliedControls_ = false;
+    syncEngineFromAutomatableParameters();
 
     // Extract CC messages and push to FIFO for the editor to consume
     for (const auto metadata : midiMessages)
@@ -1186,11 +1273,22 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     UiMidiEvent uiEvent{};
     while (popUiMidiEvent(uiEvent))
     {
-        if (uiEvent.isNoteOn)
-            engine_.noteOn(uiEvent.noteNumber, static_cast<float>(uiEvent.velocity) / 127.0f, 0);
-        else
-            engine_.noteOff(uiEvent.noteNumber, 0);
+        switch (uiEvent.type)
+        {
+            case UiMidiEvent::Type::noteOn:
+                engine_.noteOn(uiEvent.noteNumber, static_cast<float>(uiEvent.velocity) / 127.0f, 0);
+                break;
+            case UiMidiEvent::Type::noteOff:
+                engine_.noteOff(uiEvent.noteNumber, 0);
+                break;
+        }
     }
+
+    // Apply panic after draining queued UI notes so the latch also clears any requests that
+    // accumulated before it. Host MIDI in this block remains authoritative and is handled by
+    // EngineCore::render below.
+    if (panicRequested_.exchange(false, std::memory_order_acq_rel))
+        engine_.panic();
 
     engine_.render(buffer, midiMessages);
     applyOutputBoundarySmoothing(buffer);
@@ -1204,66 +1302,115 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
 
 void AudiocityAudioProcessor::setQualityTier(const QualityTier tier) noexcept
 {
-    engine_.setQualityTier(tier);
     updateParameterFromPlainValue(kParamQualityTier, static_cast<float>(tier));
+}
+
+AudiocityAudioProcessor::QualityTier AudiocityAudioProcessor::getQualityTier() const noexcept
+{
+    return static_cast<QualityTier>(juce::jlimit(0, 2,
+        static_cast<int>(std::round(getParameterPlainValue(kParamQualityTier)))));
 }
 
 void AudiocityAudioProcessor::setVelocityCurve(const VelocityCurve curve) noexcept
 {
-    engine_.setVelocityCurve(curve);
     updateParameterFromPlainValue(kParamVelocityCurve, static_cast<float>(curve));
+}
+
+AudiocityAudioProcessor::VelocityCurve AudiocityAudioProcessor::getVelocityCurve() const noexcept
+{
+    return static_cast<VelocityCurve>(juce::jlimit(0, 2,
+        static_cast<int>(std::round(getParameterPlainValue(kParamVelocityCurve)))));
 }
 
 void AudiocityAudioProcessor::setReverbMix(const float mix) noexcept
 {
-    engine_.setReverbMix(mix);
     updateParameterFromPlainValue(kParamReverbMix, mix);
+}
+
+float AudiocityAudioProcessor::getReverbMix() const noexcept
+{
+    return getParameterPlainValue(kParamReverbMix);
 }
 
 void AudiocityAudioProcessor::setDelaySettings(const DelaySettings& settings) noexcept
 {
-    engine_.setDelaySettings(settings);
-    const auto applied = engine_.getDelaySettings();
-    updateParameterFromPlainValue(kParamDelayTime, applied.timeMs);
-    updateParameterFromPlainValue(kParamDelayFeedback, applied.feedback);
-    updateParameterFromPlainValue(kParamDelayMix, applied.mix);
-    updateParameterFromPlainValue(kParamDelayTempoSync, applied.tempoSync ? 1.0f : 0.0f);
+    updateParameterFromPlainValue(kParamDelayTime, settings.timeMs);
+    updateParameterFromPlainValue(kParamDelayFeedback, settings.feedback);
+    updateParameterFromPlainValue(kParamDelayMix, settings.mix);
+    updateParameterFromPlainValue(kParamDelayTempoSync, settings.tempoSync ? 1.0f : 0.0f);
+}
+
+AudiocityAudioProcessor::DelaySettings AudiocityAudioProcessor::getDelaySettings() const noexcept
+{
+    return {
+        getParameterPlainValue(kParamDelayTime),
+        getParameterPlainValue(kParamDelayFeedback),
+        getParameterPlainValue(kParamDelayMix),
+        getParameterPlainValue(kParamDelayTempoSync) >= 0.5f
+    };
 }
 
 void AudiocityAudioProcessor::setDcFilterSettings(const DcFilterSettings& settings) noexcept
 {
-    engine_.setDcFilterSettings(settings);
-    const auto applied = engine_.getDcFilterSettings();
-    updateParameterFromPlainValue(kParamDcFilterEnabled, applied.enabled ? 1.0f : 0.0f);
-    updateParameterFromPlainValue(kParamDcFilterCutoff, applied.cutoffHz);
+    updateParameterFromPlainValue(kParamDcFilterEnabled, settings.enabled ? 1.0f : 0.0f);
+    updateParameterFromPlainValue(kParamDcFilterCutoff, settings.cutoffHz);
+}
+
+AudiocityAudioProcessor::DcFilterSettings AudiocityAudioProcessor::getDcFilterSettings() const noexcept
+{
+    return {
+        getParameterPlainValue(kParamDcFilterEnabled) >= 0.5f,
+        getParameterPlainValue(kParamDcFilterCutoff)
+    };
 }
 
 void AudiocityAudioProcessor::setAutopanSettings(const AutopanSettings& settings) noexcept
 {
-    engine_.setAutopanSettings(settings);
-    const auto applied = engine_.getAutopanSettings();
-    updateParameterFromPlainValue(kParamAutopanRate, applied.rateHz);
-    updateParameterFromPlainValue(kParamAutopanDepth, applied.depth);
+    updateParameterFromPlainValue(kParamAutopanRate, settings.rateHz);
+    updateParameterFromPlainValue(kParamAutopanDepth, settings.depth);
+}
+
+AudiocityAudioProcessor::AutopanSettings AudiocityAudioProcessor::getAutopanSettings() const noexcept
+{
+    return {
+        getParameterPlainValue(kParamAutopanRate),
+        getParameterPlainValue(kParamAutopanDepth)
+    };
 }
 
 void AudiocityAudioProcessor::setSaturationSettings(const SaturationSettings& settings) noexcept
 {
-    engine_.setSaturationSettings(settings);
-    const auto applied = engine_.getSaturationSettings();
-    updateParameterFromPlainValue(kParamSaturationDrive, applied.drive);
-    updateParameterFromPlainValue(kParamSaturationMode, static_cast<float>(applied.mode));
+    updateParameterFromPlainValue(kParamSaturationDrive, settings.drive);
+    updateParameterFromPlainValue(kParamSaturationMode, static_cast<float>(settings.mode));
+}
+
+AudiocityAudioProcessor::SaturationSettings AudiocityAudioProcessor::getSaturationSettings() const noexcept
+{
+    return {
+        getParameterPlainValue(kParamSaturationDrive),
+        static_cast<SaturationSettings::Mode>(juce::jlimit(0, 3,
+            static_cast<int>(std::round(getParameterPlainValue(kParamSaturationMode)))))
+    };
 }
 
 void AudiocityAudioProcessor::setPan(const float pan) noexcept
 {
-    engine_.setPan(pan);
-    updateParameterFromPlainValue(kParamPan, engine_.getPan());
+    updateParameterFromPlainValue(kParamPan, pan);
+}
+
+float AudiocityAudioProcessor::getPan() const noexcept
+{
+    return getParameterPlainValue(kParamPan);
 }
 
 void AudiocityAudioProcessor::setMasterVolume(const float volume) noexcept
 {
-    engine_.setMasterVolume(volume);
-    updateParameterFromPlainValue(kParamMasterVolume, engine_.getMasterVolume());
+    updateParameterFromPlainValue(kParamMasterVolume, volume);
+}
+
+float AudiocityAudioProcessor::getMasterVolume() const noexcept
+{
+    return getParameterPlainValue(kParamMasterVolume);
 }
 
 AudiocityAudioProcessor::OutputPeakLevels AudiocityAudioProcessor::consumeOutputPeakLevels() noexcept
@@ -1283,40 +1430,60 @@ AudiocityAudioProcessor::VoicePlaybackPositions AudiocityAudioProcessor::getVoic
     return positions;
 }
 
+int AudiocityAudioProcessor::getActiveVoiceCount() const noexcept
+{
+    int active = 0;
+    for (const auto& position : voicePlaybackPositions_)
+        if (position.load(std::memory_order_relaxed) >= 0)
+            ++active;
+    return active;
+}
+
 void AudiocityAudioProcessor::setFilterEnvelope(const AdsrSettings& settings) noexcept
 {
-    engine_.setFilterEnvelope(settings);
     updateParameterFromPlainValue(kParamFilterAttack, settings.attackSeconds);
     updateParameterFromPlainValue(kParamFilterDecay, settings.decaySeconds);
     updateParameterFromPlainValue(kParamFilterSustain, settings.sustainLevel);
     updateParameterFromPlainValue(kParamFilterRelease, settings.releaseSeconds);
 }
 
+AudiocityAudioProcessor::AdsrSettings AudiocityAudioProcessor::getFilterEnvelope() const noexcept
+{
+    return {
+        getParameterPlainValue(kParamFilterAttack),
+        getParameterPlainValue(kParamFilterDecay),
+        getParameterPlainValue(kParamFilterSustain),
+        getParameterPlainValue(kParamFilterRelease)
+    };
+}
+
 void AudiocityAudioProcessor::setFilterSettings(const FilterSettings& settings) noexcept
 {
-    engine_.setFilterSettings(settings);
+    updateParameterFromPlainValue(kParamFilterCutoff, settings.baseCutoffHz);
+    updateParameterFromPlainValue(kParamFilterRes, settings.resonance);
+    updateParameterFromPlainValue(kParamFilterEnvAmt, settings.envAmountHz);
+    updateParameterFromPlainValue(kParamFilterMode, static_cast<float>(settings.mode));
+    updateParameterFromPlainValue(kParamFilterKeytrack, settings.keyTracking);
+    updateParameterFromPlainValue(kParamFilterVel, settings.velocityAmountHz);
+    updateParameterFromPlainValue(kParamFilterLfoRate, settings.lfoRateHz);
+    updateParameterFromPlainValue(kParamFilterLfoRateKeytrack, settings.lfoRateKeyTracking);
+    updateParameterFromPlainValue(kParamFilterLfoAmount, settings.lfoAmountHz);
+    updateParameterFromPlainValue(kParamFilterLfoAmountKeytrack, settings.lfoAmountKeyTracking);
+    updateParameterFromPlainValue(kParamFilterLfoStartPhase, settings.lfoStartPhaseDegrees);
+    updateParameterFromPlainValue(kParamFilterLfoStartPhaseRandom, settings.lfoStartPhaseRandomDegrees);
+    updateParameterFromPlainValue(kParamFilterLfoFadeIn, settings.lfoFadeInMs);
+    updateParameterFromPlainValue(kParamFilterLfoShape, static_cast<float>(settings.lfoShape));
+    updateParameterFromPlainValue(kParamFilterLfoRetrigger, settings.lfoRetrigger ? 1.0f : 0.0f);
+    updateParameterFromPlainValue(kParamFilterLfoTempoSync, settings.lfoTempoSync ? 1.0f : 0.0f);
+    updateParameterFromPlainValue(kParamFilterLfoRateKeytrackInTempoSync, settings.lfoRateKeytrackInTempoSync ? 1.0f : 0.0f);
+    updateParameterFromPlainValue(kParamFilterLfoKeytrackLinear, settings.lfoKeytrackLinear ? 1.0f : 0.0f);
+    updateParameterFromPlainValue(kParamFilterLfoUnipolar, settings.lfoUnipolar ? 1.0f : 0.0f);
+    updateParameterFromPlainValue(kParamFilterLfoSyncDivision, static_cast<float>(settings.lfoSyncDivision));
+}
 
-    const auto applied = engine_.getFilterSettings();
-    updateParameterFromPlainValue(kParamFilterCutoff, applied.baseCutoffHz);
-    updateParameterFromPlainValue(kParamFilterRes, applied.resonance);
-    updateParameterFromPlainValue(kParamFilterEnvAmt, applied.envAmountHz);
-    updateParameterFromPlainValue(kParamFilterMode, static_cast<float>(applied.mode));
-    updateParameterFromPlainValue(kParamFilterKeytrack, applied.keyTracking);
-    updateParameterFromPlainValue(kParamFilterVel, applied.velocityAmountHz);
-    updateParameterFromPlainValue(kParamFilterLfoRate, applied.lfoRateHz);
-    updateParameterFromPlainValue(kParamFilterLfoRateKeytrack, applied.lfoRateKeyTracking);
-    updateParameterFromPlainValue(kParamFilterLfoAmount, applied.lfoAmountHz);
-    updateParameterFromPlainValue(kParamFilterLfoAmountKeytrack, applied.lfoAmountKeyTracking);
-    updateParameterFromPlainValue(kParamFilterLfoStartPhase, applied.lfoStartPhaseDegrees);
-    updateParameterFromPlainValue(kParamFilterLfoStartPhaseRandom, applied.lfoStartPhaseRandomDegrees);
-    updateParameterFromPlainValue(kParamFilterLfoFadeIn, applied.lfoFadeInMs);
-    updateParameterFromPlainValue(kParamFilterLfoShape, static_cast<float>(applied.lfoShape));
-    updateParameterFromPlainValue(kParamFilterLfoRetrigger, applied.lfoRetrigger ? 1.0f : 0.0f);
-    updateParameterFromPlainValue(kParamFilterLfoTempoSync, applied.lfoTempoSync ? 1.0f : 0.0f);
-    updateParameterFromPlainValue(kParamFilterLfoRateKeytrackInTempoSync, applied.lfoRateKeytrackInTempoSync ? 1.0f : 0.0f);
-    updateParameterFromPlainValue(kParamFilterLfoKeytrackLinear, applied.lfoKeytrackLinear ? 1.0f : 0.0f);
-    updateParameterFromPlainValue(kParamFilterLfoUnipolar, applied.lfoUnipolar ? 1.0f : 0.0f);
-    updateParameterFromPlainValue(kParamFilterLfoSyncDivision, static_cast<float>(applied.lfoSyncDivision));
+AudiocityAudioProcessor::FilterSettings AudiocityAudioProcessor::getFilterSettings() const noexcept
+{
+    return loadEngineControlSnapshot().filter;
 }
 
 juce::AudioProcessorEditor* AudiocityAudioProcessor::createEditor()
@@ -1370,36 +1537,36 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
         std::lock_guard<std::mutex> lock(libraryMetadataMutex_);
         state.appendChild(libraryMetadata_.toValueTree(), nullptr);
     }
-    state.setProperty(kRootMidiNote, engine_.getRootMidiNote(), nullptr);
-    state.setProperty(kCoarseTuneSemitones, engine_.getCoarseTuneSemitones(), nullptr);
-    state.setProperty(kFineTuneCents, engine_.getFineTuneCents(), nullptr);
-    state.setProperty(kPitchBendRangeSemitones, engine_.getPitchBendRangeSemitones(), nullptr);
-    const auto pitchLfo = engine_.getPitchLfoSettings();
+    state.setProperty(kRootMidiNote, getRootMidiNote(), nullptr);
+    state.setProperty(kCoarseTuneSemitones, getCoarseTuneSemitones(), nullptr);
+    state.setProperty(kFineTuneCents, getFineTuneCents(), nullptr);
+    state.setProperty(kPitchBendRangeSemitones, getPitchBendRangeSemitones(), nullptr);
+    const auto pitchLfo = getPitchLfoSettings();
     state.setProperty(kPitchLfoRate, pitchLfo.rateHz, nullptr);
     state.setProperty(kPitchLfoDepth, pitchLfo.depthCents, nullptr);
-    const auto modulationRouting = engine_.getModulationRoutingSettings();
+    const auto modulationRouting = getModulationRoutingSettings();
     storeModulationRoutesToState(state, modulationRouting);
 
-    const auto macroValues = engine_.getMacroControlValues();
+    const auto macroValues = getMacroControlValues();
     storeMacroControlsToState(state, macroValues);
 
-    const auto amp = engine_.getAmpEnvelope();
+    const auto amp = getAmpEnvelope();
     state.setProperty(kAmpAttack, amp.attackSeconds, nullptr);
     state.setProperty(kAmpDecay, amp.decaySeconds, nullptr);
     state.setProperty(kAmpSustain, amp.sustainLevel, nullptr);
     state.setProperty(kAmpRelease, amp.releaseSeconds, nullptr);
-    const auto ampLfo = engine_.getAmpLfoSettings();
+    const auto ampLfo = getAmpLfoSettings();
     state.setProperty(kAmpLfoRate, ampLfo.rateHz, nullptr);
     state.setProperty(kAmpLfoDepth, ampLfo.depth, nullptr);
     state.setProperty(kAmpLfoShape, static_cast<int>(ampLfo.shape), nullptr);
 
-    const auto filterAdsr = engine_.getFilterEnvelope();
+    const auto filterAdsr = getFilterEnvelope();
     state.setProperty(kFilterAttack, filterAdsr.attackSeconds, nullptr);
     state.setProperty(kFilterDecay, filterAdsr.decaySeconds, nullptr);
     state.setProperty(kFilterSustain, filterAdsr.sustainLevel, nullptr);
     state.setProperty(kFilterRelease, filterAdsr.releaseSeconds, nullptr);
 
-    const auto filter = engine_.getFilterSettings();
+    const auto filter = getFilterSettings();
     state.setProperty(kFilterBaseCutoff, filter.baseCutoffHz, nullptr);
     state.setProperty(kFilterEnvAmount, filter.envAmountHz, nullptr);
     state.setProperty(kFilterResonance, filter.resonance, nullptr);
@@ -1526,11 +1693,13 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
     if (!state.isValid() || !state.hasType(kPatchRoot))
         return;
 
+    panicAllAudio();
+
     const auto importedProgramPath = audiocity::plugin::readImportedProgramStatePath(state);
     const auto importedProgramSelectionIndex =
         audiocity::plugin::readImportedProgramStateSelectionIndex(state);
     const auto samplePath = state.getProperty(kSamplePath).toString();
-    const auto storedRootMidiNote = static_cast<int>(state.getProperty(kRootMidiNote, engine_.getRootMidiNote()));
+    const auto storedRootMidiNote = static_cast<int>(state.getProperty(kRootMidiNote, getRootMidiNote()));
 
     bool restoredSample = false;
     int restoredSampleSource = 0;
@@ -1685,8 +1854,7 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
                 juce::AudioBuffer<float> restoredBuffer(1, sampleCount);
                 std::memcpy(restoredBuffer.getWritePointer(0), capturedData->getData(), totalBytes);
 
-                engine_.setSampleData(restoredBuffer, restoredSampleRate, storedRootMidiNote);
-                engine_.setRootMidiNote(storedRootMidiNote);
+                engine_.publishSampleData(restoredBuffer, restoredSampleRate);
                 engine_.clearSamplePath();
 
                 generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
@@ -1700,8 +1868,7 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
                     capturedSampleRateState_ = restoredSampleRate;
                 }
 
-                suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-                syncSampleDerivedParametersFromEngine();
+                resetControlsForPublishedSample(storedRootMidiNote, sampleCount);
                 restoredSample = true;
                 restoredSampleSource = 3;
             }
@@ -1732,45 +1899,45 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
             state.getChildWithName(audiocity::plugin::LibraryMetadata::valueTreeType()));
     }
 
-    setRootMidiNote(static_cast<int>(state.getProperty(kRootMidiNote, engine_.getRootMidiNote())));
-    setCoarseTuneSemitones(static_cast<float>(state.getProperty(kCoarseTuneSemitones, engine_.getCoarseTuneSemitones())));
-    setFineTuneCents(static_cast<float>(state.getProperty(kFineTuneCents, engine_.getFineTuneCents())));
-    setPitchBendRangeSemitones(static_cast<float>(state.getProperty(kPitchBendRangeSemitones, engine_.getPitchBendRangeSemitones())));
-    auto pitchLfo = engine_.getPitchLfoSettings();
+    setRootMidiNote(static_cast<int>(state.getProperty(kRootMidiNote, getRootMidiNote())));
+    setCoarseTuneSemitones(static_cast<float>(state.getProperty(kCoarseTuneSemitones, getCoarseTuneSemitones())));
+    setFineTuneCents(static_cast<float>(state.getProperty(kFineTuneCents, getFineTuneCents())));
+    setPitchBendRangeSemitones(static_cast<float>(state.getProperty(kPitchBendRangeSemitones, getPitchBendRangeSemitones())));
+    auto pitchLfo = getPitchLfoSettings();
     pitchLfo.rateHz = static_cast<float>(state.getProperty(kPitchLfoRate, pitchLfo.rateHz));
     pitchLfo.depthCents = static_cast<float>(state.getProperty(kPitchLfoDepth, pitchLfo.depthCents));
     setPitchLfoSettings(pitchLfo);
 
-    auto modulationRouting = engine_.getModulationRoutingSettings();
+    auto modulationRouting = getModulationRoutingSettings();
     restoreModulationRoutesFromState(state, modulationRouting);
     setModulationRoutingSettings(modulationRouting);
 
-    auto macroValues = engine_.getMacroControlValues();
+    auto macroValues = getMacroControlValues();
     restoreMacroControlsFromState(state, macroValues);
     setMacroControlValues(macroValues);
 
-    auto amp = engine_.getAmpEnvelope();
+    auto amp = getAmpEnvelope();
     amp.attackSeconds = static_cast<float>(state.getProperty(kAmpAttack, amp.attackSeconds));
     amp.decaySeconds = static_cast<float>(state.getProperty(kAmpDecay, amp.decaySeconds));
     amp.sustainLevel = static_cast<float>(state.getProperty(kAmpSustain, amp.sustainLevel));
     amp.releaseSeconds = static_cast<float>(state.getProperty(kAmpRelease, amp.releaseSeconds));
     setAmpEnvelope(amp);
 
-    auto ampLfo = engine_.getAmpLfoSettings();
+    auto ampLfo = getAmpLfoSettings();
     ampLfo.rateHz = static_cast<float>(state.getProperty(kAmpLfoRate, ampLfo.rateHz));
     ampLfo.depth = static_cast<float>(state.getProperty(kAmpLfoDepth, ampLfo.depth));
     ampLfo.shape = static_cast<FilterSettings::LfoShape>(juce::jlimit(0, 4,
         static_cast<int>(state.getProperty(kAmpLfoShape, static_cast<int>(ampLfo.shape)))));
     setAmpLfoSettings(ampLfo);
 
-    auto filterAdsr = engine_.getFilterEnvelope();
+    auto filterAdsr = getFilterEnvelope();
     filterAdsr.attackSeconds = static_cast<float>(state.getProperty(kFilterAttack, filterAdsr.attackSeconds));
     filterAdsr.decaySeconds = static_cast<float>(state.getProperty(kFilterDecay, filterAdsr.decaySeconds));
     filterAdsr.sustainLevel = static_cast<float>(state.getProperty(kFilterSustain, filterAdsr.sustainLevel));
     filterAdsr.releaseSeconds = static_cast<float>(state.getProperty(kFilterRelease, filterAdsr.releaseSeconds));
     setFilterEnvelope(filterAdsr);
 
-    auto filter = engine_.getFilterSettings();
+    auto filter = getFilterSettings();
     filter.baseCutoffHz = static_cast<float>(state.getProperty(kFilterBaseCutoff, filter.baseCutoffHz));
     filter.envAmountHz = static_cast<float>(state.getProperty(kFilterEnvAmount, filter.envAmountHz));
     filter.resonance = static_cast<float>(state.getProperty(kFilterResonance, filter.resonance));
@@ -1947,7 +2114,7 @@ juce::String AudiocityAudioProcessor::createPlaybackPresetXml()
             writeEmbeddedSampleState(presetState,
                                      displaySample,
                                      engine_.getLoadedSampleRateHz(),
-                                     static_cast<int>(presetState.getProperty(kRootMidiNote, engine_.getRootMidiNote())),
+                                     static_cast<int>(presetState.getProperty(kRootMidiNote, getRootMidiNote())),
                                      juce::File(samplePath).getFileName());
             presetState.removeProperty(kSamplePath, nullptr);
         }
@@ -2412,7 +2579,7 @@ bool AudiocityAudioProcessor::createEmptyImportedSfzProgram(const juce::String& 
                                        .getChildFile("Libraries");
     const auto syntheticPath = destinationFolder.getChildFile(trimmedName + ".sfz");
 
-    engine_.panic();
+    panicAllAudio();
     engine_.clearSamplePath();
     engine_.setProgram(program, sampleData);
     generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
@@ -2817,12 +2984,12 @@ bool AudiocityAudioProcessor::importSf2Program(const juce::File& file, const int
 
     samplePreviewPlaying_.store(false, std::memory_order_relaxed);
     stopGeneratedWaveformPreview();
-    engine_.panic();
+    panicAllAudio();
 
     const auto& displaySample = result.sampleDataByAsset[static_cast<std::size_t>(displayAssetIndex)];
     const auto& displayAsset = result.program.sampleAssets[static_cast<std::size_t>(displayAssetIndex)];
     const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
-    engine_.setSampleData(displaySample, displaySampleRate, displayAsset.rootMidiNote);
+    engine_.publishSampleData(displaySample, displaySampleRate);
     engine_.clearSamplePath();
     engine_.setProgram(result.program, result.sampleDataByAsset);
 
@@ -2847,8 +3014,7 @@ bool AudiocityAudioProcessor::importSf2Program(const juce::File& file, const int
                                summary,
                                static_cast<int>(result.program.zones.size()),
                                result.chosenPresetIndex);
-    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-    syncSampleDerivedParametersFromEngine();
+    resetControlsForPublishedSample(displayAsset.rootMidiNote, displaySample.getNumSamples());
     setWaveformViewRange(0, engine_.getLoadedSampleLength());
     return true;
 }
@@ -2892,12 +3058,12 @@ bool AudiocityAudioProcessor::importDecentSamplerProgram(const juce::File& file)
 
     samplePreviewPlaying_.store(false, std::memory_order_relaxed);
     stopGeneratedWaveformPreview();
-    engine_.panic();
+    panicAllAudio();
 
     const auto& displaySample = result.sampleDataByAsset[static_cast<std::size_t>(displayAssetIndex)];
     const auto& displayAsset = result.program.sampleAssets[static_cast<std::size_t>(displayAssetIndex)];
     const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
-    engine_.setSampleData(displaySample, displaySampleRate, displayAsset.rootMidiNote);
+    engine_.publishSampleData(displaySample, displaySampleRate);
     engine_.clearSamplePath();
     engine_.setProgram(result.program, result.sampleDataByAsset);
 
@@ -2921,8 +3087,7 @@ bool AudiocityAudioProcessor::importDecentSamplerProgram(const juce::File& file)
                                result.sampleDataByAsset,
                                summary,
                                static_cast<int>(result.program.zones.size()));
-    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-    syncSampleDerivedParametersFromEngine();
+    resetControlsForPublishedSample(displayAsset.rootMidiNote, displaySample.getNumSamples());
     setWaveformViewRange(0, engine_.getLoadedSampleLength());
     return true;
 }
@@ -2966,12 +3131,12 @@ bool AudiocityAudioProcessor::importBitwigMultisampleProgram(const juce::File& f
 
     samplePreviewPlaying_.store(false, std::memory_order_relaxed);
     stopGeneratedWaveformPreview();
-    engine_.panic();
+    panicAllAudio();
 
     const auto& displaySample = result.sampleDataByAsset[static_cast<std::size_t>(displayAssetIndex)];
     const auto& displayAsset = result.program.sampleAssets[static_cast<std::size_t>(displayAssetIndex)];
     const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
-    engine_.setSampleData(displaySample, displaySampleRate, displayAsset.rootMidiNote);
+    engine_.publishSampleData(displaySample, displaySampleRate);
     engine_.clearSamplePath();
     engine_.setProgram(result.program, result.sampleDataByAsset);
 
@@ -2995,8 +3160,7 @@ bool AudiocityAudioProcessor::importBitwigMultisampleProgram(const juce::File& f
                                result.sampleDataByAsset,
                                summary,
                                static_cast<int>(result.program.zones.size()));
-    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-    syncSampleDerivedParametersFromEngine();
+    resetControlsForPublishedSample(displayAsset.rootMidiNote, displaySample.getNumSamples());
     setWaveformViewRange(0, engine_.getLoadedSampleLength());
     return true;
 }
@@ -3059,12 +3223,12 @@ bool AudiocityAudioProcessor::publishXmlMultisampleImport(
 {
     samplePreviewPlaying_.store(false, std::memory_order_relaxed);
     stopGeneratedWaveformPreview();
-    engine_.panic();
+    panicAllAudio();
 
     const auto& displaySample = sampleData[static_cast<std::size_t>(displayAssetIndex)];
     const auto& displayAsset = program.sampleAssets[static_cast<std::size_t>(displayAssetIndex)];
     const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
-    engine_.setSampleData(displaySample, displaySampleRate, displayAsset.rootMidiNote);
+    engine_.publishSampleData(displaySample, displaySampleRate);
     engine_.clearSamplePath();
     engine_.setProgram(program, sampleData);
 
@@ -3084,8 +3248,7 @@ bool AudiocityAudioProcessor::publishXmlMultisampleImport(
 
     setImportedProgramMetadata(file, formatTag, program, sampleData, summary,
                                static_cast<int>(program.zones.size()));
-    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-    syncSampleDerivedParametersFromEngine();
+    resetControlsForPublishedSample(displayAsset.rootMidiNote, displaySample.getNumSamples());
     setWaveformViewRange(0, engine_.getLoadedSampleLength());
     return true;
 }
@@ -3094,17 +3257,50 @@ AudiocityAudioProcessor::PreparedBackgroundImport AudiocityAudioProcessor::prepa
     const juce::File& file,
     const audiocity::plugin::ImportedProgramFormat format,
     const int selectionIndex,
-    const juce::File& searchFolder) const
+    const juce::File& searchFolder,
+    const std::atomic<bool>* const cancellationFlag) const
+{
+    return prepareBackgroundImportJob(file,
+                                      format,
+                                      selectionIndex,
+                                      searchFolder,
+                                      getRootMidiNote(),
+                                      getPlaybackMode(),
+                                      cancellationFlag);
+}
+
+AudiocityAudioProcessor::PreparedBackgroundImport AudiocityAudioProcessor::prepareBackgroundImportJob(
+    const juce::File& file,
+    const audiocity::plugin::ImportedProgramFormat format,
+    const int selectionIndex,
+    const juce::File& searchFolder,
+    const int fallbackRootMidiNote,
+    const PlaybackMode fallbackPlaybackMode,
+    const std::atomic<bool>* const cancellationFlag)
 {
     using audiocity::plugin::ImportedProgramFormat;
+    const audiocity::engine::ImportCancellationScope cancellationScope(cancellationFlag);
+
+    auto cancelled = [format]()
+    {
+        PreparedBackgroundImport prepared;
+        prepared.format = format;
+        prepared.diagnosticSummary = "Import cancelled";
+        return prepared;
+    };
+
+    if (audiocity::engine::isImportCancellationRequested())
+        return cancelled();
 
     if (format == ImportedProgramFormat::unknown)
     {
         PreparedBackgroundImport prepared;
         prepared.displaySample = audiocity::engine::EngineCore::prepareSampleFile(
             file,
-            engine_.getRootMidiNote(),
-            engine_.getPlaybackMode());
+            fallbackRootMidiNote,
+            fallbackPlaybackMode);
+        if (audiocity::engine::isImportCancellationRequested())
+            return cancelled();
         prepared.diagnosticSummary = prepared.displaySample.errorMessage;
         prepared.ok = prepared.displaySample.ok;
         return prepared;
@@ -3116,6 +3312,8 @@ AudiocityAudioProcessor::PreparedBackgroundImport AudiocityAudioProcessor::prepa
         {
             audiocity::engine::SfzImporter importer;
             auto result = importer.importFile(file);
+            if (audiocity::engine::isImportCancellationRequested())
+                return cancelled();
             const auto hasPlayableProgram = result.program.hasPlayableZones() && !result.sampleDataByAsset.empty();
             const auto imported = !result.hasErrors() && hasPlayableProgram;
             auto summary = makeSfzImportSummary(result, imported);
@@ -3165,6 +3363,8 @@ AudiocityAudioProcessor::PreparedBackgroundImport AudiocityAudioProcessor::prepa
                 prepared.diagnosticSummary = "REX import failed: runtime unavailable or slices could not be decoded";
                 return prepared;
             }
+            if (audiocity::engine::isImportCancellationRequested())
+                return cancelled();
 
             audiocity::engine::rex::ChromaticSliceProgram sliceProgram;
             if (!audiocity::engine::rex::buildChromaticSliceProgram(file, decoded, sliceProgram))
@@ -3172,11 +3372,15 @@ AudiocityAudioProcessor::PreparedBackgroundImport AudiocityAudioProcessor::prepa
                 prepared.diagnosticSummary = "REX import failed: no playable slices";
                 return prepared;
             }
+            if (audiocity::engine::isImportCancellationRequested())
+                return cancelled();
 
             prepared.displaySample = audiocity::engine::EngineCore::prepareSampleFile(
                 file,
-                engine_.getRootMidiNote(),
-                engine_.getPlaybackMode());
+                fallbackRootMidiNote,
+                fallbackPlaybackMode);
+            if (audiocity::engine::isImportCancellationRequested())
+                return cancelled();
             if (!prepared.displaySample.ok)
             {
                 prepared.diagnosticSummary = "REX import failed: display waveform could not be loaded";
@@ -3333,8 +3537,8 @@ bool AudiocityAudioProcessor::publishPreparedBackgroundImport(const juce::File& 
     {
         samplePreviewPlaying_.store(false, std::memory_order_relaxed);
         stopGeneratedWaveformPreview();
-        engine_.panic();
-        engine_.loadPreparedSample(prepared.displaySample);
+        panicAllAudio();
+        engine_.publishPreparedSample(prepared.displaySample);
 
         clearImportedProgramMetadata();
         generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
@@ -3351,13 +3555,7 @@ bool AudiocityAudioProcessor::publishPreparedBackgroundImport(const juce::File& 
             embeddedSampleRootMidiNoteState_ = 60;
         }
 
-        suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-        setAmpEnvelope(engine_.getAmpEnvelope());
-        setAmpLfoSettings(engine_.getAmpLfoSettings());
-        setPitchLfoSettings(engine_.getPitchLfoSettings());
-        setFilterEnvelope(engine_.getFilterEnvelope());
-        setFilterSettings(engine_.getFilterSettings());
-        syncSampleDerivedParametersFromEngine();
+        applyPreparedSampleControls(prepared.displaySample);
         setWaveformViewRange(0, engine_.getLoadedSampleLength());
         setLastImportDiagnosticSummary(prepared.diagnosticSummary);
         return true;
@@ -3367,8 +3565,8 @@ bool AudiocityAudioProcessor::publishPreparedBackgroundImport(const juce::File& 
     {
         samplePreviewPlaying_.store(false, std::memory_order_relaxed);
         stopGeneratedWaveformPreview();
-        engine_.panic();
-        engine_.loadPreparedSample(prepared.displaySample);
+        panicAllAudio();
+        engine_.publishPreparedSample(prepared.displaySample);
         engine_.setProgram(prepared.program, prepared.sampleData);
 
         generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
@@ -3392,8 +3590,7 @@ bool AudiocityAudioProcessor::publishPreparedBackgroundImport(const juce::File& 
                                    prepared.diagnosticSummary,
                                    static_cast<int>(prepared.program.zones.size()),
                                    prepared.selectionIndex);
-        suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-        syncSampleDerivedParametersFromEngine();
+        applyPreparedSampleControls(prepared.displaySample);
         setWaveformViewRange(0, engine_.getLoadedSampleLength());
         return true;
     }
@@ -3426,12 +3623,12 @@ bool AudiocityAudioProcessor::publishPreparedImportedProgram(
 
     samplePreviewPlaying_.store(false, std::memory_order_relaxed);
     stopGeneratedWaveformPreview();
-    engine_.panic();
+    panicAllAudio();
 
     const auto& displaySample = sampleData[static_cast<std::size_t>(displayAssetIndex)];
     const auto& displayAsset = program.sampleAssets[static_cast<std::size_t>(displayAssetIndex)];
     const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
-    engine_.setSampleData(displaySample, displaySampleRate, displayAsset.rootMidiNote);
+    engine_.publishSampleData(displaySample, displaySampleRate);
     engine_.clearSamplePath();
     engine_.setProgram(program, sampleData);
 
@@ -3456,8 +3653,7 @@ bool AudiocityAudioProcessor::publishPreparedImportedProgram(
                                diagnosticSummary,
                                static_cast<int>(program.zones.size()),
                                selectionIndex);
-    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-    syncSampleDerivedParametersFromEngine();
+    resetControlsForPublishedSample(displayAsset.rootMidiNote, displaySample.getNumSamples());
     setWaveformViewRange(0, engine_.getLoadedSampleLength());
     return true;
 }
@@ -3646,14 +3842,17 @@ bool AudiocityAudioProcessor::importTransientSliceProgram(const juce::File& file
 
     samplePreviewPlaying_.store(false, std::memory_order_relaxed);
     stopGeneratedWaveformPreview();
-    engine_.panic();
+    panicAllAudio();
 
-    if (!engine_.loadSampleFromFile(file))
+    const auto preparedDisplaySample = audiocity::engine::EngineCore::prepareSampleFile(
+        file, getRootMidiNote(), getPlaybackMode());
+    if (!preparedDisplaySample.ok)
     {
         setLastImportDiagnosticSummary("Transient slice import failed: display waveform could not be loaded");
         return false;
     }
 
+    engine_.publishPreparedSample(preparedDisplaySample);
     engine_.setProgram(sliceProgram.program, sliceProgram.sampleDataByAsset);
 
     generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
@@ -3676,8 +3875,7 @@ bool AudiocityAudioProcessor::importTransientSliceProgram(const juce::File& file
                                sliceProgram.sampleDataByAsset,
                                makeTransientSliceImportSummary(sliceProgram),
                                static_cast<int>(sliceProgram.program.zones.size()));
-    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-    syncSampleDerivedParametersFromEngine();
+    applyPreparedSampleControls(preparedDisplaySample);
     setWaveformViewRange(0, engine_.getLoadedSampleLength());
     return true;
 }
@@ -3687,6 +3885,8 @@ void AudiocityAudioProcessor::loadGeneratedWaveformAsSample(const std::vector<fl
     if (waveform.empty())
         return;
 
+    panicAllAudio();
+
     juce::AudioBuffer<float> buffer(1, static_cast<int>(waveform.size()));
     auto* write = buffer.getWritePointer(0);
     for (int i = 0; i < buffer.getNumSamples(); ++i)
@@ -3695,9 +3895,7 @@ void AudiocityAudioProcessor::loadGeneratedWaveformAsSample(const std::vector<fl
     const auto clampedRoot = juce::jlimit(0, 127, rootMidiNote);
     const auto targetHz = juce::MidiMessage::getMidiNoteInHertz(clampedRoot);
     const auto generatedSampleRate = juce::jmax(1.0, targetHz * static_cast<double>(buffer.getNumSamples()));
-
-    engine_.setSampleData(buffer, generatedSampleRate, clampedRoot);
-    engine_.setRootMidiNote(clampedRoot);
+    engine_.publishSampleData(buffer, generatedSampleRate);
     engine_.clearSamplePath();
     engine_.clearProgram();
     clearImportedProgramMetadata();
@@ -3717,8 +3915,7 @@ void AudiocityAudioProcessor::loadGeneratedWaveformAsSample(const std::vector<fl
         embeddedSampleRootMidiNoteState_ = 60;
     }
     stopGeneratedWaveformPreview();
-    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-    syncSampleDerivedParametersFromEngine();
+    resetControlsForPublishedSample(clampedRoot, buffer.getNumSamples());
     setWaveformViewRange(0, engine_.getLoadedSampleLength());
 }
 
@@ -3735,10 +3932,9 @@ void AudiocityAudioProcessor::loadEmbeddedSampleAsSample(const juce::AudioBuffer
 
     samplePreviewPlaying_.store(false, std::memory_order_relaxed);
     stopGeneratedWaveformPreview();
-    engine_.panic();
+    panicAllAudio();
 
-    engine_.setSampleData(buffer, safeRate, clampedRoot);
-    engine_.setRootMidiNote(clampedRoot);
+    engine_.publishSampleData(buffer, safeRate);
     engine_.clearSamplePath();
     engine_.clearProgram();
     clearImportedProgramMetadata();
@@ -3770,8 +3966,7 @@ void AudiocityAudioProcessor::loadEmbeddedSampleAsSample(const juce::AudioBuffer
         embeddedSampleNameState_ = displayName;
     }
 
-    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-    syncSampleDerivedParametersFromEngine();
+    resetControlsForPublishedSample(clampedRoot, buffer.getNumSamples());
     setWaveformViewRange(0, engine_.getLoadedSampleLength());
 }
 
@@ -3788,127 +3983,221 @@ juce::String AudiocityAudioProcessor::getLoadedSamplePath() const
 
 void AudiocityAudioProcessor::setPlaybackMode(const PlaybackMode mode) noexcept
 {
-    engine_.setPlaybackMode(mode);
     updateParameterFromPlainValue(kParamPlaybackMode, static_cast<float>(mode));
 }
 
 AudiocityAudioProcessor::PlaybackMode AudiocityAudioProcessor::getPlaybackMode() const noexcept
 {
-    return engine_.getPlaybackMode();
+    return static_cast<PlaybackMode>(juce::jlimit(0, 2,
+        static_cast<int>(std::round(getParameterPlainValue(kParamPlaybackMode)))));
 }
 
 void AudiocityAudioProcessor::setMonoMode(const bool enabled) noexcept
 {
-    engine_.setMonoMode(enabled);
     updateParameterFromPlainValue(kParamMonoMode, enabled ? 1.0f : 0.0f);
+}
+
+bool AudiocityAudioProcessor::getMonoMode() const noexcept
+{
+    return getParameterPlainValue(kParamMonoMode) >= 0.5f;
 }
 
 void AudiocityAudioProcessor::setLegatoMode(const bool enabled) noexcept
 {
-    engine_.setLegatoMode(enabled);
     updateParameterFromPlainValue(kParamLegatoMode, enabled ? 1.0f : 0.0f);
+}
+
+bool AudiocityAudioProcessor::getLegatoMode() const noexcept
+{
+    return getParameterPlainValue(kParamLegatoMode) >= 0.5f;
 }
 
 void AudiocityAudioProcessor::setGlideSeconds(const float seconds) noexcept
 {
-    engine_.setGlideSeconds(seconds);
-    updateParameterFromPlainValue(kParamGlideSeconds, engine_.getGlideSeconds());
+    updateParameterFromPlainValue(kParamGlideSeconds, seconds);
+}
+
+float AudiocityAudioProcessor::getGlideSeconds() const noexcept
+{
+    return getParameterPlainValue(kParamGlideSeconds);
 }
 
 void AudiocityAudioProcessor::setPolyphonyLimit(const int voices) noexcept
 {
-    engine_.setPolyphonyLimit(voices);
-    updateParameterFromPlainValue(kParamPolyphonyLimit, static_cast<float>(engine_.getPolyphonyLimit()));
+    updateParameterFromPlainValue(kParamPolyphonyLimit, static_cast<float>(voices));
+}
+
+int AudiocityAudioProcessor::getPolyphonyLimit() const noexcept
+{
+    return static_cast<int>(std::round(getParameterPlainValue(kParamPolyphonyLimit)));
 }
 
 void AudiocityAudioProcessor::setFadeSamples(const int fadeInSamples, const int fadeOutSamples) noexcept
 {
-    engine_.setFadeSamples(fadeInSamples, fadeOutSamples);
-    updateParameterFromPlainValue(kParamFadeIn, static_cast<float>(engine_.getFadeInSamples()));
-    updateParameterFromPlainValue(kParamFadeOut, static_cast<float>(engine_.getFadeOutSamples()));
+    const auto maxFade = juce::jmax(0, getSampleWindowEnd() - getSampleWindowStart());
+    updateParameterFromPlainValue(kParamFadeIn, static_cast<float>(juce::jlimit(0, maxFade, fadeInSamples)));
+    updateParameterFromPlainValue(kParamFadeOut, static_cast<float>(juce::jlimit(0, maxFade, fadeOutSamples)));
+}
+
+int AudiocityAudioProcessor::getFadeInSamples() const noexcept
+{
+    return static_cast<int>(std::round(getParameterPlainValue(kParamFadeIn)));
+}
+
+int AudiocityAudioProcessor::getFadeOutSamples() const noexcept
+{
+    return static_cast<int>(std::round(getParameterPlainValue(kParamFadeOut)));
 }
 
 void AudiocityAudioProcessor::setReversePlayback(const bool enabled) noexcept
 {
-    engine_.setReversePlayback(enabled);
     updateParameterFromPlainValue(kParamReversePlayback, enabled ? 1.0f : 0.0f);
+}
+
+bool AudiocityAudioProcessor::getReversePlayback() const noexcept
+{
+    return getParameterPlainValue(kParamReversePlayback) >= 0.5f;
 }
 
 void AudiocityAudioProcessor::setAmpEnvelope(const AdsrSettings& settings) noexcept
 {
-    engine_.setAmpEnvelope(settings);
     updateParameterFromPlainValue(kParamAmpAttack, settings.attackSeconds);
     updateParameterFromPlainValue(kParamAmpDecay, settings.decaySeconds);
     updateParameterFromPlainValue(kParamAmpSustain, settings.sustainLevel);
     updateParameterFromPlainValue(kParamAmpRelease, settings.releaseSeconds);
 }
 
+AudiocityAudioProcessor::AdsrSettings AudiocityAudioProcessor::getAmpEnvelope() const noexcept
+{
+    return {
+        getParameterPlainValue(kParamAmpAttack),
+        getParameterPlainValue(kParamAmpDecay),
+        getParameterPlainValue(kParamAmpSustain),
+        getParameterPlainValue(kParamAmpRelease)
+    };
+}
+
 void AudiocityAudioProcessor::setAmpLfoSettings(const AmpLfoSettings& settings) noexcept
 {
-    engine_.setAmpLfoSettings(settings);
-    const auto applied = engine_.getAmpLfoSettings();
-    updateParameterFromPlainValue(kParamAmpLfoRate, applied.rateHz);
-    updateParameterFromPlainValue(kParamAmpLfoDepth, applied.depth);
-    updateParameterFromPlainValue(kParamAmpLfoShape, static_cast<float>(applied.shape));
+    updateParameterFromPlainValue(kParamAmpLfoRate, settings.rateHz);
+    updateParameterFromPlainValue(kParamAmpLfoDepth, settings.depth);
+    updateParameterFromPlainValue(kParamAmpLfoShape, static_cast<float>(settings.shape));
+}
+
+AudiocityAudioProcessor::AmpLfoSettings AudiocityAudioProcessor::getAmpLfoSettings() const noexcept
+{
+    return {
+        getParameterPlainValue(kParamAmpLfoRate),
+        getParameterPlainValue(kParamAmpLfoDepth),
+        static_cast<FilterSettings::LfoShape>(juce::jlimit(0, 4,
+            static_cast<int>(std::round(getParameterPlainValue(kParamAmpLfoShape)))))
+    };
 }
 
 void AudiocityAudioProcessor::setRootMidiNote(const int rootNote) noexcept
 {
-    engine_.setRootMidiNote(rootNote);
-    updateParameterFromPlainValue(kParamRootMidiNote, static_cast<float>(engine_.getRootMidiNote()));
+    updateParameterFromPlainValue(kParamRootMidiNote, static_cast<float>(rootNote));
+}
+
+int AudiocityAudioProcessor::getRootMidiNote() const noexcept
+{
+    return static_cast<int>(std::round(getParameterPlainValue(kParamRootMidiNote)));
 }
 
 void AudiocityAudioProcessor::setCoarseTuneSemitones(const float semitones) noexcept
 {
-    engine_.setCoarseTuneSemitones(semitones);
-    updateParameterFromPlainValue(kParamTuneCoarse, engine_.getCoarseTuneSemitones());
+    updateParameterFromPlainValue(kParamTuneCoarse, semitones);
+}
+
+float AudiocityAudioProcessor::getCoarseTuneSemitones() const noexcept
+{
+    return getParameterPlainValue(kParamTuneCoarse);
 }
 
 void AudiocityAudioProcessor::setFineTuneCents(const float cents) noexcept
 {
-    engine_.setFineTuneCents(cents);
-    updateParameterFromPlainValue(kParamTuneFine, engine_.getFineTuneCents());
+    updateParameterFromPlainValue(kParamTuneFine, cents);
+}
+
+float AudiocityAudioProcessor::getFineTuneCents() const noexcept
+{
+    return getParameterPlainValue(kParamTuneFine);
 }
 
 void AudiocityAudioProcessor::setPitchBendRangeSemitones(const float semitones) noexcept
 {
-    engine_.setPitchBendRangeSemitones(semitones);
-    updateParameterFromPlainValue(kParamPitchBendRange, engine_.getPitchBendRangeSemitones());
+    updateParameterFromPlainValue(kParamPitchBendRange, semitones);
+}
+
+float AudiocityAudioProcessor::getPitchBendRangeSemitones() const noexcept
+{
+    return getParameterPlainValue(kParamPitchBendRange);
 }
 
 void AudiocityAudioProcessor::setPitchLfoSettings(const PitchLfoSettings& settings) noexcept
 {
-    engine_.setPitchLfoSettings(settings);
-    const auto applied = engine_.getPitchLfoSettings();
-    updateParameterFromPlainValue(kParamPitchLfoRate, applied.rateHz);
-    updateParameterFromPlainValue(kParamPitchLfoDepth, applied.depthCents);
+    updateParameterFromPlainValue(kParamPitchLfoRate, settings.rateHz);
+    updateParameterFromPlainValue(kParamPitchLfoDepth, settings.depthCents);
+}
+
+AudiocityAudioProcessor::PitchLfoSettings AudiocityAudioProcessor::getPitchLfoSettings() const noexcept
+{
+    return {
+        getParameterPlainValue(kParamPitchLfoRate),
+        getParameterPlainValue(kParamPitchLfoDepth)
+    };
 }
 
 void AudiocityAudioProcessor::setModulationRoutingSettings(const ModulationRoutingSettings& settings) noexcept
 {
-    engine_.setModulationRoutingSettings(settings);
-    const auto applied = engine_.getModulationRoutingSettings();
-    updateModulationRouteParameters(applied, [this](const char* parameterId, const float value)
+    updateModulationRouteParameters(settings, [this](const char* parameterId, const float value)
     {
         updateParameterFromPlainValue(parameterId, value);
     });
+}
+
+AudiocityAudioProcessor::ModulationRoutingSettings AudiocityAudioProcessor::getModulationRoutingSettings() const noexcept
+{
+    ModulationRoutingSettings settings;
+    loadModulationRoutesFromParameters(apvts_, settings);
+    return settings;
 }
 
 void AudiocityAudioProcessor::setMacroControlValues(const MacroControlValues& values) noexcept
 {
-    engine_.setMacroControlValues(values);
-    const auto applied = engine_.getMacroControlValues();
-    updateMacroControlParameters(applied, [this](const char* parameterId, const float value)
+    updateMacroControlParameters(values, [this](const char* parameterId, const float value)
     {
         updateParameterFromPlainValue(parameterId, value);
     });
 }
 
+AudiocityAudioProcessor::MacroControlValues AudiocityAudioProcessor::getMacroControlValues() const noexcept
+{
+    MacroControlValues values{};
+    loadMacroControlsFromParameters(apvts_, values);
+    return values;
+}
+
 void AudiocityAudioProcessor::setSampleWindow(const int startSample, const int endSample) noexcept
 {
-    engine_.setSampleWindow(startSample, endSample);
-    updateParameterFromPlainValue(kParamPlaybackStart, static_cast<float>(engine_.getSampleWindowStart()));
-    updateParameterFromPlainValue(kParamPlaybackEnd, static_cast<float>(engine_.getSampleWindowEnd()));
+    const auto maxValid = juce::jmax(0, getLoadedSampleLength() - 1);
+    const auto clampedStart = juce::jlimit(0, maxValid, startSample);
+    auto clampedEnd = juce::jlimit(0, maxValid, endSample);
+    if (clampedEnd <= clampedStart)
+        clampedEnd = maxValid;
+
+    updateParameterFromPlainValue(kParamPlaybackStart, static_cast<float>(clampedStart));
+    updateParameterFromPlainValue(kParamPlaybackEnd, static_cast<float>(clampedEnd));
+}
+
+int AudiocityAudioProcessor::getSampleWindowStart() const noexcept
+{
+    return static_cast<int>(std::round(getParameterPlainValue(kParamPlaybackStart)));
+}
+
+int AudiocityAudioProcessor::getSampleWindowEnd() const noexcept
+{
+    return static_cast<int>(std::round(getParameterPlainValue(kParamPlaybackEnd)));
 }
 
 void AudiocityAudioProcessor::setWaveformViewRange(const int startSample, const int sampleCount) noexcept
@@ -4313,6 +4602,8 @@ bool AudiocityAudioProcessor::loadCapturedAudioAsSample(int startSample, int end
     if (numSourceSamples <= 1)
         return false;
 
+    panicAllAudio();
+
     const auto mode = getCaptureChannelMode();
     const auto bitDepth = getCaptureBitDepth();
     const auto sourceRate = juce::jmax(1.0, captureInputSampleRate_.load(std::memory_order_relaxed));
@@ -4375,9 +4666,12 @@ bool AudiocityAudioProcessor::loadCapturedAudioAsSample(int startSample, int end
         }
     }
 
+    const auto publishedRootMidiNote = getRootMidiNote();
+    auto publishedSampleLength = 0;
     if (std::abs(targetRate - sourceRate) < 0.5)
     {
-        engine_.setSampleData(source, sourceRate, engine_.getRootMidiNote());
+        engine_.publishSampleData(source, sourceRate);
+        publishedSampleLength = source.getNumSamples();
         persistCapturedState(source, sourceRate);
     }
     else
@@ -4402,7 +4696,8 @@ bool AudiocityAudioProcessor::loadCapturedAudioAsSample(int startSample, int end
             }
         }
 
-        engine_.setSampleData(resampled, targetRate, engine_.getRootMidiNote());
+        engine_.publishSampleData(resampled, targetRate);
+        publishedSampleLength = resampled.getNumSamples();
         persistCapturedState(resampled, targetRate);
     }
 
@@ -4422,23 +4717,41 @@ bool AudiocityAudioProcessor::loadCapturedAudioAsSample(int startSample, int end
     }
 
     engine_.clearSamplePath();
-    suspendParamSyncBlocks_.store(8, std::memory_order_relaxed);
-    syncSampleDerivedParametersFromEngine();
+    resetControlsForPublishedSample(publishedRootMidiNote, publishedSampleLength);
     setWaveformViewRange(0, engine_.getLoadedSampleLength());
     return true;
 }
 
 void AudiocityAudioProcessor::setLoopPoints(const int loopStart, const int loopEnd) noexcept
 {
-    engine_.setLoopPoints(loopStart, loopEnd);
-    updateParameterFromPlainValue(kParamLoopStart, static_cast<float>(engine_.getLoopStart()));
-    updateParameterFromPlainValue(kParamLoopEnd, static_cast<float>(engine_.getLoopEnd()));
+    const auto maxValid = juce::jmax(0, getLoadedSampleLength() - 1);
+    const auto clampedStart = juce::jlimit(0, maxValid, loopStart);
+    auto clampedEnd = juce::jlimit(0, maxValid, loopEnd);
+    if (clampedEnd <= clampedStart)
+        clampedEnd = maxValid;
+
+    updateParameterFromPlainValue(kParamLoopStart, static_cast<float>(clampedStart));
+    updateParameterFromPlainValue(kParamLoopEnd, static_cast<float>(clampedEnd));
+}
+
+int AudiocityAudioProcessor::getLoopStart() const noexcept
+{
+    return static_cast<int>(std::round(getParameterPlainValue(kParamLoopStart)));
+}
+
+int AudiocityAudioProcessor::getLoopEnd() const noexcept
+{
+    return static_cast<int>(std::round(getParameterPlainValue(kParamLoopEnd)));
 }
 
 void AudiocityAudioProcessor::setLoopCrossfadeSamples(const int crossfadeSamples) noexcept
 {
-    engine_.setLoopCrossfadeSamples(crossfadeSamples);
-    updateParameterFromPlainValue(kParamLoopCrossfade, static_cast<float>(engine_.getLoopCrossfadeSamples()));
+    updateParameterFromPlainValue(kParamLoopCrossfade, static_cast<float>(crossfadeSamples));
+}
+
+int AudiocityAudioProcessor::getLoopCrossfadeSamples() const noexcept
+{
+    return static_cast<int>(std::round(getParameterPlainValue(kParamLoopCrossfade)));
 }
 
 void AudiocityAudioProcessor::setGeneratedWaveformPreview(const std::vector<float>& waveform) noexcept
@@ -4502,7 +4815,7 @@ bool AudiocityAudioProcessor::previewCapturedAudio()
     samplePreviewSamples_.store(samplesToPreview, std::memory_order_relaxed);
     samplePreviewReadPos_ = 0.0f;
     previewWavePlaying_.store(false, std::memory_order_relaxed);
-    engine_.panic();
+    panicAllAudio();
     samplePreviewPlaying_.store(true, std::memory_order_relaxed);
     return true;
 }
@@ -4531,7 +4844,7 @@ bool AudiocityAudioProcessor::previewSampleFromFile(const juce::File& file)
 
     samplePreviewPlaying_.store(false, std::memory_order_relaxed);
     previewWavePlaying_.store(false, std::memory_order_relaxed);
-    engine_.panic();
+    panicAllAudio();
 
     const auto channels = tempBuffer.getNumChannels();
     for (int i = 0; i < samplesToRead; ++i)
@@ -4554,7 +4867,7 @@ void AudiocityAudioProcessor::panicAllAudio() noexcept
 {
     stopGeneratedWaveformPreview();
     samplePreviewPlaying_.store(false, std::memory_order_relaxed);
-    engine_.panic();
+    panicRequested_.store(true, std::memory_order_release);
 }
 
 void AudiocityAudioProcessor::setPlayerPadAssignment(const int padIndex, const int noteNumber, const int velocity) noexcept
@@ -4637,7 +4950,7 @@ void AudiocityAudioProcessor::pushUiMidiEvent(const int noteNumber, const int ve
     uiMidiFifo_[static_cast<std::size_t>(writePos)] = {
         juce::jlimit(0, 127, noteNumber),
         juce::jlimit(1, 127, velocity),
-        isNoteOn
+        isNoteOn ? UiMidiEvent::Type::noteOn : UiMidiEvent::Type::noteOff
     };
     uiMidiWritePos_.store(nextWrite, std::memory_order_release);
 }
@@ -4892,17 +5205,53 @@ std::map<int, juce::String> AudiocityAudioProcessor::getAllCcMappings() const
     return ccToParam_;
 }
 
-void AudiocityAudioProcessor::syncSampleDerivedParametersFromEngine() noexcept
+void AudiocityAudioProcessor::resetControlsForPublishedSample(const int rootMidiNote,
+                                                              const int sampleLength) noexcept
 {
-    updateParameterFromPlainValue(kParamRootMidiNote, static_cast<float>(engine_.getRootMidiNote()));
-    updateParameterFromPlainValue(kParamTuneCoarse, engine_.getCoarseTuneSemitones());
-    updateParameterFromPlainValue(kParamTuneFine, engine_.getFineTuneCents());
-    updateParameterFromPlainValue(kParamPlaybackMode, static_cast<float>(engine_.getPlaybackMode()));
-    updateParameterFromPlainValue(kParamPlaybackStart, static_cast<float>(engine_.getSampleWindowStart()));
-    updateParameterFromPlainValue(kParamPlaybackEnd, static_cast<float>(engine_.getSampleWindowEnd()));
-    updateParameterFromPlainValue(kParamLoopStart, static_cast<float>(engine_.getLoopStart()));
-    updateParameterFromPlainValue(kParamLoopEnd, static_cast<float>(engine_.getLoopEnd()));
-    updateParameterFromPlainValue(kParamLoopCrossfade, static_cast<float>(engine_.getLoopCrossfadeSamples()));
+    const auto lastSample = juce::jmax(0, sampleLength - 1);
+    setRootMidiNote(rootMidiNote);
+    setSampleWindow(0, lastSample);
+    setFadeSamples(0, 0);
+    setReversePlayback(false);
+    setLoopPoints(0, lastSample);
+    controlResyncRequested_.store(true, std::memory_order_release);
+}
+
+void AudiocityAudioProcessor::applyPreparedSampleControls(
+    const audiocity::engine::EngineCore::PreparedSampleFile& prepared) noexcept
+{
+    resetControlsForPublishedSample(prepared.rootMidiNote, prepared.sampleData.getNumSamples());
+    setAmpEnvelope({});
+    setAmpLfoSettings({});
+    setPitchLfoSettings({});
+    setFilterEnvelope({ 0.001f, 0.120f, 0.0f, 0.100f });
+
+    FilterSettings filter;
+    filter.baseCutoffHz = 18000.0f;
+    filter.envAmountHz = 0.0f;
+    filter.resonance = 0.0f;
+    filter.mode = FilterSettings::Mode::lowPass12;
+    filter.keyTracking = 0.0f;
+    filter.velocityAmountHz = 0.0f;
+    filter.lfoRateHz = 0.0f;
+    filter.lfoRateKeyTracking = 0.0f;
+    filter.lfoAmountHz = 0.0f;
+    filter.lfoAmountKeyTracking = 0.0f;
+    filter.lfoStartPhaseDegrees = 0.0f;
+    filter.lfoStartPhaseRandomDegrees = 0.0f;
+    filter.lfoFadeInMs = 0.0f;
+    filter.lfoKeytrackLinear = false;
+    filter.lfoUnipolar = false;
+    filter.lfoShape = FilterSettings::LfoShape::sine;
+    filter.lfoRetrigger = true;
+    filter.lfoTempoSync = false;
+    filter.lfoRateKeytrackInTempoSync = true;
+    filter.lfoSyncDivision = 6;
+    setFilterSettings(filter);
+
+    setSampleWindow(prepared.sampleWindowStart, prepared.sampleWindowEnd);
+    setLoopPoints(prepared.loopStart, prepared.loopEnd);
+    setPlaybackMode(prepared.playbackMode);
 }
 
 void AudiocityAudioProcessor::renderGeneratedWavePreview(juce::AudioBuffer<float>& buffer) noexcept

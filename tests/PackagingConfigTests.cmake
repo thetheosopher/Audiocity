@@ -6,6 +6,8 @@ endif ()
 
 file(READ "${_audiocity_source_dir}/CMakePresets.json" _audiocity_presets)
 file(READ "${_audiocity_source_dir}/CMakeLists.txt" _audiocity_root_cmake)
+file(READ "${_audiocity_source_dir}/README.md" _audiocity_readme)
+file(READ "${_audiocity_source_dir}/docs/USER_GUIDE.md" _audiocity_user_guide)
 file(READ "${_audiocity_source_dir}/installer/AudiocityInstaller.iss" _audiocity_installer_iss)
 file(READ "${_audiocity_source_dir}/scripts/build_release.ps1" _audiocity_build_release)
 file(READ "${_audiocity_source_dir}/scripts/bootstrap.ps1" _audiocity_bootstrap)
@@ -14,11 +16,30 @@ file(READ "${_audiocity_source_dir}/.vscode/tasks.json" _audiocity_vscode_tasks)
 file(READ "${_audiocity_source_dir}/.vscode/launch.json" _audiocity_vscode_launch)
 file(READ "${_audiocity_source_dir}/scripts/export_ui_snapshots.ps1" _audiocity_export_ui_snapshots)
 file(READ "${_audiocity_source_dir}/scripts/compare_ui_snapshots.ps1" _audiocity_compare_ui_snapshots)
+file(READ "${_audiocity_source_dir}/src/plugin/PluginEditor.cpp" _audiocity_plugin_editor)
+file(READ "${_audiocity_source_dir}/src/plugin/PluginProcessor.cpp" _audiocity_plugin_processor)
+file(READ "${_audiocity_source_dir}/src/plugin/PluginProcessor.h" _audiocity_plugin_processor_header)
+file(READ "${_audiocity_source_dir}/src/plugin/OwnedJobWorker.h" _audiocity_owned_job_worker)
+file(READ "${_audiocity_source_dir}/src/plugin/EngineProgramSink.h" _audiocity_engine_program_sink)
+file(READ "${_audiocity_source_dir}/src/engine/EngineCore.cpp" _audiocity_engine_core)
+file(READ "${_audiocity_source_dir}/src/engine/RtSnapshotCell.h" _audiocity_rt_snapshot_cell)
+file(READ "${_audiocity_source_dir}/docs/02-real-time-rules.md" _audiocity_rt_rules)
 file(READ "${_audiocity_source_dir}/.github/workflows/ui-snapshots.yml" _audiocity_ui_snapshot_workflow)
 file(READ "${_audiocity_source_dir}/.github/workflows/build-and-test.yml" _audiocity_build_and_test_workflow)
 file(READ "${_audiocity_source_dir}/tests/RunUiSnapshotHarness.cmake" _audiocity_run_ui_snapshot_harness)
 file(READ "${_audiocity_source_dir}/LICENSE" _audiocity_license)
+file(GLOB _audiocity_factory_presets "${_audiocity_source_dir}/assets/factory_presets/*.acp")
 file(GLOB _audiocity_ui_snapshot_baselines "${_audiocity_source_dir}/tests/ui-snapshot-baselines/current/*.png")
+
+list(LENGTH _audiocity_factory_presets _audiocity_factory_preset_count)
+
+if (NOT _audiocity_readme MATCHES "curated ${_audiocity_factory_preset_count}-preset factory bank")
+    message(FATAL_ERROR "README.md factory-preset count must match the ${_audiocity_factory_preset_count} shipped .acp files.")
+endif ()
+
+if (NOT _audiocity_user_guide MATCHES "stock bank of ${_audiocity_factory_preset_count} factory presets")
+    message(FATAL_ERROR "docs/USER_GUIDE.md factory-preset count must match the ${_audiocity_factory_preset_count} shipped .acp files.")
+endif ()
 
 string(REGEX MATCH "project[^\n\r]*Audiocity[ \t]+VERSION[ \t]+([0-9]+[.][0-9]+([.][0-9]+([.][0-9]+)?)?)"
     _audiocity_version_match
@@ -51,6 +72,11 @@ endif ()
 
 if (NOT _audiocity_build_and_test_workflow MATCHES "ctest --preset ci-windows")
     message(FATAL_ERROR ".github/workflows/build-and-test.yml must run tests through the ci-windows test preset.")
+endif ()
+
+if (NOT _audiocity_build_and_test_workflow MATCHES "cmake --version"
+    OR NOT _audiocity_ui_snapshot_workflow MATCHES "cmake --version")
+    message(FATAL_ERROR "Both Windows workflows must print the selected CMake/toolchain version.")
 endif ()
 
 if (NOT _audiocity_bootstrap MATCHES "cmake --preset ci-windows")
@@ -255,6 +281,39 @@ endif ()
 
 if (NOT _audiocity_ui_snapshot_workflow MATCHES "BuildDir build/ci-windows")
     message(FATAL_ERROR ".github/workflows/ui-snapshots.yml must resolve the harness from the ci-windows build tree.")
+endif ()
+
+file(GLOB_RECURSE _audiocity_product_sources
+    "${_audiocity_source_dir}/src/*.cpp"
+    "${_audiocity_source_dir}/src/*.h")
+foreach (_audiocity_product_source IN LISTS _audiocity_product_sources)
+    file(READ "${_audiocity_product_source}" _audiocity_product_source_text)
+    if (_audiocity_product_source_text MATCHES "[.]detach[(][)]")
+        message(FATAL_ERROR "Product source must not launch detached background workers: ${_audiocity_product_source}")
+    endif ()
+endforeach ()
+
+if (NOT _audiocity_owned_job_worker MATCHES "worker_[.]join[(][)]"
+    OR NOT _audiocity_owned_job_worker MATCHES "requestCancellationLocked")
+    message(FATAL_ERROR "OwnedJobWorker must cooperatively cancel and join its worker during teardown.")
+endif ()
+
+if (NOT _audiocity_plugin_processor_header MATCHES "struct EngineControlSnapshot"
+    OR NOT _audiocity_plugin_processor MATCHES "loadEngineControlSnapshot[(][)]"
+    OR NOT _audiocity_plugin_processor MATCHES "lastAppliedControls_"
+    OR NOT _audiocity_plugin_processor_header MATCHES "panicRequested_"
+    OR NOT _audiocity_plugin_processor MATCHES "panicRequested_[.]exchange"
+    OR _audiocity_engine_program_sink MATCHES "engine_[.]panic[(][)]"
+    OR _audiocity_plugin_processor MATCHES "suspendParamSyncBlocks_")
+    message(FATAL_ERROR "PluginProcessor must use the audio-thread-owned snapshot/diff control plane.")
+endif ()
+
+if (NOT _audiocity_engine_core MATCHES "publishPreparedSample"
+    OR NOT _audiocity_engine_core MATCHES "programPublishSequence_"
+    OR NOT _audiocity_engine_core MATCHES "appliedSamplePublishGeneration_"
+    OR NOT _audiocity_rt_snapshot_cell MATCHES "activeReaders_"
+    OR NOT _audiocity_rt_rules MATCHES "Audio thread only")
+    message(FATAL_ERROR "Immutable structural publication and its thread-ownership contract must remain documented.")
 endif ()
 
 if (NOT _audiocity_ui_snapshot_workflow MATCHES "actions/upload-artifact@v4")

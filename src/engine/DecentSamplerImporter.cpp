@@ -1,6 +1,7 @@
 #include "DecentSamplerImporter.h"
 
 #include "AudioFileSupport.h"
+#include "ImportCancellation.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -198,6 +199,9 @@ public:
 
     void run(const juce::XmlElement& root, ImportResult& result)
     {
+        if (isImportCancellationRequested())
+            return;
+
         result.program.name = "DecentSampler";
         for (auto* groupsNode : root.getChildWithTagNameIterator("groups"))
             processGroupsContainer(*groupsNode, result);
@@ -216,13 +220,20 @@ private:
     void processGroupsContainer(const juce::XmlElement& container, ImportResult& result)
     {
         for (auto* groupNode : container.getChildWithTagNameIterator("group"))
+        {
+            if (isImportCancellationRequested())
+                return;
             processGroup(*groupNode, result, ZoneTriggerMode::gate, 0.0f, 0.0f);
+        }
     }
 
     void processGroup(const juce::XmlElement& groupNode, ImportResult& result,
                       const ZoneTriggerMode parentTrigger,
                       const float parentVolumeDb, const float parentPan)
     {
+        if (isImportCancellationRequested())
+            return;
+
         Group group;
         group.name = groupNode.getStringAttribute("name", "Group " + juce::String(static_cast<int>(result.program.groups.size() + 1))).toStdString();
         const auto groupVolumeDb = parentVolumeDb + parseVolume(groupNode);
@@ -389,6 +400,9 @@ private:
 
     [[nodiscard]] int getOrAddSampleAsset(const juce::File& sampleFile, const int rootMidiNote, ImportResult& result)
     {
+        if (isImportCancellationRequested())
+            return -1;
+
         auto openResult = audio_file::openReaderForFile(formatManager, sampleFile);
         auto reader = std::move(openResult.reader);
         const auto path = openResult.readableFile.existsAsFile()
@@ -425,7 +439,7 @@ private:
         }
 
         juce::AudioBuffer<float> sampleData(asset.numChannels, asset.lengthSamples);
-        if (!reader->read(&sampleData, 0, asset.lengthSamples, 0, true, true))
+        if (!readAudioInCancellableChunks(*reader, sampleData, asset.lengthSamples))
         {
             addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error,
                           "Could not decode DecentSampler sample " + sampleFile.getFullPathName());
@@ -456,7 +470,7 @@ ImportResult importFile(const juce::File& dspresetFile)
         return result;
     }
 
-    auto xml = juce::parseXML(dspresetFile);
+    auto xml = parseXmlFileCancellable(dspresetFile);
     if (xml == nullptr)
     {
         addDiagnostic(result.diagnostics, ImportDiagnostic::Severity::error,
