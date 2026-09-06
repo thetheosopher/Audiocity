@@ -127,13 +127,15 @@ Bootstrap the development build and run tests:
 ./scripts/bootstrap.ps1
 ```
 
+The bootstrap and CI use the ASIO-disabled `ci-windows` preset, which targets the documented Visual Studio 2022 toolchain. The existing `default` preset remains available for VS2026 development with the ASIO SDK.
+
 Manual development build:
 
 ```bash
-cmake --preset default
-cmake --build --preset default --config Debug --target Audiocity_All
-cmake --build --preset default --config Debug --target audiocity_offline_tests audiocity_ui_snapshot_harness
-ctest --test-dir build -C Debug --output-on-failure
+cmake --preset ci-windows
+cmake --build --preset ci-windows --target Audiocity_All
+cmake --build --preset ci-windows --target audiocity_offline_tests audiocity_ui_snapshot_harness audiocity_preset_runtime_smoke
+ctest --preset ci-windows --exclude-regex '^audiocity_ui_snapshot_harness$'
 ```
 
 ## Engine Profiling

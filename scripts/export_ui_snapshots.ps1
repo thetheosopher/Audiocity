@@ -1,4 +1,6 @@
 param(
+    [string]$CMakePreset = 'default',
+    [string]$BuildDir = 'build',
     [string]$OutputDir = '',
     [string]$BaselineDir = '',
     [switch]$UpdateBaseline,
@@ -100,7 +102,7 @@ function Resolve-WorkspacePath {
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$buildRoot = Join-Path $repoRoot 'build'
+$buildRoot = Resolve-WorkspacePath -PathValue $BuildDir -WorkspaceRoot $repoRoot
 $defaultBaselineDir = Join-Path $repoRoot 'tests/ui-snapshot-baselines/current'
 $resolvedOutputDir = if ($OutputDir -ne '') {
     Resolve-WorkspacePath -PathValue $OutputDir -WorkspaceRoot $repoRoot
@@ -127,10 +129,10 @@ $cmake = Resolve-ToolPath 'cmake.exe' @(
     'C:/Program Files/Microsoft Visual Studio/2022/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe'
 )
 
-Write-Step 'Configure default Debug tree'
-& $cmake --preset default
+Write-Step "Configure '$CMakePreset' Debug tree"
+& $cmake --preset $CMakePreset
 if ($LASTEXITCODE -ne 0) {
-    Write-Step 'Retry configure after clearing stale default-config state'
+    Write-Step "Retry configure after clearing stale '$CMakePreset' state"
     foreach ($path in @(
         (Join-Path $buildRoot 'CMakeCache.txt'),
         (Join-Path $buildRoot 'CMakeFiles')
@@ -140,15 +142,21 @@ if ($LASTEXITCODE -ne 0) {
         }
     }
 
-    Invoke-External $cmake @('--preset', 'default')
+    Invoke-External $cmake @('--preset', $CMakePreset)
 }
 
 Write-Step 'Build UI snapshot harness'
-Invoke-External $cmake @('--build', '--preset', 'default', '--config', 'Debug', '--target', 'audiocity_ui_snapshot_harness')
+Invoke-External $cmake @('--build', '--preset', $CMakePreset, '--target', 'audiocity_ui_snapshot_harness')
 
-$harnessExe = Join-Path $buildRoot 'tests/Debug/audiocity_ui_snapshot_harness.exe'
-if (-not (Test-Path -LiteralPath $harnessExe)) {
-    throw "Snapshot harness executable not found at '$harnessExe'."
+$harnessCandidates = @(
+    (Join-Path $buildRoot 'tests/Debug/audiocity_ui_snapshot_harness.exe'),
+    (Join-Path $buildRoot 'tests/audiocity_ui_snapshot_harness.exe')
+)
+$harnessExe = $harnessCandidates |
+    Where-Object { Test-Path -LiteralPath $_ } |
+    Select-Object -First 1
+if ($null -eq $harnessExe) {
+    throw "Snapshot harness executable not found under '$buildRoot'."
 }
 
 Write-Step 'Probe harness startup'

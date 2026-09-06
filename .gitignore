@@ -20,6 +20,7 @@ Thumbs.db
 # CMake out-of-source build trees
 /build/
 /cmake-build-*/
+/CMakeUserPresets.json
 CMakeCache.txt
 CMakeFiles/
 CTestTestfile.cmake

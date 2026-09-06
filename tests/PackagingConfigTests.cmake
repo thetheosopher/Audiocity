@@ -8,12 +8,14 @@ file(READ "${_audiocity_source_dir}/CMakePresets.json" _audiocity_presets)
 file(READ "${_audiocity_source_dir}/CMakeLists.txt" _audiocity_root_cmake)
 file(READ "${_audiocity_source_dir}/installer/AudiocityInstaller.iss" _audiocity_installer_iss)
 file(READ "${_audiocity_source_dir}/scripts/build_release.ps1" _audiocity_build_release)
+file(READ "${_audiocity_source_dir}/scripts/bootstrap.ps1" _audiocity_bootstrap)
 file(READ "${_audiocity_source_dir}/installer/PortableInstall.txt" _audiocity_portable_install)
 file(READ "${_audiocity_source_dir}/.vscode/tasks.json" _audiocity_vscode_tasks)
 file(READ "${_audiocity_source_dir}/.vscode/launch.json" _audiocity_vscode_launch)
 file(READ "${_audiocity_source_dir}/scripts/export_ui_snapshots.ps1" _audiocity_export_ui_snapshots)
 file(READ "${_audiocity_source_dir}/scripts/compare_ui_snapshots.ps1" _audiocity_compare_ui_snapshots)
 file(READ "${_audiocity_source_dir}/.github/workflows/ui-snapshots.yml" _audiocity_ui_snapshot_workflow)
+file(READ "${_audiocity_source_dir}/.github/workflows/build-and-test.yml" _audiocity_build_and_test_workflow)
 file(READ "${_audiocity_source_dir}/tests/RunUiSnapshotHarness.cmake" _audiocity_run_ui_snapshot_harness)
 file(READ "${_audiocity_source_dir}/LICENSE" _audiocity_license)
 file(GLOB _audiocity_ui_snapshot_baselines "${_audiocity_source_dir}/tests/ui-snapshot-baselines/current/*.png")
@@ -25,6 +27,34 @@ set(_audiocity_version "${CMAKE_MATCH_1}")
 
 if (_audiocity_version STREQUAL "")
     message(FATAL_ERROR "CMakeLists.txt must declare an Audiocity project version.")
+endif ()
+
+if (NOT _audiocity_presets MATCHES "\"name\"[^\r\n]*\"ci-windows\"")
+    message(FATAL_ERROR "CMakePresets.json must define the ci-windows configure/build/test preset.")
+endif ()
+
+if (NOT _audiocity_presets MATCHES "Visual Studio 17 2022")
+    message(FATAL_ERROR "The ci-windows preset must target the Visual Studio 2022 generator used by windows-2022 runners.")
+endif ()
+
+if (NOT _audiocity_presets MATCHES "build/ci-windows")
+    message(FATAL_ERROR "The ci-windows preset must use an isolated build/ci-windows tree.")
+endif ()
+
+if (NOT _audiocity_build_and_test_workflow MATCHES "cmake --preset ci-windows")
+    message(FATAL_ERROR ".github/workflows/build-and-test.yml must configure with the ci-windows preset.")
+endif ()
+
+if (NOT _audiocity_build_and_test_workflow MATCHES "--target Audiocity_All")
+    message(FATAL_ERROR ".github/workflows/build-and-test.yml must compile the shipped standalone and VST3 products.")
+endif ()
+
+if (NOT _audiocity_build_and_test_workflow MATCHES "ctest --preset ci-windows")
+    message(FATAL_ERROR ".github/workflows/build-and-test.yml must run tests through the ci-windows test preset.")
+endif ()
+
+if (NOT _audiocity_bootstrap MATCHES "cmake --preset ci-windows")
+    message(FATAL_ERROR "scripts/bootstrap.ps1 must use the same VS2022 preset as CI.")
 endif ()
 
 if (NOT _audiocity_presets MATCHES "\"name\"[^\r\n]*\"release-selfcontained\"")
@@ -217,6 +247,14 @@ endif ()
 
 if (NOT _audiocity_ui_snapshot_workflow MATCHES "scripts/export_ui_snapshots\\.ps1")
     message(FATAL_ERROR ".github/workflows/ui-snapshots.yml must invoke scripts/export_ui_snapshots.ps1.")
+endif ()
+
+if (NOT _audiocity_ui_snapshot_workflow MATCHES "CMakePreset ci-windows")
+    message(FATAL_ERROR ".github/workflows/ui-snapshots.yml must use the ci-windows preset.")
+endif ()
+
+if (NOT _audiocity_ui_snapshot_workflow MATCHES "BuildDir build/ci-windows")
+    message(FATAL_ERROR ".github/workflows/ui-snapshots.yml must resolve the harness from the ci-windows build tree.")
 endif ()
 
 if (NOT _audiocity_ui_snapshot_workflow MATCHES "actions/upload-artifact@v4")

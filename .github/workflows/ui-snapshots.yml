@@ -24,7 +24,7 @@ jobs:
 
       - name: Export UI snapshots
         shell: pwsh
-        run: ./scripts/export_ui_snapshots.ps1 -OutputDir artifacts/ui-snapshots -BaselineDir tests/ui-snapshot-baselines/current
+        run: ./scripts/export_ui_snapshots.ps1 -CMakePreset ci-windows -BuildDir build/ci-windows -OutputDir artifacts/ui-snapshots -BaselineDir tests/ui-snapshot-baselines/current
 
       - name: Append snapshot summary
         if: always()
