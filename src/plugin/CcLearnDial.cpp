@@ -85,6 +85,16 @@ CcLearnDial::CcLearnDial(const juce::String& name,
         if (onValueChange)
             onValueChange();
     };
+    slider_.onDragStart = [this]
+    {
+        if (onDragStart)
+            onDragStart();
+    };
+    slider_.onDragEnd = [this]
+    {
+        if (onDragEnd)
+            onDragEnd();
+    };
 
     addAndMakeVisible(slider_);
 }

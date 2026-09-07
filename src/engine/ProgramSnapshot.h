@@ -2,17 +2,48 @@
 
 #include "ProgramModel.h"
 
-#include <array>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <numeric>
+#include <vector>
 
 namespace audiocity::engine
 {
 struct ProgramSnapshot
 {
-    static constexpr std::size_t maxSampleAssets = 256;
-    static constexpr std::size_t maxGroups = 128;
-    static constexpr std::size_t maxZones = 512;
+    // Product security ceilings. These are validation limits, not storage sizes: accepted
+    // programs retain every asset/group/zone in dynamically-sized immutable vectors.
+    static constexpr std::size_t maxSampleAssets = 4096;
+    static constexpr std::size_t maxGroups = 2048;
+    static constexpr std::size_t maxZones = 16384;
+
+    struct CapacityReport
+    {
+        std::size_t sampleAssetCount = 0;
+        std::size_t groupCount = 0;
+        std::size_t zoneCount = 0;
+        std::size_t sampleAssetLimit = maxSampleAssets;
+        std::size_t groupLimit = maxGroups;
+        std::size_t zoneLimit = maxZones;
+
+        [[nodiscard]] bool sampleAssetsExceeded() const noexcept { return sampleAssetCount > sampleAssetLimit; }
+        [[nodiscard]] bool groupsExceeded() const noexcept { return groupCount > groupLimit; }
+        [[nodiscard]] bool zonesExceeded() const noexcept { return zoneCount > zoneLimit; }
+        [[nodiscard]] bool accepted() const noexcept
+        {
+            return !sampleAssetsExceeded() && !groupsExceeded() && !zonesExceeded();
+        }
+    };
+
+    [[nodiscard]] static CapacityReport validateCapacity(const Program& program) noexcept
+    {
+        CapacityReport report;
+        report.sampleAssetCount = program.sampleAssets.size();
+        report.groupCount = program.groups.size();
+        report.zoneCount = program.zones.size();
+        return report;
+    }
 
     struct SampleAssetRef
     {
@@ -84,25 +115,36 @@ struct ProgramSnapshot
     };
 
     std::uint32_t version = kProgramModelVersion;
-    std::array<SampleAssetRef, maxSampleAssets> sampleAssets{};
-    std::array<GroupRef, maxGroups> groups{};
-    std::array<ZoneRef, maxZones> zones{};
+    std::vector<SampleAssetRef> sampleAssets;
+    std::vector<GroupRef> groups;
+    std::vector<ZoneRef> zones;
+    // Global order is prepared off-thread. Filtering this sequence preserves the legacy
+    // per-note/per-velocity round-robin order without render-time sorting or allocation.
+    std::vector<std::size_t> roundRobinOrderedZoneIndices;
     std::size_t sampleAssetCount = 0;
     std::size_t groupCount = 0;
     std::size_t zoneCount = 0;
+    CapacityReport capacity{};
+    // Retained for source compatibility. An over-budget snapshot is empty and is never
+    // published; accepted snapshots are complete, so this can no longer mean partial load.
     bool truncated = false;
 
-    [[nodiscard]] static ProgramSnapshot fromProgram(const Program& program) noexcept
+    [[nodiscard]] static ProgramSnapshot fromProgram(const Program& program)
     {
         ProgramSnapshot snapshot;
         snapshot.version = program.version;
-        snapshot.truncated = program.sampleAssets.size() > maxSampleAssets
-            || program.groups.size() > maxGroups
-            || program.zones.size() > maxZones;
+        snapshot.capacity = validateCapacity(program);
+        snapshot.truncated = !snapshot.capacity.accepted();
+        if (snapshot.truncated)
+            return snapshot;
 
-        snapshot.sampleAssetCount = program.sampleAssets.size() < maxSampleAssets
-            ? program.sampleAssets.size()
-            : maxSampleAssets;
+        snapshot.sampleAssetCount = program.sampleAssets.size();
+        snapshot.groupCount = program.groups.size();
+        snapshot.zoneCount = program.zones.size();
+        snapshot.sampleAssets.resize(snapshot.sampleAssetCount);
+        snapshot.groups.resize(snapshot.groupCount);
+        snapshot.zones.resize(snapshot.zoneCount);
+
         for (std::size_t index = 0; index < snapshot.sampleAssetCount; ++index)
         {
             const auto& source = program.sampleAssets[index];
@@ -115,7 +157,6 @@ struct ProgramSnapshot
             target.embeddedInProgram = source.embeddedInProgram;
         }
 
-        snapshot.groupCount = program.groups.size() < maxGroups ? program.groups.size() : maxGroups;
         for (std::size_t index = 0; index < snapshot.groupCount; ++index)
         {
             const auto& source = program.groups[index];
@@ -132,7 +173,6 @@ struct ProgramSnapshot
             target.chokeGroup = source.chokeGroup;
         }
 
-        snapshot.zoneCount = program.zones.size() < maxZones ? program.zones.size() : maxZones;
         for (std::size_t index = 0; index < snapshot.zoneCount; ++index)
         {
             const auto& source = program.zones[index];
@@ -159,6 +199,14 @@ struct ProgramSnapshot
             target.chokeGroup = source.chokeGroup;
             target.loopMode = source.loopMode;
         }
+
+        snapshot.roundRobinOrderedZoneIndices.resize(snapshot.zoneCount);
+        std::iota(snapshot.roundRobinOrderedZoneIndices.begin(), snapshot.roundRobinOrderedZoneIndices.end(), 0);
+        std::sort(snapshot.roundRobinOrderedZoneIndices.begin(), snapshot.roundRobinOrderedZoneIndices.end(),
+            [&snapshot](const std::size_t left, const std::size_t right) noexcept
+            {
+                return snapshot.roundRobinSortsBefore(left, right);
+            });
 
         return snapshot;
     }
@@ -356,8 +404,8 @@ struct ProgramSnapshot
         if (roundRobinGroup <= 0)
             return findFirstMatchingZoneIndex(note, velocity);
 
-        std::array<std::size_t, maxZones> candidateZoneIndices{};
         std::size_t candidateCount = 0;
+        auto roundRobinLength = 0;
 
         for (std::size_t index = 0; index < zoneCount; ++index)
         {
@@ -365,58 +413,47 @@ struct ProgramSnapshot
             if (isZonePlayableMatch(index, note, velocity)
                 && getZoneRoundRobinGroup(zone) == roundRobinGroup)
             {
-                candidateZoneIndices[candidateCount] = index;
                 ++candidateCount;
+                const auto candidateLength = getZoneRoundRobinLength(zone);
+                if (candidateLength > roundRobinLength)
+                    roundRobinLength = candidateLength;
             }
         }
 
         if (candidateCount == 0)
             return -1;
 
-        for (std::size_t index = 1; index < candidateCount; ++index)
-        {
-            const auto candidate = candidateZoneIndices[index];
-            auto insertionIndex = index;
-
-            while (insertionIndex > 0
-                && roundRobinSortsBefore(candidate, candidateZoneIndices[insertionIndex - 1]))
-            {
-                candidateZoneIndices[insertionIndex] = candidateZoneIndices[insertionIndex - 1];
-                --insertionIndex;
-            }
-
-            candidateZoneIndices[insertionIndex] = candidate;
-        }
-
-        const auto selected = roundRobinMode == RoundRobinMode::cycleRandom
+        const auto selectedOrdinal = roundRobinMode == RoundRobinMode::cycleRandom
             ? cycleRandomCandidateIndex(roundRobinGroup, roundRobinStep, candidateCount)
             : static_cast<std::size_t>(roundRobinStep % static_cast<std::uint32_t>(candidateCount));
 
-        if (roundRobinMode == RoundRobinMode::ordered)
+        const auto targetPosition = roundRobinMode == RoundRobinMode::ordered && roundRobinLength > 0
+            ? static_cast<int>(roundRobinStep % static_cast<std::uint32_t>(roundRobinLength)) + 1
+            : 0;
+        auto ordinal = std::size_t{ 0 };
+        const auto usePreparedOrder = roundRobinMode == RoundRobinMode::ordered && targetPosition == 0;
+        for (std::size_t traversalIndex = 0; traversalIndex < zoneCount; ++traversalIndex)
         {
-            auto roundRobinLength = 0;
-            for (std::size_t index = 0; index < candidateCount; ++index)
+            const auto index = usePreparedOrder
+                ? roundRobinOrderedZoneIndices[traversalIndex]
+                : traversalIndex;
+            const auto& zone = zones[index];
+            if (!isZonePlayableMatch(index, note, velocity)
+                || getZoneRoundRobinGroup(zone) != roundRobinGroup)
+                continue;
+
+            if (targetPosition > 0)
             {
-                const auto candidateLength = getZoneRoundRobinLength(zones[candidateZoneIndices[index]]);
-                if (candidateLength > roundRobinLength)
-                    roundRobinLength = candidateLength;
+                if (zone.roundRobinPosition == targetPosition)
+                    return static_cast<int>(index);
+                continue;
             }
 
-            if (roundRobinLength > 0)
-            {
-                const auto targetPosition = static_cast<int>(roundRobinStep % static_cast<std::uint32_t>(roundRobinLength)) + 1;
-                for (std::size_t index = 0; index < candidateCount; ++index)
-                {
-                    const auto candidateIndex = candidateZoneIndices[index];
-                    if (zones[candidateIndex].roundRobinPosition == targetPosition)
-                        return static_cast<int>(candidateIndex);
-                }
-
-                return -1;
-            }
+            if (ordinal++ == selectedOrdinal)
+                return static_cast<int>(index);
         }
 
-        return static_cast<int>(candidateZoneIndices[selected]);
+        return -1;
     }
 
     [[nodiscard]] bool roundRobinSortsBefore(const std::size_t leftIndex, const std::size_t rightIndex) const noexcept

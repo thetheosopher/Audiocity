@@ -8,7 +8,10 @@
 #include <functional>
 #include <atomic>
 #include <bitset>
+#include <cstddef>
+#include <deque>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <array>
 #include <string>
@@ -18,6 +21,7 @@
 #include "CcLearnDial.h"
 #include "DialLookAndFeel.h"
 #include "ImportedProgramState.h"
+#include "LibraryFileIndex.h"
 #include "OwnedJobWorker.h"
 #include "PluginAboutPage.h"
 #include "PluginCapturePage.h"
@@ -253,6 +257,7 @@ private:
     void returnKeyPressed(int lastRowSelected) override;
 
     void timerCallback() override;
+    void promptForPendingImportedAssetRelink();
     void consumeExternalMidiDisplayEvents();
     void syncExternalMidiDisplayNotes(const std::bitset<128>& nextNotes, float noteOnVelocity = 1.0f);
     void paintSampleInspectorPane(juce::Graphics& g) const;
@@ -475,6 +480,7 @@ private:
 
     AudiocityAudioProcessor& processor_;
     std::unique_ptr<juce::FileChooser> fileChooser_;
+    bool missingAssetResolverPrompted_ = false;
     std::unique_ptr<juce::TooltipWindow> tooltipWindow_;
     audiocity::plugin::EditorUndoHistory editorUndoHistory_;
     bool isHoveringValidDrop_ = false;
@@ -483,6 +489,9 @@ private:
     std::atomic<int> sampleScanGeneration_{ 0 };
     std::atomic<bool> sampleScanInProgress_{ false };
     audiocity::plugin::OwnedJobWorker sampleScanWorker_;
+    std::atomic<int> samplePreviewGeneration_{ 0 };
+    std::atomic<bool> samplePreviewBuildInProgress_{ false };
+    audiocity::plugin::OwnedJobWorker samplePreviewWorker_;
     std::atomic<int> backgroundImportGeneration_{ 0 };
     std::atomic<bool> backgroundImportInProgress_{ false };
     audiocity::plugin::OwnedJobWorker backgroundImportWorker_;
@@ -502,6 +511,15 @@ private:
 
     struct SampleListEntry
     {
+        enum class PreviewState
+        {
+            notApplicable,
+            missing,
+            queued,
+            ready,
+            failed
+        };
+
         juce::File file;
         juce::String relativePath;
         juce::String fileName;
@@ -512,11 +530,31 @@ private:
         juce::String loopMetadataLine;
         juce::StringArray tags;
         juce::String tagsLower;
+        std::string previewCacheKey;
         std::vector<float> previewPeaks;
+        juce::int64 fileSizeBytes = 0;
+        juce::int64 modificationTimeMs = 0;
+        PreviewState previewState = PreviewState::notApplicable;
         bool isInstrument = false;
         bool isFavorite = false;
         bool isRecent = false;
         int recentRank = -1;
+    };
+
+    struct SampleScanDeliveryState
+    {
+        std::mutex mutex;
+        std::deque<SampleListEntry> pendingEntries;
+        std::vector<SampleListEntry> replacementEntries;
+        std::vector<SampleListEntry> cancellationRollbackEntries;
+        std::size_t replacementReadIndex = 0;
+        bool replacementReady = false;
+        bool cancellationRollbackReady = false;
+        bool workerComplete = false;
+        bool entryLimitReached = false;
+        bool hadWarmIndex = false;
+        audiocity::plugin::LibraryFileIndexScanResult::IncompleteReason incompleteReason =
+            audiocity::plugin::LibraryFileIndexScanResult::IncompleteReason::none;
     };
 
     class SampleBrowserListBox final : public juce::ListBox
@@ -571,6 +609,10 @@ private:
 
     std::vector<SampleListEntry> allSampleEntries_;
     std::vector<int> visibleSampleEntryIndices_;
+    std::vector<int> sampleBrowserSortOrder_;
+    bool sampleBrowserSortOrderDirty_ = true;
+    std::vector<SampleListEntry> sampleScanReplacementStaging_;
+    std::shared_ptr<SampleScanDeliveryState> sampleScanDelivery_;
     juce::String sampleRootFolderPath_;
     int lastPreviewedBrowserSourceIndex_ = -1;
     juce::String lastWaveformSamplePath_;
@@ -1066,6 +1108,8 @@ private:
     juce::ToggleButton qualityFidelityButton_{ "Fidelity" };
     juce::ToggleButton qualityUltraButton_{ "Ultra" };
     CcLearnDial preloadDial_{ "Preload", 256, 131072, 1, {}, 32768 };
+    int pendingPreloadSamples_ = 32768;
+    bool preloadDragInProgress_ = false;
     CcLearnDial masterVolumeDial_{ "Master", 0, 100, 1, "%", 100 };
     CcLearnDial panDial_{ "Pan", -100, 100, 1, {}, 0 };
     StereoPeakMeter outputLevelMeter_;
@@ -1100,6 +1144,7 @@ private:
 
     void openSampleChooser();
     void refreshUI(bool forceWaveformReset = false);
+    void commitPendingPreloadChange();
     void pushPlaybackWindow();
     void applyLoopPoints();
     void enforcePlaybackLoopConstraints();
@@ -1186,7 +1231,10 @@ private:
     void updateBrowserLibraryControls();
     void toggleSelectedBrowserFavorite();
     void applySelectedBrowserTags();
+    void drainSampleScanResults();
     void rebuildVisibleSampleList();
+    void queueVisibleSamplePreviews();
+    void restartVisibleSamplePreviews();
     void showInstrumentLoadErrorDialog(const juce::File& file,
                                        const juce::String& diagnosticSummary,
                                        std::function<void()> onDismissed = {});

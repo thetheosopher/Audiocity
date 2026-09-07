@@ -62,6 +62,10 @@ Testing/
 # Local snapshot/test artifact exports
 /artifacts/preset_audition/audio/
 /artifacts/preset_audition/regressions.txt
+/artifacts/coverage/
+/artifacts/installer-validation/
+/artifacts/performance/
+/artifacts/pluginval/
 /installer/obj/
 /installer/redist/
 /ui-snapshots/

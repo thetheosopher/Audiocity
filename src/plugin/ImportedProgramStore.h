@@ -28,6 +28,18 @@ public:
     virtual void republishProgram(const audiocity::engine::Program& program,
                                   const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset) = 0;
 
+    /** Checked full publication used by the transactional store path. Legacy/test sinks that
+        cannot fail retain the default success behavior. */
+    virtual bool republishProgramChecked(
+        const audiocity::engine::Program& program,
+        const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset,
+        juce::String& diagnostic)
+    {
+        republishProgram(program, sampleDataByAsset);
+        diagnostic.clear();
+        return true;
+    }
+
     /** Adopts a program whose audio the destination already holds. Returns false if it cannot,
         in which case the store publishes the sample data as well. */
     virtual bool republishProgramMetadata(const audiocity::engine::Program& program) = 0;
@@ -66,6 +78,7 @@ struct ImportedProgramPersistentState
     ImportedProgramFormat format = ImportedProgramFormat::unknown;
     int selectionIndex = -1;
     juce::ValueTree mappingState;
+    ImportedAssetManifest assetManifest;
 };
 
 /** Owns the imported program, its sample data, its derived state, and the publish.

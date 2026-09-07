@@ -31,12 +31,9 @@ enum class RtReaderRole : std::size_t
 // and load() takes an internal spinlock (_Lock_and_load) -- which would violate
 // docs/02-real-time-rules.md's "no locks on the audio thread" rule.
 //
-// Each fixed reader role announces an active read epoch before loading current_. The writer keeps
-// every retired owner while any role is active and reclaims old generations only at a quiescent
-// point. Sequentially consistent operations provide the cross-atomic ordering needed here: a
-// reader either announces before publication (so reclamation observes it) or loads the new current
-// pointer after publication. This is safe no matter how long a Reader guard remains alive or how
-// many generations the writer publishes during that read.
+// Each fixed reader role publishes the exact raw pointer protected by its outermost guard. Nested
+// guards reuse that pointer. An acquisition flag closes the interval between announcing the outer
+// guard and publishing its hazard; the writer simply defers reclamation across that bounded window.
 template <class T>
 class RtSnapshotCell
 {
@@ -78,14 +75,36 @@ public:
         Reader(const RtSnapshotCell& cell, const RtReaderRole role) noexcept
             : cell_(&cell), slot_(static_cast<std::size_t>(role))
         {
-            cell_->activeReaders_[slot_].fetch_add(1, std::memory_order_seq_cst);
-            ptr_ = cell_->current_.load(std::memory_order_seq_cst);
+            cell_->readerAcquiring_[slot_].store(true, std::memory_order_seq_cst);
+            const auto previousDepth = cell_->readerDepths_[slot_].fetch_add(1, std::memory_order_seq_cst);
+            if (previousDepth == 0)
+            {
+                ptr_ = cell_->current_.load(std::memory_order_seq_cst);
+                cell_->readerHazards_[slot_].store(ptr_, std::memory_order_seq_cst);
+            }
+            else
+            {
+                ptr_ = cell_->readerHazards_[slot_].load(std::memory_order_seq_cst);
+            }
+            cell_->readerAcquiring_[slot_].store(false, std::memory_order_seq_cst);
         }
 
         void release() noexcept
         {
             if (cell_ != nullptr)
-                cell_->activeReaders_[slot_].fetch_sub(1, std::memory_order_seq_cst);
+            {
+                const auto depth = cell_->readerDepths_[slot_].load(std::memory_order_seq_cst);
+                if (depth == 1)
+                {
+                    cell_->readerReleasing_[slot_].store(true, std::memory_order_seq_cst);
+                    cell_->readerHazards_[slot_].store(nullptr, std::memory_order_seq_cst);
+                }
+                cell_->readerDepths_[slot_].fetch_sub(1, std::memory_order_seq_cst);
+                if (depth == 1)
+                    cell_->readerReleasing_[slot_].store(false, std::memory_order_seq_cst);
+                cell_ = nullptr;
+                ptr_ = nullptr;
+            }
         }
 
         const RtSnapshotCell* cell_ = nullptr;
@@ -93,25 +112,45 @@ public:
         const T* ptr_ = nullptr;
     };
 
-    // Any thread; wait-free (bounded retries, no locks, no allocation). `role` must be the
-    // caller's fixed thread role -- see RtReaderRole.
+    // Any thread; fixed atomic work with no retries, locks, allocation, or reclamation. `role`
+    // must be the caller's fixed thread role -- see RtReaderRole.
     [[nodiscard]] Reader read(const RtReaderRole role) const noexcept { return Reader(*this, role); }
 
     // Writer side only (the message thread, for every EngineCore use). Not itself safe against
     // concurrent publish() calls on the same cell.
     void publish(std::shared_ptr<const T> next)
     {
-        current_.store(next.get(), std::memory_order_seq_cst);
+        // Acquire ownership before exposing the raw pointer. vector growth may throw; in that
+        // case current_ and every previously-published generation remain untouched.
+        const auto* const raw = next.get();
         limbo_.push_back(std::move(next));
+        current_.store(raw, std::memory_order_seq_cst);
         reclaim();
+    }
+
+    // Writer-side diagnostics also provide an explicit quiescent reclamation point.
+    [[nodiscard]] std::size_t retainedOwnerCountForWriter()
+    {
+        reclaim();
+        return limbo_.size();
+    }
+
+    template <class Visitor>
+    void visitRetainedOwnersForWriter(Visitor&& visitor)
+    {
+        reclaim();
+        for (const auto& owner : limbo_)
+            if (owner)
+                visitor(*owner);
     }
 
 private:
     void reclaim()
     {
-        for (const auto& readerCount : activeReaders_)
+        for (std::size_t slot = 0; slot < readerHazards_.size(); ++slot)
         {
-            if (readerCount.load(std::memory_order_seq_cst) != 0)
+            if (readerAcquiring_[slot].load(std::memory_order_seq_cst)
+                || readerReleasing_[slot].load(std::memory_order_seq_cst))
                 return;
         }
 
@@ -119,15 +158,21 @@ private:
             [this](const std::shared_ptr<const T>& owner)
             {
                 const auto* raw = owner.get();
-                if (raw == current_.load(std::memory_order_seq_cst))
+                if (raw != nullptr && raw == current_.load(std::memory_order_seq_cst))
                     return false;
+                for (const auto& hazard : readerHazards_)
+                    if (raw != nullptr && raw == hazard.load(std::memory_order_seq_cst))
+                        return false;
                 return true;
             }),
             limbo_.end());
     }
 
     mutable std::atomic<const T*> current_{ nullptr };
-    mutable std::array<std::atomic<std::size_t>, static_cast<std::size_t>(RtReaderRole::count)> activeReaders_{};
+    mutable std::array<std::atomic<const T*>, static_cast<std::size_t>(RtReaderRole::count)> readerHazards_{};
+    mutable std::array<std::atomic<std::size_t>, static_cast<std::size_t>(RtReaderRole::count)> readerDepths_{};
+    mutable std::array<std::atomic<bool>, static_cast<std::size_t>(RtReaderRole::count)> readerAcquiring_{};
+    mutable std::array<std::atomic<bool>, static_cast<std::size_t>(RtReaderRole::count)> readerReleasing_{};
     std::vector<std::shared_ptr<const T>> limbo_;
 };
 

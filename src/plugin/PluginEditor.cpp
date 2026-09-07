@@ -49,13 +49,7 @@ juce::File sampleBrowserDragFileFromDescription(const juce::var& description)
 
 bool isMappingSampleFile(const juce::File& file)
 {
-    const auto extension = file.getFileExtension().toLowerCase();
-    return extension == ".wav"
-        || extension == ".aif"
-        || extension == ".aiff"
-        || extension == ".flac"
-        || extension == ".ogg"
-        || extension == ".ncw";
+    return audiocity::plugin::isMappingImportPath(file.getFullPathName());
 }
 
 void paintSectionCard(juce::Graphics& g, juce::Rectangle<float> box, const juce::String& title)
@@ -4233,7 +4227,11 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     sampleBrowserSortCombo_.addItem("Relative Path", 2);
     sampleBrowserSortCombo_.addItem("Recent", 3);
     sampleBrowserSortCombo_.setSelectedId(1, juce::dontSendNotification);
-    sampleBrowserSortCombo_.onChange = [this] { rebuildVisibleSampleList(); };
+    sampleBrowserSortCombo_.onChange = [this]
+    {
+        sampleBrowserSortOrderDirty_ = true;
+        rebuildVisibleSampleList();
+    };
 
     addAndMakeVisible(sampleBrowserFavoriteButton_);
     sampleBrowserFavoriteButton_.onClick = [this] { toggleSelectedBrowserFavorite(); };
@@ -5094,10 +5092,21 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     saturationModeCombo_.addItem("Tape", 3);
     saturationModeCombo_.addItem("Tube", 4);
     saturationModeCombo_.setSelectedId(1, juce::dontSendNotification);
+    preloadDial_.onDragStart = [this]
+    {
+        preloadDragInProgress_ = true;
+        pendingPreloadSamples_ = juce::jmax(256, static_cast<int>(preloadDial_.getValue()));
+    };
     preloadDial_.onValueChange = [this]
     {
-        processor_.setPreloadSamples(juce::jmax(256, static_cast<int>(preloadDial_.getValue())));
-        refreshUI();
+        pendingPreloadSamples_ = juce::jmax(256, static_cast<int>(preloadDial_.getValue()));
+        if (!preloadDragInProgress_)
+            commitPendingPreloadChange();
+    };
+    preloadDial_.onDragEnd = [this]
+    {
+        preloadDragInProgress_ = false;
+        commitPendingPreloadChange();
     };
     masterVolumeDial_.onValueChange = [this]
     {
@@ -5379,8 +5388,10 @@ AudiocityAudioProcessorEditor::~AudiocityAudioProcessorEditor()
     stopTimer();
     ++backgroundImportGeneration_;
     ++sampleScanGeneration_;
+    ++samplePreviewGeneration_;
     backgroundImportWorker_.shutdown();
     sampleScanWorker_.shutdown();
+    samplePreviewWorker_.shutdown();
     playerKeyboardState_.removeListener(this);
     tabBar_.setLookAndFeel(nullptr);
     setLookAndFeel(nullptr);
@@ -5477,6 +5488,8 @@ void AudiocityAudioProcessorEditor::consumeExternalMidiDisplayEvents()
 
 void AudiocityAudioProcessorEditor::timerCallback()
 {
+    promptForPendingImportedAssetRelink();
+    drainSampleScanResults();
     updateGeneratePreviewButtonText();
     consumeExternalMidiDisplayEvents();
 
@@ -5612,6 +5625,7 @@ void AudiocityAudioProcessorEditor::timerCallback()
 
     if (currentTabIndex_ == 1 || shouldShowPersistentBrowserRail())
     {
+        queueVisibleSamplePreviews();
         const auto scanning = sampleScanInProgress_.load(std::memory_order_relaxed);
         const bool shouldShowCancelButton = (currentTabIndex_ == 1 || shouldShowPersistentBrowserRail()) && scanning;
         if (sampleBrowserCancelButton_.isVisible() != shouldShowCancelButton)
@@ -7728,6 +7742,7 @@ void AudiocityAudioProcessorEditor::listBoxItemDoubleClicked(const int row, cons
 void AudiocityAudioProcessorEditor::selectedRowsChanged(const int lastRowSelected)
 {
     updateBrowserLibraryControls();
+    restartVisibleSamplePreviews();
 
     if (currentTabIndex_ != 1 && !shouldShowPersistentBrowserRail())
         return;
@@ -7840,7 +7855,59 @@ void AudiocityAudioProcessorEditor::toggleSampleGroupExpanded(const juce::String
 
 bool AudiocityAudioProcessorEditor::isSupportedSampleFile(const juce::File& file) const
 {
-    return audiocity::plugin::LibraryFileIndex::isSupportedFile(file, processor_.isRexRuntimeAvailable());
+    const auto capabilities = audiocity::plugin::currentImportFormatCapabilities(
+        processor_.isRexRuntimeAvailable());
+    return audiocity::plugin::LibraryFileIndex::isSupportedFile(file, capabilities, true);
+}
+
+void AudiocityAudioProcessorEditor::promptForPendingImportedAssetRelink()
+{
+    if (missingAssetResolverPrompted_
+        || fileChooser_ != nullptr
+        || !processor_.hasPendingImportedAssetRelink())
+        return;
+
+    missingAssetResolverPrompted_ = true;
+    const auto initialRoot = processor_.getSampleBrowserRootFolder().isNotEmpty()
+        ? juce::File(processor_.getSampleBrowserRootFolder())
+        : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+    fileChooser_ = std::make_unique<juce::FileChooser>(
+        "Relink missing imported-program assets — choose the moved library root",
+        initialRoot);
+
+    const auto chooserFlags = juce::FileBrowserComponent::openMode
+        | juce::FileBrowserComponent::canSelectDirectories;
+    juce::Component::SafePointer<AudiocityAudioProcessorEditor> safeThis(this);
+    fileChooser_->launchAsync(chooserFlags, [safeThis](const juce::FileChooser& chooser)
+    {
+        if (safeThis == nullptr)
+            return;
+
+        const auto selectedRoot = chooser.getResult();
+        if (selectedRoot == juce::File{})
+        {
+            safeThis->mappingEditStatusLabel_.setText(
+                "Asset relink cancelled; reopen the editor to choose a library root",
+                juce::dontSendNotification);
+            return;
+        }
+
+        if (safeThis->processor_.relinkPendingImportedProgramFromFolder(selectedRoot))
+        {
+            safeThis->mappingEditStatusLabel_.setText(
+                "All imported-program assets relinked",
+                juce::dontSendNotification);
+            safeThis->refreshUI(true);
+            return;
+        }
+
+        const auto diagnostic = safeThis->processor_.getPendingImportedAssetRelinkDiagnostic();
+        safeThis->mappingEditStatusLabel_.setText(diagnostic, juce::dontSendNotification);
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::MessageBoxIconType::WarningIcon,
+            "Audiocity asset relink",
+            diagnostic);
+    });
 }
 
 bool AudiocityAudioProcessorEditor::importInstrumentFileByFormat(
@@ -8038,30 +8105,7 @@ void AudiocityAudioProcessorEditor::copyImportDiagnosticLogToClipboard()
 bool AudiocityAudioProcessorEditor::canImportInstrumentInBackground(
     const audiocity::plugin::ImportedProgramFormat format) const noexcept
 {
-    using audiocity::plugin::ImportedProgramFormat;
-    switch (format)
-    {
-        case ImportedProgramFormat::unknown:
-        case ImportedProgramFormat::sfz:
-        case ImportedProgramFormat::rex:
-        case ImportedProgramFormat::nki:
-        case ImportedProgramFormat::sf2:
-        case ImportedProgramFormat::decentSampler:
-        case ImportedProgramFormat::bitwigMultisample:
-        case ImportedProgramFormat::mpcKeygroup:
-        case ImportedProgramFormat::bento1010:
-        case ImportedProgramFormat::talSampler:
-        case ImportedProgramFormat::tx16wx:
-        case ImportedProgramFormat::korgMultisample:
-        case ImportedProgramFormat::abletonSampler:
-        case ImportedProgramFormat::distingExPreset:
-        case ImportedProgramFormat::korgKmp:
-        case ImportedProgramFormat::logicExs24:
-        case ImportedProgramFormat::nnxt:
-            return true;
-        default:
-            return false;
-    }
+    return audiocity::plugin::supportsBackgroundImport(format);
 }
 
 void AudiocityAudioProcessorEditor::setBackgroundImportUiActive(const bool active,
@@ -8070,9 +8114,11 @@ void AudiocityAudioProcessorEditor::setBackgroundImportUiActive(const bool activ
 {
     backgroundImportInProgress_.store(active, std::memory_order_relaxed);
     loadButton_.setButtonText(active ? "Cancel" : "Load");
+    const auto capabilities = audiocity::plugin::currentImportFormatCapabilities(
+        processor_.isRexRuntimeAvailable());
     loadButton_.setTooltip(active
         ? ("Cancel import of " + file.getFileName())
-        : (processor_.isRexRuntimeAvailable() ? "Load Sample, SFZ, or REX (Ctrl+O)" : "Load Sample (Ctrl+O)"));
+        : (audiocity::plugin::buildImportChooserTitle(capabilities) + " (Ctrl+O)"));
 
     if (active)
     {
@@ -8178,6 +8224,17 @@ bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file,
 {
     processor_.panicAllAudio();
     updateGeneratePreviewButtonText();
+
+    const auto capabilities = audiocity::plugin::currentImportFormatCapabilities(
+        processor_.isRexRuntimeAvailable());
+    if (const auto unavailable = audiocity::plugin::importPathUnavailableMessage(
+            file.getFullPathName(), capabilities);
+        unavailable.isNotEmpty())
+    {
+        processor_.setImportDiagnosticSummary(unavailable);
+        completeInstrumentLoad(file, false, false, completion);
+        return false;
+    }
 
     const auto choiceProbe = audiocity::plugin::probeImportedProgramChoices(file);
     const auto detectedFormat = choiceProbe.format != audiocity::plugin::ImportedProgramFormat::unknown
@@ -8371,24 +8428,50 @@ void AudiocityAudioProcessorEditor::cancelSampleRootScan()
 
     ++sampleScanGeneration_;
     sampleScanWorker_.cancelAll();
+    std::vector<SampleListEntry> cancellationRollbackEntries;
+    if (sampleScanDelivery_ != nullptr)
+    {
+        std::scoped_lock lock(sampleScanDelivery_->mutex);
+        if (sampleScanDelivery_->cancellationRollbackReady)
+            cancellationRollbackEntries = std::move(
+                sampleScanDelivery_->cancellationRollbackEntries);
+    }
+    sampleScanDelivery_.reset();
+    sampleScanReplacementStaging_.clear();
+    allSampleEntries_ = std::move(cancellationRollbackEntries);
+    visibleSampleEntryIndices_.clear();
+    sampleBrowserSortOrder_.clear();
+    sampleBrowserSortOrderDirty_ = true;
+    ++samplePreviewGeneration_;
+    samplePreviewWorker_.cancelAll();
+    samplePreviewBuildInProgress_.store(false, std::memory_order_release);
+    for (auto& entry : allSampleEntries_)
+        if (entry.previewState == SampleListEntry::PreviewState::queued)
+            entry.previewState = SampleListEntry::PreviewState::missing;
     sampleScanInProgress_.store(false, std::memory_order_relaxed);
+    rebuildVisibleSampleList();
 }
 
 void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootFolder)
 {
     const auto newRootPath = rootFolder.getFullPathName();
-    const auto rootChanged = sampleRootFolderPath_.isNotEmpty()
-        && !sampleRootFolderPath_.equalsIgnoreCase(newRootPath);
+    std::vector<SampleListEntry> existingRootRollbackEntries;
+    ++samplePreviewGeneration_;
+    samplePreviewWorker_.cancelAll();
+    samplePreviewBuildInProgress_.store(false, std::memory_order_relaxed);
+    for (auto& entry : allSampleEntries_)
+        if (entry.previewState == SampleListEntry::PreviewState::queued)
+            entry.previewState = SampleListEntry::PreviewState::missing;
+    if (!sampleScanInProgress_.load(std::memory_order_relaxed)
+        && sampleRootFolderPath_ == newRootPath)
+    {
+        existingRootRollbackEntries = std::move(allSampleEntries_);
+    }
 
-    audiocity::plugin::PeakPreviewCacheStore peakCacheStore(
-        audiocity::plugin::PeakPreviewCacheStore::getDefaultCacheFile());
-
-    if (rootChanged)
-        peakCacheStore.reset();
-
-    auto peakCacheData = peakCacheStore.load();
-    if (!peakCacheData.libraryRootPath.equalsIgnoreCase(newRootPath))
-        peakCacheData.entries.clear();
+    ++sampleScanGeneration_;
+    sampleScanWorker_.cancelAll();
+    sampleScanDelivery_.reset();
+    sampleScanReplacementStaging_.clear();
 
     sampleRootFolderPath_ = newRootPath;
     processor_.setSampleBrowserRootFolder(sampleRootFolderPath_);
@@ -8398,58 +8481,31 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
 
     allSampleEntries_.clear();
     visibleSampleEntryIndices_.clear();
+    sampleBrowserSortOrder_.clear();
+    sampleBrowserSortOrderDirty_ = true;
     rebuildVisibleSampleList();
 
     sampleScanInProgress_.store(true, std::memory_order_relaxed);
-    const auto scanGeneration = ++sampleScanGeneration_;
-    const auto includeRexFiles = processor_.isRexRuntimeAvailable();
-    auto safeThis = juce::Component::SafePointer<AudiocityAudioProcessorEditor>(this);
+    const auto importCapabilities = audiocity::plugin::currentImportFormatCapabilities(
+        processor_.isRexRuntimeAvailable());
+    auto delivery = std::make_shared<SampleScanDeliveryState>();
+    if (!existingRootRollbackEntries.empty())
+    {
+        delivery->cancellationRollbackEntries = std::move(existingRootRollbackEntries);
+        delivery->cancellationRollbackReady = true;
+    }
+    sampleScanDelivery_ = delivery;
+    audiocity::plugin::LibraryFileIndexStore indexStore(
+        audiocity::plugin::LibraryFileIndexStore::getCacheFileForRoot(rootFolder));
 
     const auto submitted = sampleScanWorker_.submit(
-        [safeThis, rootFolder, scanGeneration, includeRexFiles, peakCacheStore, cacheEntries = std::move(peakCacheData.entries)](
+        [rootFolder, importCapabilities, delivery, indexStore](
             const audiocity::plugin::OwnedJobWorker::CancellationFlag& cancelled) mutable
     {
-        std::vector<SampleListEntry> batch;
-        batch.reserve(24);
-        std::unordered_map<std::string, audiocity::plugin::PeakPreviewCacheEntry> updatedCacheEntries;
+        constexpr auto kDeliveryBatchSize = std::size_t{ 256 };
 
-        auto flushBatchToUi = [safeThis, scanGeneration, &cancelled](std::vector<SampleListEntry>& batchToFlush)
+        const auto makeListEntry = [](const audiocity::plugin::LibraryFileIndexEntry& indexedFile)
         {
-            if (batchToFlush.empty() || cancelled.load(std::memory_order_acquire))
-                return;
-
-            auto uiBatch = std::move(batchToFlush);
-            batchToFlush.clear();
-
-            juce::MessageManager::callAsync([safeThis, scanGeneration, batch = std::move(uiBatch)]() mutable
-            {
-                if (safeThis == nullptr)
-                    return;
-
-                auto* self = safeThis.getComponent();
-                if (scanGeneration != self->sampleScanGeneration_.load())
-                    return;
-
-                self->allSampleEntries_.insert(self->allSampleEntries_.end(),
-                    std::make_move_iterator(batch.begin()),
-                    std::make_move_iterator(batch.end()));
-                self->rebuildVisibleSampleList();
-            });
-        };
-
-        for (const auto& entry : juce::RangedDirectoryIterator(rootFolder, true, "*", juce::File::findFiles))
-        {
-            if (cancelled.load(std::memory_order_acquire))
-                return;
-
-            const auto indexedEntry = audiocity::plugin::LibraryFileIndex::createEntryForFile(
-                rootFolder,
-                entry.getFile(),
-                includeRexFiles);
-            if (!indexedEntry.has_value())
-                continue;
-
-            const auto& indexedFile = *indexedEntry;
             SampleListEntry item;
             item.file = indexedFile.file;
             item.relativePath = indexedFile.relativePath;
@@ -8457,74 +8513,333 @@ void AudiocityAudioProcessorEditor::scanSampleRootFolder(const juce::File& rootF
             item.fileNameLower = item.fileName.toLowerCase();
             item.relativePathLower = item.relativePath.toLowerCase();
             item.isInstrument = indexedFile.isInstrument;
-
-            const auto cacheKey = audiocity::plugin::makePeakPreviewCacheKey(indexedFile.file);
-            const auto fileSizeBytes = indexedFile.sizeBytes;
-
-            SamplePreviewData previewData;
+            item.fileSizeBytes = indexedFile.sizeBytes;
+            item.modificationTimeMs = indexedFile.modificationTimeMs;
+            item.previewCacheKey = audiocity::plugin::makePeakPreviewCacheKey(indexedFile.file);
             if (indexedFile.isInstrument)
             {
-                previewData.metadataLine = audiocity::plugin::importedProgramFormatDescription(indexedFile.file.getFullPathName());
-                previewData.loopFormatBadge = audiocity::plugin::importedProgramFormatBadge(indexedFile.file.getFullPathName());
-            }
-            else if (const auto cacheIt = cacheEntries.find(cacheKey);
-                cacheIt != cacheEntries.end() && cacheIt->second.fileSizeBytes == fileSizeBytes)
-            {
-                previewData.peaks = cacheIt->second.peaks;
-                previewData.metadataLine = cacheIt->second.metadataLine;
-                previewData.loopFormatBadge = cacheIt->second.loopFormatBadge;
-                previewData.loopMetadataLine = cacheIt->second.loopMetadataLine;
+                item.metadataLine = audiocity::plugin::importedProgramFormatDescription(
+                    indexedFile.file.getFullPathName());
+                item.loopFormatBadge = audiocity::plugin::importedProgramFormatBadge(
+                    indexedFile.file.getFullPathName());
+                item.previewState = SampleListEntry::PreviewState::notApplicable;
             }
             else
             {
-                previewData = buildPreviewAndMetadata(indexedFile.file, cancelled);
-                if (cancelled.load(std::memory_order_acquire))
-                    return;
+                item.metadataLine = "Preview queued";
+                item.previewState = SampleListEntry::PreviewState::missing;
+            }
+            return item;
+        };
+
+        const auto deliverIndexedBatch = [&delivery, &cancelled, &makeListEntry](
+            const std::span<const audiocity::plugin::LibraryFileIndexEntry> indexedFiles,
+            const bool retainForCancellationRollback,
+            const bool completesCancellationRollback)
+        {
+            if (indexedFiles.empty() || cancelled.load(std::memory_order_acquire))
+                return;
+
+            std::vector<SampleListEntry> converted;
+            converted.reserve(indexedFiles.size());
+            for (const auto& indexedFile : indexedFiles)
+            {
+                if (audiocity::plugin::findImportFormatDescriptorForPath(
+                        indexedFile.file.getFullPathName()) != nullptr)
+                {
+                    converted.push_back(makeListEntry(indexedFile));
+                }
             }
 
-            updatedCacheEntries[cacheKey] = {
-                fileSizeBytes,
-                previewData.peaks,
-                previewData.metadataLine,
-                previewData.loopFormatBadge,
-                previewData.loopMetadataLine
-            };
+            if (cancelled.load(std::memory_order_acquire))
+                return;
 
-            item.previewPeaks = std::move(previewData.peaks);
-            item.metadataLine = std::move(previewData.metadataLine);
-            item.loopFormatBadge = std::move(previewData.loopFormatBadge);
-            item.loopMetadataLine = std::move(previewData.loopMetadataLine);
-            batch.push_back(std::move(item));
+            std::scoped_lock lock(delivery->mutex);
+            for (auto& entry : converted)
+            {
+                if (retainForCancellationRollback
+                    && !delivery->cancellationRollbackReady)
+                {
+                    delivery->cancellationRollbackEntries.push_back(entry);
+                }
+                delivery->pendingEntries.push_back(std::move(entry));
+            }
+            if (retainForCancellationRollback
+                && completesCancellationRollback
+                && !delivery->cancellationRollbackReady)
+            {
+                delivery->cancellationRollbackReady = true;
+            }
+        };
 
-            if (batch.size() >= 24)
-                flushBatchToUi(batch);
+        auto hadWarmIndex = false;
+        if (auto cached = indexStore.load(); cached.has_value()
+            && cached->libraryRootPath == rootFolder.getFullPathName())
+        {
+            hadWarmIndex = !cached->entries.empty();
+            {
+                std::scoped_lock lock(delivery->mutex);
+                delivery->hadWarmIndex = hadWarmIndex;
+                if (!delivery->cancellationRollbackReady)
+                    delivery->cancellationRollbackEntries.reserve(cached->entries.size());
+            }
+            for (auto batchStart = std::size_t{ 0 }; batchStart < cached->entries.size();)
+            {
+                if (cancelled.load(std::memory_order_acquire))
+                    return;
+
+                const auto batchCount = juce::jmin(
+                    kDeliveryBatchSize, cached->entries.size() - batchStart);
+                deliverIndexedBatch(std::span<const audiocity::plugin::LibraryFileIndexEntry>(
+                    cached->entries.data() + batchStart, batchCount),
+                    true,
+                    batchStart + batchCount == cached->entries.size());
+                batchStart += batchCount;
+            }
         }
 
-        flushBatchToUi(batch);
+        audiocity::plugin::LibraryFileIndex::EntryBatchCallback freshBatchCallback;
+        if (!hadWarmIndex)
+        {
+            freshBatchCallback = [&deliverIndexedBatch](
+                const std::span<const audiocity::plugin::LibraryFileIndexEntry> indexedFiles)
+            {
+                deliverIndexedBatch(indexedFiles, false, false);
+            };
+        }
+
+        auto freshScan = audiocity::plugin::LibraryFileIndex::scanRootIncrementally(
+            rootFolder,
+            importCapabilities,
+            true,
+            [&cancelled]
+            {
+                return cancelled.load(std::memory_order_acquire);
+            },
+            std::move(freshBatchCallback));
+
+        if (!freshScan.complete())
+        {
+            std::scoped_lock lock(delivery->mutex);
+            delivery->entryLimitReached = freshScan.entryLimitReached;
+            delivery->incompleteReason = freshScan.incompleteReason;
+            delivery->replacementEntries.clear();
+            delivery->replacementReady = false;
+            if (!hadWarmIndex)
+                delivery->pendingEntries.clear();
+            delivery->workerComplete = true;
+            return;
+        }
 
         if (cancelled.load(std::memory_order_acquire))
             return;
 
-        audiocity::plugin::PeakPreviewCacheData newCacheData;
-        newCacheData.libraryRootPath = rootFolder.getFullPathName();
-        newCacheData.entries = std::move(updatedCacheEntries);
-        peakCacheStore.save(newCacheData);
-
-        juce::MessageManager::callAsync([safeThis, scanGeneration]()
+        std::vector<SampleListEntry> freshReplacement;
+        if (hadWarmIndex)
         {
-            if (safeThis == nullptr)
-                return;
+            freshReplacement.reserve(freshScan.entries.size());
+            for (const auto& indexedFile : freshScan.entries)
+            {
+                if (cancelled.load(std::memory_order_acquire))
+                    return;
+                if (audiocity::plugin::findImportFormatDescriptorForPath(
+                        indexedFile.file.getFullPathName()) != nullptr)
+                {
+                    freshReplacement.push_back(makeListEntry(indexedFile));
+                }
+            }
+        }
 
-            auto* self = safeThis.getComponent();
-            if (scanGeneration != self->sampleScanGeneration_.load())
-                return;
+        if (cancelled.load(std::memory_order_acquire))
+            return;
+        static_cast<void>(indexStore.saveCompletedScan(rootFolder, std::move(freshScan), [&cancelled]
+        {
+            return cancelled.load(std::memory_order_acquire);
+        }));
+        if (cancelled.load(std::memory_order_acquire))
+            return;
 
-            self->sampleScanInProgress_.store(false, std::memory_order_relaxed);
-        });
+        {
+            std::scoped_lock lock(delivery->mutex);
+            if (hadWarmIndex)
+            {
+                delivery->replacementEntries = std::move(freshReplacement);
+                delivery->replacementReadIndex = 0;
+                delivery->replacementReady = true;
+            }
+            delivery->workerComplete = true;
+        }
     });
 
     if (!submitted)
+    {
+        {
+            std::scoped_lock lock(delivery->mutex);
+            if (delivery->cancellationRollbackReady)
+                allSampleEntries_ = std::move(delivery->cancellationRollbackEntries);
+        }
+        sampleScanDelivery_.reset();
         sampleScanInProgress_.store(false, std::memory_order_relaxed);
+        sampleBrowserSortOrder_.clear();
+        sampleBrowserSortOrderDirty_ = true;
+        refreshBrowserEntryLibraryFlags();
+        rebuildVisibleSampleList();
+    }
+}
+
+void AudiocityAudioProcessorEditor::drainSampleScanResults()
+{
+    const auto delivery = sampleScanDelivery_;
+    if (delivery == nullptr)
+        return;
+
+    constexpr auto kMaximumEntriesPerTick = std::size_t{ 2048 };
+    std::vector<SampleListEntry> appendedEntries;
+    std::vector<SampleListEntry> replacementEntries;
+    appendedEntries.reserve(kMaximumEntriesPerTick);
+    replacementEntries.reserve(kMaximumEntriesPerTick);
+    auto replacementFinished = false;
+    auto scanFinished = false;
+    auto entryLimitReached = false;
+    auto hadWarmIndex = false;
+    auto cancellationRollbackReady = false;
+    std::vector<SampleListEntry> cancellationRollbackEntries;
+    auto incompleteReason = audiocity::plugin::LibraryFileIndexScanResult::IncompleteReason::none;
+    {
+        std::scoped_lock lock(delivery->mutex);
+        while (!delivery->pendingEntries.empty()
+               && appendedEntries.size() < kMaximumEntriesPerTick)
+        {
+            appendedEntries.push_back(std::move(delivery->pendingEntries.front()));
+            delivery->pendingEntries.pop_front();
+        }
+
+        if (delivery->pendingEntries.empty() && delivery->replacementReady)
+        {
+            while (delivery->replacementReadIndex < delivery->replacementEntries.size()
+                   && replacementEntries.size() < kMaximumEntriesPerTick)
+            {
+                replacementEntries.push_back(std::move(
+                    delivery->replacementEntries[delivery->replacementReadIndex++]));
+            }
+            if (delivery->replacementReadIndex == delivery->replacementEntries.size())
+            {
+                delivery->replacementEntries.clear();
+                delivery->replacementReadIndex = 0;
+                delivery->replacementReady = false;
+                replacementFinished = true;
+            }
+        }
+
+        scanFinished = delivery->workerComplete
+            && delivery->pendingEntries.empty()
+            && !delivery->replacementReady;
+        entryLimitReached = delivery->entryLimitReached;
+        hadWarmIndex = delivery->hadWarmIndex;
+        incompleteReason = delivery->incompleteReason;
+        if (scanFinished
+            && incompleteReason
+                != audiocity::plugin::LibraryFileIndexScanResult::IncompleteReason::none
+            && delivery->cancellationRollbackReady)
+        {
+            cancellationRollbackReady = true;
+            cancellationRollbackEntries = std::move(
+                delivery->cancellationRollbackEntries);
+        }
+    }
+
+    if (!appendedEntries.empty())
+    {
+        const auto firstSourceIndex = static_cast<int>(allSampleEntries_.size());
+        allSampleEntries_.insert(allSampleEntries_.end(),
+            std::make_move_iterator(appendedEntries.begin()),
+            std::make_move_iterator(appendedEntries.end()));
+        sampleBrowserSortOrderDirty_ = true;
+
+        const auto hasActiveFilter = sampleBrowserFilterEditor_.getText().isNotEmpty()
+            || sampleBrowserFavoritesOnlyToggle_.getToggleState()
+            || sampleBrowserRecentOnlyToggle_.getToggleState()
+            || sampleBrowserTagFilterCombo_.getSelectedId() > 1;
+        if (firstSourceIndex == 0)
+        {
+            refreshBrowserEntryLibraryFlags();
+            rebuildVisibleSampleList();
+        }
+        else if (hasActiveFilter)
+        {
+            // The first batch remains interactive while the scan continues. Rebuilding the
+            // accumulated, sorted filtered view for every delivery batch makes a large scan
+            // quadratic on the message thread; reconcile it once when the scan completes.
+            sampleBrowserCountLabel_.setText(
+                juce::String(visibleSampleEntryIndices_.size()) + " shown / "
+                    + juce::String(allSampleEntries_.size()) + " indexed (indexing...)",
+                juce::dontSendNotification);
+        }
+        else
+        {
+            for (auto index = firstSourceIndex; index < static_cast<int>(allSampleEntries_.size()); ++index)
+                visibleSampleEntryIndices_.push_back(index);
+            sampleBrowserListBox_.updateContent();
+            sampleBrowserListBox_.repaint();
+            sampleBrowserCountLabel_.setText(
+                juce::String(allSampleEntries_.size()) + " items (indexing...)",
+                juce::dontSendNotification);
+        }
+    }
+
+    if (!replacementEntries.empty())
+    {
+        sampleScanReplacementStaging_.insert(sampleScanReplacementStaging_.end(),
+            std::make_move_iterator(replacementEntries.begin()),
+            std::make_move_iterator(replacementEntries.end()));
+    }
+
+    if (replacementFinished)
+    {
+        allSampleEntries_ = std::move(sampleScanReplacementStaging_);
+        sampleScanReplacementStaging_.clear();
+        sampleBrowserSortOrderDirty_ = true;
+    }
+
+    if (!scanFinished)
+        return;
+
+    if (incompleteReason != audiocity::plugin::LibraryFileIndexScanResult::IncompleteReason::none)
+    {
+        sampleScanReplacementStaging_.clear();
+        if (cancellationRollbackReady)
+        {
+            allSampleEntries_ = std::move(cancellationRollbackEntries);
+            sampleBrowserSortOrder_.clear();
+            sampleBrowserSortOrderDirty_ = true;
+        }
+        else if (!hadWarmIndex)
+        {
+            allSampleEntries_.clear();
+            visibleSampleEntryIndices_.clear();
+            sampleBrowserSortOrder_.clear();
+            sampleBrowserSortOrderDirty_ = true;
+        }
+    }
+
+    if (sampleScanDelivery_ == delivery)
+        sampleScanDelivery_.reset();
+    sampleScanInProgress_.store(false, std::memory_order_relaxed);
+    refreshBrowserEntryLibraryFlags();
+    rebuildVisibleSampleList();
+    if (entryLimitReached)
+    {
+        sampleBrowserCountLabel_.setText(
+            juce::String(allSampleEntries_.size()) + " items (scan incomplete: 100,000-item safety limit reached)",
+            juce::dontSendNotification);
+    }
+    else if (incompleteReason != audiocity::plugin::LibraryFileIndexScanResult::IncompleteReason::none)
+    {
+        sampleBrowserCountLabel_.setText(
+            juce::String(allSampleEntries_.size()) + " items (scan incomplete)",
+            juce::dontSendNotification);
+    }
+    queueVisibleSamplePreviews();
 }
 
 void AudiocityAudioProcessorEditor::refreshSampleBrowserBookmarks()
@@ -8634,6 +8949,8 @@ void AudiocityAudioProcessorEditor::refreshBrowserEntryLibraryFlags()
         item.tags = metadata.getTags(path);
         item.tagsLower = item.tags.joinIntoString(" ").toLowerCase();
     }
+    sampleBrowserSortOrderDirty_ = true;
+    refreshSampleBrowserTagFilter();
 }
 
 void AudiocityAudioProcessorEditor::updateBrowserLibraryControls()
@@ -8731,8 +9048,45 @@ void AudiocityAudioProcessorEditor::applySelectedBrowserTags()
 void AudiocityAudioProcessorEditor::rebuildVisibleSampleList()
 {
     visibleSampleEntryIndices_.clear();
-    refreshBrowserEntryLibraryFlags();
-    refreshSampleBrowserTagFilter();
+
+    const auto sortMode = sampleBrowserSortCombo_.getSelectedId();
+    if (sampleBrowserSortOrderDirty_
+        || sampleBrowserSortOrder_.size() != allSampleEntries_.size())
+    {
+        sampleBrowserSortOrder_.resize(allSampleEntries_.size());
+        for (std::size_t index = 0; index < sampleBrowserSortOrder_.size(); ++index)
+            sampleBrowserSortOrder_[index] = static_cast<int>(index);
+
+        std::sort(sampleBrowserSortOrder_.begin(), sampleBrowserSortOrder_.end(),
+            [this, sortMode](const int lhs, const int rhs)
+            {
+                const auto& a = allSampleEntries_[static_cast<std::size_t>(lhs)];
+                const auto& b = allSampleEntries_[static_cast<std::size_t>(rhs)];
+
+                if (sortMode == 3)
+                {
+                    if (a.recentRank != b.recentRank)
+                    {
+                        if (a.recentRank < 0)
+                            return false;
+                        if (b.recentRank < 0)
+                            return true;
+                        return a.recentRank < b.recentRank;
+                    }
+                }
+                else if (sortMode == 2)
+                {
+                    if (a.relativePathLower == b.relativePathLower)
+                        return a.fileNameLower < b.fileNameLower;
+                    return a.relativePathLower < b.relativePathLower;
+                }
+
+                if (a.fileNameLower == b.fileNameLower)
+                    return a.relativePathLower < b.relativePathLower;
+                return a.fileNameLower < b.fileNameLower;
+            });
+        sampleBrowserSortOrderDirty_ = false;
+    }
 
     const auto needle = sampleBrowserFilterEditor_.getText().trim().toLowerCase();
     const auto tagNeedle = needle.startsWithChar('#') ? needle.substring(1) : needle;
@@ -8743,7 +9097,7 @@ void AudiocityAudioProcessorEditor::rebuildVisibleSampleList()
     const auto recentOnly = sampleBrowserRecentOnlyToggle_.getToggleState();
     int favoriteCount = 0;
     int recentCount = 0;
-    for (int i = 0; i < static_cast<int>(allSampleEntries_.size()); ++i)
+    for (const auto i : sampleBrowserSortOrder_)
     {
         const auto& item = allSampleEntries_[static_cast<std::size_t>(i)];
         if (item.isFavorite)
@@ -8751,9 +9105,8 @@ void AudiocityAudioProcessorEditor::rebuildVisibleSampleList()
         if (item.isRecent)
             ++recentCount;
 
-        const auto matches = needle.isEmpty()
-            || item.fileNameLower.contains(needle)
-            || item.relativePathLower.contains(needle)
+        const auto matches = audiocity::plugin::LibraryFileIndex::matchesSearch(
+                item.fileNameLower, item.relativePathLower, needle)
             || (!tagNeedle.isEmpty() && item.tagsLower.contains(tagNeedle));
 
         const auto matchesLibraryFilters = (!favoritesOnly || item.isFavorite)
@@ -8772,41 +9125,6 @@ void AudiocityAudioProcessorEditor::rebuildVisibleSampleList()
             visibleSampleEntryIndices_.push_back(i);
     }
 
-    const auto sortMode = sampleBrowserSortCombo_.getSelectedId();
-    std::sort(visibleSampleEntryIndices_.begin(), visibleSampleEntryIndices_.end(),
-        [this, sortMode](const int lhs, const int rhs)
-        {
-            const auto& a = allSampleEntries_[static_cast<std::size_t>(lhs)];
-            const auto& b = allSampleEntries_[static_cast<std::size_t>(rhs)];
-
-            if (sortMode == 3)
-            {
-                if (a.recentRank != b.recentRank)
-                {
-                    if (a.recentRank < 0)
-                        return false;
-                    if (b.recentRank < 0)
-                        return true;
-                    return a.recentRank < b.recentRank;
-                }
-
-                if (a.fileNameLower == b.fileNameLower)
-                    return a.relativePathLower < b.relativePathLower;
-                return a.fileNameLower < b.fileNameLower;
-            }
-
-            if (sortMode == 2)
-            {
-                if (a.relativePathLower == b.relativePathLower)
-                    return a.fileNameLower < b.fileNameLower;
-                return a.relativePathLower < b.relativePathLower;
-            }
-
-            if (a.fileNameLower == b.fileNameLower)
-                return a.relativePathLower < b.relativePathLower;
-            return a.fileNameLower < b.fileNameLower;
-        });
-
     sampleBrowserListBox_.updateContent();
     sampleBrowserListBox_.repaint();
 
@@ -8823,6 +9141,236 @@ void AudiocityAudioProcessorEditor::rebuildVisibleSampleList()
     }
 
     updateBrowserLibraryControls();
+}
+
+void AudiocityAudioProcessorEditor::restartVisibleSamplePreviews()
+{
+    ++samplePreviewGeneration_;
+    samplePreviewWorker_.cancelAll();
+    samplePreviewBuildInProgress_.store(false, std::memory_order_release);
+    for (auto& entry : allSampleEntries_)
+    {
+        if (entry.previewState == SampleListEntry::PreviewState::queued)
+            entry.previewState = SampleListEntry::PreviewState::missing;
+    }
+    queueVisibleSamplePreviews();
+}
+
+void AudiocityAudioProcessorEditor::queueVisibleSamplePreviews()
+{
+    if (sampleRootFolderPath_.isEmpty()
+        || samplePreviewBuildInProgress_.exchange(true, std::memory_order_acq_rel))
+    {
+        return;
+    }
+
+    struct PreviewRequest
+    {
+        int sourceIndex = -1;
+        juce::File file;
+        std::string cacheKey;
+        juce::int64 sizeBytes = 0;
+        juce::int64 modificationTimeMs = 0;
+    };
+
+    std::vector<PreviewRequest> requests;
+    constexpr auto kMaximumPreviewBatch = 16;
+    requests.reserve(kMaximumPreviewBatch);
+
+    const auto rowCount = static_cast<int>(visibleSampleEntryIndices_.size());
+    auto firstVisibleRow = sampleBrowserListBox_.getRowContainingPosition(1, 1);
+    if (firstVisibleRow < 0)
+        firstVisibleRow = 0;
+    const auto visibleRowCount = juce::jmax(
+        1,
+        (sampleBrowserListBox_.getHeight() / juce::jmax(1, sampleBrowserListBox_.getRowHeight())) + 2);
+    const auto lastVisibleRow = juce::jmin(rowCount, firstVisibleRow + visibleRowCount);
+
+    std::vector<int> candidateRows;
+    candidateRows.reserve(kMaximumPreviewBatch);
+    const auto addCandidateRow = [&candidateRows, rowCount](const int row)
+    {
+        if (row >= 0 && row < rowCount
+            && std::find(candidateRows.begin(), candidateRows.end(), row) == candidateRows.end())
+        {
+            candidateRows.push_back(row);
+        }
+    };
+    const auto selectedRow = sampleBrowserListBox_.getSelectedRow();
+    addCandidateRow(selectedRow);
+    for (auto row = firstVisibleRow;
+         row < lastVisibleRow && candidateRows.size() < kMaximumPreviewBatch;
+         ++row)
+    {
+        addCandidateRow(row);
+    }
+    for (auto distance = 1;
+         selectedRow >= 0 && candidateRows.size() < kMaximumPreviewBatch;
+         ++distance)
+    {
+        const auto before = selectedRow - distance;
+        const auto after = selectedRow + distance;
+        addCandidateRow(before);
+        if (candidateRows.size() < kMaximumPreviewBatch)
+            addCandidateRow(after);
+        if (before < 0 && after >= rowCount)
+            break;
+    }
+
+    for (const auto row : candidateRows)
+    {
+        const auto sourceIndex = visibleSampleEntryIndices_[static_cast<std::size_t>(row)];
+        auto& entry = allSampleEntries_[static_cast<std::size_t>(sourceIndex)];
+        if (entry.previewState != SampleListEntry::PreviewState::missing)
+            continue;
+
+        entry.previewState = SampleListEntry::PreviewState::queued;
+        requests.push_back({ sourceIndex,
+                             entry.file,
+                             entry.previewCacheKey,
+                             entry.fileSizeBytes,
+                             entry.modificationTimeMs });
+    }
+
+    if (requests.empty())
+    {
+        samplePreviewBuildInProgress_.store(false, std::memory_order_release);
+        return;
+    }
+
+    const auto previewGeneration = samplePreviewGeneration_.load(std::memory_order_acquire);
+    const auto rootPath = sampleRootFolderPath_;
+    const auto cacheStore = audiocity::plugin::PeakPreviewCacheStore::getCacheFileForRoot(juce::File(rootPath));
+    auto safeThis = juce::Component::SafePointer<AudiocityAudioProcessorEditor>(this);
+
+    const auto submitted = samplePreviewWorker_.submit(
+        [safeThis, previewGeneration, rootPath, cacheStore, requests = std::move(requests)](
+            const audiocity::plugin::OwnedJobWorker::CancellationFlag& cancelled) mutable
+    {
+        struct PreviewResult
+        {
+            PreviewRequest request;
+            SamplePreviewData preview;
+            juce::int64 currentSizeBytes = 0;
+            juce::int64 currentModificationTimeMs = 0;
+            bool ok = false;
+        };
+
+        audiocity::plugin::PeakPreviewCacheStore store(cacheStore);
+        auto cacheData = store.load();
+        if (!cacheData.libraryRootPath.equalsIgnoreCase(rootPath))
+        {
+            cacheData.libraryRootPath = rootPath;
+            cacheData.entries.clear();
+        }
+
+        std::vector<PreviewResult> results;
+        results.reserve(requests.size());
+        for (auto& request : requests)
+        {
+            if (cancelled.load(std::memory_order_acquire))
+                return;
+
+            PreviewResult result;
+            result.request = request;
+            if (request.file.existsAsFile())
+            {
+                result.currentSizeBytes = request.file.getSize();
+                result.currentModificationTimeMs = request.file.getLastModificationTime().toMilliseconds();
+                if (const auto cacheIt = cacheData.entries.find(request.cacheKey);
+                    cacheIt != cacheData.entries.end()
+                        && audiocity::plugin::isPeakPreviewCacheEntryCurrent(cacheIt->second, request.file))
+                {
+                    result.preview.peaks = cacheIt->second.peaks;
+                    result.preview.metadataLine = cacheIt->second.metadataLine;
+                    result.preview.loopFormatBadge = cacheIt->second.loopFormatBadge;
+                    result.preview.loopMetadataLine = cacheIt->second.loopMetadataLine;
+                    cacheIt->second.lastAccessTimeMs = juce::Time::currentTimeMillis();
+                    result.ok = true;
+                }
+                else
+                {
+                    cacheData.entries.erase(request.cacheKey);
+                    result.preview = buildPreviewAndMetadata(request.file, cancelled);
+                    result.ok = !cancelled.load(std::memory_order_acquire)
+                        && result.preview.metadataLine.isNotEmpty();
+                }
+            }
+
+            if (result.ok)
+            {
+                audiocity::plugin::PeakPreviewCacheEntry cacheEntry;
+                cacheEntry.fileSizeBytes = result.currentSizeBytes;
+                cacheEntry.fileModificationTimeMs = result.currentModificationTimeMs;
+                cacheEntry.lastAccessTimeMs = juce::Time::currentTimeMillis();
+                cacheEntry.peaks = result.preview.peaks;
+                cacheEntry.metadataLine = result.preview.metadataLine;
+                cacheEntry.loopFormatBadge = result.preview.loopFormatBadge;
+                cacheEntry.loopMetadataLine = result.preview.loopMetadataLine;
+                cacheData.entries[result.request.cacheKey] = std::move(cacheEntry);
+            }
+
+            results.push_back(std::move(result));
+        }
+
+        if (cancelled.load(std::memory_order_acquire))
+            return;
+
+        store.save(cacheData);
+        juce::MessageManager::callAsync(
+            [safeThis, previewGeneration, results = std::move(results)]() mutable
+        {
+            if (safeThis == nullptr)
+                return;
+
+            auto* self = safeThis.getComponent();
+            if (previewGeneration != self->samplePreviewGeneration_.load(std::memory_order_acquire))
+                return;
+
+            for (auto& result : results)
+            {
+                if (result.request.sourceIndex < 0
+                    || result.request.sourceIndex >= static_cast<int>(self->allSampleEntries_.size()))
+                {
+                    continue;
+                }
+
+                auto& entry = self->allSampleEntries_[static_cast<std::size_t>(result.request.sourceIndex)];
+                if (entry.previewCacheKey != result.request.cacheKey)
+                    continue;
+
+                if (!result.ok)
+                {
+                    entry.previewState = SampleListEntry::PreviewState::failed;
+                    entry.metadataLine = "Preview unavailable";
+                    continue;
+                }
+
+                entry.fileSizeBytes = result.currentSizeBytes;
+                entry.modificationTimeMs = result.currentModificationTimeMs;
+                entry.previewPeaks = std::move(result.preview.peaks);
+                entry.metadataLine = std::move(result.preview.metadataLine);
+                entry.loopFormatBadge = std::move(result.preview.loopFormatBadge);
+                entry.loopMetadataLine = std::move(result.preview.loopMetadataLine);
+                entry.previewState = SampleListEntry::PreviewState::ready;
+            }
+
+            self->samplePreviewBuildInProgress_.store(false, std::memory_order_release);
+            self->sampleBrowserListBox_.repaint();
+            self->queueVisibleSamplePreviews();
+        });
+    });
+
+    if (!submitted)
+    {
+        samplePreviewBuildInProgress_.store(false, std::memory_order_release);
+        for (const auto& request : requests)
+        {
+            if (request.sourceIndex >= 0 && request.sourceIndex < static_cast<int>(allSampleEntries_.size()))
+                allSampleEntries_[static_cast<std::size_t>(request.sourceIndex)].previewState =
+                    SampleListEntry::PreviewState::missing;
+        }
+    }
 }
 
 void AudiocityAudioProcessorEditor::loadSampleFromBrowserRow(const int row)
@@ -9847,9 +10395,7 @@ void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawRect(overlay, 2);
     g.setColour(uiTextStrongColour().withAlpha(0.95f));
     g.setFont(14.0f);
-    const auto dropText = processor_.isRexRuntimeAvailable()
-        ? juce::String("Drop .wav, .aiff, .sfz, .nki, .rex, or .rx2 to open")
-        : juce::String("Drop .wav, .aiff, .sfz, or .nki to open");
+    const auto dropText = juce::String("Drop a supported sample or instrument to open");
     g.drawText(dropText, overlay, juce::Justification::centred);
 }
 
@@ -11071,7 +11617,9 @@ void AudiocityAudioProcessorEditor::setupTooltips()
     presetDeleteButton_.setTooltip(
         "Delete Preset - Remove selected preset file");
     loadButton_.setTooltip(
-        processor_.isRexRuntimeAvailable() ? "Load Sample, SFZ, or REX (Ctrl+O)" : "Load Sample (Ctrl+O)");
+        audiocity::plugin::buildImportChooserTitle(
+            audiocity::plugin::currentImportFormatCapabilities(processor_.isRexRuntimeAvailable()))
+        + " (Ctrl+O)");
     diagnosticsToggleButton_.setTooltip(
         "Show or hide preload, stream, and voice diagnostics (Ctrl+Alt+D)");
     copyImportDiagnosticsButton_.setTooltip(
@@ -11378,11 +11926,10 @@ bool AudiocityAudioProcessorEditor::isInterestedInFileDrag(const juce::StringArr
         else if (path.startsWithIgnoreCase("file://"))
             path = path.substring(7).replace("/", "\\");
 
-        const auto ext = juce::File(path).getFileExtension().toLowerCase();
         if constexpr (kVerboseDragDropLogging)
-            DBG("[DnD]   normalized=\"" + path + "\"  ext=\"" + ext + "\"");
-        if (ext == ".sfz" || ext == ".nki" || ext == ".wav" || ext == ".aiff" || ext == ".aif"
-            || (processor_.isRexRuntimeAvailable() && (ext == ".rex" || ext == ".rx2")))
+            DBG("[DnD]   normalized=\"" + path + "\"  ext=\""
+                + juce::File(path).getFileExtension().toLowerCase() + "\"");
+        if (audiocity::plugin::isKnownImportPath(path))
         {
             if constexpr (kVerboseDragDropLogging)
                 DBG("[DnD]   -> INTERESTED");
@@ -11438,11 +11985,11 @@ void AudiocityAudioProcessorEditor::filesDropped(const juce::StringArray& files,
 
 void AudiocityAudioProcessorEditor::openSampleChooser()
 {
-    const auto wildcard = processor_.isRexRuntimeAvailable()
-        ? juce::String("*.wav;*.aiff;*.aif;*.sfz;*.nki;*.rex;*.rx2")
-        : juce::String("*.wav;*.aiff;*.aif;*.sfz;*.nki");
+    const auto capabilities = audiocity::plugin::currentImportFormatCapabilities(
+        processor_.isRexRuntimeAvailable());
+    const auto wildcard = audiocity::plugin::buildImportChooserWildcard(capabilities, true);
     fileChooser_ = std::make_unique<juce::FileChooser>(
-        processor_.isRexRuntimeAvailable() ? "Open sample, SFZ, NKI, or REX" : "Open sample, SFZ, or NKI",
+        audiocity::plugin::buildImportChooserTitle(capabilities),
         juce::File{},
         wildcard);
 
@@ -11535,6 +12082,16 @@ void AudiocityAudioProcessorEditor::showPadAssignmentDialog(const int padIndex)
 }
 
 // ─── Refresh UI ────────────────────────────────────────────────────────────────
+
+void AudiocityAudioProcessorEditor::commitPendingPreloadChange()
+{
+    const auto requested = juce::jmax(256, pendingPreloadSamples_);
+    if (requested == processor_.getPreloadSamples())
+        return;
+
+    processor_.setPreloadSamples(requested);
+    refreshUI();
+}
 
 void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
 {
@@ -11725,7 +12282,11 @@ void AudiocityAudioProcessorEditor::refreshUI(const bool forceWaveformReset)
     qualityUltraButton_.setToggleState(
         processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::ultra,
         juce::dontSendNotification);
-    preloadDial_.setValue(processor_.getPreloadSamples());
+    if (!preloadDragInProgress_)
+    {
+        pendingPreloadSamples_ = processor_.getPreloadSamples();
+        preloadDial_.setValue(pendingPreloadSamples_, juce::dontSendNotification);
+    }
     masterVolumeDial_.setValue(processor_.getMasterVolume() * 100.0f);
     panDial_.setValue(processor_.getPan() * 100.0f);
     reverbMixDial_.setValue(processor_.getReverbMix() * 100.0f);

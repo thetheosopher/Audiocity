@@ -19,6 +19,9 @@
 #include "../src/engine/XmlMultisampleImporters.h"
 #include "../src/engine/BinaryMultisampleImporters.h"
 #include "../src/plugin/CcLearnDial.h"
+#include "../src/plugin/AudioStateCodec.h"
+#include "../src/plugin/ImportFormatRegistry.h"
+#include "../src/plugin/ImportedAssetResolver.h"
 #include "../src/plugin/LibraryFileIndex.h"
 #include "../src/plugin/LibraryMetadata.h"
 #include "../src/plugin/OwnedJobWorker.h"
@@ -31,6 +34,7 @@
 #include "../src/plugin/ProgramMappingUndoHistory.h"
 #include "../src/plugin/SampleBrowserTooltip.h"
 
+#include <algorithm>
 #include <cmath>
 #include <array>
 #include <atomic>
@@ -39,10 +43,12 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <functional>
 #include <limits>
 #include <mutex>
 #include <set>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -2832,9 +2838,17 @@ bool runSfzImportRoundRobinPlaybackTest()
         return selectedZone;
     };
 
-    return triggerAndReadZone() == 1
-        && triggerAndReadZone() == 0
-        && triggerAndReadZone() == 1;
+    const auto firstSelected = triggerAndReadZone();
+    const auto secondSelected = triggerAndReadZone();
+    const auto thirdSelected = triggerAndReadZone();
+    if (firstSelected != 1 || secondSelected != 0 || thirdSelected != 1)
+    {
+        std::fprintf(stderr, "SFZ round-robin zones: %d, %d, %d\n",
+                     firstSelected, secondSelected, thirdSelected);
+        return false;
+    }
+
+    return true;
 }
 
 bool runSfzImportSeqModeRandomTest()
@@ -7564,10 +7578,8 @@ bool runBackgroundImportWorkerPublishContractTest()
         && headerText.contains("OwnedJobWorker backgroundImportWorker_")
         && headerText.contains("void cancelBackgroundInstrumentLoad()")
         && headerText.contains("const juce::File& searchFolder = {}")
-        && sourceText.contains("case ImportedProgramFormat::unknown:")
-        && sourceText.contains("case ImportedProgramFormat::sfz:")
-        && sourceText.contains("case ImportedProgramFormat::rex:")
-        && sourceText.contains("case ImportedProgramFormat::nki:")
+        && sourceText.contains("return audiocity::plugin::supportsBackgroundImport(format);")
+        && startFunctionBody.contains("canImportInstrumentInBackground(format)")
         && startFunctionBody.contains("backgroundImportWorker_.submit(")
         && startFunctionBody.contains("CancellationFlag& cancelled")
         && startFunctionBody.contains("cancelled.load(std::memory_order_acquire)")
@@ -13000,6 +13012,141 @@ bool runLibraryMetadataBookmarksTest()
     return true;
 }
 
+bool runImportFormatRegistryConsistencyTest()
+{
+    using namespace audiocity::plugin;
+
+    const auto descriptors = importFormatDescriptors();
+    if (descriptors.size() != 18)
+        return false;
+
+    const ImportFormatCapabilities unavailableCapabilities{ false, false };
+    const ImportFormatCapabilities availableCapabilities{ true, true };
+    juce::StringArray allPatterns;
+    allPatterns.addTokens(buildImportChooserWildcard(unavailableCapabilities, true), ";", {});
+    juce::StringArray availablePatterns;
+    availablePatterns.addTokens(buildImportChooserWildcard(unavailableCapabilities, false), ";", {});
+
+    std::set<int> instrumentFormats;
+    std::set<std::string> stateTokens;
+    for (const auto& descriptor : descriptors)
+    {
+        if (descriptor.badge.empty()
+            || descriptor.description.empty()
+            || descriptor.extensionCount == 0
+            || descriptor.extensionCount > descriptor.extensions.size())
+        {
+            return false;
+        }
+
+        const auto representativePath = descriptor.requiredFileName.empty()
+            ? (juce::String("Fixture") + descriptor.extensions[0].data())
+            : juce::String(descriptor.requiredFileName.data());
+        const auto* matched = findImportFormatDescriptorForPath(representativePath);
+        if (matched != &descriptor
+            || !isKnownImportPath(representativePath)
+            || isMappingImportPath(representativePath) != descriptor.supportsMappingDrag)
+        {
+            return false;
+        }
+
+        const auto available = isImportFormatAvailable(descriptor, unavailableCapabilities);
+        const auto expectedAvailable = descriptor.availability == ImportFormatAvailability::always;
+        const auto expectedAvailableWithCapabilities =
+            descriptor.availability != ImportFormatAvailability::diagnosticOnly;
+        if (descriptor.availability == ImportFormatAvailability::diagnosticOnly
+            && (descriptor.unavailableMessage.empty()
+                || descriptor.supportsMappingDrag
+                || descriptor.supportsBackgroundImport))
+        {
+            return false;
+        }
+        if (available != expectedAvailable
+            || isImportPathAvailable(representativePath, unavailableCapabilities) != expectedAvailable
+            || isImportPathAvailable(representativePath, availableCapabilities)
+                != expectedAvailableWithCapabilities)
+        {
+            return false;
+        }
+
+        const auto unavailableMessage = importPathUnavailableMessage(
+            representativePath, unavailableCapabilities);
+        if (expectedAvailable != unavailableMessage.isEmpty())
+            return false;
+
+        if (descriptor.isInstrument)
+        {
+            if (descriptor.stateToken.empty()
+                || !instrumentFormats.insert(static_cast<int>(descriptor.format)).second
+                || !stateTokens.insert(std::string(descriptor.stateToken)).second
+                || findImportFormatDescriptor(descriptor.format) != &descriptor
+                || parseImportedProgramFormatToken(descriptor.stateToken.data()) != descriptor.format
+                || importedProgramFormatToken(descriptor.format) != descriptor.stateToken.data()
+                || supportsBackgroundImport(descriptor.format) != descriptor.supportsBackgroundImport)
+            {
+                return false;
+            }
+        }
+
+        if (!descriptor.requiredFileName.empty())
+        {
+            if (!allPatterns.contains(descriptor.requiredFileName.data())
+                || availablePatterns.contains(descriptor.requiredFileName.data()) != expectedAvailable)
+            {
+                return false;
+            }
+            continue;
+        }
+
+        for (std::size_t extensionIndex = 0;
+             extensionIndex < descriptor.extensionCount;
+             ++extensionIndex)
+        {
+            const auto pattern = "*" + juce::String(descriptor.extensions[extensionIndex].data());
+            if (!allPatterns.contains(pattern)
+                || availablePatterns.contains(pattern) != expectedAvailable)
+            {
+                return false;
+            }
+        }
+    }
+
+    const auto* bento = findImportFormatDescriptorForPath("preset.xml");
+    const auto diagnosticBrowserRoot = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_diagnostic_format_browser", "");
+    const auto diagnosticBrowserFile = diagnosticBrowserRoot.getChildFile("Patch.sxt");
+    const auto createdDiagnosticFixture = diagnosticBrowserRoot.createDirectory()
+        && diagnosticBrowserFile.replaceWithText("CAT NN-XT");
+    const auto browserIncludesDiagnostic = createdDiagnosticFixture
+        && LibraryFileIndex::isSupportedFile(
+            diagnosticBrowserFile, availableCapabilities, true);
+    const auto browserExcludesUnavailable = createdDiagnosticFixture
+        && !LibraryFileIndex::isSupportedFile(
+            diagnosticBrowserFile, availableCapabilities, false);
+    diagnosticBrowserRoot.deleteRecursively();
+
+    return instrumentFormats.size() == 16
+        && stateTokens.size() == 16
+        && bento != nullptr
+        && bento->format == ImportedProgramFormat::bento1010
+        && findImportFormatDescriptorForPath("NotPreset.xml") == nullptr
+        && allPatterns.contains("preset.xml")
+        && !allPatterns.contains("*.xml")
+        && !availablePatterns.contains("*.rex")
+        && !availablePatterns.contains("*.rx2")
+        && !availablePatterns.contains("*.ncw")
+        && !availablePatterns.contains("*.sxt")
+        && isKnownImportPath("Patch.sxt")
+        && !isMappingImportPath("Patch.sxt")
+        && !supportsBackgroundImport(ImportedProgramFormat::nnxt)
+        && browserIncludesDiagnostic
+        && browserExcludesUnavailable
+        && buildImportChooserTitle(unavailableCapabilities).contains("REX")
+        && buildImportChooserTitle(unavailableCapabilities).contains("NCW")
+        && buildImportChooserTitle(unavailableCapabilities).contains("NNXT")
+        && importPathUnavailableMessage("Patch.sxt", availableCapabilities).contains("not yet supported");
+}
+
 bool runLibraryFileIndexScanTest()
 {
     using audiocity::plugin::LibraryFileIndex;
@@ -13077,6 +13224,415 @@ bool runLibraryFileIndexScanTest()
     return ok;
 }
 
+bool runLibraryFileIndexPersistentStoreTest()
+{
+    using audiocity::plugin::LibraryFileIndexData;
+    using audiocity::plugin::LibraryFileIndexEntry;
+    using audiocity::plugin::LibraryFileIndexStore;
+
+    const auto tempRoot = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_library_index_store", "");
+    const auto libraryA = tempRoot.getChildFile("LibraryA");
+    const auto libraryB = tempRoot.getChildFile("LibraryB");
+    if (!libraryA.createDirectory() || !libraryB.createDirectory())
+        return false;
+
+    if (LibraryFileIndexStore::getCacheFileForRoot(libraryA)
+        == LibraryFileIndexStore::getCacheFileForRoot(libraryB))
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+
+    const auto cacheFile = tempRoot.getChildFile("index.acli");
+    LibraryFileIndexStore store(cacheFile);
+    LibraryFileIndexData source;
+    source.libraryRootPath = libraryA.getFullPathName();
+    LibraryFileIndexEntry kick;
+    kick.relativePath = "Drums/Kick.wav";
+    kick.sizeBytes = 4096;
+    kick.modificationTimeMs = 123456;
+    source.entries.push_back(kick);
+    LibraryFileIndexEntry patch;
+    patch.relativePath = "Patches/Kit.sfz";
+    patch.sizeBytes = 8192;
+    patch.modificationTimeMs = 234567;
+    patch.isInstrument = true;
+    source.entries.push_back(patch);
+
+    if (!store.save(source))
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+
+    const auto restored = store.load();
+    if (!restored.has_value()
+        || restored->libraryRootPath != libraryA.getFullPathName()
+        || restored->entries.size() != 2
+        || restored->entries[0].relativePath != kick.relativePath
+        || restored->entries[0].file != libraryA.getChildFile(kick.relativePath)
+        || restored->entries[0].sizeBytes != kick.sizeBytes
+        || restored->entries[1].relativePath != patch.relativePath
+        || !restored->entries[1].isInstrument)
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+
+    auto cancelledReplacement = source;
+    cancelledReplacement.entries[0].sizeBytes = 999999;
+    auto cancellationChecks = 0;
+    if (store.save(cancelledReplacement, [&cancellationChecks]
+        {
+            return ++cancellationChecks >= 3;
+        }))
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+    const auto preservedAfterCancelledSave = store.load();
+    if (!preservedAfterCancelledSave.has_value()
+        || preservedAfterCancelledSave->entries.size() != source.entries.size()
+        || preservedAfterCancelledSave->entries[0].sizeBytes != kick.sizeBytes)
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+
+    juce::MemoryBlock encoded;
+    if (!cacheFile.loadFileAsData(encoded) || encoded.getSize() < 40)
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+    auto* encodedBytes = static_cast<juce::uint8*>(encoded.getData());
+    encodedBytes[encoded.getSize() - 1] ^= 0x5a;
+    if (!cacheFile.replaceWithData(encoded.getData(), encoded.getSize()))
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+
+    LibraryFileIndexData destination;
+    destination.libraryRootPath = "sentinel";
+    destination.entries.push_back(kick);
+    if (store.load(destination)
+        || destination.libraryRootPath != "sentinel"
+        || destination.entries.size() != 1)
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+
+    source.entries[0].relativePath = "../escape.wav";
+    const auto rejectedUnsafePath = !store.save(source);
+    juce::String overDeepPath;
+    for (auto component = 0; component < 257; ++component)
+        overDeepPath += "d/";
+    source.entries[0].relativePath = overDeepPath + "sample.wav";
+    const auto rejectedOverDeepPath = !store.save(source);
+    tempRoot.deleteRecursively();
+    return rejectedUnsafePath && rejectedOverDeepPath;
+}
+
+bool runLibraryFileIndex50kScanSearchIntegrationTest()
+{
+    using audiocity::plugin::LibraryFileIndex;
+
+   #if defined(NDEBUG)
+    constexpr auto kEntryCount = std::size_t{ 50000 };
+   #else
+    // Debug exercises the same real traversal, batching, search, and cancellation
+    // paths without turning every local test run into a filesystem benchmark.
+    constexpr auto kEntryCount = std::size_t{ 4096 };
+   #endif
+    constexpr auto kFilesPerDirectory = std::size_t{ 500 };
+    constexpr auto kMaximumBatchSize = std::size_t{ 256 };
+    const auto tempRoot = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_library_scan_50k", "");
+    const auto libraryRoot = tempRoot.getChildFile("Library");
+    struct DirectoryCleanup final
+    {
+        juce::File directory;
+        ~DirectoryCleanup() { static_cast<void>(directory.deleteRecursively()); }
+    } cleanup{ tempRoot };
+
+    if (!libraryRoot.createDirectory())
+        return false;
+
+    const auto setupStart = juce::Time::getMillisecondCounterHiRes();
+    juce::File currentDirectory;
+    for (std::size_t index = 0; index < kEntryCount; ++index)
+    {
+        if (index % kFilesPerDirectory == 0)
+        {
+            currentDirectory = libraryRoot.getChildFile(
+                "Bank_" + juce::String(static_cast<juce::int64>(index / kFilesPerDirectory)));
+            if (!currentDirectory.createDirectory())
+                return false;
+        }
+
+        const auto file = currentDirectory.getChildFile(
+            "Sample_" + juce::String(static_cast<juce::int64>(index)).paddedLeft('0', 5) + ".wav");
+        std::ofstream output(file.getFullPathName().toStdString(), std::ios::binary | std::ios::trunc);
+        output.put(static_cast<char>(index & 0xffu));
+        if (!output.good())
+            return false;
+    }
+    const auto setupDurationMs = juce::Time::getMillisecondCounterHiRes() - setupStart;
+
+    auto firstDeliveryMs = -1.0;
+    auto deliveredEntries = std::size_t{ 0 };
+    auto largestBatch = std::size_t{ 0 };
+    const auto scanStart = juce::Time::getMillisecondCounterHiRes();
+    auto scan = LibraryFileIndex::scanRootIncrementally(
+        libraryRoot,
+        audiocity::plugin::ImportFormatCapabilities{ false, true },
+        true,
+        {},
+        [&](const std::span<const audiocity::plugin::LibraryFileIndexEntry> batch)
+        {
+            if (firstDeliveryMs < 0.0)
+                firstDeliveryMs = juce::Time::getMillisecondCounterHiRes() - scanStart;
+            deliveredEntries += batch.size();
+            largestBatch = juce::jmax(largestBatch, batch.size());
+        });
+    const auto fullScanDurationMs = juce::Time::getMillisecondCounterHiRes() - scanStart;
+    if (scan.cancelled
+        || scan.entryLimitReached
+        || scan.entries.size() != kEntryCount
+        || deliveredEntries != kEntryCount
+        || firstDeliveryMs < 0.0
+        || largestBatch == 0
+        || largestBatch > kMaximumBatchSize)
+    {
+        return false;
+    }
+
+    const auto targetName = "Sample_"
+        + juce::String(static_cast<juce::int64>(kEntryCount - 1)).paddedLeft('0', 5)
+        + ".wav";
+    const auto searchStart = juce::Time::getMillisecondCounterHiRes();
+    const auto matches = LibraryFileIndex::search(scan.entries, targetName);
+    const auto searchDurationMs = juce::Time::getMillisecondCounterHiRes() - searchStart;
+    if (matches.size() != 1
+        || scan.entries[matches.front()].fileName != targetName)
+    {
+        return false;
+    }
+
+    // A root replacement cancels the old traversal through the same callback used
+    // by the editor worker. No partial result is suitable for persistence after it.
+    auto cancelRequested = false;
+    auto cancellationDeliveries = std::size_t{ 0 };
+    const auto cancelledScan = LibraryFileIndex::scanRootIncrementally(
+        libraryRoot,
+        audiocity::plugin::ImportFormatCapabilities{ false, true },
+        true,
+        [&cancelRequested] { return cancelRequested; },
+        [&](const std::span<const audiocity::plugin::LibraryFileIndexEntry>)
+        {
+            ++cancellationDeliveries;
+            cancelRequested = true;
+        });
+    if (!cancelledScan.cancelled
+        || cancelledScan.incompleteReason
+            != audiocity::plugin::LibraryFileIndexScanResult::IncompleteReason::cancelled
+        || cancelledScan.entryLimitReached
+        || cancellationDeliveries != 1
+        || cancelledScan.entries.empty()
+        || cancelledScan.entries.size() >= kEntryCount)
+    {
+        return false;
+    }
+
+    const auto emptyTreeRoot = tempRoot.getChildFile("DirectoryOnly");
+    if (!emptyTreeRoot.createDirectory())
+        return false;
+    for (auto index = 0; index < 64; ++index)
+        if (!emptyTreeRoot.getChildFile("Empty_" + juce::String(index)).createDirectory())
+            return false;
+
+    auto directoryCancellationChecks = 0;
+    const auto directoryOnlyCancelled = LibraryFileIndex::scanRootIncrementally(
+        emptyTreeRoot,
+        audiocity::plugin::ImportFormatCapabilities{ false, true },
+        true,
+        [&directoryCancellationChecks]
+        {
+            return ++directoryCancellationChecks >= 4;
+        });
+    if (!directoryOnlyCancelled.cancelled
+        || directoryOnlyCancelled.incompleteReason
+            != audiocity::plugin::LibraryFileIndexScanResult::IncompleteReason::cancelled
+        || directoryCancellationChecks < 4
+        || !directoryOnlyCancelled.entries.empty())
+    {
+        return false;
+    }
+
+    audiocity::plugin::LibraryFileIndexScanLimits tinyLimits;
+    tinyLimits.maximumEntries = 2;
+    tinyLimits.maximumDirectories = 1024;
+    tinyLimits.maximumDepth = 8;
+    auto limitedScan = LibraryFileIndex::scanRootIncrementally(
+        libraryRoot,
+        audiocity::plugin::ImportFormatCapabilities{ false, true },
+        true,
+        {},
+        {},
+        tinyLimits);
+    if (limitedScan.complete()
+        || !limitedScan.entryLimitReached
+        || limitedScan.incompleteReason
+            != audiocity::plugin::LibraryFileIndexScanResult::IncompleteReason::entryLimitReached
+        || limitedScan.entries.size() != tinyLimits.maximumEntries)
+    {
+        return false;
+    }
+
+    const auto preservationCache = tempRoot.getChildFile("limited-preservation.acli");
+    audiocity::plugin::LibraryFileIndexStore preservationStore(preservationCache);
+    audiocity::plugin::LibraryFileIndexData preservedIndex;
+    preservedIndex.libraryRootPath = libraryRoot.getFullPathName();
+    audiocity::plugin::LibraryFileIndexEntry preservedEntry;
+    preservedEntry.relativePath = "Preserved.wav";
+    preservedEntry.sizeBytes = 17;
+    preservedEntry.modificationTimeMs = 23;
+    preservedIndex.entries.push_back(preservedEntry);
+    if (!preservationStore.save(preservedIndex)
+        || preservationStore.saveCompletedScan(libraryRoot, std::move(limitedScan)))
+    {
+        return false;
+    }
+    const auto preservedAfterLimit = preservationStore.load();
+    if (!preservedAfterLimit.has_value()
+        || preservedAfterLimit->entries.size() != 1
+        || preservedAfterLimit->entries.front().relativePath != preservedEntry.relativePath)
+    {
+        return false;
+    }
+
+    const auto replacementRoot = tempRoot.getChildFile("ReplaceDuringScan");
+    if (!replacementRoot.createDirectory())
+        return false;
+    for (auto index = 0; index < 300; ++index)
+    {
+        const auto file = replacementRoot.getChildFile(
+            "Replace_" + juce::String(index).paddedLeft('0', 3) + ".wav");
+        std::ofstream output(file.getFullPathName().toStdString(), std::ios::binary | std::ios::trunc);
+        output.put(static_cast<char>(index & 0xff));
+        if (!output.good())
+            return false;
+    }
+
+    auto completedBeforeRootReplacement = LibraryFileIndex::scanRootIncrementally(
+        replacementRoot,
+        audiocity::plugin::ImportFormatCapabilities{ false, true },
+        true);
+    if (!completedBeforeRootReplacement.complete()
+        || completedBeforeRootReplacement.entries.size() != 300)
+    {
+        return false;
+    }
+
+    const auto movedReplacementRoot = tempRoot.getChildFile("OriginalRootMoved");
+    auto replacementAttempted = false;
+    auto replacementSucceeded = false;
+    const auto rootReplacedScan = LibraryFileIndex::scanRootIncrementally(
+        replacementRoot,
+        audiocity::plugin::ImportFormatCapabilities{ false, true },
+        true,
+        {},
+        [&](const std::span<const audiocity::plugin::LibraryFileIndexEntry>)
+        {
+            if (replacementAttempted)
+                return;
+            replacementAttempted = true;
+            replacementSucceeded = replacementRoot.moveFileTo(movedReplacementRoot)
+                && replacementRoot.createDirectory();
+        });
+    if (!replacementAttempted
+        || !replacementSucceeded
+        || rootReplacedScan.complete()
+        || rootReplacedScan.incompleteReason
+            != audiocity::plugin::LibraryFileIndexScanResult::IncompleteReason::rootChanged)
+    {
+        return false;
+    }
+    if (preservationStore.saveCompletedScan(
+            replacementRoot, std::move(completedBeforeRootReplacement)))
+    {
+        return false;
+    }
+    const auto preservedAfterRootReplacement = preservationStore.load();
+    if (!preservedAfterRootReplacement.has_value()
+        || preservedAfterRootReplacement->entries.size() != 1
+        || preservedAfterRootReplacement->entries.front().relativePath
+            != preservedEntry.relativePath)
+    {
+        return false;
+    }
+
+    std::printf("Library index filesystem fixture: setup %.2f ms (not budgeted), "
+                "first batch %.2f ms, full scan %.2f ms, search %.2f ms, entries %zu\n",
+        setupDurationMs,
+        firstDeliveryMs,
+        fullScanDurationMs,
+        searchDurationMs,
+        kEntryCount);
+
+   #if defined(NDEBUG)
+    constexpr auto kMaximumFirstDeliveryMs = 500.0;
+    constexpr auto kMaximumSearchMs = 50.0;
+    return firstDeliveryMs < kMaximumFirstDeliveryMs
+        && searchDurationMs < kMaximumSearchMs;
+   #else
+    return true;
+   #endif
+}
+
+bool runLibraryFileIndexExactCaseIdentityTest()
+{
+    using audiocity::plugin::LibraryFileIndexData;
+    using audiocity::plugin::LibraryFileIndexEntry;
+    using audiocity::plugin::LibraryFileIndexStore;
+
+    const auto tempRoot = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_library_index_case_identity", "");
+    const auto libraryRoot = tempRoot.getChildFile("Library");
+    if (!libraryRoot.createDirectory())
+        return false;
+
+    const auto upperPartition = LibraryFileIndexStore::getCacheFileForRoot(
+        tempRoot.getChildFile("CaseRoot")).getFileName();
+    const auto lowerPartition = LibraryFileIndexStore::getCacheFileForRoot(
+        tempRoot.getChildFile("caseroot")).getFileName();
+
+    LibraryFileIndexData source;
+    source.libraryRootPath = libraryRoot.getFullPathName();
+    LibraryFileIndexEntry entry;
+    entry.relativePath = "Bank/Sample.wav";
+    entry.sizeBytes = 64;
+    entry.modificationTimeMs = 1000;
+    source.entries.push_back(entry);
+    entry.relativePath = "bank/Sample.wav";
+    source.entries.push_back(entry);
+
+    const LibraryFileIndexStore store(tempRoot.getChildFile("case-index.acli"));
+    const auto saved = store.save(source);
+    const auto restored = store.load();
+    const auto ok = upperPartition != lowerPartition
+        && saved
+        && restored.has_value()
+        && restored->entries.size() == source.entries.size()
+        && restored->entries[0].relativePath == "Bank/Sample.wav"
+        && restored->entries[1].relativePath == "bank/Sample.wav";
+    tempRoot.deleteRecursively();
+    return ok;
+}
+
 bool runPeakPreviewCacheRoundTripTest()
 {
     const auto tempRoot = juce::File::getSpecialLocation(juce::File::tempDirectory)
@@ -13091,6 +13647,8 @@ bool runPeakPreviewCacheRoundTripTest()
     saveData.libraryRootPath = "C:/Library/Samples";
     saveData.entries["c:/library/samples/kick.wav"] = {
         2048,
+        123456,
+        234567,
         { 0.1f, 0.5f, 0.9f },
         "SR: 48000 Hz  Ch: 1",
         "Acidized",
@@ -13110,6 +13668,8 @@ bool runPeakPreviewCacheRoundTripTest()
 
     const auto& entry = it->second;
     if (entry.fileSizeBytes != 2048)
+        return false;
+    if (entry.fileModificationTimeMs != 123456 || entry.lastAccessTimeMs != 234567)
         return false;
     if (entry.metadataLine != "SR: 48000 Hz  Ch: 1")
         return false;
@@ -13139,6 +13699,8 @@ bool runPeakPreviewCacheResetClearsFileTest()
     saveData.libraryRootPath = "C:/Library/A";
     saveData.entries["c:/library/a/snare.wav"] = {
         100,
+        123,
+        456,
         { 0.2f },
         "meta",
         {},
@@ -13155,6 +13717,127 @@ bool runPeakPreviewCacheResetClearsFileTest()
 
     const auto loaded = store.load();
     return loaded.libraryRootPath.isEmpty() && loaded.entries.empty();
+}
+
+bool runPeakPreviewCacheFreshnessPartitionAndCorruptionTest()
+{
+    const auto tempRoot = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_peak_cache_validity", "");
+    const auto firstRoot = tempRoot.getChildFile("LibraryA");
+    const auto secondRoot = tempRoot.getChildFile("LibraryB");
+    if (!firstRoot.createDirectory() || !secondRoot.createDirectory())
+        return false;
+
+    const auto sampleFile = firstRoot.getChildFile("same-size.wav");
+    if (!sampleFile.replaceWithText("AAAA"))
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+
+    const auto oldTimestamp = juce::Time::getCurrentTime().toMilliseconds() - 10000;
+    if (!sampleFile.setLastModificationTime(juce::Time(oldTimestamp)))
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+
+    audiocity::plugin::PeakPreviewCacheEntry entry;
+    entry.fileSizeBytes = sampleFile.getSize();
+    entry.fileModificationTimeMs = sampleFile.getLastModificationTime().toMilliseconds();
+    if (!audiocity::plugin::isPeakPreviewCacheEntryCurrent(entry, sampleFile))
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+
+    if (!sampleFile.replaceWithText("BBBB")
+        || !sampleFile.setLastModificationTime(juce::Time(oldTimestamp + 4000))
+        || sampleFile.getSize() != entry.fileSizeBytes
+        || sampleFile.getLastModificationTime().toMilliseconds() == entry.fileModificationTimeMs
+        || audiocity::plugin::isPeakPreviewCacheEntryCurrent(entry, sampleFile))
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+
+    const auto firstPartition = audiocity::plugin::PeakPreviewCacheStore::getCacheFileForRoot(firstRoot);
+    const auto secondPartition = audiocity::plugin::PeakPreviewCacheStore::getCacheFileForRoot(secondRoot);
+    if (firstPartition == secondPartition)
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+
+    const auto corruptCache = tempRoot.getChildFile("corrupt.xml");
+    if (!corruptCache.replaceWithText("<peakPreviewCache version=\"2\"><entry"))
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+
+    const auto corruptData = audiocity::plugin::PeakPreviewCacheStore(corruptCache).load();
+    const auto invalidPeakCache = tempRoot.getChildFile("invalid-peaks.xml");
+    if (!invalidPeakCache.replaceWithText(
+            "<peakPreviewCache version=\"2\" libraryRoot=\"LibraryA\">"
+            "<entry path=\"bad.wav\" size=\"4\" mtime=\"1\" accessed=\"2\">"
+            "<peaks>1.2.3</peaks></entry>"
+            "<entry path=\"missing.wav\" size=\"4\" mtime=\"1\" accessed=\"2\"/>"
+            "</peakPreviewCache>"))
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+
+    const auto invalidPeakData = audiocity::plugin::PeakPreviewCacheStore(invalidPeakCache).load();
+    const auto ok = corruptData.libraryRootPath.isEmpty() && corruptData.entries.empty()
+        && invalidPeakData.entries.empty();
+    tempRoot.deleteRecursively();
+    return ok;
+}
+
+bool runPeakPreviewCacheLruAndPeakBoundsTest()
+{
+    using audiocity::plugin::PeakPreviewCacheStore;
+
+    const auto tempRoot = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_peak_cache_bounds", "");
+    if (!tempRoot.createDirectory())
+        return false;
+
+    const auto cacheFile = tempRoot.getChildFile("bounded.xml");
+    PeakPreviewCacheStore store(cacheFile);
+    audiocity::plugin::PeakPreviewCacheData saveData;
+    saveData.libraryRootPath = tempRoot.getFullPathName();
+
+    for (std::size_t index = 0; index <= PeakPreviewCacheStore::maxEntries; ++index)
+    {
+        audiocity::plugin::PeakPreviewCacheEntry entry;
+        entry.fileSizeBytes = static_cast<juce::int64>(index + 1);
+        entry.fileModificationTimeMs = 1000;
+        entry.lastAccessTimeMs = static_cast<juce::int64>(index + 1);
+        entry.peaks.assign(PeakPreviewCacheStore::maxPeaksPerEntry + 17, 0.5f);
+        saveData.entries.emplace("entry-" + std::to_string(index), std::move(entry));
+    }
+
+    if (!store.save(saveData))
+    {
+        tempRoot.deleteRecursively();
+        return false;
+    }
+
+    const auto loaded = store.load();
+    const auto newestKey = "entry-" + std::to_string(PeakPreviewCacheStore::maxEntries);
+    const auto newest = loaded.entries.find(newestKey);
+    const auto ok = !loaded.entries.empty()
+        && loaded.entries.size() < PeakPreviewCacheStore::maxEntries
+        && loaded.entries.find("entry-0") == loaded.entries.end()
+        && newest != loaded.entries.end()
+        && newest->second.peaks.size() == PeakPreviewCacheStore::maxPeaksPerEntry
+        && cacheFile.getSize() > 0
+        && cacheFile.getSize() < 16 * 1024 * 1024;
+    tempRoot.deleteRecursively();
+    return ok;
 }
 
 // --- Factory / embedded-sample preset tests --------------------------------
@@ -13911,6 +14594,23 @@ public:
         lastSampleAssetCount = static_cast<int>(sampleDataByAsset.size());
     }
 
+    bool republishProgramChecked(
+        const audiocity::engine::Program& program,
+        const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset,
+        juce::String& diagnostic) override
+    {
+        ++checkedPublishCount;
+        if (!acceptFullPublish)
+        {
+            diagnostic = "Injected engine publication failure";
+            return false;
+        }
+
+        diagnostic.clear();
+        republishProgram(program, sampleDataByAsset);
+        return true;
+    }
+
     bool republishProgramMetadata(const audiocity::engine::Program& program) override
     {
         ++metadataPublishCount;
@@ -13923,7 +14623,9 @@ public:
     }
 
     bool acceptMetadataPublish = true;
+    bool acceptFullPublish = true;
     int publishCount = 0;
+    int checkedPublishCount = 0;
     int metadataPublishCount = 0;
     int lastSampleAssetCount = 0;
     audiocity::engine::Program lastProgram;
@@ -14216,6 +14918,44 @@ bool runImportedProgramStoreFallsBackWhenMetadataPublishRefusedTest()
     return !sink.lastProgram.zones.empty() && sink.lastProgram.zones.front().rootMidiNote == 55;
 }
 
+bool runImportedProgramStoreFailedPublishLeavesStateUntouchedTest()
+{
+    RecordingProgramSink sink;
+    sink.acceptMetadataPublish = false;
+    sink.acceptFullPublish = false;
+
+    audiocity::plugin::ImportedProgramStore store(sink);
+    loadStoreTestProgram(store, 2);
+
+    const auto outcome = store.edit([](audiocity::plugin::ImportedProgramEdit& edit)
+    {
+        audiocity::plugin::ImportedProgramEditOutcome result;
+        edit.program.zones.front().rootMidiNote = 47;
+        result.ok = true;
+        result.resultIndex = 0;
+        result.label = "Mapping updated";
+        return result;
+    });
+
+    if (outcome.ok
+        || outcome.resultIndex != -1
+        || !outcome.label.contains("Injected engine publication failure")
+        || sink.metadataPublishCount != 1
+        || sink.checkedPublishCount != 1
+        || sink.publishCount != 0
+        || store.getLastDiagnosticSummary() != outcome.label)
+    {
+        return false;
+    }
+
+    audiocity::engine::Program stored;
+    std::vector<juce::AudioBuffer<float>> storedSamples;
+    store.captureSnapshot(stored, storedSamples);
+    return stored.zones.size() == 2u
+        && stored.zones.front().rootMidiNote == 60
+        && storedSamples.size() == 1u;
+}
+
 bool runProgramMetadataUpdateReusesLoadedAudioTest()
 {
     using namespace audiocity::engine;
@@ -14284,18 +15024,1157 @@ bool runProgramMetadataUpdateReusesLoadedAudioTest()
     return !engine.setProgramMetadata(withExtraAsset);
 }
 
+bool runConcurrentProgramSnapshotReclamationTest()
+{
+    using namespace audiocity::engine;
+    constexpr int zoneCount = 600;
+    EngineCore engine;
+    engine.prepare(48000.0, 64, 2);
+
+    Program program;
+    SampleAsset asset;
+    asset.sampleRateHz = 48000.0;
+    program.sampleAssets.push_back(asset);
+    for (auto index = 0; index < zoneCount; ++index)
+    {
+        Zone zone;
+        zone.sampleAssetIndex = 0;
+        zone.keyRange = MidiRange::single(index % 128);
+        program.zones.push_back(zone);
+    }
+    std::vector<juce::AudioBuffer<float>> audio{ createTestSample(4096) };
+    if (!engine.setProgram(program, audio))
+        return false;
+
+    std::atomic<bool> stop{ false };
+    std::atomic<int> renderCount{ 0 };
+    std::thread renderThread([&]
+    {
+        juce::AudioBuffer<float> block(2, 64);
+        juce::MidiBuffer midi;
+        while (!stop.load(std::memory_order_acquire))
+        {
+            block.clear();
+            engine.render(block, midi);
+            renderCount.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+
+    for (auto edit = 0; edit < 256; ++edit)
+    {
+        program.zones[0].rootMidiNote = 48 + (edit % 24);
+        if (!engine.setProgramMetadata(program))
+        {
+            stop.store(true, std::memory_order_release);
+            renderThread.join();
+            return false;
+        }
+    }
+    stop.store(true, std::memory_order_release);
+    renderThread.join();
+
+    const auto retained = engine.getProgramSnapshotRetentionStats();
+    const auto oneSnapshotUpperBound = sizeof(ProgramSnapshot)
+        + program.sampleAssets.size() * sizeof(ProgramSnapshot::SampleAssetRef)
+        + program.zones.size() * sizeof(ProgramSnapshot::ZoneRef)
+        + program.zones.size() * sizeof(std::size_t);
+    return renderCount.load(std::memory_order_relaxed) > 0
+        && retained.ownerCount == 1
+        && retained.metadataBytes <= oneSnapshotUpperBound;
+}
+
+bool runNestedSnapshotReaderReclamationTest()
+{
+    struct Payload
+    {
+        int generation = 0;
+    };
+
+    audiocity::engine::RtSnapshotCell<Payload> cell;
+    {
+        const auto emptyOuter = cell.read(audiocity::engine::RtReaderRole::audio);
+        const auto emptyInner = cell.read(audiocity::engine::RtReaderRole::audio);
+        cell.publish(std::make_shared<const Payload>(Payload{ 0 }));
+        if (emptyOuter || emptyInner || cell.retainedOwnerCountForWriter() != 1)
+            return false;
+    }
+    cell.publish(std::make_shared<const Payload>(Payload{ 1 }));
+
+    {
+        const auto outer = cell.read(audiocity::engine::RtReaderRole::audio);
+        const auto inner = cell.read(audiocity::engine::RtReaderRole::audio);
+        if (!outer || !inner || outer->generation != 1 || inner->generation != 1)
+            return false;
+
+        std::thread publisher([&]
+        {
+            for (auto generation = 2; generation <= 257; ++generation)
+                cell.publish(std::make_shared<const Payload>(Payload{ generation }));
+        });
+        publisher.join();
+
+        // A nested same-role read must remain pinned to the outer guard's generation even while
+        // the writer publishes and reclaims hundreds of intervening owners.
+        if (outer->generation != 1 || inner->generation != 1
+            || cell.retainedOwnerCountForWriter() != 2)
+            return false;
+    }
+
+    return cell.retainedOwnerCountForWriter() == 1;
+}
+
+bool runProgramPublishRejectsIncompleteReferencedAudioTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int blockSize = 64;
+    constexpr double sampleRate = 48000.0;
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, 2);
+
+    Program baseline;
+    SampleAsset asset;
+    asset.displayName = "active.wav";
+    asset.sampleRateHz = sampleRate;
+    baseline.sampleAssets.push_back(asset);
+    asset.displayName = "intentionally-unused.wav";
+    baseline.sampleAssets.push_back(asset);
+
+    Zone activeZone;
+    activeZone.sampleAssetIndex = 0;
+    activeZone.keyRange = MidiRange::single(60);
+    activeZone.rootMidiNote = 60;
+    baseline.zones.push_back(activeZone);
+
+    std::vector<juce::AudioBuffer<float>> onlyActiveAudio;
+    onlyActiveAudio.push_back(createTestSample(1024));
+    if (!engine.setProgram(baseline, onlyActiveAudio))
+        return false;
+
+    // An unreferenced asset may be absent, but metadata-only edits may not make
+    // that unloaded asset playable.
+    auto invalidMetadataEdit = baseline;
+    invalidMetadataEdit.zones.front().sampleAssetIndex = 1;
+    invalidMetadataEdit.zones.front().keyRange = MidiRange::single(65);
+    if (engine.setProgramMetadata(invalidMetadataEdit))
+        return false;
+
+    auto missingProgram = baseline;
+    Zone missingZone = activeZone;
+    missingZone.sampleAssetIndex = 1;
+    missingZone.keyRange = MidiRange::single(65);
+    missingProgram.zones.push_back(missingZone);
+    const auto missingResult = engine.setProgram(missingProgram, onlyActiveAudio);
+    if (missingResult
+        || missingResult.error != EngineCore::ProgramPublishResult::Error::missingReferencedAudio
+        || missingResult.referencedZoneIndex != 1
+        || missingResult.referencedSampleAssetIndex != 1
+        || !missingResult.diagnostic.contains("only 1 audio buffers")
+        || !missingResult.diagnostic.contains("previous program preserved"))
+    {
+        return false;
+    }
+
+    auto audioWithEmptyReference = onlyActiveAudio;
+    audioWithEmptyReference.emplace_back();
+    const auto emptyResult = engine.setProgram(missingProgram, audioWithEmptyReference);
+    if (emptyResult
+        || emptyResult.error != EngineCore::ProgramPublishResult::Error::emptyReferencedAudio
+        || emptyResult.referencedZoneIndex != 1
+        || emptyResult.referencedSampleAssetIndex != 1
+        || !emptyResult.diagnostic.contains("0 channels")
+        || !emptyResult.diagnostic.contains("0 samples")
+        || !emptyResult.diagnostic.contains("previous program preserved"))
+    {
+        return false;
+    }
+
+    if (!engine.hasProgram() || engine.getProgramZoneCount() != 1)
+        return false;
+
+    juce::AudioBuffer<float> block(2, blockSize);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+    engine.render(block, midi);
+    return engine.activeVoiceCount() == 1 && blockEnergy(block) > 0.01f;
+}
+
+bool runProgramCapacityBoundaryAndRejectionTest()
+{
+    using namespace audiocity::engine;
+
+    EngineCore engine;
+    engine.prepare(48000.0, 64, 2);
+
+    Program baseline;
+    SampleAsset baselineAsset;
+    baselineAsset.lengthSamples = 256;
+    baselineAsset.numChannels = 1;
+    baselineAsset.sampleRateHz = 48000.0;
+    baseline.sampleAssets.push_back(baselineAsset);
+    Zone baselineZone;
+    baselineZone.sampleAssetIndex = 0;
+    baseline.zones.push_back(baselineZone);
+
+    auto restoreBaseline = [&]()
+    {
+        return static_cast<bool>(engine.setProgram(baseline))
+            && engine.getProgramZoneCount() == 1;
+    };
+
+    auto verifyRejected = [&](const Program& program, const juce::String& dimension)
+    {
+        if (!restoreBaseline())
+            return false;
+
+        const auto result = engine.setProgram(program);
+        return !result
+            && result.error == EngineCore::ProgramPublishResult::Error::capacityExceeded
+            && result.diagnostic.contains(dimension)
+            && result.diagnostic.contains("Counts/limits")
+            && engine.hasProgram()
+            && engine.getProgramZoneCount() == 1;
+    };
+
+    Program assetsAtLimit;
+    assetsAtLimit.sampleAssets.resize(ProgramSnapshot::maxSampleAssets);
+    if (!engine.setProgram(assetsAtLimit))
+        return false;
+    auto assetsOverLimit = assetsAtLimit;
+    assetsOverLimit.sampleAssets.emplace_back();
+    if (!verifyRejected(assetsOverLimit, "sample assets"))
+        return false;
+
+    Program groupsAtLimit;
+    groupsAtLimit.groups.resize(ProgramSnapshot::maxGroups);
+    if (!engine.setProgram(groupsAtLimit))
+        return false;
+    auto groupsOverLimit = groupsAtLimit;
+    groupsOverLimit.groups.emplace_back();
+    if (!verifyRejected(groupsOverLimit, "groups"))
+        return false;
+
+    Program zonesAtLimit;
+    zonesAtLimit.zones.resize(ProgramSnapshot::maxZones);
+    if (!engine.setProgram(zonesAtLimit))
+        return false;
+    auto zonesOverLimit = zonesAtLimit;
+    zonesOverLimit.zones.emplace_back();
+    return verifyRejected(zonesOverLimit, "zones");
+}
+
+bool runScalableProgramSnapshotAboveLegacyZoneLimitTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int zoneCount = 600;
+    constexpr int sampleLength = 2048;
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_large_sfz_fixture", "");
+    const auto sampleFile = tempDirectory.getChildFile("Tone.wav");
+    const auto sfzFile = tempDirectory.getChildFile("Large.sfz");
+    if (!tempDirectory.createDirectory()
+        || !writeMonoToneWav(sampleFile, 48000, sampleLength))
+        return false;
+
+    juce::String sfz;
+    for (auto zoneIndex = 0; zoneIndex < zoneCount; ++zoneIndex)
+    {
+        const auto note = zoneIndex % 128;
+        const auto velocity = 1 + (zoneIndex / 128);
+        sfz << "<region> sample=Tone.wav key=" << note
+            << " lovel=" << velocity << " hivel=" << velocity
+            << " offset=" << zoneIndex << "\n";
+    }
+    if (!sfzFile.replaceWithText(sfz))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    SfzImporter importer;
+    const auto imported = importer.importFile(sfzFile);
+    if (imported.hasErrors()
+        || imported.program.sampleAssets.size() != 1
+        || imported.sampleDataByAsset.size() != 1
+        || imported.program.zones.size() != zoneCount)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto snapshot = ProgramSnapshot::fromProgram(imported.program);
+    if (snapshot.truncated || snapshot.zoneCount != zoneCount || snapshot.zones.size() != zoneCount)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+    for (std::size_t zoneIndex = 0; zoneIndex < snapshot.zoneCount; ++zoneIndex)
+    {
+        const auto expectedNote = static_cast<int>(zoneIndex) % 128;
+        const auto expectedVelocity = 1 + (static_cast<int>(zoneIndex) / 128);
+        const auto& zone = imported.program.zones[zoneIndex];
+        if (!snapshot.isZonePlayable(zoneIndex)
+            || zone.sampleAssetIndex != 0
+            || zone.keyRange.low != expectedNote
+            || zone.keyRange.high != expectedNote
+            || zone.velocityRange.low != expectedVelocity
+            || zone.velocityRange.high != expectedVelocity
+            || zone.sampleStart != static_cast<int>(zoneIndex))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    EngineCore engine;
+    engine.prepare(48000.0, 64, 2);
+    if (!engine.setProgram(imported.program, imported.sampleDataByAsset)
+        || engine.getProgramZoneCount() != zoneCount)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    for (auto zoneIndex = 0; zoneIndex < zoneCount; ++zoneIndex)
+    {
+        engine.panic();
+        juce::AudioBuffer<float> block(2, 64);
+        block.clear();
+        juce::MidiBuffer midi;
+        const auto note = zoneIndex % 128;
+        const auto velocity = static_cast<juce::uint8>(1 + (zoneIndex / 128));
+        midi.addEvent(juce::MidiMessage::noteOn(1, note, velocity), 0);
+        engine.render(block, midi);
+
+        auto reachedZone = false;
+        for (const auto& voice : engine.getVoicePlaybackStates())
+            reachedZone = reachedZone || (voice.active && voice.zoneIndex == zoneIndex);
+        if (!reachedZone || blockEnergy(block) <= 0.0f)
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    tempDirectory.deleteRecursively();
+    return true;
+}
+
+bool runPreloadNoOpRebuildGuardTest()
+{
+    using namespace audiocity::engine;
+
+    EngineCore engine;
+    engine.prepare(48000.0, 64, 2);
+    engine.setSampleData(createTestSample(8192), 48000.0, 60);
+
+    const auto initialPreload = engine.getPreloadSamples();
+    const auto beforeNoOp = engine.getSegmentRebuildCount();
+    engine.setPreloadSamples(initialPreload);
+    if (engine.getSegmentRebuildCount() != beforeNoOp)
+        return false;
+
+    const auto changedPreload = initialPreload == 2048 ? 4096 : 2048;
+    engine.setPreloadSamples(changedPreload);
+    const auto afterChange = engine.getSegmentRebuildCount();
+    if (afterChange != beforeNoOp + 1)
+        return false;
+
+    engine.setPreloadSamples(changedPreload);
+    return engine.getSegmentRebuildCount() == afterChange;
+}
+
+bool runPendingEventLinearDispatchTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int blockSize = EngineCore::pendingEventCapacity;
+    constexpr std::array eventCounts{ 64, 256, EngineCore::pendingEventCapacity };
+    std::array<int, eventCounts.size()> traversalCounts{};
+    auto previousEventCount = 0;
+    auto previousTraversalCount = 0;
+
+    for (auto countIndex = std::size_t{ 0 }; countIndex < eventCounts.size(); ++countIndex)
+    {
+        const auto eventCount = eventCounts[countIndex];
+        EngineCore engine;
+        engine.prepare(48000.0, blockSize, 2);
+        engine.setSampleData(createTestSample(4096), 48000.0, 60);
+        engine.resetPendingEventDropCounts();
+
+        for (auto eventIndex = 0; eventIndex < eventCount; ++eventIndex)
+        {
+            const auto offset = eventIndex * blockSize / eventCount;
+            engine.noteOff(1, offset);
+        }
+
+        juce::AudioBuffer<float> block(2, blockSize);
+        juce::MidiBuffer midi;
+        engine.render(block, midi);
+
+        const auto drops = engine.getPendingEventDropCounts();
+        const auto traversalCount = engine.getLastPendingEventTraversalCount();
+        if (engine.getLastPendingEventDispatchCount() != eventCount
+            || traversalCount < eventCount
+            || traversalCount > eventCount * 3
+            || drops.noteOn != 0
+            || drops.noteOff != 0
+            || drops.allNotesOff != 0
+            || drops.continuousControl != 0
+            || drops.panicRecoveries != 0)
+        {
+            return false;
+        }
+
+        // The observed cursor work may have a small constant edge effect, but
+        // quadrupling input must not grow it by more than a linear 4x plus that edge.
+        if (previousEventCount > 0
+            && traversalCount > previousTraversalCount * (eventCount / previousEventCount) + 8)
+        {
+            return false;
+        }
+        previousEventCount = eventCount;
+        previousTraversalCount = traversalCount;
+        traversalCounts[countIndex] = traversalCount;
+    }
+
+    std::printf("Pending-event traversal counts: 64=%d, 256=%d, 1024=%d (linear bound <= 3n).\n",
+        traversalCounts[0], traversalCounts[1], traversalCounts[2]);
+    return true;
+}
+
+bool runPendingEventSafetyOverflowRecoveryTest()
+{
+    using namespace audiocity::engine;
+
+    EngineCore engine;
+    engine.prepare(48000.0, 64, 2);
+    engine.setSampleData(createTestSample(4096), 48000.0, 60);
+
+    {
+        juce::AudioBuffer<float> block(2, 64);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+    }
+    if (!engine.isNoteActive(60))
+        return false;
+
+    engine.resetPendingEventDropCounts();
+    for (auto eventIndex = 0; eventIndex < EngineCore::pendingEventCapacity; ++eventIndex)
+        engine.noteOff(1, 0);
+
+    // A queue containing only safety events cannot displace one. The bounded panic latch must
+    // recover the held note on the next audio render and make that exceptional path observable.
+    engine.noteOff(60, 0);
+
+    juce::AudioBuffer<float> block(2, 64);
+    juce::MidiBuffer midi;
+    engine.render(block, midi);
+
+    const auto drops = engine.getPendingEventDropCounts();
+    return !engine.isNoteActive(60)
+        && engine.activeVoiceCount() == 0
+        && drops.noteOff == 1
+        && drops.panicRecoveries == 1;
+}
+
+bool runPendingEventSafetyDisplacesContinuousControlTest()
+{
+    using namespace audiocity::engine;
+
+    EngineCore engine;
+    engine.prepare(48000.0, 64, 2);
+    engine.setSampleData(createTestSample(4096), 48000.0, 60);
+    auto amp = engine.getAmpEnvelope();
+    amp.releaseSeconds = 0.001f;
+    engine.setAmpEnvelope(amp);
+
+    {
+        juce::AudioBuffer<float> block(2, 64);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        engine.render(block, midi);
+    }
+    if (!engine.isNoteActive(60))
+        return false;
+
+    engine.resetPendingEventDropCounts();
+    const auto nonSafetyCapacity = EngineCore::pendingEventCapacity
+        - EngineCore::pendingSafetyEventReserve;
+    for (auto eventIndex = 0; eventIndex < nonSafetyCapacity; ++eventIndex)
+        engine.pitchBend(8192 + (eventIndex % 128), 0);
+
+    // Fill the reserved tail with harmless release events, then submit the release
+    // that matters. The scheduler must evict a continuous-control event, not lose
+    // the note-off or fall back to panic recovery.
+    for (auto eventIndex = 0; eventIndex < EngineCore::pendingSafetyEventReserve; ++eventIndex)
+        engine.noteOff(1, 0);
+    engine.noteOff(60, 0);
+
+    juce::AudioBuffer<float> block(2, 64);
+    juce::MidiBuffer midi;
+    engine.render(block, midi);
+
+    const auto drops = engine.getPendingEventDropCounts();
+    return !engine.isNoteActive(60)
+        && engine.getLastPendingEventDispatchCount() == EngineCore::pendingEventCapacity
+        && drops.noteOn == 0
+        && drops.noteOff == 0
+        && drops.allNotesOff == 0
+        && drops.continuousControl == 1
+        && drops.panicRecoveries == 0;
+}
+
+bool runMidiAllNotesOffSafetyEventTest()
+{
+    using namespace audiocity::engine;
+
+    EngineCore engine;
+    engine.prepare(48000.0, 64, 2);
+    engine.setSampleData(createTestSample(4096), 48000.0, 60);
+
+    juce::AudioBuffer<float> block(2, 64);
+    juce::MidiBuffer start;
+    start.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+    engine.render(block, start);
+    if (!engine.isNoteActive(60))
+        return false;
+
+    juce::MidiBuffer stop;
+    stop.addEvent(juce::MidiMessage::allNotesOff(1), 0);
+    engine.render(block, stop);
+    return engine.activeVoiceCount() == 0;
+}
+
+bool runAudioStateCodecRoundTripTest()
+{
+    juce::AudioBuffer<float> source(2, 4096);
+    for (auto sample = 0; sample < source.getNumSamples(); ++sample)
+    {
+        source.setSample(0, sample, static_cast<float>(std::sin(sample * 0.01)));
+        source.setSample(1, sample, sample % 64 == 0 ? 0.5f : 0.0f);
+    }
+
+    juce::String error;
+    const auto encoded = audiocity::plugin::encodeAudioStateAsset(source, &error);
+    if (encoded.isEmpty() || error.isNotEmpty()
+        || encoded.getSize() >= static_cast<std::size_t>(source.getNumChannels()
+            * source.getNumSamples() * static_cast<int>(sizeof(float))))
+        return false;
+
+    juce::AudioBuffer<float> restored;
+    if (!audiocity::plugin::decodeAudioStateAsset(encoded, restored, &error)
+        || restored.getNumChannels() != source.getNumChannels()
+        || restored.getNumSamples() != source.getNumSamples())
+        return false;
+
+    for (auto channel = 0; channel < source.getNumChannels(); ++channel)
+        if (std::memcmp(source.getReadPointer(channel),
+                        restored.getReadPointer(channel),
+                        static_cast<std::size_t>(source.getNumSamples()) * sizeof(float)) != 0)
+            return false;
+
+    return true;
+}
+
+bool runAudioStateCodecRejectsCorruptionAtomicallyTest()
+{
+    std::vector<float> source(2048, 0.125f);
+    auto encoded = audiocity::plugin::encodeMonoAudioStateAsset(source);
+    if (encoded.getSize() < 40)
+        return false;
+
+    auto* bytes = static_cast<std::uint8_t*>(encoded.getData());
+    bytes[encoded.getSize() - 1] ^= 0x5au;
+
+    juce::AudioBuffer<float> destination(1, 2);
+    destination.setSample(0, 0, 0.25f);
+    destination.setSample(0, 1, -0.5f);
+    juce::String error;
+    if (audiocity::plugin::decodeAudioStateAsset(encoded, destination, &error)
+        || error.isEmpty()
+        || destination.getNumChannels() != 1
+        || destination.getNumSamples() != 2
+        || destination.getSample(0, 0) != 0.25f
+        || destination.getSample(0, 1) != -0.5f)
+        return false;
+
+    encoded.setSize(encoded.getSize() - 3, true);
+    return !audiocity::plugin::decodeAudioStateAsset(encoded, destination, &error)
+        && error.isNotEmpty()
+        && destination.getNumSamples() == 2;
+}
+
+bool runAudioStateCodecEnforcesLimitsTest()
+{
+    juce::AudioBuffer<float> tooManyChannels(
+        audiocity::plugin::AudioStateCodecLimits::maximumChannels + 1, 1);
+    juce::String error;
+    if (!audiocity::plugin::encodeAudioStateAsset(tooManyChannels, &error).isEmpty()
+        || error.isEmpty())
+        return false;
+
+    juce::AudioBuffer<float> nonFinite(1, 2);
+    nonFinite.setSample(0, 0, std::numeric_limits<float>::infinity());
+    return audiocity::plugin::encodeAudioStateAsset(nonFinite, &error).isEmpty()
+        && error.isNotEmpty();
+}
+
+juce::MemoryBlock gzipAudioStateTestPayload(const void* const data, const std::size_t size)
+{
+    juce::MemoryOutputStream compressed;
+    {
+        juce::GZIPCompressorOutputStream zipper(
+            compressed,
+            6,
+            juce::GZIPCompressorOutputStream::windowBitsGZIP);
+        if (!zipper.write(data, size))
+            return {};
+    }
+    return compressed.getMemoryBlock();
+}
+
+juce::MemoryBlock forgeAudioStateTestAsset(const int channels,
+                                           const int samples,
+                                           const int decodedBytes,
+                                           const std::uint32_t crc,
+                                           const juce::MemoryBlock& compressed)
+{
+    constexpr std::array<char, 8> magic{ 'A', 'C', 'T', 'Y', 'A', 'U', 'D', '1' };
+    juce::MemoryOutputStream output;
+    output.write(magic.data(), magic.size());
+    output.writeInt(1);
+    output.writeInt(channels);
+    output.writeInt(samples);
+    output.writeInt(decodedBytes);
+    output.writeInt(static_cast<int>(crc));
+    output.writeInt(static_cast<int>(compressed.getSize()));
+    output.write(compressed.getData(), compressed.getSize());
+    return output.getMemoryBlock();
+}
+
+bool runAudioStateCodecRejectsForgedSizesAndTrailingDataTest()
+{
+    constexpr auto headerPrefixBytes = std::size_t{ 28 };
+    const std::vector<float> source(32, 0.125f);
+    const auto valid = audiocity::plugin::encodeMonoAudioStateAsset(source);
+    if (valid.getSize() <= headerPrefixBytes)
+        return false;
+
+    std::vector<float> validDestination;
+    juce::String error("stale error");
+    if (!audiocity::plugin::decodeMonoAudioStateAsset(valid, validDestination, &error)
+        || validDestination != source
+        || error.isNotEmpty())
+        return false;
+
+    std::vector<float> decodedWithTrailingSample(source);
+    decodedWithTrailingSample.push_back(-0.75f);
+    const auto compressedWithTrailingSample = gzipAudioStateTestPayload(
+        decodedWithTrailingSample.data(), decodedWithTrailingSample.size() * sizeof(float));
+    if (compressedWithTrailingSample.isEmpty())
+        return false;
+
+    juce::MemoryOutputStream trailingAssetStream;
+    trailingAssetStream.write(valid.getData(), headerPrefixBytes);
+    trailingAssetStream.writeInt(static_cast<int>(compressedWithTrailingSample.getSize()));
+    trailingAssetStream.write(compressedWithTrailingSample.getData(), compressedWithTrailingSample.getSize());
+    const auto trailingAsset = trailingAssetStream.getMemoryBlock();
+
+    std::vector<float> monoDestination{ 0.625f, -0.375f };
+    if (audiocity::plugin::decodeMonoAudioStateAsset(trailingAsset, monoDestination, &error)
+        || !error.containsIgnoreCase("trailing decoded data")
+        || monoDestination != std::vector<float>({ 0.625f, -0.375f }))
+        return false;
+
+    const float tinyDecodedPayload = 0.0f;
+    const auto tinyCompressedPayload = gzipAudioStateTestPayload(
+        &tinyDecodedPayload, sizeof(tinyDecodedPayload));
+    if (tinyCompressedPayload.isEmpty())
+        return false;
+
+    const auto maximumDecodedBytes = audiocity::plugin::AudioStateCodecLimits::maximumDecodedBytes;
+    const auto maximumMonoSamples = static_cast<int>(maximumDecodedBytes / sizeof(float));
+    const auto oversized = forgeAudioStateTestAsset(
+        1,
+        maximumMonoSamples + 1,
+        static_cast<int>(maximumDecodedBytes + sizeof(float)),
+        0,
+        tinyCompressedPayload);
+
+    juce::AudioBuffer<float> destination(1, 2);
+    destination.setSample(0, 0, 0.25f);
+    destination.setSample(0, 1, -0.5f);
+    if (audiocity::plugin::decodeAudioStateAsset(oversized, destination, &error)
+        || !error.containsIgnoreCase("header")
+        || destination.getNumSamples() != 2
+        || destination.getSample(0, 0) != 0.25f
+        || destination.getSample(0, 1) != -0.5f)
+        return false;
+
+    // The exact 64 MiB boundary is admitted by the header checks, but a tiny forged
+    // payload must still fail atomically instead of being treated as zero-filled data.
+    const auto maximumBoundary = forgeAudioStateTestAsset(
+        1,
+        maximumMonoSamples,
+        static_cast<int>(maximumDecodedBytes),
+        0,
+        tinyCompressedPayload);
+    return !audiocity::plugin::decodeAudioStateAsset(maximumBoundary, destination, &error)
+        && error.containsIgnoreCase("decoded fewer bytes")
+        && destination.getNumSamples() == 2
+        && destination.getSample(0, 0) == 0.25f
+        && destination.getSample(0, 1) == -0.5f;
+}
+
+bool writeResolverFixtureFile(const juce::File& file, const char* const bytes)
+{
+    return file.getParentDirectory().createDirectory().wasOk()
+        && file.replaceWithData(bytes, std::strlen(bytes));
+}
+
+bool runImportedAssetResolverMovedFolderAndSafetyTest()
+{
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_asset_resolver", "");
+    const auto originalLibrary = tempDirectory.getChildFile("Original").getChildFile("Library");
+    const auto originalProgram = originalLibrary.getChildFile("Instruments").getChildFile("Piano.sfz");
+    const auto originalSampleA = originalLibrary.getChildFile("Samples").getChildFile("A.wav");
+    const auto originalSampleB = originalLibrary.getChildFile("Samples").getChildFile("B.wav");
+    if (!writeResolverFixtureFile(originalProgram, "<region> sample=../Samples/A.wav")
+        || !writeResolverFixtureFile(originalSampleA, "RIFF-audio-A")
+        || !writeResolverFixtureFile(originalSampleB, "RIFF-audio-B"))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    audiocity::engine::Program program;
+    program.sampleAssets.resize(2);
+    program.sampleAssets[0].sourcePath = originalSampleA.getFullPathName().toStdString();
+    program.sampleAssets[1].sourcePath = originalSampleB.getFullPathName().toStdString();
+    const auto manifest = audiocity::plugin::createImportedAssetManifest(originalProgram, program);
+    if (!manifest.isValid() || manifest.entries.size() != 3)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+    for (const auto& entry : manifest.entries)
+    {
+        if (!entry.hasFastHash || entry.sizeBytes <= 0 || entry.modificationTimeMs <= 0
+            || entry.relativePath.contains(".."))
+        {
+            tempDirectory.deleteRecursively();
+            return false;
+        }
+    }
+
+    juce::ValueTree patch("Patch");
+    audiocity::plugin::appendImportedProgramState(
+        patch,
+        originalProgram.getFullPathName(),
+        {},
+        audiocity::plugin::ImportedProgramFormat::sfz,
+        -1,
+        manifest);
+    const auto restoredManifest = audiocity::plugin::readImportedAssetManifestState(patch);
+    if (!restoredManifest.isValid() || restoredManifest.entries.size() != manifest.entries.size())
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto collaboratorRoot = tempDirectory.getChildFile("Collaborator");
+    const auto movedLibrary = collaboratorRoot.getChildFile("Library");
+    collaboratorRoot.createDirectory();
+    if (!originalLibrary.copyDirectoryTo(movedLibrary)
+        || !tempDirectory.getChildFile("Original").deleteRecursively())
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto moved = audiocity::plugin::resolveImportedAssetManifest(
+        restoredManifest, { collaboratorRoot });
+    if (!moved.complete || moved.ambiguous || moved.resolvedFiles.size() != 3
+        || moved.resolvedProgramFile() != movedLibrary.getChildFile("Instruments").getChildFile("Piano.sfz"))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    // A same-size replacement must not be accepted solely because its name and size match.
+    const auto movedSampleA = movedLibrary.getChildFile("Samples").getChildFile("A.wav");
+    if (!movedSampleA.replaceWithData("RIFF-audio-X", std::strlen("RIFF-audio-X")))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+    const auto altered = audiocity::plugin::resolveImportedAssetManifest(
+        restoredManifest, { collaboratorRoot });
+    if (altered.complete || !altered.resolvedFiles.empty())
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+    movedSampleA.replaceWithData("RIFF-audio-A", std::strlen("RIFF-audio-A"));
+
+    const auto duplicateRoot = tempDirectory.getChildFile("Duplicate");
+    const auto duplicateLibrary = duplicateRoot.getChildFile("Library");
+    duplicateRoot.createDirectory();
+    if (!movedLibrary.copyDirectoryTo(duplicateLibrary))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+    const auto ambiguous = audiocity::plugin::resolveImportedAssetManifest(
+        restoredManifest, { tempDirectory });
+    if (ambiguous.complete || !ambiguous.ambiguous || !ambiguous.resolvedFiles.empty())
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    duplicateRoot.deleteRecursively();
+    movedLibrary.getChildFile("Samples").getChildFile("B.wav").deleteFile();
+    const auto missingSubset = audiocity::plugin::resolveImportedAssetManifest(
+        restoredManifest, { collaboratorRoot });
+    const auto ok = !missingSubset.complete && !missingSubset.ambiguous
+        && missingSubset.resolvedFiles.empty() && missingSubset.diagnostic.isNotEmpty();
+    tempDirectory.deleteRecursively();
+    return ok;
+}
+
+bool runImportedAssetResolverBoundedUniquenessTest()
+{
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_asset_resolver_limit", "");
+    const auto originalRoot = tempDirectory.getChildFile("Original");
+    const auto originalProgram = originalRoot.getChildFile("Patch.sfz");
+    const auto originalSample = originalRoot.getChildFile("Tone.wav");
+    if (!writeResolverFixtureFile(originalProgram, "<region> sample=Tone.wav")
+        || !writeResolverFixtureFile(originalSample, "RIFF-tone"))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    audiocity::engine::Program program;
+    program.sampleAssets.resize(1);
+    program.sampleAssets.front().sourcePath = originalSample.getFullPathName().toStdString();
+    auto manifest = audiocity::plugin::createImportedAssetManifest(originalProgram, program);
+
+    const auto searchRoot = tempDirectory.getChildFile("Search");
+    const auto firstVisited = searchRoot.getChildFile("ZFirst");
+    const auto hiddenDuplicate = searchRoot.getChildFile("AHidden");
+    if (!searchRoot.createDirectory()
+        || !originalRoot.copyDirectoryTo(firstVisited)
+        || !originalRoot.copyDirectoryTo(hiddenDuplicate)
+        || !originalRoot.deleteRecursively())
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    manifest.originalRoot.clear();
+    audiocity::plugin::ImportedAssetSearchLimits limits;
+    limits.maximumFiles = 1;
+    limits.maximumDirectories = 32;
+    limits.maximumDepth = 4;
+    const auto resolution = audiocity::plugin::resolveImportedAssetManifest(
+        manifest, { searchRoot }, limits);
+    const auto ok = !resolution.complete
+        && !resolution.ambiguous
+        && resolution.limitReached
+        && resolution.resolvedFiles.empty()
+        && resolution.diagnostic.containsIgnoreCase("uniqueness")
+        && firstVisited.getChildFile("Patch.sfz").existsAsFile()
+        && hiddenDuplicate.getChildFile("Patch.sfz").existsAsFile();
+    tempDirectory.deleteRecursively();
+    return ok;
+}
+
+bool runImportedAssetResolverLegacyStateTest()
+{
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_legacy_asset_resolver", "");
+    const auto oldFile = tempDirectory.getChildFile("Old").getChildFile("Legacy.sfz");
+    const auto movedRoot = tempDirectory.getChildFile("Moved");
+    const auto movedFile = movedRoot.getChildFile("Legacy.sfz");
+    if (!writeResolverFixtureFile(movedFile, "<region> sample=tone.wav"))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    auto legacyManifest = audiocity::plugin::createLegacyImportedProgramManifest(oldFile);
+    legacyManifest.originalRoot.clear();
+    const auto resolution = audiocity::plugin::resolveImportedAssetManifest(
+        legacyManifest, { movedRoot });
+    const auto ok = resolution.complete && resolution.resolvedFiles.size() == 1
+        && resolution.resolvedProgramFile() == movedFile;
+    tempDirectory.deleteRecursively();
+    return ok;
+}
+
+bool runImportedAssetResolverHashlessMtimeTest()
+{
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_hashless_asset_resolver", "");
+    const auto programFile = tempDirectory.getChildFile("Patch.sfz");
+    if (!writeResolverFixtureFile(programFile, "<region> sample=Tone.wav"))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    audiocity::engine::Program program;
+    auto manifest = audiocity::plugin::createImportedAssetManifest(programFile, program);
+    if (!manifest.isValid() || manifest.entries.size() != 1)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    auto& entry = manifest.entries.front();
+    entry.hasFastHash = false;
+    entry.fastHash = 0;
+    if (!manifest.isValid())
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto originalMtime = entry.modificationTimeMs;
+    const auto unchanged = audiocity::plugin::resolveImportedAssetManifest(manifest, { tempDirectory });
+    const auto changedTime = juce::Time(originalMtime + 5000);
+    if (!unchanged.complete || !programFile.setLastModificationTime(changedTime))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto changed = audiocity::plugin::resolveImportedAssetManifest(manifest, { tempDirectory });
+    entry.modificationTimeMs = 0;
+    const auto rejectsMissingStoredMtime = !manifest.isValid();
+    const auto ok = !changed.complete
+        && changed.resolvedFiles.empty()
+        && programFile.getSize() == entry.sizeBytes
+        && rejectsMissingStoredMtime;
+    tempDirectory.deleteRecursively();
+    return ok;
+}
+
+bool runLibraryFileIndexAndResolverLinkTraversalRejectionTest()
+{
+    const auto tempDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_link_traversal", "");
+    const auto libraryRoot = tempDirectory.getChildFile("Library");
+    const auto outsideRoot = tempDirectory.getChildFile("Outside");
+    const auto outsideProgram = outsideRoot.getChildFile("Patch.sfz");
+    const auto outsideSample = outsideRoot.getChildFile("Tone.wav");
+    const auto linkedFolder = libraryRoot.getChildFile("Linked");
+    const auto originalLibraryProgram = linkedFolder.getChildFile("Patch.sfz");
+    const auto originalLibrarySample = linkedFolder.getChildFile("Tone.wav");
+    if (!libraryRoot.createDirectory()
+        || !writeResolverFixtureFile(outsideProgram, "<region> sample=Tone.wav")
+        || !writeResolverFixtureFile(outsideSample, "RIFF-link-tone")
+        || !writeResolverFixtureFile(originalLibraryProgram, "<region> sample=Tone.wav")
+        || !writeResolverFixtureFile(originalLibrarySample, "RIFF-link-tone"))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    audiocity::plugin::LibraryFileIndexData indexData;
+    indexData.libraryRootPath = libraryRoot.getFullPathName();
+    audiocity::plugin::LibraryFileIndexEntry linkedEntry;
+    linkedEntry.relativePath = "Linked/Tone.wav";
+    linkedEntry.sizeBytes = originalLibrarySample.getSize();
+    linkedEntry.modificationTimeMs = originalLibrarySample.getLastModificationTime().toMilliseconds();
+    indexData.entries.push_back(linkedEntry);
+    linkedEntry.relativePath = "Linked/Patch.sfz";
+    linkedEntry.sizeBytes = originalLibraryProgram.getSize();
+    linkedEntry.modificationTimeMs = originalLibraryProgram.getLastModificationTime().toMilliseconds();
+    linkedEntry.isInstrument = true;
+    indexData.entries.push_back(linkedEntry);
+    const auto cacheFile = tempDirectory.getChildFile("linked-index.acli");
+    audiocity::plugin::LibraryFileIndexStore indexStore(cacheFile);
+    if (!indexStore.save(indexData))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+    const auto safeRestored = indexStore.load();
+    if (!safeRestored.has_value() || safeRestored->entries.size() != indexData.entries.size())
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    bool replacementAttempted = false;
+    bool originalDirectoryRemoved = false;
+    bool replacementLinkCreated = false;
+    audiocity::plugin::LibraryFileIndexStore replacingIndexStore(cacheFile);
+    replacingIndexStore.setPathValidationObserverForTesting([&](const std::size_t validatedEntries)
+    {
+        if (validatedEntries != 1 || replacementAttempted)
+            return;
+
+        replacementAttempted = true;
+        originalDirectoryRemoved = linkedFolder.deleteRecursively();
+        if (originalDirectoryRemoved)
+            replacementLinkCreated = outsideRoot.createSymbolicLink(linkedFolder, true)
+                && linkedFolder.isSymbolicLink();
+    });
+    const auto replacedDuringLoad = replacingIndexStore.load();
+    if (!replacementAttempted || !originalDirectoryRemoved)
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+    if (!replacementLinkCreated)
+    {
+        std::printf("Symbolic-link traversal test skipped: link creation is unavailable.\n");
+        tempDirectory.deleteRecursively();
+        return true;
+    }
+    if (replacedDuringLoad.has_value() || !linkedFolder.isSymbolicLink())
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+
+    const auto scanned = audiocity::plugin::LibraryFileIndex::scanRoot(libraryRoot, false);
+    const auto indexLoadRejected = !indexStore.load().has_value();
+    const auto indexSaveRejected = !indexStore.save(indexData);
+
+    audiocity::engine::Program program;
+    program.sampleAssets.resize(1);
+    program.sampleAssets.front().sourcePath = outsideSample.getFullPathName().toStdString();
+    auto manifest = audiocity::plugin::createImportedAssetManifest(outsideProgram, program);
+    manifest.originalRoot.clear();
+    for (auto& entry : manifest.entries)
+        entry.relativePath = "Linked/" + entry.relativePath;
+
+    const auto resolution = audiocity::plugin::resolveImportedAssetManifest(
+        manifest, { libraryRoot });
+    auto caseSensitiveCacheRejected = true;
+    const auto caseLibraryRoot = tempDirectory.getChildFile("CaseLibrary");
+    const auto upperFolder = caseLibraryRoot.getChildFile("Bank");
+    const auto lowerFolder = caseLibraryRoot.getChildFile("bank");
+    const auto upperSample = upperFolder.getChildFile("Safe.wav");
+    const auto caseOutsideRoot = tempDirectory.getChildFile("CaseOutside");
+    if (!writeResolverFixtureFile(upperSample, "RIFF-safe")
+        || !writeResolverFixtureFile(caseOutsideRoot.getChildFile("Linked.wav"), "RIFF-linked"))
+    {
+        tempDirectory.deleteRecursively();
+        return false;
+    }
+    if (caseOutsideRoot.createSymbolicLink(lowerFolder, false) && lowerFolder.isSymbolicLink())
+    {
+        audiocity::plugin::LibraryFileIndexData caseData;
+        caseData.libraryRootPath = caseLibraryRoot.getFullPathName();
+        audiocity::plugin::LibraryFileIndexEntry caseEntry;
+        caseEntry.relativePath = "Bank/Safe.wav";
+        caseEntry.sizeBytes = upperSample.getSize();
+        caseEntry.modificationTimeMs = upperSample.getLastModificationTime().toMilliseconds();
+        caseData.entries.push_back(caseEntry);
+        caseEntry.relativePath = "bank/Linked.wav";
+        caseData.entries.push_back(caseEntry);
+        const audiocity::plugin::LibraryFileIndexStore caseStore(
+            tempDirectory.getChildFile("case-sensitive-index.acli"));
+        caseSensitiveCacheRejected = !caseStore.save(caseData);
+    }
+
+    const auto ok = scanned.empty()
+        && indexLoadRejected
+        && indexSaveRejected
+        && !resolution.complete
+        && resolution.resolvedFiles.empty()
+        && caseSensitiveCacheRejected;
+    tempDirectory.deleteRecursively();
+    return ok;
+}
+
+enum class OfflineTestSuite
+{
+    engine,
+    import,
+    state,
+    preset,
+    count
+};
+
 struct OfflineTestCase
 {
     const char* name = nullptr;
     bool (*run)() = nullptr;
     int failureCode = 1;
+    OfflineTestSuite suite = OfflineTestSuite::engine;
 };
 
-template <std::size_t TestCount>
-int runOfflineTests(const OfflineTestCase (&tests)[TestCount])
+const char* offlineTestSuiteName(const OfflineTestSuite suite)
 {
+    switch (suite)
+    {
+        case OfflineTestSuite::import: return "import";
+        case OfflineTestSuite::state: return "state";
+        case OfflineTestSuite::preset: return "preset";
+        case OfflineTestSuite::engine:
+        default: return "engine";
+    }
+}
+
+template <std::size_t TestCount>
+bool validateOfflineTestRegistry(const OfflineTestCase (&tests)[TestCount])
+{
+    std::set<std::string> names;
+    std::array<std::size_t, static_cast<std::size_t>(OfflineTestSuite::count)> suiteCounts{};
     for (const auto& test : tests)
     {
+        const auto suiteIndex = static_cast<std::size_t>(test.suite);
+        if (test.name == nullptr
+            || test.name[0] == '\0'
+            || test.run == nullptr
+            || suiteIndex >= suiteCounts.size()
+            || !names.emplace(test.name).second)
+        {
+            return false;
+        }
+        ++suiteCounts[suiteIndex];
+    }
+
+    return std::all_of(suiteCounts.begin(), suiteCounts.end(), [](const auto count)
+    {
+        return count > 0;
+    });
+}
+
+template <std::size_t TestCount>
+int runOfflineTests(const OfflineTestCase (&tests)[TestCount],
+                    const juce::String& requestedSuite,
+                    const juce::String& requestedFilter,
+                    const bool listOnly)
+{
+    auto selectedTests = 0;
+    for (const auto& test : tests)
+    {
+        const auto suite = test.suite;
+        if (requestedSuite.isNotEmpty() && requestedSuite != offlineTestSuiteName(suite))
+            continue;
+        if (requestedFilter.isNotEmpty()
+            && !juce::String(test.name).containsIgnoreCase(requestedFilter))
+            continue;
+
+        ++selectedTests;
+        if (listOnly)
+        {
+            std::printf("%s\t%s\n", offlineTestSuiteName(suite), test.name);
+            continue;
+        }
         if (test.run != nullptr && test.run())
             continue;
 
@@ -14303,226 +16182,301 @@ int runOfflineTests(const OfflineTestCase (&tests)[TestCount])
         return test.failureCode;
     }
 
+    if (selectedTests == 0)
+    {
+        std::fprintf(stderr, "No offline tests matched suite '%s' and filter '%s'.\n",
+                     requestedSuite.toRawUTF8(), requestedFilter.toRawUTF8());
+        return 64;
+    }
+
     return 0;
 }
 }
 
-int main()
+int main(const int argc, char** argv)
 {
-#define AUDIOCITY_TEST(fn, code) { #fn, fn, code }
+#define AUDIOCITY_TEST(suite, fn, code) { #fn, fn, code, OfflineTestSuite::suite }
     const OfflineTestCase tests[] = {
-        AUDIOCITY_TEST(runDeterminismTest, 1),
-        AUDIOCITY_TEST(runRenderSegmentationMatchesSubBlockSequenceTest, 225),
-        AUDIOCITY_TEST(runStaticFilterSegmentationMatchesSubBlockSequenceTest, 226),
-        AUDIOCITY_TEST(runEditedSampleSegmentationMatchesSubBlockSequenceTest, 227),
-        AUDIOCITY_TEST(runStereoFilterChannelIsolationTest, 228),
-        AUDIOCITY_TEST(runDynamic24dBFilterSegmentationMatchesSubBlockSequenceTest, 229),
-        AUDIOCITY_TEST(runStereoFidelitySegmentationMatchesSubBlockSequenceTest, 230),
-        AUDIOCITY_TEST(runLowDepth24dBFilterSegmentationMatchesSubBlockSequenceTest, 231),
-        AUDIOCITY_TEST(runFilterCutoffHysteresisMatchesReferenceWithinToleranceTest, 232),
-        AUDIOCITY_TEST(runMonoFidelityLoopCrossfadeSegmentationMatchesSubBlockSequenceTest, 233),
-        AUDIOCITY_TEST(runProgramModelRangeAndZoneMatchingTest, 73),
-        AUDIOCITY_TEST(runProgramSnapshotBuildAndMatchTest, 75),
-        AUDIOCITY_TEST(runProgramMappingRowsTest, 97),
-        AUDIOCITY_TEST(runProgramMappingEditTest, 98),
-        AUDIOCITY_TEST(runProgramMappingOverviewEditTest, 99),
-        AUDIOCITY_TEST(runProgramMappingSampleWindowEditTest, 100),
-        AUDIOCITY_TEST(runProgramMappingZoneOperationsTest, 102),
-        AUDIOCITY_TEST(runProgramMappingChromaticRemapTest, 115),
-        AUDIOCITY_TEST(runProgramMappingKeyRangeSpreadTest, 117),
-        AUDIOCITY_TEST(runProgramSliceSplitAtSampleTest, 118),
-        AUDIOCITY_TEST(runProgramSliceMergeAtBoundaryTest, 120),
-        AUDIOCITY_TEST(runProgramMappingDeriveRootNotesTest, 119),
-        AUDIOCITY_TEST(runProgramMappingMapToRootNotesTest, 121),
-        AUDIOCITY_TEST(runProgramMappingAtomicBatchEditRollbackTest, 111),
-        AUDIOCITY_TEST(runProgramMappingAtomicBatchDeleteRollbackTest, 112),
-        AUDIOCITY_TEST(runProgramMappingStateRoundTripTest, 101),
-        AUDIOCITY_TEST(runProgramMappingStructuralStateRoundTripTest, 103),
-        AUDIOCITY_TEST(runImportedProgramStateSubtreeRoundTripTest, 106),
-        AUDIOCITY_TEST(runImportedProgramStateLegacyReplayFallbackTest, 107),
-        AUDIOCITY_TEST(runImportedProgramRestoreResultSuccessTest, 108),
-        AUDIOCITY_TEST(runImportedProgramRestoreResultAtomicFailureTest, 109),
-        AUDIOCITY_TEST(runImportedProgramDerivedStateSummaryTest, 110),
-        AUDIOCITY_TEST(runSfzImportIncludeDefineDefaultPathTest, 87),
-        AUDIOCITY_TEST(runSfzImportRoundRobinPlaybackTest, 88),
-        AUDIOCITY_TEST(runSfzImportSeqModeRandomTest, 125),
-        AUDIOCITY_TEST(runSfzImportSeqLengthPlaybackTest, 104),
-        AUDIOCITY_TEST(runSfzImportReleaseTriggerPlaybackTest, 105),
-        AUDIOCITY_TEST(runSfzImportLoopContinuousPlaybackTest, 129),
-        AUDIOCITY_TEST(runSfzImportOneShotPlaybackTest, 131),
-        AUDIOCITY_TEST(runSfzImportGainPanTunePlaybackTest, 133),
-        AUDIOCITY_TEST(runSfzImportChokeGroupPlaybackTest, 135),
-        AUDIOCITY_TEST(runSfzImportVelocityCrossfadePlaybackTest, 127),
-        AUDIOCITY_TEST(runSfzImporterDiagnosticsTest, 89),
-        AUDIOCITY_TEST(runSfzExporterRoundTripTest, 234),
-        AUDIOCITY_TEST(runSfzExporterCreateFromScratchTest, 235),
-        AUDIOCITY_TEST(runDecentSamplerImporterTest, 136),
-        AUDIOCITY_TEST(runDecentSamplerExporterRoundTripTest, 249),
-        AUDIOCITY_TEST(runSf2ImporterMinimalTest, 137),
-        AUDIOCITY_TEST(runSf2ImporterPresetSelectionTest, 224),
-        AUDIOCITY_TEST(runSf2ImporterRejectsShortListChunkTest, 243),
-        AUDIOCITY_TEST(runSf2ImporterRejectsEmptyRequiredTablesTest, 244),
-        AUDIOCITY_TEST(runBitwigMultisampleImporterTest, 138),
-        AUDIOCITY_TEST(runArchiveRelativePathSafetyTest, 236),
-        AUDIOCITY_TEST(runBitwigMultisampleRejectsUnsafeArchivePathTest, 237),
-        AUDIOCITY_TEST(runArchiveImportersRejectOversizedManifestTest, 245),
-        AUDIOCITY_TEST(runMpcKeygroupImporterTest, 140),
-        AUDIOCITY_TEST(run1010MusicPresetImporterTest, 141),
-        AUDIOCITY_TEST(runTalSamplerImporterTest, 142),
-        AUDIOCITY_TEST(runTx16WxImporterTest, 143),
-        AUDIOCITY_TEST(runKorgMultisampleImporterTest, 144),
-        AUDIOCITY_TEST(runKorgMultisampleRejectsUnsafeArchivePathTest, 238),
-        AUDIOCITY_TEST(runAbletonAdvImporterTest, 145),
-        AUDIOCITY_TEST(runAbletonAdvRejectsOversizedXmlTest, 246),
-        AUDIOCITY_TEST(runDistingExPresetImporterTest, 146),
-        AUDIOCITY_TEST(runKorgKmpImporterTest, 147),
-        AUDIOCITY_TEST(runKorgKmpImporterCapsRlp1EntriesTest, 241),
-        AUDIOCITY_TEST(runLogicExs24ImporterRejectsOversizedChunkTest, 242),
-        AUDIOCITY_TEST(runLogicExs24ImporterTest, 148),
-        AUDIOCITY_TEST(runNnxtImporterDiagnosticTest, 149),
-        AUDIOCITY_TEST(runMalformedImporterCorpusTest, 240),
-        AUDIOCITY_TEST(runLegacyNkiImportNcwViaConverterTest, 222),
-        AUDIOCITY_TEST(runLegacyNkiProbeDetectsEncryptedPatchTest, 139),
-        AUDIOCITY_TEST(runLegacyNkiProbeDetectsDiscreteSampleReferencesTest, 122),
-        AUDIOCITY_TEST(runLegacyNkiProbeRejectsContainerFormatsTest, 123),
-        AUDIOCITY_TEST(runLegacyNkiProbeResolvesParentSamplesFolderTest, 124),
-        AUDIOCITY_TEST(runLegacyNkiProbeEnumeratesZoneMetadataTest, 126),
-        AUDIOCITY_TEST(runLegacyNkiImportTranslatesLegacyZonesTest, 128),
-        AUDIOCITY_TEST(runLegacyNkiImportSampleWindowAndLoopTest, 130),
-        AUDIOCITY_TEST(runLegacyNkiImportGainPanTuneTest, 132),
-        AUDIOCITY_TEST(runLegacyNkiImportTriggerModesTest, 134),
-        AUDIOCITY_TEST(runSameOffsetMidiEventOrderTest, 74),
-        AUDIOCITY_TEST(runEngineProgramSnapshotZoneSelectionTest, 76),
-        AUDIOCITY_TEST(runEngineProgramSampleAssetBindingTest, 77),
-        AUDIOCITY_TEST(runEngineProgramStereoAssetPlaybackTest, 81),
-        AUDIOCITY_TEST(runEngineProgramRoundRobinZoneSelectionTest, 82),
-        AUDIOCITY_TEST(runEngineProgramLayeredZonePlaybackTest, 90),
-        AUDIOCITY_TEST(runEngineProgramVelocityFadeInTest, 91),
-        AUDIOCITY_TEST(runEngineProgramCycleRandomRoundRobinZoneSelectionTest, 85),
-        AUDIOCITY_TEST(runEngineProgramChokeGroupTest, 83),
-        AUDIOCITY_TEST(runEngineProgramZoneAndGroupPanTest, 84),
-        AUDIOCITY_TEST(runEngineProgramZoneTriggerModeTest, 86),
-        AUDIOCITY_TEST(runEngineProgramZoneGainAndTuneTest, 78),
-        AUDIOCITY_TEST(runEngineProgramZoneSampleWindowTest, 79),
-        AUDIOCITY_TEST(runEngineProgramZoneLoopModeTest, 80),
-        AUDIOCITY_TEST(runVoiceStealingEdgeCaseTest, 2),
-        AUDIOCITY_TEST(runPolyphonyLimitControlTest, 52),
-        AUDIOCITY_TEST(runPlaybackModesTest, 3),
-        AUDIOCITY_TEST(runLoopMarkersTest, 4),
-        AUDIOCITY_TEST(runLoadSampleResetsPlaybackAndLoopRangesTest, 44),
-        AUDIOCITY_TEST(runLoadSampleClearsProgramSnapshotTest, 92),
-        AUDIOCITY_TEST(runLoadSampleResetsEnvelopeAndFilterDefaultsTest, 45),
-        AUDIOCITY_TEST(runLoadNcwSampleViaConverterTest, 223),
-        AUDIOCITY_TEST(runLoadNcwSampleViaConverterQuotesShellMetacharactersTest, 239),
-        AUDIOCITY_TEST(runFilterModulationAmountsAreBipolarTest, 70),
-        AUDIOCITY_TEST(runEmbeddedLoopMetadataLoadsWithoutRootNoteTest, 64),
-        AUDIOCITY_TEST(runRexRuntimeFallbackSmokeTest, 62),
-        AUDIOCITY_TEST(runRexSliceProgramBuildTest, 114),
-        AUDIOCITY_TEST(runTransientSliceProgramBuildTest, 116),
-        AUDIOCITY_TEST(runCcLearnDialUserClearCallbackTest, 63),
-        AUDIOCITY_TEST(runGeneratedCyclePitchInvariantAcrossSampleCountsTest, 46),
-        AUDIOCITY_TEST(runDisplayMinMaxPreservesPolarityTest, 48),
-        AUDIOCITY_TEST(runLoadedSampleMetadataForGeneratedDataTest, 69),
-        AUDIOCITY_TEST(runParameterIdSafetyTest, 72),
-        AUDIOCITY_TEST(runEditorFilterLfoPushPreservesAdvancedControlsTest, 180),
-        AUDIOCITY_TEST(runEditorModulationPanelExtractionTest, 181),
-        AUDIOCITY_TEST(runBackgroundImportWorkerPublishContractTest, 247),
-        AUDIOCITY_TEST(runOwnedJobWorkerReplacementIsSerialTest, 255),
-        AUDIOCITY_TEST(runOwnedJobWorkerDestructorCancelsAndJoinsTest, 256),
-        AUDIOCITY_TEST(runCancellableAudioReadStopsAtChunkBoundaryTest, 257),
-        AUDIOCITY_TEST(runAboutPageExtractionContractTest, 248),
-        AUDIOCITY_TEST(runGeneratePageExtractionContractTest, 251),
-        AUDIOCITY_TEST(runCapturePageExtractionContractTest, 252),
-        AUDIOCITY_TEST(runDecentSamplerSaveRoutingContractTest, 250),
-        AUDIOCITY_TEST(runEditorSampleEditControlsTest, 5),
-        AUDIOCITY_TEST(runPolyphonicDifferentNotesLayerWhenMonoOffTest, 43),
-        AUDIOCITY_TEST(runMonoLegatoUsesSingleVoiceTest, 7),
-        AUDIOCITY_TEST(runPolyphonicSameNoteReleaseTest, 24),
-        AUDIOCITY_TEST(runDenseLoopModeOverflowDoesNotStickNotesTest, 55),
-        AUDIOCITY_TEST(runQueueSaturatedByPitchBendStillReleasesNoteOffTest, 56),
-        AUDIOCITY_TEST(runGlideChangesLegatoTransitionTest, 8),
-        AUDIOCITY_TEST(runPreloadSegmentationDeterminismTest, 9),
-        AUDIOCITY_TEST(runRuntimePreloadChangeStabilityTest, 10),
-        AUDIOCITY_TEST(runRuntimeSampleReloadStabilityTest, 11),
-        AUDIOCITY_TEST(runLoopModeRuntimePreloadChangeStabilityTest, 12),
-        AUDIOCITY_TEST(runSegmentRebuildCounterTest, 13),
-        AUDIOCITY_TEST(runProgramPreloadMetricsAndRebuildTest, 14),
-        AUDIOCITY_TEST(runSingleSampleFileStreamingPreloadMetricsTest, 170),
-        AUDIOCITY_TEST(runProgramStreamPrimingAndCacheMetricsTest, 171),
-        AUDIOCITY_TEST(runProgramStreamLookaheadPrimingTest, 172),
-        AUDIOCITY_TEST(runDiskStreamCacheStaysResponsiveUnderContentionTest, 253),
-        AUDIOCITY_TEST(runRtSnapshotCellProtectsHeldReaderAcrossPublishesTest, 254),
-        AUDIOCITY_TEST(runProgramMappingCreateZoneTest, 176),
-        AUDIOCITY_TEST(runQualityTierDifferenceTest, 15),
-        AUDIOCITY_TEST(runQualityTierDeterminismTest, 16),
-        AUDIOCITY_TEST(runCpuQualityEnergyDriftSmokeTest, 17),
-        AUDIOCITY_TEST(runRuntimeQualitySwitchSmokeTest, 18),
-        AUDIOCITY_TEST(runEditorUndoHistoryMixedOrderTest, 173),
-        AUDIOCITY_TEST(runEditorUndoHistoryCoalesceAndLabelsTest, 174),
-        AUDIOCITY_TEST(runEditorUndoHistoryDuplicateAndSplitTest, 175),
-        AUDIOCITY_TEST(runEditorUndoHistoryCreateZoneTest, 177),
-        AUDIOCITY_TEST(runSettingsUndoHistoryTest, 18),
-        AUDIOCITY_TEST(runSettingsUndoHistoryCapacityTest, 19),
-        AUDIOCITY_TEST(runSettingsUndoHistoryCoalesceTest, 20),
-        AUDIOCITY_TEST(runSettingsUndoHistoryLabelsTest, 21),
-        AUDIOCITY_TEST(runSettingsUndoHistoryEditorStateTest, 22),
-        AUDIOCITY_TEST(runSettingsSnapshotCaptureFieldsAffectEqualityTest, 65),
-        AUDIOCITY_TEST(runSettingsUndoHistoryTracksCaptureSettingsTest, 66),
-        AUDIOCITY_TEST(runPresetXmlRoundTripWithEmbeddedSampleDataTest, 67),
-        AUDIOCITY_TEST(runPresetXmlRejectsInvalidPayloadTest, 68),
-        AUDIOCITY_TEST(runEmbeddedSamplePresetRoundTripTest, 220),
-        AUDIOCITY_TEST(runFactoryPresetBankDiscoveryTest, 221),
-        AUDIOCITY_TEST(runLibraryMetadataFavoritesAndRecentsTest, 93),
-        AUDIOCITY_TEST(runLibraryMetadataValueTreeRoundTripTest, 94),
-        AUDIOCITY_TEST(runLibraryMetadataBookmarksTest, 95),
-        AUDIOCITY_TEST(runLibraryFileIndexScanTest, 96),
-        AUDIOCITY_TEST(runPeakPreviewCacheRoundTripTest, 70),
-        AUDIOCITY_TEST(runPeakPreviewCacheResetClearsFileTest, 71),
-        AUDIOCITY_TEST(runPlayerPadStateUtilityTest, 23),
-        AUDIOCITY_TEST(runSampleBrowserTooltipFormattingTest, 236),
-        AUDIOCITY_TEST(runEditorPersistentBrowserRailTabGateTest, 237),
-        AUDIOCITY_TEST(runFilterModeDifferenceTest, 25),
-        AUDIOCITY_TEST(runFilterModulationDifferenceTest, 26),
-        AUDIOCITY_TEST(runFilterKeytrackPolarityTest, 30),
-        AUDIOCITY_TEST(runFilterLfoDifferenceTest, 31),
-        AUDIOCITY_TEST(runPitchLfoVibratoSettingsTest, 53),
-        AUDIOCITY_TEST(runFilterLfoShapeDifferenceTest, 32),
-        AUDIOCITY_TEST(runAmpLfoTremoloSettingsTest, 52),
-        AUDIOCITY_TEST(runFilterLfoTempoSyncSettingsTest, 33),
-        AUDIOCITY_TEST(runFilterLfoRetriggerDifferenceTest, 34),
-        AUDIOCITY_TEST(runFilterLfoStartPhaseDifferenceTest, 35),
-        AUDIOCITY_TEST(runFilterLfoFadeInDifferenceTest, 36),
-        AUDIOCITY_TEST(runFilterLfoStartRandomDifferenceTest, 37),
-        AUDIOCITY_TEST(runFilterLfoAmountKeytrackingDifferenceTest, 38),
-        AUDIOCITY_TEST(runFilterLfoRateKeytrackingDifferenceTest, 39),
-        AUDIOCITY_TEST(runFilterLfoRateKeytrackInTempoSyncToggleDifferenceTest, 40),
-        AUDIOCITY_TEST(runFilterLfoKeytrackCurveDifferenceTest, 41),
-        AUDIOCITY_TEST(runFilterLfoUnipolarDifferenceTest, 42),
-        AUDIOCITY_TEST(runUltraQualityDifferenceTest, 27),
-        AUDIOCITY_TEST(runUltraQualitySpectralTonePreservationTest, 178),
-        AUDIOCITY_TEST(runReverbMixTailTest, 28),
-        AUDIOCITY_TEST(runDelayMixTailTest, 57),
-        AUDIOCITY_TEST(runDelayTempoSyncRespondsToTempoTest, 58),
-        AUDIOCITY_TEST(runDcOffsetFilterRemovesBiasTest, 59),
-        AUDIOCITY_TEST(runMasterVolumeGainTest, 47),
-        AUDIOCITY_TEST(runPanBalanceTest, 51),
-        AUDIOCITY_TEST(runAutopanStereoMotionTest, 60),
-        AUDIOCITY_TEST(runSaturationDriveAndModeTest, 61),
-        AUDIOCITY_TEST(runTuneCoarseFinePitchShiftTest, 49),
-        AUDIOCITY_TEST(runPitchBendRangeAndRealtimeModulationTest, 50),
-        AUDIOCITY_TEST(runModulationRoutingRealtimeTest, 179),
-        AUDIOCITY_TEST(runVoicePlaybackStateSnapshotTest, 54),
-        AUDIOCITY_TEST(runLoopCrossfadeSmoothsBoundaryTest, 29),
-        AUDIOCITY_TEST(runImportedProgramStoreEditPublishesCommittedProgramTest, 241),
-        AUDIOCITY_TEST(runImportedProgramStoreRejectedEditLeavesStateUntouchedTest, 242),
-        AUDIOCITY_TEST(runImportedProgramStoreAppendsSampleDataOnCommitTest, 243),
-        AUDIOCITY_TEST(runImportedProgramStoreRejectsEditWithoutLoadedProgramTest, 244),
-        AUDIOCITY_TEST(runImportedProgramStoreLoadProgramPublishesNothingTest, 245),
-        AUDIOCITY_TEST(runImportedProgramStoreZoneEditSkipsSampleDataTest, 246),
-        AUDIOCITY_TEST(runImportedProgramStoreFallsBackWhenMetadataPublishRefusedTest, 247),
-        AUDIOCITY_TEST(runProgramMetadataUpdateReusesLoadedAudioTest, 248),
+        AUDIOCITY_TEST(engine, runDeterminismTest, 1),
+        AUDIOCITY_TEST(engine, runRenderSegmentationMatchesSubBlockSequenceTest, 225),
+        AUDIOCITY_TEST(engine, runStaticFilterSegmentationMatchesSubBlockSequenceTest, 226),
+        AUDIOCITY_TEST(engine, runEditedSampleSegmentationMatchesSubBlockSequenceTest, 227),
+        AUDIOCITY_TEST(engine, runStereoFilterChannelIsolationTest, 228),
+        AUDIOCITY_TEST(engine, runDynamic24dBFilterSegmentationMatchesSubBlockSequenceTest, 229),
+        AUDIOCITY_TEST(engine, runStereoFidelitySegmentationMatchesSubBlockSequenceTest, 230),
+        AUDIOCITY_TEST(engine, runLowDepth24dBFilterSegmentationMatchesSubBlockSequenceTest, 231),
+        AUDIOCITY_TEST(engine, runFilterCutoffHysteresisMatchesReferenceWithinToleranceTest, 232),
+        AUDIOCITY_TEST(engine, runMonoFidelityLoopCrossfadeSegmentationMatchesSubBlockSequenceTest, 233),
+        AUDIOCITY_TEST(engine, runProgramModelRangeAndZoneMatchingTest, 73),
+        AUDIOCITY_TEST(engine, runProgramSnapshotBuildAndMatchTest, 75),
+        AUDIOCITY_TEST(import, runProgramMappingRowsTest, 97),
+        AUDIOCITY_TEST(import, runProgramMappingEditTest, 98),
+        AUDIOCITY_TEST(import, runProgramMappingOverviewEditTest, 99),
+        AUDIOCITY_TEST(import, runProgramMappingSampleWindowEditTest, 100),
+        AUDIOCITY_TEST(import, runProgramMappingZoneOperationsTest, 102),
+        AUDIOCITY_TEST(import, runProgramMappingChromaticRemapTest, 115),
+        AUDIOCITY_TEST(import, runProgramMappingKeyRangeSpreadTest, 117),
+        AUDIOCITY_TEST(import, runProgramSliceSplitAtSampleTest, 118),
+        AUDIOCITY_TEST(import, runProgramSliceMergeAtBoundaryTest, 120),
+        AUDIOCITY_TEST(import, runProgramMappingDeriveRootNotesTest, 119),
+        AUDIOCITY_TEST(import, runProgramMappingMapToRootNotesTest, 121),
+        AUDIOCITY_TEST(import, runProgramMappingAtomicBatchEditRollbackTest, 111),
+        AUDIOCITY_TEST(import, runProgramMappingAtomicBatchDeleteRollbackTest, 112),
+        AUDIOCITY_TEST(state, runProgramMappingStateRoundTripTest, 101),
+        AUDIOCITY_TEST(state, runProgramMappingStructuralStateRoundTripTest, 103),
+        AUDIOCITY_TEST(state, runImportedProgramStateSubtreeRoundTripTest, 106),
+        AUDIOCITY_TEST(state, runImportedProgramStateLegacyReplayFallbackTest, 107),
+        AUDIOCITY_TEST(import, runImportedProgramRestoreResultSuccessTest, 108),
+        AUDIOCITY_TEST(import, runImportedProgramRestoreResultAtomicFailureTest, 109),
+        AUDIOCITY_TEST(state, runImportedProgramDerivedStateSummaryTest, 110),
+        AUDIOCITY_TEST(import, runSfzImportIncludeDefineDefaultPathTest, 87),
+        AUDIOCITY_TEST(import, runSfzImportRoundRobinPlaybackTest, 88),
+        AUDIOCITY_TEST(import, runSfzImportSeqModeRandomTest, 125),
+        AUDIOCITY_TEST(import, runSfzImportSeqLengthPlaybackTest, 104),
+        AUDIOCITY_TEST(import, runSfzImportReleaseTriggerPlaybackTest, 105),
+        AUDIOCITY_TEST(import, runSfzImportLoopContinuousPlaybackTest, 129),
+        AUDIOCITY_TEST(import, runSfzImportOneShotPlaybackTest, 131),
+        AUDIOCITY_TEST(import, runSfzImportGainPanTunePlaybackTest, 133),
+        AUDIOCITY_TEST(import, runSfzImportChokeGroupPlaybackTest, 135),
+        AUDIOCITY_TEST(import, runSfzImportVelocityCrossfadePlaybackTest, 127),
+        AUDIOCITY_TEST(import, runSfzImporterDiagnosticsTest, 89),
+        AUDIOCITY_TEST(import, runSfzExporterRoundTripTest, 234),
+        AUDIOCITY_TEST(import, runSfzExporterCreateFromScratchTest, 235),
+        AUDIOCITY_TEST(import, runDecentSamplerImporterTest, 136),
+        AUDIOCITY_TEST(import, runDecentSamplerExporterRoundTripTest, 249),
+        AUDIOCITY_TEST(import, runSf2ImporterMinimalTest, 137),
+        AUDIOCITY_TEST(import, runSf2ImporterPresetSelectionTest, 224),
+        AUDIOCITY_TEST(import, runSf2ImporterRejectsShortListChunkTest, 243),
+        AUDIOCITY_TEST(import, runSf2ImporterRejectsEmptyRequiredTablesTest, 244),
+        AUDIOCITY_TEST(import, runBitwigMultisampleImporterTest, 138),
+        AUDIOCITY_TEST(import, runArchiveRelativePathSafetyTest, 236),
+        AUDIOCITY_TEST(import, runBitwigMultisampleRejectsUnsafeArchivePathTest, 237),
+        AUDIOCITY_TEST(import, runArchiveImportersRejectOversizedManifestTest, 245),
+        AUDIOCITY_TEST(import, runMpcKeygroupImporterTest, 140),
+        AUDIOCITY_TEST(import, run1010MusicPresetImporterTest, 141),
+        AUDIOCITY_TEST(import, runTalSamplerImporterTest, 142),
+        AUDIOCITY_TEST(import, runTx16WxImporterTest, 143),
+        AUDIOCITY_TEST(import, runKorgMultisampleImporterTest, 144),
+        AUDIOCITY_TEST(import, runKorgMultisampleRejectsUnsafeArchivePathTest, 238),
+        AUDIOCITY_TEST(import, runAbletonAdvImporterTest, 145),
+        AUDIOCITY_TEST(import, runAbletonAdvRejectsOversizedXmlTest, 246),
+        AUDIOCITY_TEST(import, runDistingExPresetImporterTest, 146),
+        AUDIOCITY_TEST(import, runKorgKmpImporterTest, 147),
+        AUDIOCITY_TEST(import, runKorgKmpImporterCapsRlp1EntriesTest, 241),
+        AUDIOCITY_TEST(import, runLogicExs24ImporterRejectsOversizedChunkTest, 242),
+        AUDIOCITY_TEST(import, runLogicExs24ImporterTest, 148),
+        AUDIOCITY_TEST(import, runNnxtImporterDiagnosticTest, 149),
+        AUDIOCITY_TEST(import, runMalformedImporterCorpusTest, 240),
+        AUDIOCITY_TEST(import, runLegacyNkiImportNcwViaConverterTest, 222),
+        AUDIOCITY_TEST(import, runLegacyNkiProbeDetectsEncryptedPatchTest, 139),
+        AUDIOCITY_TEST(import, runLegacyNkiProbeDetectsDiscreteSampleReferencesTest, 122),
+        AUDIOCITY_TEST(import, runLegacyNkiProbeRejectsContainerFormatsTest, 123),
+        AUDIOCITY_TEST(import, runLegacyNkiProbeResolvesParentSamplesFolderTest, 124),
+        AUDIOCITY_TEST(state, runLegacyNkiProbeEnumeratesZoneMetadataTest, 126),
+        AUDIOCITY_TEST(import, runLegacyNkiImportTranslatesLegacyZonesTest, 128),
+        AUDIOCITY_TEST(import, runLegacyNkiImportSampleWindowAndLoopTest, 130),
+        AUDIOCITY_TEST(import, runLegacyNkiImportGainPanTuneTest, 132),
+        AUDIOCITY_TEST(import, runLegacyNkiImportTriggerModesTest, 134),
+        AUDIOCITY_TEST(engine, runSameOffsetMidiEventOrderTest, 74),
+        AUDIOCITY_TEST(engine, runEngineProgramSnapshotZoneSelectionTest, 76),
+        AUDIOCITY_TEST(engine, runEngineProgramSampleAssetBindingTest, 77),
+        AUDIOCITY_TEST(engine, runEngineProgramStereoAssetPlaybackTest, 81),
+        AUDIOCITY_TEST(engine, runEngineProgramRoundRobinZoneSelectionTest, 82),
+        AUDIOCITY_TEST(engine, runEngineProgramLayeredZonePlaybackTest, 90),
+        AUDIOCITY_TEST(engine, runEngineProgramVelocityFadeInTest, 91),
+        AUDIOCITY_TEST(engine, runEngineProgramCycleRandomRoundRobinZoneSelectionTest, 85),
+        AUDIOCITY_TEST(engine, runEngineProgramChokeGroupTest, 83),
+        AUDIOCITY_TEST(engine, runEngineProgramZoneAndGroupPanTest, 84),
+        AUDIOCITY_TEST(engine, runEngineProgramZoneTriggerModeTest, 86),
+        AUDIOCITY_TEST(engine, runEngineProgramZoneGainAndTuneTest, 78),
+        AUDIOCITY_TEST(engine, runEngineProgramZoneSampleWindowTest, 79),
+        AUDIOCITY_TEST(engine, runEngineProgramZoneLoopModeTest, 80),
+        AUDIOCITY_TEST(engine, runVoiceStealingEdgeCaseTest, 2),
+        AUDIOCITY_TEST(engine, runPolyphonyLimitControlTest, 52),
+        AUDIOCITY_TEST(engine, runPlaybackModesTest, 3),
+        AUDIOCITY_TEST(engine, runLoopMarkersTest, 4),
+        AUDIOCITY_TEST(engine, runLoadSampleResetsPlaybackAndLoopRangesTest, 44),
+        AUDIOCITY_TEST(engine, runLoadSampleClearsProgramSnapshotTest, 92),
+        AUDIOCITY_TEST(engine, runLoadSampleResetsEnvelopeAndFilterDefaultsTest, 45),
+        AUDIOCITY_TEST(engine, runLoadNcwSampleViaConverterTest, 223),
+        AUDIOCITY_TEST(engine, runLoadNcwSampleViaConverterQuotesShellMetacharactersTest, 239),
+        AUDIOCITY_TEST(engine, runFilterModulationAmountsAreBipolarTest, 70),
+        AUDIOCITY_TEST(state, runEmbeddedLoopMetadataLoadsWithoutRootNoteTest, 64),
+        AUDIOCITY_TEST(engine, runRexRuntimeFallbackSmokeTest, 62),
+        AUDIOCITY_TEST(import, runRexSliceProgramBuildTest, 114),
+        AUDIOCITY_TEST(import, runTransientSliceProgramBuildTest, 116),
+        AUDIOCITY_TEST(state, runCcLearnDialUserClearCallbackTest, 63),
+        AUDIOCITY_TEST(engine, runGeneratedCyclePitchInvariantAcrossSampleCountsTest, 46),
+        AUDIOCITY_TEST(engine, runDisplayMinMaxPreservesPolarityTest, 48),
+        AUDIOCITY_TEST(state, runLoadedSampleMetadataForGeneratedDataTest, 69),
+        AUDIOCITY_TEST(engine, runParameterIdSafetyTest, 72),
+        AUDIOCITY_TEST(state, runEditorFilterLfoPushPreservesAdvancedControlsTest, 180),
+        AUDIOCITY_TEST(state, runEditorModulationPanelExtractionTest, 181),
+        AUDIOCITY_TEST(state, runBackgroundImportWorkerPublishContractTest, 247),
+        AUDIOCITY_TEST(state, runOwnedJobWorkerReplacementIsSerialTest, 255),
+        AUDIOCITY_TEST(state, runOwnedJobWorkerDestructorCancelsAndJoinsTest, 256),
+        AUDIOCITY_TEST(engine, runCancellableAudioReadStopsAtChunkBoundaryTest, 257),
+        AUDIOCITY_TEST(state, runAboutPageExtractionContractTest, 248),
+        AUDIOCITY_TEST(state, runGeneratePageExtractionContractTest, 251),
+        AUDIOCITY_TEST(state, runCapturePageExtractionContractTest, 252),
+        AUDIOCITY_TEST(import, runDecentSamplerSaveRoutingContractTest, 250),
+        AUDIOCITY_TEST(state, runEditorSampleEditControlsTest, 5),
+        AUDIOCITY_TEST(engine, runPolyphonicDifferentNotesLayerWhenMonoOffTest, 43),
+        AUDIOCITY_TEST(engine, runMonoLegatoUsesSingleVoiceTest, 7),
+        AUDIOCITY_TEST(engine, runPolyphonicSameNoteReleaseTest, 24),
+        AUDIOCITY_TEST(engine, runDenseLoopModeOverflowDoesNotStickNotesTest, 55),
+        AUDIOCITY_TEST(engine, runQueueSaturatedByPitchBendStillReleasesNoteOffTest, 56),
+        AUDIOCITY_TEST(engine, runGlideChangesLegatoTransitionTest, 8),
+        AUDIOCITY_TEST(engine, runPreloadSegmentationDeterminismTest, 9),
+        AUDIOCITY_TEST(engine, runRuntimePreloadChangeStabilityTest, 10),
+        AUDIOCITY_TEST(engine, runRuntimeSampleReloadStabilityTest, 11),
+        AUDIOCITY_TEST(engine, runLoopModeRuntimePreloadChangeStabilityTest, 12),
+        AUDIOCITY_TEST(engine, runSegmentRebuildCounterTest, 13),
+        AUDIOCITY_TEST(engine, runProgramPreloadMetricsAndRebuildTest, 14),
+        AUDIOCITY_TEST(engine, runSingleSampleFileStreamingPreloadMetricsTest, 170),
+        AUDIOCITY_TEST(state, runProgramStreamPrimingAndCacheMetricsTest, 171),
+        AUDIOCITY_TEST(engine, runProgramStreamLookaheadPrimingTest, 172),
+        AUDIOCITY_TEST(state, runDiskStreamCacheStaysResponsiveUnderContentionTest, 253),
+        AUDIOCITY_TEST(engine, runRtSnapshotCellProtectsHeldReaderAcrossPublishesTest, 254),
+        AUDIOCITY_TEST(import, runProgramMappingCreateZoneTest, 176),
+        AUDIOCITY_TEST(engine, runQualityTierDifferenceTest, 15),
+        AUDIOCITY_TEST(engine, runQualityTierDeterminismTest, 16),
+        AUDIOCITY_TEST(engine, runCpuQualityEnergyDriftSmokeTest, 17),
+        AUDIOCITY_TEST(engine, runRuntimeQualitySwitchSmokeTest, 18),
+        AUDIOCITY_TEST(state, runEditorUndoHistoryMixedOrderTest, 173),
+        AUDIOCITY_TEST(state, runEditorUndoHistoryCoalesceAndLabelsTest, 174),
+        AUDIOCITY_TEST(state, runEditorUndoHistoryDuplicateAndSplitTest, 175),
+        AUDIOCITY_TEST(state, runEditorUndoHistoryCreateZoneTest, 177),
+        AUDIOCITY_TEST(state, runSettingsUndoHistoryTest, 18),
+        AUDIOCITY_TEST(state, runSettingsUndoHistoryCapacityTest, 19),
+        AUDIOCITY_TEST(state, runSettingsUndoHistoryCoalesceTest, 20),
+        AUDIOCITY_TEST(state, runSettingsUndoHistoryLabelsTest, 21),
+        AUDIOCITY_TEST(state, runSettingsUndoHistoryEditorStateTest, 22),
+        AUDIOCITY_TEST(engine, runSettingsSnapshotCaptureFieldsAffectEqualityTest, 65),
+        AUDIOCITY_TEST(state, runSettingsUndoHistoryTracksCaptureSettingsTest, 66),
+        AUDIOCITY_TEST(preset, runPresetXmlRoundTripWithEmbeddedSampleDataTest, 67),
+        AUDIOCITY_TEST(preset, runPresetXmlRejectsInvalidPayloadTest, 68),
+        AUDIOCITY_TEST(preset, runEmbeddedSamplePresetRoundTripTest, 220),
+        AUDIOCITY_TEST(preset, runFactoryPresetBankDiscoveryTest, 221),
+        AUDIOCITY_TEST(state, runLibraryMetadataFavoritesAndRecentsTest, 93),
+        AUDIOCITY_TEST(state, runLibraryMetadataValueTreeRoundTripTest, 94),
+        AUDIOCITY_TEST(state, runLibraryMetadataBookmarksTest, 95),
+        AUDIOCITY_TEST(import, runImportFormatRegistryConsistencyTest, 275),
+        AUDIOCITY_TEST(state, runLibraryFileIndexScanTest, 96),
+        AUDIOCITY_TEST(state, runLibraryFileIndexPersistentStoreTest, 271),
+        AUDIOCITY_TEST(state, runLibraryFileIndex50kScanSearchIntegrationTest, 272),
+        AUDIOCITY_TEST(state, runLibraryFileIndexExactCaseIdentityTest, 279),
+        AUDIOCITY_TEST(state, runPeakPreviewCacheRoundTripTest, 70),
+        AUDIOCITY_TEST(state, runPeakPreviewCacheResetClearsFileTest, 71),
+        AUDIOCITY_TEST(state, runPeakPreviewCacheFreshnessPartitionAndCorruptionTest, 269),
+        AUDIOCITY_TEST(state, runPeakPreviewCacheLruAndPeakBoundsTest, 270),
+        AUDIOCITY_TEST(state, runPlayerPadStateUtilityTest, 23),
+        AUDIOCITY_TEST(state, runSampleBrowserTooltipFormattingTest, 236),
+        AUDIOCITY_TEST(state, runEditorPersistentBrowserRailTabGateTest, 237),
+        AUDIOCITY_TEST(engine, runFilterModeDifferenceTest, 25),
+        AUDIOCITY_TEST(engine, runFilterModulationDifferenceTest, 26),
+        AUDIOCITY_TEST(engine, runFilterKeytrackPolarityTest, 30),
+        AUDIOCITY_TEST(engine, runFilterLfoDifferenceTest, 31),
+        AUDIOCITY_TEST(engine, runPitchLfoVibratoSettingsTest, 53),
+        AUDIOCITY_TEST(engine, runFilterLfoShapeDifferenceTest, 32),
+        AUDIOCITY_TEST(engine, runAmpLfoTremoloSettingsTest, 52),
+        AUDIOCITY_TEST(engine, runFilterLfoTempoSyncSettingsTest, 33),
+        AUDIOCITY_TEST(engine, runFilterLfoRetriggerDifferenceTest, 34),
+        AUDIOCITY_TEST(engine, runFilterLfoStartPhaseDifferenceTest, 35),
+        AUDIOCITY_TEST(engine, runFilterLfoFadeInDifferenceTest, 36),
+        AUDIOCITY_TEST(engine, runFilterLfoStartRandomDifferenceTest, 37),
+        AUDIOCITY_TEST(engine, runFilterLfoAmountKeytrackingDifferenceTest, 38),
+        AUDIOCITY_TEST(engine, runFilterLfoRateKeytrackingDifferenceTest, 39),
+        AUDIOCITY_TEST(engine, runFilterLfoRateKeytrackInTempoSyncToggleDifferenceTest, 40),
+        AUDIOCITY_TEST(engine, runFilterLfoKeytrackCurveDifferenceTest, 41),
+        AUDIOCITY_TEST(engine, runFilterLfoUnipolarDifferenceTest, 42),
+        AUDIOCITY_TEST(engine, runUltraQualityDifferenceTest, 27),
+        AUDIOCITY_TEST(engine, runUltraQualitySpectralTonePreservationTest, 178),
+        AUDIOCITY_TEST(engine, runReverbMixTailTest, 28),
+        AUDIOCITY_TEST(engine, runDelayMixTailTest, 57),
+        AUDIOCITY_TEST(engine, runDelayTempoSyncRespondsToTempoTest, 58),
+        AUDIOCITY_TEST(engine, runDcOffsetFilterRemovesBiasTest, 59),
+        AUDIOCITY_TEST(engine, runMasterVolumeGainTest, 47),
+        AUDIOCITY_TEST(engine, runPanBalanceTest, 51),
+        AUDIOCITY_TEST(engine, runAutopanStereoMotionTest, 60),
+        AUDIOCITY_TEST(engine, runSaturationDriveAndModeTest, 61),
+        AUDIOCITY_TEST(engine, runTuneCoarseFinePitchShiftTest, 49),
+        AUDIOCITY_TEST(engine, runPitchBendRangeAndRealtimeModulationTest, 50),
+        AUDIOCITY_TEST(engine, runModulationRoutingRealtimeTest, 179),
+        AUDIOCITY_TEST(state, runVoicePlaybackStateSnapshotTest, 54),
+        AUDIOCITY_TEST(engine, runLoopCrossfadeSmoothsBoundaryTest, 29),
+        AUDIOCITY_TEST(import, runImportedProgramStoreEditPublishesCommittedProgramTest, 241),
+        AUDIOCITY_TEST(state, runImportedProgramStoreRejectedEditLeavesStateUntouchedTest, 242),
+        AUDIOCITY_TEST(import, runImportedProgramStoreAppendsSampleDataOnCommitTest, 243),
+        AUDIOCITY_TEST(import, runImportedProgramStoreRejectsEditWithoutLoadedProgramTest, 244),
+        AUDIOCITY_TEST(import, runImportedProgramStoreLoadProgramPublishesNothingTest, 245),
+        AUDIOCITY_TEST(import, runImportedProgramStoreZoneEditSkipsSampleDataTest, 246),
+        AUDIOCITY_TEST(state, runImportedProgramStoreFallsBackWhenMetadataPublishRefusedTest, 247),
+        AUDIOCITY_TEST(state, runImportedProgramStoreFailedPublishLeavesStateUntouchedTest, 274),
+        AUDIOCITY_TEST(state, runProgramMetadataUpdateReusesLoadedAudioTest, 248),
+        AUDIOCITY_TEST(engine, runConcurrentProgramSnapshotReclamationTest, 282),
+        AUDIOCITY_TEST(engine, runNestedSnapshotReaderReclamationTest, 283),
+        AUDIOCITY_TEST(engine, runProgramPublishRejectsIncompleteReferencedAudioTest, 280),
+        AUDIOCITY_TEST(engine, runProgramCapacityBoundaryAndRejectionTest, 258),
+        AUDIOCITY_TEST(engine, runScalableProgramSnapshotAboveLegacyZoneLimitTest, 259),
+        AUDIOCITY_TEST(engine, runPreloadNoOpRebuildGuardTest, 260),
+        AUDIOCITY_TEST(engine, runPendingEventLinearDispatchTest, 261),
+        AUDIOCITY_TEST(engine, runPendingEventSafetyOverflowRecoveryTest, 262),
+        AUDIOCITY_TEST(engine, runPendingEventSafetyDisplacesContinuousControlTest, 276),
+        AUDIOCITY_TEST(engine, runMidiAllNotesOffSafetyEventTest, 263),
+        AUDIOCITY_TEST(engine, runPanicSilencesAudioImmediatelyTest, 284),
+        AUDIOCITY_TEST(state, runAudioStateCodecRoundTripTest, 264),
+        AUDIOCITY_TEST(state, runAudioStateCodecRejectsCorruptionAtomicallyTest, 265),
+        AUDIOCITY_TEST(state, runAudioStateCodecEnforcesLimitsTest, 266),
+        AUDIOCITY_TEST(state, runAudioStateCodecRejectsForgedSizesAndTrailingDataTest, 273),
+        AUDIOCITY_TEST(state, runImportedAssetResolverMovedFolderAndSafetyTest, 267),
+        AUDIOCITY_TEST(state, runImportedAssetResolverBoundedUniquenessTest, 277),
+        AUDIOCITY_TEST(state, runImportedAssetResolverLegacyStateTest, 268),
+        AUDIOCITY_TEST(state, runImportedAssetResolverHashlessMtimeTest, 281),
+        AUDIOCITY_TEST(state, runLibraryFileIndexAndResolverLinkTraversalRejectionTest, 278),
     };
 #undef AUDIOCITY_TEST
 
-    return runOfflineTests(tests);
+    if (!validateOfflineTestRegistry(tests))
+    {
+        std::fprintf(stderr, "Offline test registry has an invalid or duplicate suite assignment.\n");
+        return 65;
+    }
+
+    juce::String requestedSuite;
+    juce::String requestedFilter;
+    auto listOnly = false;
+    for (auto argument = 1; argument < argc; ++argument)
+    {
+        const juce::String token(argv[argument]);
+        if (token == "--list")
+        {
+            listOnly = true;
+        }
+        else if (token == "--suite" && argument + 1 < argc)
+        {
+            requestedSuite = juce::String(argv[++argument]).toLowerCase();
+        }
+        else if (token == "--filter" && argument + 1 < argc)
+        {
+            requestedFilter = argv[++argument];
+        }
+        else
+        {
+            std::fprintf(stderr, "Usage: audiocity_offline_tests [--suite engine|import|state|preset] [--filter text] [--list]\n");
+            return 64;
+        }
+    }
+
+    if (requestedSuite.isNotEmpty()
+        && requestedSuite != "engine"
+        && requestedSuite != "import"
+        && requestedSuite != "state"
+        && requestedSuite != "preset")
+    {
+        std::fprintf(stderr, "Unknown offline test suite: %s\n", requestedSuite.toRawUTF8());
+        return 64;
+    }
+
+    return runOfflineTests(tests, requestedSuite, requestedFilter, listOnly);
 }

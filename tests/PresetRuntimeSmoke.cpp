@@ -1,27 +1,67 @@
 #include <cstdio>
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
+#include <cstring>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <vector>
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
+#include <juce_gui_basics/juce_gui_basics.h>
 
+#include "plugin/AudioStateCodec.h"
 #include "plugin/PluginProcessor.h"
 #include "plugin/PresetJson.h"
+
+#if JUCE_WINDOWS
+#include <windows.h>
+#include <psapi.h>
+#endif
 
 namespace
 {
 constexpr auto kPatchRoot = "AudiocityPatch";
+constexpr auto kGeneratedWaveformData = "generatedWaveformData";
+constexpr auto kCapturedSampleData = "capturedSampleData";
+constexpr auto kCapturedSampleAsset = "capturedSampleAssetV1";
 constexpr auto kEmbeddedSampleData = "embeddedSampleData";
+constexpr auto kEmbeddedSampleAsset = "embeddedSampleAssetV1";
 constexpr auto kEmbeddedSampleChannels = "embeddedSampleChannels";
+constexpr auto kAudioStateSizeWarning = "audioStateSizeWarning";
 constexpr auto kSamplePath = "samplePath";
 constexpr auto kSampleWindowStart = "sampleWindowStart";
 constexpr auto kSampleWindowEnd = "sampleWindowEnd";
+constexpr std::size_t kOneMiB = 1024u * 1024u;
+constexpr std::size_t kTwentyInstanceFeatureStorageLimit = 20u * kOneMiB;
+constexpr std::size_t kTwentyInstancePrivateMemoryLimit = 500u * kOneMiB;
+
+std::optional<std::size_t> currentProcessPrivateUsageBytes()
+{
+#if JUCE_WINDOWS
+    PROCESS_MEMORY_COUNTERS_EX counters{};
+    counters.cb = sizeof(counters);
+    if (::GetProcessMemoryInfo(::GetCurrentProcess(),
+            reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters)) != FALSE)
+    {
+        return static_cast<std::size_t>(counters.PrivateUsage);
+    }
+#endif
+    return std::nullopt;
+}
 
 int readEmbeddedFrameCount(const juce::ValueTree& state)
 {
+    if (const auto* asset = state.getProperty(kEmbeddedSampleAsset).getBinaryData(); asset != nullptr)
+    {
+        juce::AudioBuffer<float> decoded;
+        return audiocity::plugin::decodeAudioStateAsset(*asset, decoded) ? decoded.getNumSamples() : 0;
+    }
+
     const auto* embeddedData = state.getProperty(kEmbeddedSampleData).getBinaryData();
     if (embeddedData == nullptr)
         return 0;
@@ -29,6 +69,19 @@ int readEmbeddedFrameCount(const juce::ValueTree& state)
     const auto channels = juce::jmax(1,
         static_cast<int>(state.getProperty(kEmbeddedSampleChannels, 1)));
     return static_cast<int>(embeddedData->getSize() / sizeof(float)) / channels;
+}
+
+int readEmbeddedChannelCount(const juce::ValueTree& state)
+{
+    if (const auto* asset = state.getProperty(kEmbeddedSampleAsset).getBinaryData(); asset != nullptr)
+    {
+        juce::AudioBuffer<float> decoded;
+        return audiocity::plugin::decodeAudioStateAsset(*asset, decoded) ? decoded.getNumChannels() : 0;
+    }
+
+    return state.getProperty(kEmbeddedSampleData).getBinaryData() != nullptr
+        ? juce::jmax(1, static_cast<int>(state.getProperty(kEmbeddedSampleChannels, 1)))
+        : 0;
 }
 
 bool writeStereoToneWav(const juce::File& wavFile, const int sampleRate, const int sampleLength)
@@ -77,10 +130,264 @@ bool peaksMatch(const std::vector<std::vector<float>>& expected,
 
     return true;
 }
+
+juce::MemoryBlock processorStateFromTree(const juce::ValueTree& state)
+{
+    juce::MemoryBlock result;
+    if (auto xml = state.createXml())
+        juce::AudioProcessor::copyXmlToBinary(*xml, result);
+    return result;
+}
+
+juce::ValueTree processorStateTreeFromBlock(const juce::MemoryBlock& state)
+{
+    if (auto xml = juce::AudioProcessor::getXmlFromBinary(
+            state.getData(), static_cast<int>(state.getSize())))
+        return juce::ValueTree::fromXml(*xml);
+    return {};
+}
+
+juce::Slider* findNamedSlider(juce::Component& component, const juce::String& name)
+{
+    if (auto* slider = dynamic_cast<juce::Slider*>(&component);
+        slider != nullptr && slider->getName().equalsIgnoreCase(name))
+    {
+        return slider;
+    }
+
+    for (auto childIndex = 0; childIndex < component.getNumChildComponents(); ++childIndex)
+    {
+        if (auto* child = component.getChildComponent(childIndex); child != nullptr)
+            if (auto* match = findNamedSlider(*child, name); match != nullptr)
+                return match;
+    }
+
+    return nullptr;
+}
+
+bool runPreloadDragDebounceGestureTest()
+{
+    auto processor = std::make_unique<AudiocityAudioProcessor>();
+    processor->prepareToPlay(48000.0, 256);
+
+    std::vector<float> waveform(65536, 0.125f);
+    processor->loadGeneratedWaveformAsSample(waveform, 60);
+    const auto originalPreload = processor->getPreloadSamples();
+    const auto rebuildsBeforeDrag = processor->getSegmentRebuildCount();
+
+    std::unique_ptr<juce::AudioProcessorEditor> editor(processor->createEditor());
+    if (editor == nullptr)
+        return false;
+
+    auto* preload = findNamedSlider(*editor, "Preload");
+    if (preload == nullptr || !preload->onDragStart || !preload->onDragEnd)
+        return false;
+
+    preload->onDragStart();
+    preload->setValue(4096.0, juce::sendNotificationSync);
+    preload->setValue(8192.0, juce::sendNotificationSync);
+    preload->setValue(16384.0, juce::sendNotificationSync);
+    if (processor->getPreloadSamples() != originalPreload
+        || processor->getSegmentRebuildCount() != rebuildsBeforeDrag)
+    {
+        return false;
+    }
+
+    preload->onDragEnd();
+    if (processor->getPreloadSamples() != 16384
+        || processor->getSegmentRebuildCount() != rebuildsBeforeDrag + 1)
+    {
+        return false;
+    }
+
+    // A gesture which quantizes to the already-committed value must remain a no-op.
+    preload->onDragStart();
+    preload->onDragEnd();
+    return processor->getSegmentRebuildCount() == rebuildsBeforeDrag + 1;
+}
+
+bool runTwentyIdleCaptureAllocationTest()
+{
+    // Warm one instance so process-wide JUCE/runtime one-time allocation is not
+    // charged to the twenty-instance measurement.
+    {
+        AudiocityAudioProcessor warmProcessor;
+        warmProcessor.prepareToPlay(48000.0, 256);
+    }
+
+    const auto privateBytesBefore = currentProcessPrivateUsageBytes();
+    std::vector<std::unique_ptr<AudiocityAudioProcessor>> processors;
+    processors.reserve(20);
+    auto totalFeatureStorageBytes = std::size_t{ 0 };
+    for (auto index = 0; index < 20; ++index)
+    {
+        auto processor = std::make_unique<AudiocityAudioProcessor>();
+        processor->prepareToPlay(48000.0, 256);
+        const auto featureStorageBytes = processor->getCurrentCaptureAndPreviewSampleStorageBytes();
+        if (processor->getCaptureWorkingStorageBytes() != 0 || featureStorageBytes >= kOneMiB)
+            return false;
+        totalFeatureStorageBytes += featureStorageBytes;
+        processors.push_back(std::move(processor));
+    }
+
+    if (totalFeatureStorageBytes >= kTwentyInstanceFeatureStorageLimit)
+        return false;
+
+    const auto privateBytesAfter = currentProcessPrivateUsageBytes();
+    if (privateBytesBefore.has_value() && privateBytesAfter.has_value())
+    {
+        const auto privateDelta = *privateBytesAfter > *privateBytesBefore
+            ? *privateBytesAfter - *privateBytesBefore
+            : std::size_t{ 0 };
+        std::printf("Twenty idle processors: feature storage %.2f MiB, private-memory delta %.2f MiB.\n",
+            static_cast<double>(totalFeatureStorageBytes) / static_cast<double>(kOneMiB),
+            static_cast<double>(privateDelta) / static_cast<double>(kOneMiB));
+        if (privateDelta >= kTwentyInstancePrivateMemoryLimit)
+            return false;
+    }
+
+    return true;
+}
+
+bool runLegacyNonFiniteStateRejectionTest()
+{
+    const std::array<float, 3> samples{
+        0.25f,
+        std::numeric_limits<float>::quiet_NaN(),
+        -0.25f
+    };
+    juce::MemoryBlock sampleBytes(sizeof(samples));
+    std::memcpy(sampleBytes.getData(), samples.data(), sizeof(samples));
+
+    constexpr std::array<const char*, 3> legacyProperties{
+        kEmbeddedSampleData,
+        kGeneratedWaveformData,
+        kCapturedSampleData
+    };
+    for (const auto* property : legacyProperties)
+    {
+        juce::ValueTree state(kPatchRoot);
+        state.setProperty(property, juce::var(sampleBytes), nullptr);
+        if (juce::String(property) == kEmbeddedSampleData)
+            state.setProperty(kEmbeddedSampleChannels, 1, nullptr);
+
+        const auto encodedState = processorStateFromTree(state);
+        if (encodedState.isEmpty())
+            return false;
+
+        AudiocityAudioProcessor processor;
+        processor.prepareToPlay(48000.0, 256);
+        processor.setStateInformation(encodedState.getData(), static_cast<int>(encodedState.getSize()));
+        if (processor.isEmbeddedSampleLoaded()
+            || processor.isGeneratedWaveformLoaded()
+            || processor.isCapturedAudioLoaded()
+            || processor.getLastStateRestoreSourceLabel() != "none"
+            || !processor.getLastImportDiagnosticSummary().containsIgnoreCase("non-finite"))
+        {
+            std::fprintf(stderr,
+                         "Legacy property %s: embedded=%d generated=%d captured=%d source='%s' diagnostic='%s'.\n",
+                         property,
+                         processor.isEmbeddedSampleLoaded() ? 1 : 0,
+                         processor.isGeneratedWaveformLoaded() ? 1 : 0,
+                         processor.isCapturedAudioLoaded() ? 1 : 0,
+                         processor.getLastStateRestoreSourceLabel().toRawUTF8(),
+                         processor.getLastImportDiagnosticSummary().toRawUTF8());
+            return false;
+        }
+    }
+    return true;
+}
+
+bool runEmbeddedSerializationWarningTest()
+{
+    AudiocityAudioProcessor processor;
+    processor.prepareToPlay(48000.0, 256);
+    juce::AudioBuffer<float> invalidSample(1, 3);
+    invalidSample.setSample(0, 0, 0.25f);
+    invalidSample.setSample(0, 1, std::numeric_limits<float>::infinity());
+    invalidSample.setSample(0, 2, -0.25f);
+    processor.loadEmbeddedSampleAsSample(invalidSample, 48000.0, 60, "NonFinite.wav");
+
+    juce::MemoryBlock stateData;
+    processor.getStateInformation(stateData);
+    const auto state = processorStateTreeFromBlock(stateData);
+    return processor.hasStateAssetSizeWarning()
+        && processor.getLastSerializedAssetStateBytes() == 0
+        && state.isValid()
+        && state.getProperty(kAudioStateSizeWarning).toString().containsIgnoreCase("non-finite")
+        && state.getProperty(kEmbeddedSampleAsset).getBinaryData() == nullptr;
+}
+
+bool runMaximumDurationCaptureCommitTest()
+{
+    constexpr auto sampleRate = 96000;
+    constexpr auto captureSeconds = 30;
+    constexpr auto expectedSamples = sampleRate * captureSeconds;
+    constexpr auto blockSize = 8192;
+    constexpr auto expectedStorageBytes = static_cast<std::size_t>(expectedSamples)
+        * 2u * sizeof(float);
+
+    auto processor = std::make_unique<AudiocityAudioProcessor>();
+    processor->prepareToPlay(sampleRate, blockSize);
+    processor->startInputCapture();
+    if (!processor->isInputCaptureRecording()
+        || processor->getCaptureWorkingStorageBytes() != expectedStorageBytes)
+        return false;
+
+    juce::AudioBuffer<float> input(2, blockSize);
+    juce::MidiBuffer midi;
+    const auto maximumBlocks = (expectedSamples + blockSize - 1) / blockSize;
+    auto blocksProcessed = 0;
+    while (processor->isInputCaptureRecording() && blocksProcessed <= maximumBlocks)
+    {
+        for (auto channel = 0; channel < input.getNumChannels(); ++channel)
+            std::fill(input.getWritePointer(channel),
+                      input.getWritePointer(channel) + input.getNumSamples(),
+                      channel == 0 ? 0.125f : -0.0625f);
+        midi.clear();
+        processor->processBlock(input, midi);
+        ++blocksProcessed;
+    }
+
+    if (blocksProcessed != maximumBlocks
+        || processor->isInputCaptureRecording()
+        || !processor->didInputCaptureOverflow()
+        || processor->getCapturedInputSamples() != expectedSamples
+        || !processor->loadCapturedAudioAsSample(0, expectedSamples)
+        || !processor->isCapturedAudioLoaded()
+        || processor->getLoadedSampleLength() != expectedSamples
+        || processor->getCaptureWorkingStorageBytes() != 0
+        || processor->getCapturedInputSamples() != 0)
+        return false;
+
+    juce::MemoryBlock stateData;
+    processor->getStateInformation(stateData);
+    const auto state = processorStateTreeFromBlock(stateData);
+    const auto* capturedAsset = state.getProperty(kCapturedSampleAsset).getBinaryData();
+    if (capturedAsset == nullptr
+        || processor->getLastSerializedAssetStateBytes()
+            != static_cast<std::uint64_t>(expectedSamples) * sizeof(float))
+        return false;
+
+    std::vector<float> restoredSamples;
+    if (!audiocity::plugin::decodeMonoAudioStateAsset(*capturedAsset, restoredSamples)
+        || restoredSamples.size() != static_cast<std::size_t>(expectedSamples))
+        return false;
+
+    processor.reset();
+    AudiocityAudioProcessor restoredProcessor;
+    restoredProcessor.prepareToPlay(sampleRate, blockSize);
+    restoredProcessor.setStateInformation(stateData.getData(), static_cast<int>(stateData.getSize()));
+    return restoredProcessor.isCapturedAudioLoaded()
+        && restoredProcessor.getLoadedSampleLength() == expectedSamples
+        && restoredProcessor.getCaptureWorkingStorageBytes() == 0;
+}
 }
 
 int main()
 {
+    juce::ScopedJuceInitialiser_GUI initialiseJuce;
+
     const auto presetFile = juce::File(AUDIOCITY_SOURCE_DIR)
         .getChildFile("assets")
         .getChildFile("factory_presets")
@@ -126,8 +433,58 @@ int main()
         return 6;
     }
 
+    if (!runTwentyIdleCaptureAllocationTest())
+    {
+        std::fprintf(stderr, "One of 20 idle processor instances eagerly allocated capture storage.\n");
+        return 102;
+    }
+
+    if (!runLegacyNonFiniteStateRejectionTest())
+    {
+        std::fprintf(stderr, "A legacy generated, captured, or embedded state accepted a non-finite sample.\n");
+        return 103;
+    }
+
+    if (!runEmbeddedSerializationWarningTest())
+    {
+        std::fprintf(stderr, "Embedded serialization failure did not surface through state-asset warning telemetry.\n");
+        return 104;
+    }
+
+    if (!runMaximumDurationCaptureCommitTest())
+    {
+        std::fprintf(stderr, "Maximum-duration capture did not clamp, commit, release storage, and round-trip.\n");
+        return 105;
+    }
+
+    if (!runPreloadDragDebounceGestureTest())
+    {
+        std::fprintf(stderr, "A preload drag rebuilt before release, rebuilt more than once, or mishandled a no-op gesture.\n");
+        return 106;
+    }
+
     auto processor = std::make_unique<AudiocityAudioProcessor>();
     processor->prepareToPlay(48000.0, 256);
+
+    if (processor->getCaptureWorkingStorageBytes() != 0)
+    {
+        std::fprintf(stderr, "An idle processor eagerly allocated capture working storage.\n");
+        return 90;
+    }
+
+    processor->startInputCapture();
+    if (processor->getCaptureWorkingStorageBytes() == 0 || !processor->isInputCaptureRecording())
+    {
+        std::fprintf(stderr, "Starting capture did not allocate its bounded working storage.\n");
+        return 91;
+    }
+
+    processor->clearInputCapture();
+    if (processor->getCaptureWorkingStorageBytes() != 0 || processor->isInputCaptureRecording())
+    {
+        std::fprintf(stderr, "Clearing capture did not release its working storage.\n");
+        return 92;
+    }
 
     std::vector<float> waveform(4096, 0.0f);
     for (std::size_t i = 0; i < waveform.size(); ++i)
@@ -234,11 +591,9 @@ int main()
         return 16;
     }
 
-    const auto* waveEmbeddedData = wavePresetState.getProperty(kEmbeddedSampleData).getBinaryData();
     if (!wavePresetState.hasType(kPatchRoot)
-        || waveEmbeddedData == nullptr
         || wavePresetState.getProperty(kSamplePath).toString().isNotEmpty()
-        || static_cast<int>(wavePresetState.getProperty(kEmbeddedSampleChannels, 0)) != 2
+        || readEmbeddedChannelCount(wavePresetState) != 2
         || readEmbeddedFrameCount(wavePresetState) != 512)
     {
         std::fprintf(stderr, "Loaded WAV preset did not embed the current sample as a two-channel payload.\n");
@@ -712,10 +1067,164 @@ int main()
         return 34;
     }
 
+    // A moved reference-only instrument must restore automatically from a bounded known root,
+    // or remain pending without replacing the currently playable program until one manual root
+    // resolves every manifest entry.
+    const auto originalLibrary = tempDirectory.getChildFile("RelinkOriginal");
+    const auto originalSamples = originalLibrary.getChildFile("Samples");
+    const auto originalProgram = originalLibrary.getChildFile("Instrument.sfz");
+    const auto originalTone = originalSamples.getChildFile("Tone.wav");
+    if (!originalSamples.createDirectory()
+        || !writeStereoToneWav(originalTone, 48000, 384)
+        || !originalProgram.replaceWithText("<region> sample=Samples/Tone.wav key=60\n"))
+    {
+        std::fprintf(stderr, "Failed to create missing-asset resolver runtime fixtures.\n");
+        tempDirectory.deleteRecursively();
+        return 93;
+    }
+
+    auto relinkSourceProcessor = std::make_unique<AudiocityAudioProcessor>();
+    relinkSourceProcessor->prepareToPlay(48000.0, 256);
+    relinkSourceProcessor->setSampleBrowserRootFolder(tempDirectory.getFullPathName());
+    if (!relinkSourceProcessor->importSfzProgram(originalProgram))
+    {
+        std::fprintf(stderr, "Failed to import missing-asset resolver source fixture.\n");
+        tempDirectory.deleteRecursively();
+        return 94;
+    }
+
+    juce::MemoryBlock relinkState;
+    relinkSourceProcessor->getStateInformation(relinkState);
+    const auto collaboratorRoot = tempDirectory.getChildFile("Collaborator");
+    const auto movedLibrary = collaboratorRoot.getChildFile("Library");
+    if (!collaboratorRoot.createDirectory()
+        || !originalLibrary.copyDirectoryTo(movedLibrary)
+        || !originalLibrary.deleteRecursively())
+    {
+        std::fprintf(stderr, "Failed to move missing-asset resolver source fixture.\n");
+        tempDirectory.deleteRecursively();
+        return 95;
+    }
+
+    auto autoRelinkProcessor = std::make_unique<AudiocityAudioProcessor>();
+    autoRelinkProcessor->prepareToPlay(48000.0, 256);
+    autoRelinkProcessor->setStateInformation(relinkState.getData(), static_cast<int>(relinkState.getSize()));
+    const auto movedProgram = movedLibrary.getChildFile("Instrument.sfz");
+    if (autoRelinkProcessor->hasPendingImportedAssetRelink()
+        || !autoRelinkProcessor->hasImportedProgram()
+        || autoRelinkProcessor->getImportedProgramPath() != movedProgram.getFullPathName()
+        || autoRelinkProcessor->getImportedProgramZoneCount() != 1)
+    {
+        std::fprintf(stderr, "Known-root state restore did not relink the complete moved library.\n");
+        tempDirectory.deleteRecursively();
+        return 96;
+    }
+
+    const auto manualRoot = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_manual_relink", "");
+    const auto manualLibrary = manualRoot.getChildFile("Library");
+    if (!manualRoot.createDirectory()
+        || !movedLibrary.copyDirectoryTo(manualLibrary)
+        || !movedLibrary.deleteRecursively())
+    {
+        std::fprintf(stderr, "Failed to prepare manual missing-asset resolver fixture.\n");
+        manualRoot.deleteRecursively();
+        tempDirectory.deleteRecursively();
+        return 97;
+    }
+
+    const auto seedLibrary = tempDirectory.getChildFile("SeedLibrary");
+    const auto seedSamples = seedLibrary.getChildFile("Samples");
+    const auto seedProgram = seedLibrary.getChildFile("Seed.sfz");
+    if (!seedSamples.createDirectory()
+        || !writeStereoToneWav(seedSamples.getChildFile("Seed.wav"), 48000, 256)
+        || !seedProgram.replaceWithText("<region> sample=Samples/Seed.wav key=48\n"))
+    {
+        std::fprintf(stderr, "Failed to prepare the preserved-program relink fixture.\n");
+        manualRoot.deleteRecursively();
+        tempDirectory.deleteRecursively();
+        return 98;
+    }
+
+    auto manualRelinkProcessor = std::make_unique<AudiocityAudioProcessor>();
+    manualRelinkProcessor->prepareToPlay(48000.0, 256);
+    if (!manualRelinkProcessor->importSfzProgram(seedProgram))
+    {
+        std::fprintf(stderr, "Failed to seed the program preserved during relink.\n");
+        manualRoot.deleteRecursively();
+        tempDirectory.deleteRecursively();
+        return 99;
+    }
+
+    const auto preservedPath = manualRelinkProcessor->getImportedProgramPath();
+    manualRelinkProcessor->setStateInformation(
+        relinkState.getData(), static_cast<int>(relinkState.getSize()));
+    if (!manualRelinkProcessor->hasPendingImportedAssetRelink()
+        || manualRelinkProcessor->getImportedProgramPath() != preservedPath
+        || !manualRelinkProcessor->getPendingImportedAssetRelinkDiagnostic().containsIgnoreCase(
+            "choose the moved library root"))
+    {
+        std::fprintf(stderr, "A failed automatic relink replaced the playable program or hid recovery.\n");
+        manualRoot.deleteRecursively();
+        tempDirectory.deleteRecursively();
+        return 100;
+    }
+
+    if (!manualRelinkProcessor->relinkPendingImportedProgramFromFolder(manualRoot)
+        || manualRelinkProcessor->hasPendingImportedAssetRelink()
+        || manualRelinkProcessor->getImportedProgramPath()
+            != manualLibrary.getChildFile("Instrument.sfz").getFullPathName()
+        || manualRelinkProcessor->getImportedProgramZoneCount() != 1)
+    {
+        std::fprintf(stderr, "Manual folder relink did not atomically restore all moved assets.\n");
+        manualRoot.deleteRecursively();
+        tempDirectory.deleteRecursively();
+        return 101;
+    }
+
+    constexpr int largeZoneCount = 600;
+    const auto largeProgram = tempDirectory.getChildFile("LargeMapping.sfz");
+    const auto largeSample = tempDirectory.getChildFile("LargeMapping.wav");
+    juce::String largeSfz;
+    for (auto zoneIndex = 0; zoneIndex < largeZoneCount; ++zoneIndex)
+    {
+        const auto note = zoneIndex % 128;
+        const auto velocity = 1 + (zoneIndex / 128);
+        largeSfz << "<region> sample=LargeMapping.wav key=" << note
+                 << " lovel=" << velocity << " hivel=" << velocity
+                 << " offset=" << zoneIndex << "\n";
+    }
+    auto largeMappingProcessor = std::make_unique<AudiocityAudioProcessor>();
+    largeMappingProcessor->prepareToPlay(48000.0, 256);
+    if (!writeStereoToneWav(largeSample, 48000, 2048)
+        || !largeProgram.replaceWithText(largeSfz)
+        || !largeMappingProcessor->importSfzProgram(largeProgram))
+    {
+        std::fprintf(stderr, "Failed to import the large mapping-row fixture.\n");
+        manualRoot.deleteRecursively();
+        tempDirectory.deleteRecursively();
+        return 102;
+    }
+
+    const auto largeRows = largeMappingProcessor->getImportedProgramZoneRows();
+    if (static_cast<int>(largeRows.size()) != largeZoneCount
+        || largeMappingProcessor->getImportedProgramZoneCount() != largeZoneCount
+        || largeMappingProcessor->getPublishedRendererZoneCount() != largeZoneCount)
+    {
+        std::fprintf(stderr, "Mapping rows, model zones, and published renderer zones diverged.\n");
+        manualRoot.deleteRecursively();
+        tempDirectory.deleteRecursively();
+        return 103;
+    }
+
     // Release every stream source and join each processor-owned priming worker before removing
     // the WAV fixtures. Deleting an open streamed file is nondeterministic on Windows and can
     // otherwise make the concurrency smoke appear to hang during teardown.
     controlProcessor.reset();
+    largeMappingProcessor.reset();
+    manualRelinkProcessor.reset();
+    autoRelinkProcessor.reset();
+    relinkSourceProcessor.reset();
     editProcessor.reset();
     backgroundSampleProcessor.reset();
     preparedProcessor.reset();
@@ -723,6 +1232,7 @@ int main()
     restoredProcessor.reset();
     sourceProcessor.reset();
     processor.reset();
+    manualRoot.deleteRecursively();
     tempDirectory.deleteRecursively();
 
     return 0;

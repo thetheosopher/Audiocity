@@ -30,6 +30,8 @@ public:
 
     // Callbacks
     std::function<void()> onValueChange;
+    std::function<void()> onDragStart;
+    std::function<void()> onDragEnd;
     std::function<void()> onCcClearedByUser;
 
     // CC learn

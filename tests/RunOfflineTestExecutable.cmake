@@ -2,30 +2,18 @@ if (NOT DEFINED AUDIOCITY_TEST_EXE OR AUDIOCITY_TEST_EXE STREQUAL "")
     message(FATAL_ERROR "AUDIOCITY_TEST_EXE was not provided.")
 endif ()
 
-set(candidate_paths "${AUDIOCITY_TEST_EXE}")
+if (NOT EXISTS "${AUDIOCITY_TEST_EXE}")
+    message(FATAL_ERROR
+        "The generator-selected audiocity offline test executable does not exist: ${AUDIOCITY_TEST_EXE}")
+endif ()
 
-get_filename_component(requested_config_dir "${AUDIOCITY_TEST_EXE}" DIRECTORY)
-get_filename_component(test_binary_name "${AUDIOCITY_TEST_EXE}" NAME)
-get_filename_component(test_binary_parent "${requested_config_dir}" DIRECTORY)
-
-foreach (config_name IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
-    list(APPEND candidate_paths "${test_binary_parent}/${config_name}/${test_binary_name}")
-endforeach ()
-
-set(test_executable "")
-foreach (candidate_path IN LISTS candidate_paths)
-    if (EXISTS "${candidate_path}")
-        set(test_executable "${candidate_path}")
-        break()
-    endif ()
-endforeach ()
-
-if (test_executable STREQUAL "")
-    message(FATAL_ERROR "Unable to find audiocity offline test executable. Tried: ${candidate_paths}")
+set(test_arguments)
+if (DEFINED AUDIOCITY_TEST_SUITE AND NOT AUDIOCITY_TEST_SUITE STREQUAL "")
+    list(APPEND test_arguments --suite "${AUDIOCITY_TEST_SUITE}")
 endif ()
 
 execute_process(
-    COMMAND "${test_executable}"
+    COMMAND "${AUDIOCITY_TEST_EXE}" ${test_arguments}
     RESULT_VARIABLE test_result)
 
 if (NOT test_result EQUAL 0)

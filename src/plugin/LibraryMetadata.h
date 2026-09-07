@@ -3,6 +3,9 @@
 #include <juce_core/juce_core.h>
 #include <juce_data_structures/juce_data_structures.h>
 
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace audiocity::plugin
@@ -46,14 +49,20 @@ private:
     };
 
     [[nodiscard]] static juce::String normalizePath(const juce::String& filePath);
+    [[nodiscard]] static std::string pathKey(const juce::String& filePath);
     [[nodiscard]] static juce::String normalizeTag(const juce::String& tag);
     [[nodiscard]] static juce::StringArray normalizeTags(const juce::StringArray& tags);
     [[nodiscard]] static int indexOfPath(const juce::StringArray& paths, const juce::String& filePath);
     [[nodiscard]] int indexOfTaggedPath(const juce::String& filePath) const;
+    void rebuildRecentRanks();
+    void rebuildTaggedPathIndices(std::size_t firstChangedIndex = 0);
 
     juce::StringArray favoritePaths_;
     juce::StringArray recentPaths_;
     juce::StringArray bookmarkPaths_;
     std::vector<TaggedPath> taggedPaths_;
+    std::unordered_set<std::string> favoritePathKeys_;
+    std::unordered_map<std::string, int> recentRanksByPath_;
+    std::unordered_map<std::string, std::size_t> taggedPathIndices_;
 };
 } // namespace audiocity::plugin

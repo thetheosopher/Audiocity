@@ -5,12 +5,14 @@
 
 #include "RexLoader.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <new>
 #include <optional>
 
 namespace audiocity::engine
@@ -742,7 +744,7 @@ private:
     // on the audio thread, potentially once per output sample. Only one thread ever calls
     // publishCacheState() on a given instance at a time -- construction happens-before the first
     // call from the stream-prime worker thread (via the acquire/release pair around
-    // programAudioSnapshot_), and the worker thread itself is the single serialized caller of
+    // publishedProgramSnapshot_), and the worker thread itself is the single serialized caller of
     // servicePendingPrime() thereafter -- so cacheStateOwners_ needs no synchronization of its own.
     // cacheStateOwners_ keeps kCacheStateGenerations retired states alive so that a reader which
     // already loaded a pointer keeps something valid to dereference. The worker publishes at least
@@ -830,7 +832,7 @@ struct EngineCore::SampleSegments
 
 struct EngineCore::ProgramAudioSnapshot
 {
-    std::array<std::shared_ptr<const SampleSegments>, ProgramSnapshot::maxSampleAssets> sampleSegments{};
+    std::vector<std::shared_ptr<const SampleSegments>> sampleSegments;
     std::size_t sampleAssetCount = 0;
 
     [[nodiscard]] const SampleSegments* getSampleSegments(const int sampleAssetIndex) const noexcept
@@ -843,6 +845,31 @@ struct EngineCore::ProgramAudioSnapshot
     }
 };
 
+struct EngineCore::PublishedProgramSnapshot
+{
+    std::shared_ptr<const ProgramSnapshot> metadata;
+    std::shared_ptr<const ProgramAudioSnapshot> audio;
+    std::uint64_t generation = 0;
+};
+
+EngineCore::ProgramSnapshotRetentionStats EngineCore::getProgramSnapshotRetentionStats()
+{
+    const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
+    ProgramSnapshotRetentionStats stats;
+    stats.ownerCount = publishedProgramSnapshot_.retainedOwnerCountForWriter();
+    publishedProgramSnapshot_.visitRetainedOwnersForWriter([&stats](const PublishedProgramSnapshot& owner)
+    {
+        if (!owner.metadata)
+            return;
+        stats.metadataBytes += sizeof(ProgramSnapshot)
+            + owner.metadata->sampleAssets.capacity() * sizeof(ProgramSnapshot::SampleAssetRef)
+            + owner.metadata->groups.capacity() * sizeof(ProgramSnapshot::GroupRef)
+            + owner.metadata->zones.capacity() * sizeof(ProgramSnapshot::ZoneRef)
+            + owner.metadata->roundRobinOrderedZoneIndices.capacity() * sizeof(std::size_t);
+    });
+    return stats;
+}
+
 void EngineCore::prepare(const double sampleRate, const int maxSamplesPerBlock, const int outputChannels) noexcept
 {
     sampleRate_ = sampleRate;
@@ -851,6 +878,7 @@ void EngineCore::prepare(const double sampleRate, const int maxSamplesPerBlock, 
 
     voicePool_.prepare(maxSamplesPerBlock_);
     pendingEventCount_ = 0;
+    pendingSafetyRecoveryRequested_.store(false, std::memory_order_relaxed);
     resetRoundRobinCursors();
     globalFilterLfoPhase_ = 0.0f;
     globalAmpLfoPhase_ = 0.0f;
@@ -903,6 +931,7 @@ void EngineCore::release() noexcept
     stopAllVoicesImmediate();
     voicePool_.reset();
     pendingEventCount_ = 0;
+    pendingSafetyRecoveryRequested_.store(false, std::memory_order_relaxed);
     resetRoundRobinCursors();
     currentPitchBendSemitones_ = 0.0f;
     delayBuffer_.clear();
@@ -953,10 +982,9 @@ void EngineCore::setSaturationSettings(const SaturationSettings& settings) noexc
 
 int EngineCore::getLoadedPreloadSamples() const noexcept
 {
-    const auto programSnapshot = programSnapshot_.read(RtReaderRole::message);
-    const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::message);
-    if (programSnapshot)
-        return programAudioSnapshot ? countProgramSegmentSamples(*programAudioSnapshot, true) : 0;
+    const auto publishedProgram = publishedProgramSnapshot_.read(RtReaderRole::message);
+    if (publishedProgram && publishedProgram->metadata)
+        return publishedProgram->audio ? countProgramSegmentSamples(*publishedProgram->audio, true) : 0;
 
     const auto segments = getSampleSegmentsSnapshot(RtReaderRole::message);
     return segments ? segments->preloadData.getNumSamples() : 0;
@@ -964,10 +992,9 @@ int EngineCore::getLoadedPreloadSamples() const noexcept
 
 int EngineCore::getLoadedStreamSamples() const noexcept
 {
-    const auto programSnapshot = programSnapshot_.read(RtReaderRole::message);
-    const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::message);
-    if (programSnapshot)
-        return programAudioSnapshot ? countProgramSegmentSamples(*programAudioSnapshot, false) : 0;
+    const auto publishedProgram = publishedProgramSnapshot_.read(RtReaderRole::message);
+    if (publishedProgram && publishedProgram->metadata)
+        return publishedProgram->audio ? countProgramSegmentSamples(*publishedProgram->audio, false) : 0;
 
     const auto segments = getSampleSegmentsSnapshot(RtReaderRole::message);
     return segments ? segments->getStreamNumSamples() : 0;
@@ -1156,7 +1183,6 @@ void EngineCore::publishPreparedSample(const PreparedSampleFile& prepared) noexc
     loadedMetadataTempoBpm_ = prepared.metadataTempoBpm;
     samplePath_ = prepared.samplePath;
     loadedSampleLoopFormatBadge_ = prepared.loopFormatBadge;
-    clearProgram();
 }
 
 bool EngineCore::loadSampleFromFile(const juce::File& file)
@@ -1220,7 +1246,8 @@ void EngineCore::setSampleDataInternal(const juce::AudioBuffer<float>& sampleDat
         monoSample = mono;
     }
 
-    rebuildSampleSegments(monoSample, backingFile, !applyPlaybackControls);
+    if (!rebuildSampleSegments(monoSample, backingFile, !applyPlaybackControls))
+        return;
 
     if (getTotalSampleLength() <= 0)
         generateFallbackSample();
@@ -1234,172 +1261,356 @@ void EngineCore::setSampleDataInternal(const juce::AudioBuffer<float>& sampleDat
     }
 }
 
-void EngineCore::setProgram(const Program& program)
+EngineCore::ProgramPublishResult EngineCore::validateProgramForPublish(const Program& program)
 {
-    const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
-    programPublishSequence_.fetch_add(1, std::memory_order_acq_rel);
-    programAudioSnapshot_.publish(nullptr);
-    programSnapshot_.publish(
-        std::make_shared<const ProgramSnapshot>(ProgramSnapshot::fromProgram(program)));
-    programPublishSequence_.fetch_add(1, std::memory_order_release);
+    ProgramPublishResult result;
+    result.capacity = ProgramSnapshot::validateCapacity(program);
+    if (result.capacity.accepted())
+    {
+        result.ok = true;
+        result.diagnostic = "Program accepted: "
+            + juce::String(static_cast<juce::int64>(result.capacity.sampleAssetCount)) + " sample assets, "
+            + juce::String(static_cast<juce::int64>(result.capacity.groupCount)) + " groups, "
+            + juce::String(static_cast<juce::int64>(result.capacity.zoneCount)) + " zones";
+        return result;
+    }
+
+    result.error = ProgramPublishResult::Error::capacityExceeded;
+    result.diagnostic = "Program rejected before publish; previous program preserved. Counts/limits: sample assets "
+        + juce::String(static_cast<juce::int64>(result.capacity.sampleAssetCount)) + "/"
+        + juce::String(static_cast<juce::int64>(result.capacity.sampleAssetLimit)) + ", groups "
+        + juce::String(static_cast<juce::int64>(result.capacity.groupCount)) + "/"
+        + juce::String(static_cast<juce::int64>(result.capacity.groupLimit)) + ", zones "
+        + juce::String(static_cast<juce::int64>(result.capacity.zoneCount)) + "/"
+        + juce::String(static_cast<juce::int64>(result.capacity.zoneLimit)) + ". Exceeded: ";
+
+    juce::StringArray exceeded;
+    if (result.capacity.sampleAssetsExceeded())
+        exceeded.add("sample assets");
+    if (result.capacity.groupsExceeded())
+        exceeded.add("groups");
+    if (result.capacity.zonesExceeded())
+        exceeded.add("zones");
+    result.diagnostic += exceeded.joinIntoString(", ");
+    return result;
 }
 
-void EngineCore::setProgram(const Program& program, const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset)
+EngineCore::ProgramPublishResult EngineCore::setProgram(const Program& program)
 {
-    const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
-    auto metadata = ProgramSnapshot::fromProgram(program);
-    auto audio = std::make_shared<ProgramAudioSnapshot>();
-    audio->sampleAssetCount = metadata.sampleAssetCount;
+    auto result = validateProgramForPublish(program);
+    if (!result)
+        return result;
 
-    const auto sampleCount = sampleDataByAsset.size() < metadata.sampleAssetCount
-        ? sampleDataByAsset.size()
-        : metadata.sampleAssetCount;
-
-    for (std::size_t assetIndex = 0; assetIndex < sampleCount; ++assetIndex)
+    try
     {
-        const auto& source = sampleDataByAsset[assetIndex];
-        if (source.getNumChannels() <= 0 || source.getNumSamples() <= 0)
+        auto metadata = std::make_shared<const ProgramSnapshot>(ProgramSnapshot::fromProgram(program));
+        const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
+        auto published = std::make_shared<PublishedProgramSnapshot>();
+        published->metadata = std::move(metadata);
+        published->generation = nextProgramPublishGeneration_ + 1;
+        publishedProgramSnapshot_.publish(std::move(published));
+        ++nextProgramPublishGeneration_;
+        return result;
+    }
+    catch (const std::bad_alloc&)
+    {
+        result.ok = false;
+        result.error = ProgramPublishResult::Error::allocationFailed;
+        result.diagnostic = "Program rejected before publish because immutable snapshot allocation failed; previous program preserved";
+        return result;
+    }
+}
+
+EngineCore::ProgramPublishResult EngineCore::setProgram(
+    const Program& program,
+    const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset)
+{
+    auto result = validateProgramForPublish(program);
+    if (!result)
+        return result;
+
+    // Only assets referenced by valid zones must have supplied audio. Importers
+    // may intentionally retain unused assets, and standalone generated/captured
+    // audio uses the metadata-only setProgram overload with the current sample.
+    for (std::size_t zoneIndex = 0; zoneIndex < program.zones.size(); ++zoneIndex)
+    {
+        const auto& zone = program.zones[zoneIndex];
+        if (!program.isZoneSampleIndexValid(zone))
             continue;
 
-        auto& asset = metadata.sampleAssets[assetIndex];
-        asset.lengthSamples = source.getNumSamples();
-        asset.numChannels = source.getNumChannels();
-        if (asset.sampleRateHz <= 0.0)
+        const auto assetIndex = static_cast<std::size_t>(zone.sampleAssetIndex);
+        if (assetIndex >= sampleDataByAsset.size())
         {
-            const auto loadedSampleRate = sampleDataRate_.load(std::memory_order_acquire);
-            asset.sampleRateHz = loadedSampleRate > 0.0 ? loadedSampleRate : sampleRate_;
+            result.ok = false;
+            result.error = ProgramPublishResult::Error::missingReferencedAudio;
+            result.referencedZoneIndex = static_cast<int>(zoneIndex);
+            result.referencedSampleAssetIndex = zone.sampleAssetIndex;
+            result.diagnostic = "Program rejected before publish; previous program preserved. Zone "
+                + juce::String(static_cast<juce::int64>(zoneIndex)) + " references sample asset "
+                + juce::String(zone.sampleAssetIndex) + ", but only "
+                + juce::String(static_cast<juce::int64>(sampleDataByAsset.size()))
+                + " audio buffers were supplied";
+            return result;
         }
 
-        const auto backingFilePath = juce::String::fromUTF8(program.sampleAssets[assetIndex].sourcePath.c_str());
-        audio->sampleSegments[assetIndex] = buildSampleSegments(source, preloadSamples_, juce::File(backingFilePath));
+        const auto& source = sampleDataByAsset[assetIndex];
+        if (source.getNumChannels() <= 0 || source.getNumSamples() <= 0)
+        {
+            result.ok = false;
+            result.error = ProgramPublishResult::Error::emptyReferencedAudio;
+            result.referencedZoneIndex = static_cast<int>(zoneIndex);
+            result.referencedSampleAssetIndex = zone.sampleAssetIndex;
+            result.diagnostic = "Program rejected before publish; previous program preserved. Zone "
+                + juce::String(static_cast<juce::int64>(zoneIndex)) + " references sample asset "
+                + juce::String(zone.sampleAssetIndex) + ", whose supplied audio buffer has "
+                + juce::String(source.getNumChannels()) + " channels and "
+                + juce::String(source.getNumSamples()) + " samples";
+            return result;
+        }
     }
 
-    for (std::size_t zoneIndex = 0; zoneIndex < metadata.zoneCount; ++zoneIndex)
+    try
     {
-        const auto& zone = metadata.zones[zoneIndex];
-        if (!metadata.isZoneSampleIndexValid(zone))
-            continue;
+        const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
+        auto metadata = ProgramSnapshot::fromProgram(program);
+        auto audio = std::make_shared<ProgramAudioSnapshot>();
+        audio->sampleAssetCount = metadata.sampleAssetCount;
+        audio->sampleSegments.resize(audio->sampleAssetCount);
 
-        const auto* segments = audio->getSampleSegments(zone.sampleAssetIndex);
-        if (segments == nullptr)
-            continue;
+        const auto sampleCount = sampleDataByAsset.size() < metadata.sampleAssetCount
+            ? sampleDataByAsset.size()
+            : metadata.sampleAssetCount;
 
-        segments->requestPrimeForAbsoluteSample(zone.sampleStart);
-        const auto primed = segments->servicePendingPrime();
-        juce::ignoreUnused(primed);
+        for (std::size_t assetIndex = 0; assetIndex < sampleCount; ++assetIndex)
+        {
+            const auto& source = sampleDataByAsset[assetIndex];
+            if (source.getNumChannels() <= 0 || source.getNumSamples() <= 0)
+                continue;
+
+            auto& asset = metadata.sampleAssets[assetIndex];
+            asset.lengthSamples = source.getNumSamples();
+            asset.numChannels = source.getNumChannels();
+            if (asset.sampleRateHz <= 0.0)
+            {
+                const auto loadedSampleRate = sampleDataRate_.load(std::memory_order_acquire);
+                asset.sampleRateHz = loadedSampleRate > 0.0 ? loadedSampleRate : sampleRate_;
+            }
+
+            const auto backingFilePath = juce::String::fromUTF8(program.sampleAssets[assetIndex].sourcePath.c_str());
+            audio->sampleSegments[assetIndex] = buildSampleSegments(source, preloadSamples_, juce::File(backingFilePath));
+        }
+
+        for (std::size_t zoneIndex = 0; zoneIndex < metadata.zoneCount; ++zoneIndex)
+        {
+            const auto& zone = metadata.zones[zoneIndex];
+            if (!metadata.isZoneSampleIndexValid(zone))
+                continue;
+
+            const auto* segments = audio->getSampleSegments(zone.sampleAssetIndex);
+            if (segments == nullptr)
+                continue;
+
+            segments->requestPrimeForAbsoluteSample(zone.sampleStart);
+            const auto primed = segments->servicePendingPrime();
+            juce::ignoreUnused(primed);
+        }
+
+        auto immutableMetadata = std::make_shared<const ProgramSnapshot>(std::move(metadata));
+        auto published = std::make_shared<PublishedProgramSnapshot>();
+        published->metadata = std::move(immutableMetadata);
+        published->audio = std::move(audio);
+        published->generation = nextProgramPublishGeneration_ + 1;
+        publishedProgramSnapshot_.publish(std::move(published));
+        ++nextProgramPublishGeneration_;
+        return result;
     }
-
-    programPublishSequence_.fetch_add(1, std::memory_order_acq_rel);
-    programAudioSnapshot_.publish(audio);
-    programSnapshot_.publish(std::make_shared<const ProgramSnapshot>(metadata));
-    programPublishSequence_.fetch_add(1, std::memory_order_release);
+    catch (const std::bad_alloc&)
+    {
+        result.ok = false;
+        result.error = ProgramPublishResult::Error::allocationFailed;
+        result.diagnostic = "Program rejected before publish because immutable snapshot allocation failed; previous program preserved";
+        return result;
+    }
 }
 
 bool EngineCore::setProgramMetadata(const Program& program)
 {
-    const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
-    const auto audio = programAudioSnapshot_.read(RtReaderRole::message);
-    if (!audio)
+    if (!validateProgramForPublish(program))
         return false;
 
-    auto metadata = ProgramSnapshot::fromProgram(program);
-
-    // The loaded audio is what makes this program playable, so it has to describe the same set
-    // of assets. Anything else means the sample data changed and must be published with it.
-    if (metadata.sampleAssetCount != audio->sampleAssetCount)
-        return false;
-
-    for (std::size_t assetIndex = 0; assetIndex < metadata.sampleAssetCount; ++assetIndex)
+    try
     {
-        const auto* segments = audio->getSampleSegments(static_cast<int>(assetIndex));
-        if (segments == nullptr)
-            continue;
-
-        // Take the shape of the audio actually held, exactly as a full publish would.
-        auto& asset = metadata.sampleAssets[assetIndex];
-        asset.lengthSamples = segments->preloadData.getNumSamples() + segments->getStreamNumSamples();
-        asset.numChannels = juce::jmax(segments->preloadData.getNumChannels(),
-                                       segments->getStreamNumChannels());
-        if (asset.sampleRateHz <= 0.0)
+        const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
+        std::shared_ptr<const ProgramAudioSnapshot> currentAudio;
         {
-            const auto loadedSampleRate = sampleDataRate_.load(std::memory_order_acquire);
-            asset.sampleRateHz = loadedSampleRate > 0.0 ? loadedSampleRate : sampleRate_;
+            const auto current = publishedProgramSnapshot_.read(RtReaderRole::message);
+            if (!current || !current->audio)
+                return false;
+            currentAudio = current->audio;
         }
-    }
 
-    // Zone starts may have moved even though the audio did not, so the streaming windows still
-    // need priming; only the segment rebuild is skipped.
-    for (std::size_t zoneIndex = 0; zoneIndex < metadata.zoneCount; ++zoneIndex)
+        auto metadata = ProgramSnapshot::fromProgram(program);
+
+        // The loaded audio is what makes this program playable, so it has to describe the same set
+        // of assets. Anything else means the sample data changed and must be published with it.
+        if (metadata.sampleAssetCount != currentAudio->sampleAssetCount)
+            return false;
+
+        for (std::size_t assetIndex = 0; assetIndex < metadata.sampleAssetCount; ++assetIndex)
+        {
+            const auto* segments = currentAudio->getSampleSegments(static_cast<int>(assetIndex));
+            if (segments == nullptr)
+                continue;
+
+            // Take the shape of the audio actually held, exactly as a full publish would.
+            auto& asset = metadata.sampleAssets[assetIndex];
+            asset.lengthSamples = segments->preloadData.getNumSamples() + segments->getStreamNumSamples();
+            asset.numChannels = juce::jmax(segments->preloadData.getNumChannels(),
+                                           segments->getStreamNumChannels());
+            if (asset.sampleRateHz <= 0.0)
+            {
+                const auto loadedSampleRate = sampleDataRate_.load(std::memory_order_acquire);
+                asset.sampleRateHz = loadedSampleRate > 0.0 ? loadedSampleRate : sampleRate_;
+            }
+        }
+
+        // Zone starts may have moved even though the audio did not, so the streaming windows still
+        // need priming; only the segment rebuild is skipped.
+        for (std::size_t zoneIndex = 0; zoneIndex < metadata.zoneCount; ++zoneIndex)
+        {
+            const auto& zone = metadata.zones[zoneIndex];
+            if (!metadata.isZoneSampleIndexValid(zone))
+                continue;
+
+            const auto* segments = currentAudio->getSampleSegments(zone.sampleAssetIndex);
+            if (segments == nullptr)
+                return false;
+
+            segments->requestPrimeForAbsoluteSample(zone.sampleStart);
+            const auto primed = segments->servicePendingPrime();
+            juce::ignoreUnused(primed);
+        }
+
+        auto published = std::make_shared<PublishedProgramSnapshot>();
+        published->metadata = std::make_shared<const ProgramSnapshot>(std::move(metadata));
+        published->audio = std::move(currentAudio);
+        published->generation = nextProgramPublishGeneration_ + 1;
+        publishedProgramSnapshot_.publish(std::move(published));
+        ++nextProgramPublishGeneration_;
+        return true;
+    }
+    catch (const std::bad_alloc&)
     {
-        const auto& zone = metadata.zones[zoneIndex];
-        if (!metadata.isZoneSampleIndexValid(zone))
-            continue;
-
-        const auto* segments = audio->getSampleSegments(zone.sampleAssetIndex);
-        if (segments == nullptr)
-            continue;
-
-        segments->requestPrimeForAbsoluteSample(zone.sampleStart);
-        const auto primed = segments->servicePendingPrime();
-        juce::ignoreUnused(primed);
+        return false;
     }
-
-    programPublishSequence_.fetch_add(1, std::memory_order_acq_rel);
-    programSnapshot_.publish(std::make_shared<const ProgramSnapshot>(metadata));
-    programPublishSequence_.fetch_add(1, std::memory_order_release);
-    return true;
 }
 
 void EngineCore::clearProgram() noexcept
 {
     const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
-    programPublishSequence_.fetch_add(1, std::memory_order_acq_rel);
-    programSnapshot_.publish(nullptr);
-    programAudioSnapshot_.publish(nullptr);
-    programPublishSequence_.fetch_add(1, std::memory_order_release);
+    try
+    {
+        auto cleared = std::make_shared<PublishedProgramSnapshot>();
+        cleared->generation = nextProgramPublishGeneration_ + 1;
+        publishedProgramSnapshot_.publish(std::move(cleared));
+        ++nextProgramPublishGeneration_;
+    }
+    catch (const std::bad_alloc&)
+    {
+        // The old coherent program remains owned and published.
+    }
 }
 
 bool EngineCore::hasProgram() const noexcept
 {
-    return static_cast<bool>(programSnapshot_.read(RtReaderRole::message));
+    const auto published = publishedProgramSnapshot_.read(RtReaderRole::message);
+    return published && static_cast<bool>(published->metadata);
 }
 
 int EngineCore::getProgramZoneCount() const noexcept
 {
-    const auto snapshot = programSnapshot_.read(RtReaderRole::message);
-    return snapshot ? static_cast<int>(snapshot->zoneCount) : 0;
+    const auto published = publishedProgramSnapshot_.read(RtReaderRole::message);
+    return published && published->metadata ? static_cast<int>(published->metadata->zoneCount) : 0;
 }
 
 void EngineCore::setPreloadSamples(const int preloadSamples) noexcept
 {
     const std::lock_guard<std::recursive_mutex> writerLock(structuralWriterMutex_);
-    preloadSamples_ = juce::jmax(256, preloadSamples);
+    const auto clampedPreloadSamples = juce::jmax(256, preloadSamples);
+    if (clampedPreloadSamples == preloadSamples_)
+        return;
 
-    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::message);
-    if (segments && getTotalSampleLength(*segments) > 0)
-        rebuildSampleSegments(materializeSampleData(*segments), juce::File(segments->backingFilePath));
-
-    const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::message);
-    if (programAudioSnapshot)
+    try
     {
-        ++segmentRebuildCount_;
-        programAudioSnapshot_.publish(rebuildProgramAudioSnapshot(*programAudioSnapshot));
-    }
+        auto rebuiltSegments = false;
+        std::shared_ptr<const ProgramSnapshot> currentMetadata;
+        std::shared_ptr<const ProgramAudioSnapshot> currentAudio;
+        {
+            const auto published = publishedProgramSnapshot_.read(RtReaderRole::message);
+            if (published)
+            {
+                currentMetadata = published->metadata;
+                currentAudio = published->audio;
+            }
+        }
 
+        if (currentMetadata && currentAudio)
+        {
+            auto published = std::make_shared<PublishedProgramSnapshot>();
+            published->metadata = std::move(currentMetadata);
+            published->audio = rebuildProgramAudioSnapshot(*currentAudio, clampedPreloadSamples);
+            published->generation = nextProgramPublishGeneration_ + 1;
+            publishedProgramSnapshot_.publish(std::move(published));
+            ++nextProgramPublishGeneration_;
+            rebuiltSegments = true;
+        }
+        else
+        {
+            {
+                std::shared_ptr<const SampleSegments> replacement;
+                {
+                    const auto segments = getSampleSegmentsSnapshot(RtReaderRole::message);
+                    if (segments && getTotalSampleLength(*segments) > 0)
+                    {
+                        const auto source = materializeSampleData(*segments);
+                        replacement = buildSampleSegments(
+                            source,
+                            clampedPreloadSamples,
+                            juce::File(segments->backingFilePath),
+                            sampleDataRate_.load(std::memory_order_acquire),
+                            currentSamplePublishGeneration_);
+                    }
+                }
+
+                if (replacement)
+                {
+                    sampleSegments_.publish(std::move(replacement));
+                    rebuiltSegments = true;
+                }
+            }
+        }
+
+        preloadSamples_ = clampedPreloadSamples;
+        if (rebuiltSegments)
+            ++segmentRebuildCount_;
+    }
+    catch (const std::bad_alloc&)
+    {
+        // Keep the old preload value and every previously-published segment owner.
+    }
 }
 
 void EngineCore::serviceStreamPriming()
 {
-    const auto programSnapshot = programSnapshot_.read(RtReaderRole::worker);
-    if (programSnapshot)
+    const auto publishedProgram = publishedProgramSnapshot_.read(RtReaderRole::worker);
+    if (publishedProgram && publishedProgram->metadata)
     {
-        const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::worker);
-        if (!programAudioSnapshot)
+        if (!publishedProgram->audio)
             return;
 
-        for (std::size_t assetIndex = 0; assetIndex < programAudioSnapshot->sampleAssetCount; ++assetIndex)
+        for (std::size_t assetIndex = 0; assetIndex < publishedProgram->audio->sampleAssetCount; ++assetIndex)
         {
-            if (const auto* segments = programAudioSnapshot->getSampleSegments(static_cast<int>(assetIndex)); segments != nullptr)
+            if (const auto* segments = publishedProgram->audio->getSampleSegments(static_cast<int>(assetIndex)); segments != nullptr)
             {
                 const auto serviced = segments->servicePendingPrime();
                 juce::ignoreUnused(serviced);
@@ -1418,17 +1629,16 @@ void EngineCore::serviceStreamPriming()
 
 int EngineCore::getStreamPrimeRequestCount() const noexcept
 {
-    const auto programSnapshot = programSnapshot_.read(RtReaderRole::message);
-    if (programSnapshot)
+    const auto publishedProgram = publishedProgramSnapshot_.read(RtReaderRole::message);
+    if (publishedProgram && publishedProgram->metadata)
     {
         auto total = 0;
-        const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::message);
-        if (!programAudioSnapshot)
+        if (!publishedProgram->audio)
             return 0;
 
-        for (std::size_t assetIndex = 0; assetIndex < programAudioSnapshot->sampleAssetCount; ++assetIndex)
+        for (std::size_t assetIndex = 0; assetIndex < publishedProgram->audio->sampleAssetCount; ++assetIndex)
         {
-            if (const auto* segments = programAudioSnapshot->getSampleSegments(static_cast<int>(assetIndex)); segments != nullptr)
+            if (const auto* segments = publishedProgram->audio->getSampleSegments(static_cast<int>(assetIndex)); segments != nullptr)
                 total += segments->getPrimeRequestCount();
         }
 
@@ -1441,17 +1651,16 @@ int EngineCore::getStreamPrimeRequestCount() const noexcept
 
 int EngineCore::getStreamPrimeCacheHitCount() const noexcept
 {
-    const auto programSnapshot = programSnapshot_.read(RtReaderRole::message);
-    if (programSnapshot)
+    const auto publishedProgram = publishedProgramSnapshot_.read(RtReaderRole::message);
+    if (publishedProgram && publishedProgram->metadata)
     {
         auto total = 0;
-        const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::message);
-        if (!programAudioSnapshot)
+        if (!publishedProgram->audio)
             return 0;
 
-        for (std::size_t assetIndex = 0; assetIndex < programAudioSnapshot->sampleAssetCount; ++assetIndex)
+        for (std::size_t assetIndex = 0; assetIndex < publishedProgram->audio->sampleAssetCount; ++assetIndex)
         {
-            if (const auto* segments = programAudioSnapshot->getSampleSegments(static_cast<int>(assetIndex)); segments != nullptr)
+            if (const auto* segments = publishedProgram->audio->getSampleSegments(static_cast<int>(assetIndex)); segments != nullptr)
                 total += segments->getPrimeCacheHitCount();
         }
 
@@ -1464,17 +1673,16 @@ int EngineCore::getStreamPrimeCacheHitCount() const noexcept
 
 int EngineCore::getStreamPrimeCacheMissCount() const noexcept
 {
-    const auto programSnapshot = programSnapshot_.read(RtReaderRole::message);
-    if (programSnapshot)
+    const auto publishedProgram = publishedProgramSnapshot_.read(RtReaderRole::message);
+    if (publishedProgram && publishedProgram->metadata)
     {
         auto total = 0;
-        const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::message);
-        if (!programAudioSnapshot)
+        if (!publishedProgram->audio)
             return 0;
 
-        for (std::size_t assetIndex = 0; assetIndex < programAudioSnapshot->sampleAssetCount; ++assetIndex)
+        for (std::size_t assetIndex = 0; assetIndex < publishedProgram->audio->sampleAssetCount; ++assetIndex)
         {
-            if (const auto* segments = programAudioSnapshot->getSampleSegments(static_cast<int>(assetIndex)); segments != nullptr)
+            if (const auto* segments = publishedProgram->audio->getSampleSegments(static_cast<int>(assetIndex)); segments != nullptr)
                 total += segments->getPrimeCacheMissCount();
         }
 
@@ -1487,17 +1695,16 @@ int EngineCore::getStreamPrimeCacheMissCount() const noexcept
 
 int EngineCore::getStreamPrimeServiceCount() const noexcept
 {
-    const auto programSnapshot = programSnapshot_.read(RtReaderRole::message);
-    if (programSnapshot)
+    const auto publishedProgram = publishedProgramSnapshot_.read(RtReaderRole::message);
+    if (publishedProgram && publishedProgram->metadata)
     {
         auto total = 0;
-        const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::message);
-        if (!programAudioSnapshot)
+        if (!publishedProgram->audio)
             return 0;
 
-        for (std::size_t assetIndex = 0; assetIndex < programAudioSnapshot->sampleAssetCount; ++assetIndex)
+        for (std::size_t assetIndex = 0; assetIndex < publishedProgram->audio->sampleAssetCount; ++assetIndex)
         {
-            if (const auto* segments = programAudioSnapshot->getSampleSegments(static_cast<int>(assetIndex)); segments != nullptr)
+            if (const auto* segments = publishedProgram->audio->getSampleSegments(static_cast<int>(assetIndex)); segments != nullptr)
                 total += segments->getPrimeServiceCount();
         }
 
@@ -1550,13 +1757,15 @@ void EngineCore::noteOn(const int noteNumber, const float velocity, const int sa
 
 void EngineCore::noteOff(const int noteNumber, const int sampleOffsetInBlock) noexcept
 {
-    const auto accepted = enqueuePendingEvent(EventType::noteOff,
+    enqueuePendingEvent(EventType::noteOff,
         juce::jlimit(0, 127, noteNumber),
         0.0f,
         juce::jmax(0, sampleOffsetInBlock));
+}
 
-    if (!accepted)
-        releaseVoicesForNote(juce::jlimit(0, 127, noteNumber));
+void EngineCore::allNotesOff(const int sampleOffsetInBlock) noexcept
+{
+    enqueuePendingEvent(EventType::allNotesOff, 0, 0.0f, juce::jmax(0, sampleOffsetInBlock));
 }
 
 void EngineCore::pitchBend(const int pitchWheelValue, const int sampleOffsetInBlock) noexcept
@@ -1607,34 +1816,43 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
     juce::FloatVectorOperations::clear(mixLeft, numSamples);
     juce::FloatVectorOperations::clear(mixRight, numSamples);
 
-    const auto programSequenceBefore = programPublishSequence_.load(std::memory_order_acquire);
-    const auto programSnapshot = programSnapshot_.read(RtReaderRole::audio);
-    const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::audio);
-    const auto programSequenceAfter = programPublishSequence_.load(std::memory_order_acquire);
-    const auto programPublicationIsStable = (programSequenceBefore & 1u) == 0u
-        && programSequenceBefore == programSequenceAfter;
-
-    if (programPublicationIsStable && programSequenceAfter != appliedProgramPublishSequence_)
+    const auto publishedProgram = publishedProgramSnapshot_.read(RtReaderRole::audio);
+    const auto publishedGeneration = publishedProgram ? publishedProgram->generation : 0;
+    if (publishedGeneration != appliedProgramPublishGeneration_)
     {
         stopAllVoicesImmediate();
         resetRoundRobinCursors();
-        appliedProgramPublishSequence_ = programSequenceAfter;
+        appliedProgramPublishGeneration_ = publishedGeneration;
     }
 
-    const auto* program = programPublicationIsStable && programSnapshot && programSnapshot->hasPlayableZones()
-        ? programSnapshot.get()
+    const auto* program = publishedProgram
+        && publishedProgram->metadata
+        && publishedProgram->metadata->hasPlayableZones()
+        ? publishedProgram->metadata.get()
         : nullptr;
-    const auto* programAudio = programPublicationIsStable ? programAudioSnapshot.get() : nullptr;
+    const auto* programAudio = publishedProgram && publishedProgram->audio
+        ? publishedProgram->audio.get()
+        : nullptr;
+
+    if (pendingSafetyRecoveryRequested_.exchange(false, std::memory_order_acq_rel))
+        stopAllVoicesImmediate();
 
     sortPendingEventsByOffset();
 
     auto segmentStart = 0;
     auto pendingEventCursor = 0;
+    auto pendingEventTraversalCount = 0;
     while (segmentStart < numSamples)
     {
-        flushPendingEventsAtOffset(segmentStart, program, programAudio, segments->sampleRateHz);
+        flushPendingEventsAtOffset(segmentStart,
+            pendingEventCursor,
+            pendingEventTraversalCount,
+            program,
+            programAudio,
+            segments->sampleRateHz);
 
-        const auto segmentEnd = findNextPendingEventOffset(segmentStart, numSamples, pendingEventCursor);
+        const auto segmentEnd = findNextPendingEventOffset(
+            segmentStart, numSamples, pendingEventCursor, pendingEventTraversalCount);
         const auto segmentSamples = segmentEnd - segmentStart;
         if (segmentSamples > 0)
         {
@@ -1730,19 +1948,24 @@ void EngineCore::render(float** outputs, const int numChannels, const int numSam
             juce::FloatVectorOperations::multiply(outputs[channel], masterVolume_, numSamples);
     }
 
+    lastPendingEventDispatchCount_.store(pendingEventCursor, std::memory_order_relaxed);
+    lastPendingEventTraversalCount_.store(pendingEventTraversalCount, std::memory_order_relaxed);
     pendingEventCount_ = 0;
 }
 
-int EngineCore::findNextPendingEventOffset(const int currentOffset, const int blockEnd, int& eventCursor) const noexcept
+int EngineCore::findNextPendingEventOffset(const int currentOffset,
+                                           const int blockEnd,
+                                           int& eventCursor,
+                                           int& eventTraversalCount) const noexcept
 {
-    while (eventCursor < pendingEventCount_
-        && pendingEvents_[static_cast<std::size_t>(eventCursor)].offset <= currentOffset)
+    while (eventCursor < pendingEventCount_)
     {
+        ++eventTraversalCount;
+        const auto nextOffset = pendingEvents_[static_cast<std::size_t>(eventCursor)].offset;
+        if (nextOffset > currentOffset)
+            return juce::jmin(blockEnd, nextOffset);
         ++eventCursor;
     }
-
-    if (eventCursor < pendingEventCount_)
-        return juce::jmin(blockEnd, pendingEvents_[static_cast<std::size_t>(eventCursor)].offset);
 
     return blockEnd;
 }
@@ -2475,6 +2698,8 @@ void EngineCore::render(juce::AudioBuffer<float>& audioBuffer, const juce::MidiB
             noteOn(message.getNoteNumber(), message.getFloatVelocity(), offset);
         else if (message.isNoteOff())
             noteOff(message.getNoteNumber(), offset);
+        else if (message.isAllNotesOff() || message.isAllSoundOff())
+            allNotesOff(offset);
         else if (message.isPitchWheel())
             pitchBend(message.getPitchWheelValue(), offset);
         else if (message.isChannelPressure())
@@ -2513,6 +2738,7 @@ void EngineCore::panic() noexcept
 {
     stopAllVoicesImmediate();
     pendingEventCount_ = 0;
+    pendingSafetyRecoveryRequested_.store(false, std::memory_order_release);
     currentPitchBendSemitones_ = 0.0f;
     currentModWheelValue_ = 0.0f;
     currentAftertouchValue_ = 0.0f;
@@ -2660,65 +2886,113 @@ bool EngineCore::enqueuePendingEvent(const EventType type,
                                      const float velocity,
                                      const int sampleOffsetInBlock) noexcept
 {
-    const auto capacity = static_cast<int>(pendingEvents_.size());
     const auto clampedOffset = juce::jmax(0, sampleOffsetInBlock);
+    const auto isSafetyEvent = type == EventType::noteOff || type == EventType::allNotesOff;
+    const auto admissionLimit = isSafetyEvent
+        ? pendingEventCapacity
+        : pendingEventCapacity - pendingSafetyEventReserve;
 
-    if (pendingEventCount_ < capacity)
+    const auto countDropped = [this](const EventType droppedType) noexcept
+    {
+        switch (droppedType)
+        {
+            case EventType::noteOn:
+                droppedNoteOnEvents_.fetch_add(1, std::memory_order_relaxed);
+                break;
+            case EventType::noteOff:
+                droppedNoteOffEvents_.fetch_add(1, std::memory_order_relaxed);
+                break;
+            case EventType::allNotesOff:
+                droppedAllNotesOffEvents_.fetch_add(1, std::memory_order_relaxed);
+                break;
+            case EventType::pitchBend:
+            case EventType::channelPressure:
+            case EventType::controller:
+                droppedContinuousControlEvents_.fetch_add(1, std::memory_order_relaxed);
+                break;
+        }
+    };
+
+    if (pendingEventCount_ < admissionLimit)
     {
         auto& event = pendingEvents_[static_cast<std::size_t>(pendingEventCount_++)];
         event.type = type;
         event.data = noteNumber;
         event.value = velocity;
         event.offset = clampedOffset;
+        event.sequence = nextPendingEventSequence_++;
         return true;
     }
 
-    if (type == EventType::noteOn)
+    if (!isSafetyEvent)
+    {
+        countDropped(type);
         return false;
+    }
 
+    // The reserved tail normally admits release events directly. If it is saturated too,
+    // displace the newest non-safety event; exact arrival order remains encoded by sequence.
     int replaceIndex = -1;
-    int latestOffset = std::numeric_limits<int>::min();
+    auto latestSequence = std::uint64_t{ 0 };
     for (int index = 0; index < pendingEventCount_; ++index)
     {
-        if (pendingEvents_[static_cast<std::size_t>(index)].type != EventType::noteOn)
+        const auto& candidate = pendingEvents_[static_cast<std::size_t>(index)];
+        if (candidate.type == EventType::noteOff || candidate.type == EventType::allNotesOff)
             continue;
 
-        const auto eventOffset = pendingEvents_[static_cast<std::size_t>(index)].offset;
-        if (eventOffset >= latestOffset)
+        if (replaceIndex < 0 || candidate.sequence >= latestSequence)
         {
-            latestOffset = eventOffset;
+            latestSequence = candidate.sequence;
             replaceIndex = index;
         }
     }
 
     if (replaceIndex < 0)
+    {
+        countDropped(type);
+        if (!pendingSafetyRecoveryRequested_.exchange(true, std::memory_order_acq_rel))
+            pendingEventPanicRecoveries_.fetch_add(1, std::memory_order_relaxed);
         return false;
+    }
 
     auto& event = pendingEvents_[static_cast<std::size_t>(replaceIndex)];
+    countDropped(event.type);
     event.type = type;
     event.data = noteNumber;
     event.value = velocity;
     event.offset = clampedOffset;
+    event.sequence = nextPendingEventSequence_++;
     return true;
 }
 
 void EngineCore::sortPendingEventsByOffset() noexcept
 {
-    for (int index = 1; index < pendingEventCount_; ++index)
-    {
-        const auto event = pendingEvents_[static_cast<std::size_t>(index)];
-        auto insertionIndex = index;
-
-        while (insertionIndex > 0
-            && pendingEvents_[static_cast<std::size_t>(insertionIndex - 1)].offset > event.offset)
+    std::sort(pendingEvents_.begin(), pendingEvents_.begin() + pendingEventCount_,
+        [](const PendingEvent& left, const PendingEvent& right) noexcept
         {
-            pendingEvents_[static_cast<std::size_t>(insertionIndex)] =
-                pendingEvents_[static_cast<std::size_t>(insertionIndex - 1)];
-            --insertionIndex;
-        }
+            return left.offset < right.offset
+                || (left.offset == right.offset && left.sequence < right.sequence);
+        });
+}
 
-        pendingEvents_[static_cast<std::size_t>(insertionIndex)] = event;
-    }
+EngineCore::PendingEventDropCounts EngineCore::getPendingEventDropCounts() const noexcept
+{
+    PendingEventDropCounts counts;
+    counts.noteOn = droppedNoteOnEvents_.load(std::memory_order_relaxed);
+    counts.noteOff = droppedNoteOffEvents_.load(std::memory_order_relaxed);
+    counts.allNotesOff = droppedAllNotesOffEvents_.load(std::memory_order_relaxed);
+    counts.continuousControl = droppedContinuousControlEvents_.load(std::memory_order_relaxed);
+    counts.panicRecoveries = pendingEventPanicRecoveries_.load(std::memory_order_relaxed);
+    return counts;
+}
+
+void EngineCore::resetPendingEventDropCounts() noexcept
+{
+    droppedNoteOnEvents_.store(0, std::memory_order_relaxed);
+    droppedNoteOffEvents_.store(0, std::memory_order_relaxed);
+    droppedAllNotesOffEvents_.store(0, std::memory_order_relaxed);
+    droppedContinuousControlEvents_.store(0, std::memory_order_relaxed);
+    pendingEventPanicRecoveries_.store(0, std::memory_order_relaxed);
 }
 
 int EngineCore::stealCount() const noexcept
@@ -2743,8 +3017,10 @@ EngineCore::VoicePlaybackStates EngineCore::getVoicePlaybackStates() const noexc
     if (!segments)
         return states;
 
-    const auto programAudioSnapshot = programAudioSnapshot_.read(RtReaderRole::audio);
-    const auto* programAudio = programAudioSnapshot.get();
+    const auto publishedProgram = publishedProgramSnapshot_.read(RtReaderRole::audio);
+    const auto* programAudio = publishedProgram && publishedProgram->audio
+        ? publishedProgram->audio.get()
+        : nullptr;
 
     for (int voiceIndex = 0; voiceIndex < static_cast<int>(VoicePool::maxVoices); ++voiceIndex)
     {
@@ -2858,7 +3134,9 @@ int EngineCore::chooseProgramZoneIndices(const ProgramSnapshot& programSnapshot,
     if (zoneIndices == nullptr || maxZoneIndices <= 0)
         return 0;
 
-    std::array<int, ProgramSnapshot::maxGroups> handledRoundRobinGroups{};
+    // A note can start at most one round-robin choice per output voice. Keeping this scratch
+    // at the voice ceiling makes render-time storage independent of program size.
+    std::array<int, VoicePool::maxVoices> handledRoundRobinGroups{};
     auto handledRoundRobinGroupCount = 0;
     auto selectedCount = 0;
 
@@ -2899,6 +3177,9 @@ int EngineCore::chooseProgramZoneIndices(const ProgramSnapshot& programSnapshot,
 
     for (std::size_t zoneIndex = 0; zoneIndex < programSnapshot.zoneCount; ++zoneIndex)
     {
+        if (selectedCount >= maxZoneIndices)
+            break;
+
         if (!programSnapshot.isZonePlayableMatch(zoneIndex, note, velocity))
             continue;
 
@@ -2918,8 +3199,8 @@ int EngineCore::chooseProgramZoneIndices(const ProgramSnapshot& programSnapshot,
 
         markRoundRobinGroupHandled(roundRobinGroup);
         const auto step = consumeRoundRobinStep(roundRobinGroup);
-        std::array<int, ProgramSnapshot::maxZones> candidateIndices{};
         auto candidateCount = 0;
+        auto roundRobinLength = 0;
         for (std::size_t candidateZoneIndex = 0; candidateZoneIndex < programSnapshot.zoneCount; ++candidateZoneIndex)
         {
             if (!programSnapshot.isZonePlayableMatch(candidateZoneIndex, note, velocity))
@@ -2932,77 +3213,81 @@ int EngineCore::chooseProgramZoneIndices(const ProgramSnapshot& programSnapshot,
                 continue;
             }
 
-            candidateIndices[static_cast<std::size_t>(candidateCount++)] = static_cast<int>(candidateZoneIndex);
-        }
-
-        if (candidateCount <= 0)
-            continue;
-
-        if (candidateCount == 1)
-        {
-            addSelectedZone(candidateIndices[0]);
-            continue;
-        }
-
-        const auto roundRobinMode = programSnapshot.getZoneRoundRobinMode(zone);
-        if (roundRobinMode == RoundRobinMode::cycleRandom)
-        {
-            const auto selectedIndex = ProgramSnapshot::cycleRandomCandidateIndex(
-                roundRobinGroup,
-                step,
-                static_cast<std::size_t>(candidateCount));
-            addSelectedZone(candidateIndices[selectedIndex]);
-            continue;
-        }
-
-        auto roundRobinLength = 0;
-        for (int candidateIndex = 0; candidateIndex < candidateCount; ++candidateIndex)
-        {
-            const auto& candidateZone = programSnapshot.zones[static_cast<std::size_t>(candidateIndices[candidateIndex])];
+            ++candidateCount;
             const auto candidateLength = programSnapshot.getZoneRoundRobinLength(candidateZone);
             if (candidateLength > roundRobinLength)
                 roundRobinLength = candidateLength;
         }
 
-        if (roundRobinLength > 0)
-        {
-            const auto targetPosition = static_cast<int>(step % static_cast<std::uint32_t>(roundRobinLength)) + 1;
-            for (int candidateIndex = 0; candidateIndex < candidateCount; ++candidateIndex)
-            {
-                const auto resolvedZoneIndex = candidateIndices[candidateIndex];
-                if (programSnapshot.zones[static_cast<std::size_t>(resolvedZoneIndex)].roundRobinPosition == targetPosition)
-                {
-                    addSelectedZone(resolvedZoneIndex);
-                    break;
-                }
-            }
+        if (candidateCount <= 0)
             continue;
-        }
 
-        std::sort(candidateIndices.begin(), candidateIndices.begin() + candidateCount,
-            [&programSnapshot](const int left, const int right)
+        const auto roundRobinMode = programSnapshot.getZoneRoundRobinMode(zone);
+        const auto selectedOrdinal = roundRobinMode == RoundRobinMode::cycleRandom
+            ? ProgramSnapshot::cycleRandomCandidateIndex(
+                roundRobinGroup,
+                step,
+                static_cast<std::size_t>(candidateCount))
+            : static_cast<std::size_t>(step % static_cast<std::uint32_t>(candidateCount));
+        const auto targetPosition = roundRobinMode == RoundRobinMode::ordered && roundRobinLength > 0
+            ? static_cast<int>(step % static_cast<std::uint32_t>(roundRobinLength)) + 1
+            : 0;
+        auto ordinal = std::size_t{ 0 };
+        const auto usePreparedOrder = roundRobinMode == RoundRobinMode::ordered && targetPosition == 0;
+        for (std::size_t traversalIndex = 0; traversalIndex < programSnapshot.zoneCount; ++traversalIndex)
+        {
+            const auto candidateZoneIndex = usePreparedOrder
+                ? programSnapshot.roundRobinOrderedZoneIndices[traversalIndex]
+                : traversalIndex;
+            if (!programSnapshot.isZonePlayableMatch(candidateZoneIndex, note, velocity))
+                continue;
+
+            const auto& candidateZone = programSnapshot.zones[candidateZoneIndex];
+            if (!matchesTriggerPhase(candidateZone)
+                || programSnapshot.getZoneRoundRobinGroup(candidateZone) != roundRobinGroup)
             {
-                return programSnapshot.roundRobinSortsBefore(
-                    static_cast<std::size_t>(left),
-                    static_cast<std::size_t>(right));
-            });
-        addSelectedZone(candidateIndices[static_cast<std::size_t>(step % static_cast<std::uint32_t>(candidateCount))]);
+                continue;
+            }
+
+            if (targetPosition > 0)
+            {
+                if (candidateZone.roundRobinPosition == targetPosition)
+                    addSelectedZone(static_cast<int>(candidateZoneIndex));
+                if (selectedCount > 0 && zoneIndices[selectedCount - 1] == static_cast<int>(candidateZoneIndex))
+                    break;
+                continue;
+            }
+
+            if (ordinal++ == selectedOrdinal)
+            {
+                addSelectedZone(static_cast<int>(candidateZoneIndex));
+                break;
+            }
+        }
     }
 
     return selectedCount;
 }
 
 void EngineCore::flushPendingEventsAtOffset(const int offset,
-                                           const ProgramSnapshot* const programSnapshot,
-                                           const ProgramAudioSnapshot* const programAudioSnapshot,
-                                           const double singleSampleRateHz) noexcept
+                                            int& eventCursor,
+                                            int& eventTraversalCount,
+                                            const ProgramSnapshot* const programSnapshot,
+                                            const ProgramAudioSnapshot* const programAudioSnapshot,
+                                            const double singleSampleRateHz) noexcept
 {
-    for (int eventIndex = 0; eventIndex < pendingEventCount_; ++eventIndex)
+    while (eventCursor < pendingEventCount_)
     {
-        const auto& event = pendingEvents_[static_cast<std::size_t>(eventIndex)];
-
-        if (event.offset != offset)
+        ++eventTraversalCount;
+        const auto event = pendingEvents_[static_cast<std::size_t>(eventCursor)];
+        if (event.offset < offset)
+        {
+            ++eventCursor;
             continue;
+        }
+        if (event.offset > offset)
+            break;
+        ++eventCursor;
 
         auto startResolvedVoice = [&](const int selectedZoneIndex, const int existingVoiceIndex) noexcept
         {
@@ -3071,12 +3356,16 @@ void EngineCore::flushPendingEventsAtOffset(const int offset,
             return voiceIndex >= 0;
         };
 
-        if (event.type == EventType::noteOn)
+        if (event.type == EventType::allNotesOff)
+        {
+            stopAllVoicesImmediate();
+        }
+        else if (event.type == EventType::noteOn)
         {
 
             if (programSnapshot != nullptr)
             {
-                std::array<int, ProgramSnapshot::maxZones> selectedZoneIndices{};
+                std::array<int, VoicePool::maxVoices> selectedZoneIndices{};
                 const auto midiVelocity = juce::jlimit(0, 127, static_cast<int>(std::round(event.value * 127.0f)));
                 const auto selectedZoneCount = chooseProgramZoneIndices(
                     *programSnapshot,
@@ -3141,7 +3430,7 @@ void EngineCore::flushPendingEventsAtOffset(const int offset,
             if (programSnapshot == nullptr)
                 continue;
 
-            std::array<int, ProgramSnapshot::maxZones> selectedZoneIndices{};
+            std::array<int, VoicePool::maxVoices> selectedZoneIndices{};
             const auto midiVelocity = juce::jlimit(0, 127, static_cast<int>(std::round(event.value * 127.0f)));
             const auto selectedZoneCount = chooseProgramZoneIndices(
                 *programSnapshot,
@@ -3654,24 +3943,39 @@ float EngineCore::readSampleLinear(const float position) const noexcept
     return readSampleLinear(*segments, position);
 }
 
-void EngineCore::rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData) noexcept
+bool EngineCore::rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData) noexcept
 {
-    rebuildSampleSegments(monoSampleData, {}, true);
+    return rebuildSampleSegments(monoSampleData, {}, true);
 }
 
-void EngineCore::rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData,
+bool EngineCore::rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData,
                                        const juce::File& backingFile,
                                        const bool beginNewGeneration) noexcept
 {
-    ++segmentRebuildCount_;
-    if (beginNewGeneration || currentSamplePublishGeneration_ == 0)
-        currentSamplePublishGeneration_ = ++nextSamplePublishGeneration_;
-
-    sampleSegments_.publish(buildSampleSegments(monoSampleData,
-                                                preloadSamples_,
-                                                backingFile,
-                                                sampleDataRate_.load(std::memory_order_acquire),
-                                                currentSamplePublishGeneration_));
+    try
+    {
+        const auto startsGeneration = beginNewGeneration || currentSamplePublishGeneration_ == 0;
+        const auto generation = startsGeneration
+            ? nextSamplePublishGeneration_ + 1
+            : currentSamplePublishGeneration_;
+        auto replacement = buildSampleSegments(monoSampleData,
+                                               preloadSamples_,
+                                               backingFile,
+                                               sampleDataRate_.load(std::memory_order_acquire),
+                                               generation);
+        sampleSegments_.publish(std::move(replacement));
+        if (startsGeneration)
+        {
+            ++nextSamplePublishGeneration_;
+            currentSamplePublishGeneration_ = generation;
+        }
+        ++segmentRebuildCount_;
+        return true;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return false;
+    }
 }
 
 RtSnapshotCell<EngineCore::SampleSegments>::Reader EngineCore::getSampleSegmentsSnapshot(const RtReaderRole role) const noexcept
@@ -3684,7 +3988,7 @@ std::shared_ptr<const EngineCore::SampleSegments> EngineCore::buildSampleSegment
     const int preloadSamples,
     const juce::File& backingFile,
     const double sampleRateHz,
-    const std::uint64_t generation) noexcept
+    const std::uint64_t generation)
 {
     auto segments = std::make_shared<SampleSegments>();
     segments->sampleRateHz = juce::jmax(1.0, sampleRateHz);
@@ -3732,7 +4036,7 @@ std::shared_ptr<const EngineCore::SampleSegments> EngineCore::buildSampleSegment
     return segments;
 }
 
-juce::AudioBuffer<float> EngineCore::materializeSampleData(const SampleSegments& segments) noexcept
+juce::AudioBuffer<float> EngineCore::materializeSampleData(const SampleSegments& segments)
 {
     const auto preloadSamples = segments.preloadData.getNumSamples();
     const auto streamSamples = segments.getStreamNumSamples();
@@ -3811,10 +4115,12 @@ juce::AudioBuffer<float> EngineCore::materializeSampleData(const SampleSegments&
 }
 
 std::shared_ptr<const EngineCore::ProgramAudioSnapshot> EngineCore::rebuildProgramAudioSnapshot(
-    const ProgramAudioSnapshot& snapshot) const noexcept
+    const ProgramAudioSnapshot& snapshot,
+    const int preloadSamples) const
 {
     auto rebuilt = std::make_shared<ProgramAudioSnapshot>();
     rebuilt->sampleAssetCount = snapshot.sampleAssetCount;
+    rebuilt->sampleSegments.resize(rebuilt->sampleAssetCount);
 
     for (std::size_t assetIndex = 0; assetIndex < snapshot.sampleAssetCount; ++assetIndex)
     {
@@ -3827,7 +4133,7 @@ std::shared_ptr<const EngineCore::ProgramAudioSnapshot> EngineCore::rebuildProgr
             continue;
 
         const auto backingFile = segments->backingFilePath.isNotEmpty() ? juce::File(segments->backingFilePath) : juce::File();
-        rebuilt->sampleSegments[assetIndex] = buildSampleSegments(source, preloadSamples_, backingFile);
+        rebuilt->sampleSegments[assetIndex] = buildSampleSegments(source, preloadSamples, backingFile);
     }
 
     return rebuilt;

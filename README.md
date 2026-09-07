@@ -95,10 +95,10 @@ The content workflow is deterministic and test-backed:
 
 ## Supported Formats
 
-- Direct sample load: WAV, AIFF, REX, RX2, and NCW through an external converter command.
-- Imported instruments: SFZ, SF2, DecentSampler `.dspreset`, Bitwig `.multisample`, MPC `.xpm`, 1010music Bento, TAL Sampler, TX16Wx, Korg multisample ZIP, Korg `.kmp`, Ableton `.adv` and `.adg`, EXS24, and a validated legacy NKI subset.
+- Direct sample load: WAV, AIFF, FLAC, OGG, and NCW through an external converter command.
+- Imported instruments and loops: SFZ, REX/RX2, SF2, DecentSampler `.dspreset`, Bitwig `.multisample`, MPC `.xpm`, 1010music Bento `preset.xml`, TAL Sampler `.talsmpl`, TX16Wx `.txprog`, Korg `.korgmultisample` and `.kmp`, Ableton `.adv` and `.adg`, disting EX `.dexpreset`, EXS24 `.exs`, and a validated legacy NKI subset.
 - Exported instruments: SFZ and DecentSampler `.dspreset`.
-- Detection-only diagnostics: protected or encrypted Kontakt content is identified and reported, but not imported.
+- Detection-only diagnostics: Reason NN-XT `.sxt` and protected/encrypted Kontakt content are identified and reported, but not imported.
 
 ## Support
 
@@ -129,14 +129,22 @@ Bootstrap the development build and run tests:
 
 The bootstrap and CI use the ASIO-disabled `ci-windows` preset, which targets the documented Visual Studio 2022 toolchain. The existing `default` preset remains available for VS2026 development with the ASIO SDK.
 
-Manual development build:
+Manual Debug test build and complete nine-test matrix:
 
-```bash
+```powershell
 cmake --preset ci-windows
-cmake --build --preset ci-windows --target Audiocity_All
-cmake --build --preset ci-windows --target audiocity_offline_tests audiocity_ui_snapshot_harness audiocity_preset_runtime_smoke
-ctest --preset ci-windows --exclude-regex '^audiocity_ui_snapshot_harness$'
+cmake --build --preset ci-windows --target audiocity_offline_tests audiocity_ui_snapshot_harness audiocity_preset_runtime_smoke audiocity_ui_snapshot_header_smoke audiocity_ui_snapshot_core_smoke
+ctest --preset ci-windows
 ```
+
+Build and verify the products users receive in a separate Release configuration:
+
+```powershell
+cmake --build --preset ci-windows-release
+./scripts/verify_release_artifacts.ps1 -BuildDir build/ci-windows -Configuration Release
+```
+
+The offline executable supports `--suite engine|import|state|preset`, `--filter <text>`, and `--list`. See [docs/05-testing.md](docs/05-testing.md) for sanitizer/fuzz, coverage, render-deadline, VST3 host-validation, and UI-snapshot commands.
 
 ## Engine Profiling
 

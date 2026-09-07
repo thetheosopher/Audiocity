@@ -154,6 +154,11 @@ void registerAudioFormats(juce::AudioFormatManager& formatManager)
     formatManager.registerBasicFormats();
 }
 
+bool isNcwConverterAvailable()
+{
+    return juce::SystemStats::getEnvironmentVariable(kNcwConverterEnv, {}).trim().isNotEmpty();
+}
+
 ReaderOpenResult openReaderForFile(juce::AudioFormatManager& formatManager,
                                    const juce::File& sourceFile)
 {

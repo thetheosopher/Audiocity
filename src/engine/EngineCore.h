@@ -6,6 +6,7 @@
 #include <juce_dsp/juce_dsp.h>
 
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -197,6 +198,24 @@ public:
 
     using VoicePlaybackStates = std::array<VoicePlaybackState, VoicePool::maxVoices>;
 
+    struct PendingEventDropCounts
+    {
+        std::uint64_t noteOn = 0;
+        std::uint64_t noteOff = 0;
+        std::uint64_t allNotesOff = 0;
+        std::uint64_t continuousControl = 0;
+        std::uint64_t panicRecoveries = 0;
+    };
+
+    struct ProgramSnapshotRetentionStats
+    {
+        std::size_t ownerCount = 0;
+        std::size_t metadataBytes = 0;
+    };
+
+    static constexpr int pendingEventCapacity = 1024;
+    static constexpr int pendingSafetyEventReserve = 32;
+
     struct PreparedSampleFile
     {
         juce::AudioBuffer<float> sampleData;
@@ -217,19 +236,46 @@ public:
         juce::String errorMessage;
     };
 
+    struct ProgramPublishResult
+    {
+        enum class Error
+        {
+            none,
+            capacityExceeded,
+            missingReferencedAudio,
+            emptyReferencedAudio,
+            allocationFailed
+        };
+
+        bool ok = false;
+        Error error = Error::none;
+        ProgramSnapshot::CapacityReport capacity{};
+        int referencedZoneIndex = -1;
+        int referencedSampleAssetIndex = -1;
+        juce::String diagnostic;
+
+        [[nodiscard]] explicit operator bool() const noexcept { return ok; }
+    };
+
+    [[nodiscard]] static ProgramPublishResult validateProgramForPublish(const Program& program);
+
     bool loadSampleFromFile(const juce::File& file);
     [[nodiscard]] static PreparedSampleFile prepareSampleFile(const juce::File& file,
                                                               int fallbackRootMidiNote = 60,
                                                               PlaybackMode fallbackPlaybackMode = PlaybackMode::gate);
     void loadPreparedSample(const PreparedSampleFile& prepared) noexcept;
-    /** Publishes immutable sample/display data without touching audio-thread-owned controls. */
+    /** Publishes immutable sample/display data without touching audio-thread-owned controls or
+        replacing the currently-published program. The caller decides whether this sample is a
+        display companion for a program or a standalone replacement. */
     void publishPreparedSample(const PreparedSampleFile& prepared) noexcept;
     [[nodiscard]] bool isRexRuntimeAvailable() const noexcept;
     void setSampleData(const juce::AudioBuffer<float>& sampleData, double sampleRate, int rootNote) noexcept;
     /** Publishes immutable sample/display data without touching audio-thread-owned controls. */
     void publishSampleData(const juce::AudioBuffer<float>& sampleData, double sampleRate) noexcept;
-    void setProgram(const Program& program);
-    void setProgram(const Program& program, const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset);
+    ProgramPublishResult setProgram(const Program& program);
+    ProgramPublishResult setProgram(
+        const Program& program,
+        const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset);
     /** Publishes a program whose audio is already loaded, reusing the sample segments rather
         than rebuilding and re-priming them. Returns false when the loaded audio cannot back the
         given program, in which case the caller must publish the sample data too. */
@@ -291,6 +337,7 @@ public:
 
     void noteOn(int noteNumber, float velocity, int sampleOffsetInBlock) noexcept;
     void noteOff(int noteNumber, int sampleOffsetInBlock) noexcept;
+    void allNotesOff(int sampleOffsetInBlock = 0) noexcept;
     void pitchBend(int pitchWheelValue, int sampleOffsetInBlock) noexcept;
     void channelPressure(int pressureValue, int sampleOffsetInBlock) noexcept;
 
@@ -356,10 +403,22 @@ public:
     void resetStealCount() noexcept;
     [[nodiscard]] bool isNoteActive(int noteNumber) const noexcept;
     [[nodiscard]] VoicePlaybackStates getVoicePlaybackStates() const noexcept;
+    [[nodiscard]] PendingEventDropCounts getPendingEventDropCounts() const noexcept;
+    [[nodiscard]] int getLastPendingEventDispatchCount() const noexcept
+    {
+        return lastPendingEventDispatchCount_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] int getLastPendingEventTraversalCount() const noexcept
+    {
+        return lastPendingEventTraversalCount_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] ProgramSnapshotRetentionStats getProgramSnapshotRetentionStats();
+    void resetPendingEventDropCounts() noexcept;
 
 private:
     struct SampleSegments;
     struct ProgramAudioSnapshot;
+    struct PublishedProgramSnapshot;
 
     struct VoiceFilterCoefficients
     {
@@ -494,7 +553,8 @@ private:
         noteOff,
         pitchBend,
         channelPressure,
-        controller
+        controller,
+        allNotesOff
     };
 
     struct PendingEvent
@@ -503,6 +563,7 @@ private:
         int data = 0;
         float value = 0.0f;
         int offset = 0;
+        std::uint64_t sequence = 0;
     };
 
     struct RoundRobinCursor
@@ -525,6 +586,8 @@ private:
                                                int maxZoneIndices) noexcept;
     void sortPendingEventsByOffset() noexcept;
     void flushPendingEventsAtOffset(int offset,
+                                    int& eventCursor,
+                                    int& eventTraversalCount,
                                     const ProgramSnapshot* programSnapshot,
                                     const ProgramAudioSnapshot* programAudioSnapshot,
                                     double singleSampleRateHz) noexcept;
@@ -549,10 +612,10 @@ private:
                                int rootNote,
                                const juce::File& backingFile,
                                bool applyPlaybackControls) noexcept;
-    void rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData) noexcept;
-    void rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData,
-                               const juce::File& backingFile,
-                               bool beginNewGeneration = false) noexcept;
+    [[nodiscard]] bool rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData) noexcept;
+    [[nodiscard]] bool rebuildSampleSegments(const juce::AudioBuffer<float>& monoSampleData,
+                                             const juce::File& backingFile,
+                                             bool beginNewGeneration = false) noexcept;
     // `role` identifies the calling thread so the lock-free snapshot cell can protect the
     // returned guard without contending with the other two roles. See RtSnapshotCell.h.
     [[nodiscard]] RtSnapshotCell<SampleSegments>::Reader getSampleSegmentsSnapshot(RtReaderRole role) const noexcept;
@@ -560,10 +623,11 @@ private:
         int preloadSamples,
         const juce::File& backingFile = {},
         double sampleRateHz = 44100.0,
-        std::uint64_t generation = 0) noexcept;
-    [[nodiscard]] static juce::AudioBuffer<float> materializeSampleData(const SampleSegments& segments) noexcept;
+        std::uint64_t generation = 0);
+    [[nodiscard]] static juce::AudioBuffer<float> materializeSampleData(const SampleSegments& segments);
     [[nodiscard]] std::shared_ptr<const ProgramAudioSnapshot> rebuildProgramAudioSnapshot(
-        const ProgramAudioSnapshot& snapshot) const noexcept;
+        const ProgramAudioSnapshot& snapshot,
+        int preloadSamples) const;
     [[nodiscard]] static int countProgramSegmentSamples(const ProgramAudioSnapshot& snapshot, bool usePreloadData) noexcept;
     [[nodiscard]] int getTotalSampleLength(const SampleSegments& segments) const noexcept;
     [[nodiscard]] int getTotalSampleLength() const noexcept;
@@ -627,7 +691,10 @@ private:
                                                             int numSamples) noexcept;
     [[nodiscard]] int getVoiceRenderBlockSize(const VoiceState& voice,
                                               int remainingSamples) const noexcept;
-    [[nodiscard]] int findNextPendingEventOffset(int currentOffset, int blockEnd, int& eventCursor) const noexcept;
+    [[nodiscard]] int findNextPendingEventOffset(int currentOffset,
+                                                 int blockEnd,
+                                                 int& eventCursor,
+                                                 int& eventTraversalCount) const noexcept;
     void renderActiveVoices(int startSample,
                             int numSamples,
                             const SampleSegments& fallbackSegments,
@@ -641,17 +708,26 @@ private:
 
     VoicePool voicePool_;
     std::array<VoiceState, VoicePool::maxVoices> voices_{};
-    std::array<PendingEvent, 1024> pendingEvents_{};
-    std::array<RoundRobinCursor, ProgramSnapshot::maxGroups> roundRobinCursors_{};
+    std::array<PendingEvent, pendingEventCapacity> pendingEvents_{};
+    // Zones may declare their own round-robin group without a Program group entry.
+    std::array<RoundRobinCursor, ProgramSnapshot::maxZones> roundRobinCursors_{};
     int pendingEventCount_ = 0;
+    std::uint64_t nextPendingEventSequence_ = 0;
+    std::atomic<bool> pendingSafetyRecoveryRequested_{ false };
+    std::atomic<std::uint64_t> droppedNoteOnEvents_{ 0 };
+    std::atomic<std::uint64_t> droppedNoteOffEvents_{ 0 };
+    std::atomic<std::uint64_t> droppedAllNotesOffEvents_{ 0 };
+    std::atomic<std::uint64_t> droppedContinuousControlEvents_{ 0 };
+    std::atomic<std::uint64_t> pendingEventPanicRecoveries_{ 0 };
+    std::atomic<int> lastPendingEventDispatchCount_{ 0 };
+    std::atomic<int> lastPendingEventTraversalCount_{ 0 };
 
-    RtSnapshotCell<ProgramSnapshot> programSnapshot_{};
-    RtSnapshotCell<ProgramAudioSnapshot> programAudioSnapshot_{};
+    RtSnapshotCell<PublishedProgramSnapshot> publishedProgramSnapshot_{};
     RtSnapshotCell<SampleSegments> sampleSegments_{};
-    // Structural writers serialize here. The audio thread only observes the sequence counter.
+    // Structural writers serialize here. Readers observe one coherent metadata/audio owner.
     mutable std::recursive_mutex structuralWriterMutex_;
-    std::atomic<std::uint64_t> programPublishSequence_{ 0 };
-    std::uint64_t appliedProgramPublishSequence_ = 0;
+    std::uint64_t nextProgramPublishGeneration_ = 0;
+    std::uint64_t appliedProgramPublishGeneration_ = 0;
     std::uint64_t nextSamplePublishGeneration_ = 0;
     std::uint64_t currentSamplePublishGeneration_ = 0;
     std::uint64_t appliedSamplePublishGeneration_ = 0;

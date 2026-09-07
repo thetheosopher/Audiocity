@@ -1,6 +1,7 @@
 #include "ImportedProgramState.h"
 
 #include "../engine/Sf2Importer.h"
+#include "ImportFormatRegistry.h"
 #include "ProgramMappingModel.h"
 
 namespace audiocity::plugin
@@ -26,102 +27,12 @@ AUDIOCITY_IMPORTED_PROGRAM_IDENTIFIER(kLegacyImportedProgramPathStateProperty, "
 
 juce::String formatImportedProgramFormat(const ImportedProgramFormat format)
 {
-    switch (format)
-    {
-        case ImportedProgramFormat::sfz:
-            return "sfz";
-        case ImportedProgramFormat::rex:
-            return "rex";
-        case ImportedProgramFormat::sampleSlices:
-            return "sampleSlices";
-        case ImportedProgramFormat::nki:
-            return "nki";
-        case ImportedProgramFormat::sf2:
-            return "sf2";
-        case ImportedProgramFormat::decentSampler:
-            return "decentSampler";
-        case ImportedProgramFormat::bitwigMultisample:
-            return "bitwigMultisample";
-        case ImportedProgramFormat::mpcKeygroup:
-            return "mpcKeygroup";
-        case ImportedProgramFormat::bento1010:
-            return "bento1010";
-        case ImportedProgramFormat::talSampler:
-            return "talSampler";
-        case ImportedProgramFormat::tx16wx:
-            return "tx16wx";
-        case ImportedProgramFormat::korgMultisample:
-            return "korgMultisample";
-        case ImportedProgramFormat::abletonSampler:
-            return "abletonSampler";
-        case ImportedProgramFormat::distingExPreset:
-            return "distingExPreset";
-        case ImportedProgramFormat::korgKmp:
-            return "korgKmp";
-        case ImportedProgramFormat::logicExs24:
-            return "logicExs24";
-        case ImportedProgramFormat::nnxt:
-            return "nnxt";
-        case ImportedProgramFormat::unknown:
-        default:
-            return {};
-    }
+    return importedProgramFormatToken(format);
 }
 
 ImportedProgramFormat parseImportedProgramFormat(const juce::String& formatText)
 {
-    if (formatText.equalsIgnoreCase("sfz"))
-        return ImportedProgramFormat::sfz;
-
-    if (formatText.equalsIgnoreCase("rex"))
-        return ImportedProgramFormat::rex;
-
-    if (formatText.equalsIgnoreCase("sampleSlices"))
-        return ImportedProgramFormat::sampleSlices;
-
-    if (formatText.equalsIgnoreCase("nki"))
-        return ImportedProgramFormat::nki;
-
-    if (formatText.equalsIgnoreCase("sf2"))
-        return ImportedProgramFormat::sf2;
-
-    if (formatText.equalsIgnoreCase("decentSampler") || formatText.equalsIgnoreCase("dspreset"))
-        return ImportedProgramFormat::decentSampler;
-
-    if (formatText.equalsIgnoreCase("bitwigMultisample") || formatText.equalsIgnoreCase("multisample"))
-        return ImportedProgramFormat::bitwigMultisample;
-
-    if (formatText.equalsIgnoreCase("mpcKeygroup") || formatText.equalsIgnoreCase("xpm"))
-        return ImportedProgramFormat::mpcKeygroup;
-
-    if (formatText.equalsIgnoreCase("bento1010") || formatText.equalsIgnoreCase("1010music"))
-        return ImportedProgramFormat::bento1010;
-
-    if (formatText.equalsIgnoreCase("talSampler") || formatText.equalsIgnoreCase("talsmpl"))
-        return ImportedProgramFormat::talSampler;
-
-    if (formatText.equalsIgnoreCase("tx16wx") || formatText.equalsIgnoreCase("txprog"))
-        return ImportedProgramFormat::tx16wx;
-
-    if (formatText.equalsIgnoreCase("korgMultisample") || formatText.equalsIgnoreCase("korgmultisample"))
-        return ImportedProgramFormat::korgMultisample;
-
-    if (formatText.equalsIgnoreCase("abletonSampler") || formatText.equalsIgnoreCase("adv") || formatText.equalsIgnoreCase("adg"))
-        return ImportedProgramFormat::abletonSampler;
-
-    if (formatText.equalsIgnoreCase("distingExPreset") || formatText.equalsIgnoreCase("dexpreset"))
-        return ImportedProgramFormat::distingExPreset;
-
-    if (formatText.equalsIgnoreCase("korgKmp") || formatText.equalsIgnoreCase("kmp"))
-        return ImportedProgramFormat::korgKmp;
-
-    if (formatText.equalsIgnoreCase("logicExs24") || formatText.equalsIgnoreCase("exs") || formatText.equalsIgnoreCase("exs24"))
-        return ImportedProgramFormat::logicExs24;
-
-    if (formatText.equalsIgnoreCase("nnxt") || formatText.equalsIgnoreCase("sxt"))
-        return ImportedProgramFormat::nnxt;
-
-    return ImportedProgramFormat::unknown;
+    return parseImportedProgramFormatToken(formatText);
 }
 
 juce::String formatRange(const int low, const int high)
@@ -226,56 +137,11 @@ juce::Identifier importedProgramPathStateProperty()
 
 ImportedProgramFormat detectImportedProgramFormat(const juce::String& programPath)
 {
-    const auto extension = juce::File(programPath).getFileExtension();
-    if (extension.equalsIgnoreCase(".sfz"))
-        return ImportedProgramFormat::sfz;
-
-    if (extension.equalsIgnoreCase(".rex") || extension.equalsIgnoreCase(".rx2"))
-        return ImportedProgramFormat::rex;
-
-    if (extension.equalsIgnoreCase(".nki"))
-        return ImportedProgramFormat::nki;
-
-    if (extension.equalsIgnoreCase(".sf2"))
-        return ImportedProgramFormat::sf2;
-
-    if (extension.equalsIgnoreCase(".dspreset"))
-        return ImportedProgramFormat::decentSampler;
-
-    if (extension.equalsIgnoreCase(".multisample"))
-        return ImportedProgramFormat::bitwigMultisample;
-
-    if (extension.equalsIgnoreCase(".xpm"))
-        return ImportedProgramFormat::mpcKeygroup;
-
-    if (extension.equalsIgnoreCase(".talsmpl"))
-        return ImportedProgramFormat::talSampler;
-
-    if (extension.equalsIgnoreCase(".txprog"))
-        return ImportedProgramFormat::tx16wx;
-
-    if (extension.equalsIgnoreCase(".korgmultisample"))
-        return ImportedProgramFormat::korgMultisample;
-
-    if (extension.equalsIgnoreCase(".adv") || extension.equalsIgnoreCase(".adg"))
-        return ImportedProgramFormat::abletonSampler;
-
-    if (extension.equalsIgnoreCase(".dexpreset"))
-        return ImportedProgramFormat::distingExPreset;
-
-    if (extension.equalsIgnoreCase(".kmp"))
-        return ImportedProgramFormat::korgKmp;
-
-    if (extension.equalsIgnoreCase(".exs"))
-        return ImportedProgramFormat::logicExs24;
-
-    if (extension.equalsIgnoreCase(".sxt"))
-        return ImportedProgramFormat::nnxt;
-
-    // 1010music presets are conventionally named preset.xml
-    if (extension.equalsIgnoreCase(".xml")
-        && juce::File(programPath).getFileNameWithoutExtension().equalsIgnoreCase("preset"))
-        return ImportedProgramFormat::bento1010;
+    if (const auto* descriptor = findImportFormatDescriptorForPath(programPath);
+        descriptor != nullptr && descriptor->isInstrument)
+    {
+        return descriptor->format;
+    }
 
     return ImportedProgramFormat::unknown;
 }
@@ -296,46 +162,13 @@ ImportedProgramFormat readImportedProgramStateFormat(const juce::ValueTree& stat
 
 juce::String importedProgramFormatBadge(const ImportedProgramFormat format)
 {
-    switch (format)
-    {
-        case ImportedProgramFormat::sfz:
-            return "SFZ";
-        case ImportedProgramFormat::rex:
-            return "REX";
-        case ImportedProgramFormat::sampleSlices:
-            return "SLICE";
-        case ImportedProgramFormat::nki:
-            return "NKI";
-        case ImportedProgramFormat::sf2:
-            return "SF2";
-        case ImportedProgramFormat::decentSampler:
-            return "DSPRESET";
-        case ImportedProgramFormat::bitwigMultisample:
-            return "MULTI";
-        case ImportedProgramFormat::mpcKeygroup:
-            return "XPM";
-        case ImportedProgramFormat::bento1010:
-            return "BENTO";
-        case ImportedProgramFormat::talSampler:
-            return "TALS";
-        case ImportedProgramFormat::tx16wx:
-            return "TX16W";
-        case ImportedProgramFormat::korgMultisample:
-            return "KORG";
-        case ImportedProgramFormat::abletonSampler:
-            return "ADV";
-        case ImportedProgramFormat::distingExPreset:
-            return "DEX";
-        case ImportedProgramFormat::korgKmp:
-            return "KMP";
-        case ImportedProgramFormat::logicExs24:
-            return "EXS";
-        case ImportedProgramFormat::nnxt:
-            return "NNXT";
-        case ImportedProgramFormat::unknown:
-        default:
-            return "PROGRAM";
-    }
+    if (format == ImportedProgramFormat::sampleSlices)
+        return "SLICE";
+
+    if (const auto* descriptor = findImportFormatDescriptor(format))
+        return descriptor->badge.data();
+
+    return "PROGRAM";
 }
 
 juce::String importedProgramFormatBadge(const juce::String& programPath)
@@ -345,46 +178,13 @@ juce::String importedProgramFormatBadge(const juce::String& programPath)
 
 juce::String importedProgramFormatDescription(const ImportedProgramFormat format)
 {
-    switch (format)
-    {
-        case ImportedProgramFormat::sfz:
-            return "SFZ instrument";
-        case ImportedProgramFormat::rex:
-            return "REX loop";
-        case ImportedProgramFormat::sampleSlices:
-            return "Transient slice program";
-        case ImportedProgramFormat::nki:
-            return "NKI instrument (legacy subset)";
-        case ImportedProgramFormat::sf2:
-            return "SoundFont bank";
-        case ImportedProgramFormat::decentSampler:
-            return "DecentSampler preset";
-        case ImportedProgramFormat::bitwigMultisample:
-            return "Bitwig multisample";
-        case ImportedProgramFormat::mpcKeygroup:
-            return "MPC keygroup program";
-        case ImportedProgramFormat::bento1010:
-            return "1010music preset";
-        case ImportedProgramFormat::talSampler:
-            return "TAL Sampler preset";
-        case ImportedProgramFormat::tx16wx:
-            return "TX16Wx program";
-        case ImportedProgramFormat::korgMultisample:
-            return "Korg multisample";
-        case ImportedProgramFormat::abletonSampler:
-            return "Ableton sampler preset";
-        case ImportedProgramFormat::distingExPreset:
-            return "disting EX preset";
-        case ImportedProgramFormat::korgKmp:
-            return "Korg KMP program";
-        case ImportedProgramFormat::logicExs24:
-            return "EXS24 instrument";
-        case ImportedProgramFormat::nnxt:
-            return "NN-XT instrument";
-        case ImportedProgramFormat::unknown:
-        default:
-            return "Instrument library";
-    }
+    if (format == ImportedProgramFormat::sampleSlices)
+        return "Transient slice program";
+
+    if (const auto* descriptor = findImportFormatDescriptor(format))
+        return descriptor->description.data();
+
+    return "Instrument library";
 }
 
 juce::String importedProgramFormatDescription(const juce::String& programPath)
@@ -442,7 +242,8 @@ void appendImportedProgramState(juce::ValueTree& state,
                                 const juce::String& programPath,
                                 const juce::ValueTree& mappingState,
                                 const ImportedProgramFormat format,
-                                const int selectionIndex)
+                                const int selectionIndex,
+                                const ImportedAssetManifest& assetManifest)
 {
     if (!state.isValid() || programPath.isEmpty())
         return;
@@ -458,6 +259,9 @@ void appendImportedProgramState(juce::ValueTree& state,
 
     if (selectionIndex >= 0)
         state.setProperty(kImportedProgramSelectionIndexStateProperty, selectionIndex, nullptr);
+
+    if (auto manifestState = createImportedAssetManifestState(assetManifest); manifestState.isValid())
+        state.appendChild(manifestState, nullptr);
 
     if (mappingState.isValid() && mappingState.hasType(programZoneMappingStateType()))
         state.appendChild(mappingState.createCopy(), nullptr);

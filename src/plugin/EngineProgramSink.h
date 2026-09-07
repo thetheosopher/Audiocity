@@ -21,7 +21,19 @@ public:
     void republishProgram(const audiocity::engine::Program& program,
                           const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset) override
     {
-        engine_.setProgram(program, sampleDataByAsset);
+        juce::String ignoredDiagnostic;
+        const auto published = republishProgramChecked(program, sampleDataByAsset, ignoredDiagnostic);
+        juce::ignoreUnused(published);
+    }
+
+    bool republishProgramChecked(
+        const audiocity::engine::Program& program,
+        const std::vector<juce::AudioBuffer<float>>& sampleDataByAsset,
+        juce::String& diagnostic) override
+    {
+        const auto result = engine_.setProgram(program, sampleDataByAsset);
+        diagnostic = result.diagnostic;
+        return static_cast<bool>(result);
     }
 
     bool republishProgramMetadata(const audiocity::engine::Program& program) override

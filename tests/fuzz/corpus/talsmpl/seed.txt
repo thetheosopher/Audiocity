@@ -1,0 +1,1 @@
+<tal><sample path="missing.wav" root="60"/></tal>

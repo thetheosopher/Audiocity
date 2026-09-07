@@ -14,7 +14,51 @@ endif ()
 
 option(AUDIOCITY_FETCH_JUCE "Fetch JUCE automatically when third_party/JUCE is unavailable" ON)
 option(AUDIOCITY_ENABLE_ASIO "Enable ASIO device backend for Standalone builds (requires Steinberg ASIO SDK headers)." OFF)
+option(AUDIOCITY_ENABLE_SANITIZERS "Instrument test targets with AddressSanitizer and, where supported, UndefinedBehaviorSanitizer." OFF)
+option(AUDIOCITY_ENABLE_COVERAGE "Instrument test targets for source coverage reporting." OFF)
+option(AUDIOCITY_BUILD_FUZZERS "Build importer corpus/libFuzzer entry points." OFF)
 set(AUDIOCITY_ASIO_SDK_DIR "" CACHE PATH "Path to Steinberg ASIO SDK directory that contains common/iasiodrv.h")
+
+function(audiocity_apply_test_instrumentation target)
+    get_target_property(audiocity_target_type ${target} TYPE)
+    set(audiocity_can_link TRUE)
+    if (audiocity_target_type STREQUAL "OBJECT_LIBRARY"
+        OR audiocity_target_type STREQUAL "STATIC_LIBRARY")
+        set(audiocity_can_link FALSE)
+    endif ()
+
+    if (AUDIOCITY_ENABLE_SANITIZERS)
+        if (MSVC)
+            target_compile_options(${target} PRIVATE /fsanitize=address /Zi)
+            if (audiocity_can_link)
+                target_link_options(${target} PRIVATE /INCREMENTAL:NO)
+            endif ()
+        elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+            target_compile_options(${target} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+            if (audiocity_can_link)
+                target_link_options(${target} PRIVATE -fsanitize=address,undefined)
+            endif ()
+        else ()
+            message(FATAL_ERROR "AUDIOCITY_ENABLE_SANITIZERS is unsupported by ${CMAKE_CXX_COMPILER_ID}")
+        endif ()
+    endif ()
+
+    if (AUDIOCITY_ENABLE_COVERAGE)
+        if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            target_compile_options(${target} PRIVATE -fprofile-instr-generate -fcoverage-mapping)
+            if (audiocity_can_link)
+                target_link_options(${target} PRIVATE -fprofile-instr-generate -fcoverage-mapping)
+            endif ()
+        elseif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            target_compile_options(${target} PRIVATE --coverage)
+            if (audiocity_can_link)
+                target_link_options(${target} PRIVATE --coverage)
+            endif ()
+        elseif (NOT MSVC)
+            message(FATAL_ERROR "AUDIOCITY_ENABLE_COVERAGE is unsupported by ${CMAKE_CXX_COMPILER_ID}")
+        endif ()
+    endif ()
+endfunction()
 
 set(AUDIOCITY_JUCE_ASIO 0)
 set(AUDIOCITY_ASIO_HEADER_DIR "")
@@ -113,6 +157,8 @@ target_sources(Audiocity
         src/plugin/PluginSampleInspectorCardLayout.cpp
         src/plugin/PluginEditor.cpp
         src/plugin/PeakPreviewCache.cpp
+        src/plugin/AudioStateCodec.cpp
+        src/plugin/ImportedAssetResolver.cpp
         src/plugin/ImportedProgramState.cpp
         src/plugin/ImportedProgramStore.cpp
         src/plugin/PresetJson.cpp
@@ -121,6 +167,7 @@ target_sources(Audiocity
         src/plugin/SampleBrowserTooltip.cpp
         src/plugin/CcLearnDial.cpp
         src/plugin/LibraryFileIndex.cpp
+        src/plugin/ImportFormatRegistry.cpp
         src/plugin/LibraryMetadata.cpp
         src/engine/AudioFileSupport.cpp
         src/engine/EngineCore.cpp

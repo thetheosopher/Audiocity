@@ -13,6 +13,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <mutex>
@@ -123,6 +124,10 @@ public:
     {
         return importedProgramStore_.getZoneCount();
     }
+    [[nodiscard]] int getPublishedRendererZoneCount() const noexcept
+    {
+        return engine_.getProgramZoneCount();
+    }
     [[nodiscard]] juce::String getImportedProgramPath() const;
     [[nodiscard]] audiocity::plugin::ImportedProgramFormat getImportedProgramFormat() const;
     [[nodiscard]] juce::String getImportedProgramName() const;
@@ -163,6 +168,12 @@ public:
                                             juce::StringArray* warningsOut = nullptr);
 
     [[nodiscard]] juce::String getLastImportDiagnosticSummary() const;
+    [[nodiscard]] bool hasPendingImportedAssetRelink() const noexcept
+    {
+        return pendingImportedAssetRelink_.load(std::memory_order_acquire);
+    }
+    [[nodiscard]] juce::String getPendingImportedAssetRelinkDiagnostic() const;
+    bool relinkPendingImportedProgramFromFolder(const juce::File& selectedRoot);
     [[nodiscard]] bool isRexRuntimeAvailable() const noexcept { return engine_.isRexRuntimeAvailable(); }
     void loadGeneratedWaveformAsSample(const std::vector<float>& waveform, int rootMidiNote = 60);
     [[nodiscard]] juce::String getLoadedSamplePath() const;
@@ -178,6 +189,33 @@ public:
     [[nodiscard]] bool isEmbeddedSampleLoaded() const noexcept
     {
         return embeddedSampleLoaded_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::uint64_t getLastSerializedAssetStateBytes() const noexcept
+    {
+        return lastSerializedAssetStateBytes_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] bool hasStateAssetSizeWarning() const noexcept
+    {
+        return stateAssetSizeWarning_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::size_t getCaptureWorkingStorageBytes() const noexcept
+    {
+        return captureWorkingStorageBytes_.load(std::memory_order_acquire);
+    }
+    /** Current capture/state/preview sample payloads; retired RT snapshots are intentionally excluded. */
+    [[nodiscard]] std::size_t getCurrentCaptureAndPreviewSampleStorageBytes() const
+    {
+        auto bytes = getCaptureWorkingStorageBytes() + previewWaveData_.size() * sizeof(float);
+        {
+            const std::scoped_lock lock(generatedWaveformStateMutex_);
+            bytes += generatedWaveformState_.capacity() * sizeof(float);
+            bytes += capturedSampleState_.capacity() * sizeof(float);
+            bytes += embeddedSampleState_.capacity() * sizeof(float);
+        }
+
+        if (const auto preview = samplePreviewSnapshot_.read(audiocity::engine::RtReaderRole::message))
+            bytes += preview->samples.capacity() * sizeof(float);
+        return bytes;
     }
     [[nodiscard]] juce::String getEmbeddedSampleName() const;
     void loadEmbeddedSampleAsSample(const juce::AudioBuffer<float>& buffer,
@@ -515,6 +553,16 @@ private:
                                     int zoneCount,
                                     int selectionIndex = -1);
     void setLastImportDiagnosticSummary(const juce::String& diagnosticSummary);
+    bool restoreImportedProgramFromState(const juce::File& file,
+                                         audiocity::plugin::ImportedProgramFormat format,
+                                         int selectionIndex,
+                                         const juce::ValueTree& mappingState);
+    void setPendingImportedAssetRelink(const audiocity::plugin::ImportedAssetManifest& manifest,
+                                       audiocity::plugin::ImportedProgramFormat format,
+                                       int selectionIndex,
+                                       const juce::ValueTree& mappingState,
+                                       const juce::String& diagnostic);
+    void clearPendingImportedAssetRelink();
 
     struct UiMidiEvent
     {
@@ -542,6 +590,14 @@ private:
     audiocity::engine::EngineCore engine_;
     audiocity::plugin::EngineProgramSink programSink_{ engine_ };
     audiocity::plugin::ImportedProgramStore importedProgramStore_{ programSink_ };
+    mutable std::mutex pendingImportedAssetMutex_;
+    audiocity::plugin::ImportedAssetManifest pendingImportedAssetManifest_;
+    audiocity::plugin::ImportedProgramFormat pendingImportedAssetFormat_ =
+        audiocity::plugin::ImportedProgramFormat::unknown;
+    int pendingImportedAssetSelectionIndex_ = -1;
+    juce::ValueTree pendingImportedAssetMappingState_;
+    juce::String pendingImportedAssetDiagnostic_;
+    std::atomic<bool> pendingImportedAssetRelink_{ false };
     juce::AudioProcessorValueTreeState apvts_;
     std::thread streamPrimeWorker_;
     std::atomic<bool> stopStreamPrimeWorkerRequested_{ false };
@@ -575,6 +631,8 @@ private:
     std::atomic<bool> generatedWaveformLoaded_{ false };
     std::atomic<bool> capturedAudioLoaded_{ false };
     std::atomic<bool> embeddedSampleLoaded_{ false };
+    std::atomic<std::uint64_t> lastSerializedAssetStateBytes_{ 0 };
+    std::atomic<bool> stateAssetSizeWarning_{ false };
     std::atomic<int> lastStateRestoreSource_{ 0 }; // 0=none, 1=file, 2=generated, 3=captured, 4=imported-program, 5=embedded-sample
     mutable std::mutex generatedWaveformStateMutex_;
     std::vector<float> generatedWaveformState_;
@@ -609,16 +667,21 @@ private:
     float previewWavePhase_ = 0.0f;
 
     static constexpr int kSamplePreviewMaxSamples = 30 * 48000;
-    std::array<float, kSamplePreviewMaxSamples> samplePreviewData_{};
-    std::atomic<int> samplePreviewSamples_{ 0 };
-    std::atomic<double> samplePreviewSourceRate_{ 44100.0 };
+    struct SamplePreviewSnapshot
+    {
+        std::vector<float> samples;
+        double sourceRate = 44100.0;
+    };
+    audiocity::engine::RtSnapshotCell<SamplePreviewSnapshot> samplePreviewSnapshot_;
     std::atomic<bool> samplePreviewPlaying_{ false };
     float samplePreviewReadPos_ = 0.0f;
     static constexpr int kCaptureMaxSeconds = 30;
     static constexpr int kCaptureMaxSampleRate = 96000;
     static constexpr int kCaptureMaxSamplesPerChannel = kCaptureMaxSeconds * kCaptureMaxSampleRate;
-    std::array<float, kCaptureMaxSamplesPerChannel> captureInputLeft_{};
-    std::array<float, kCaptureMaxSamplesPerChannel> captureInputRight_{};
+    std::unique_ptr<float[]> captureInputLeft_;
+    std::unique_ptr<float[]> captureInputRight_;
+    std::atomic<std::size_t> captureWorkingStorageBytes_{ 0 };
+    std::atomic<int> captureAudioReaders_{ 0 };
     std::atomic<int> captureInputSamples_{ 0 };
     std::atomic<double> captureInputSampleRate_{ 44100.0 };
     std::atomic<bool> captureRecording_{ false };
@@ -629,6 +692,8 @@ private:
     std::atomic<float> captureInputGain_{ 1.0f };
     std::atomic<float> captureInputPeakLeft_{ 0.0f };
     std::atomic<float> captureInputPeakRight_{ 0.0f };
+    void waitForCaptureAudioReaders() noexcept;
+    void releaseCaptureWorkingStorage() noexcept;
     void pushUiMidiEvent(int noteNumber, int velocity, bool isNoteOn) noexcept;
     [[nodiscard]] bool popUiMidiEvent(UiMidiEvent& out) noexcept;
     void pushExternalMidiDisplayEvent(int noteNumber, int velocity, bool isNoteOn) noexcept;

@@ -1,0 +1,1 @@
+<Preset><Sample filename="missing.wav" rootNote="60"/></Preset>

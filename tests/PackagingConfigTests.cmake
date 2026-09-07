@@ -10,6 +10,7 @@ file(READ "${_audiocity_source_dir}/README.md" _audiocity_readme)
 file(READ "${_audiocity_source_dir}/docs/USER_GUIDE.md" _audiocity_user_guide)
 file(READ "${_audiocity_source_dir}/installer/AudiocityInstaller.iss" _audiocity_installer_iss)
 file(READ "${_audiocity_source_dir}/scripts/build_release.ps1" _audiocity_build_release)
+file(READ "${_audiocity_source_dir}/scripts/verify_release_artifacts.ps1" _audiocity_verify_release_artifacts)
 file(READ "${_audiocity_source_dir}/scripts/bootstrap.ps1" _audiocity_bootstrap)
 file(READ "${_audiocity_source_dir}/installer/PortableInstall.txt" _audiocity_portable_install)
 file(READ "${_audiocity_source_dir}/.vscode/tasks.json" _audiocity_vscode_tasks)
@@ -22,6 +23,7 @@ file(READ "${_audiocity_source_dir}/src/plugin/PluginProcessor.h" _audiocity_plu
 file(READ "${_audiocity_source_dir}/src/plugin/OwnedJobWorker.h" _audiocity_owned_job_worker)
 file(READ "${_audiocity_source_dir}/src/plugin/EngineProgramSink.h" _audiocity_engine_program_sink)
 file(READ "${_audiocity_source_dir}/src/engine/EngineCore.cpp" _audiocity_engine_core)
+file(READ "${_audiocity_source_dir}/src/engine/EngineCore.h" _audiocity_engine_core_header)
 file(READ "${_audiocity_source_dir}/src/engine/RtSnapshotCell.h" _audiocity_rt_snapshot_cell)
 file(READ "${_audiocity_source_dir}/docs/02-real-time-rules.md" _audiocity_rt_rules)
 file(READ "${_audiocity_source_dir}/.github/workflows/ui-snapshots.yml" _audiocity_ui_snapshot_workflow)
@@ -66,8 +68,117 @@ if (NOT _audiocity_build_and_test_workflow MATCHES "cmake --preset ci-windows")
     message(FATAL_ERROR ".github/workflows/build-and-test.yml must configure with the ci-windows preset.")
 endif ()
 
-if (NOT _audiocity_build_and_test_workflow MATCHES "--target Audiocity_All")
-    message(FATAL_ERROR ".github/workflows/build-and-test.yml must compile the shipped standalone and VST3 products.")
+if (NOT _audiocity_build_and_test_workflow MATCHES "cmake --build --preset ci-windows-release"
+    OR NOT _audiocity_presets MATCHES "Audiocity_All")
+    message(FATAL_ERROR ".github/workflows/build-and-test.yml must compile the shipped standalone and VST3 products through the Release preset.")
+endif ()
+
+if (NOT _audiocity_build_and_test_workflow MATCHES "installer/[*][*]")
+    message(FATAL_ERROR ".github/workflows/build-and-test.yml must run for installer-only changes.")
+endif ()
+
+if (NOT _audiocity_build_and_test_workflow MATCHES "ci-windows-release")
+    message(FATAL_ERROR ".github/workflows/build-and-test.yml must build shipped products in Release configuration.")
+endif ()
+
+if (NOT _audiocity_build_and_test_workflow MATCHES "verify_release_artifacts[.]ps1")
+    message(FATAL_ERROR ".github/workflows/build-and-test.yml must verify the built product and installer-input paths.")
+endif ()
+
+if (NOT _audiocity_build_and_test_workflow MATCHES "verify_release_artifacts[.]ps1[^\r\n]*-CompileInstaller")
+    message(FATAL_ERROR ".github/workflows/build-and-test.yml must compile the installer definition against the built Release inputs.")
+endif ()
+
+if (NOT _audiocity_verify_release_artifacts MATCHES "Get-ChildItem[^\r\n]*-Recurse"
+    OR NOT _audiocity_verify_release_artifacts MATCHES "Get-FileHash[^\r\n]*SHA256"
+    OR NOT _audiocity_verify_release_artifacts MATCHES "Assert-PresetBankMatches"
+    OR NOT _audiocity_verify_release_artifacts MATCHES "Resolve-InnoSetupCompiler"
+    OR NOT _audiocity_verify_release_artifacts MATCHES "/DSourceRoot=[$]artifactRoot")
+    message(FATAL_ERROR "verify_release_artifacts.ps1 must compare recursive preset paths/content and support a real ISCC input compile.")
+endif ()
+
+if (WIN32)
+    find_program(_audiocity_powershell_executable NAMES pwsh powershell)
+    if (NOT _audiocity_powershell_executable)
+        message(FATAL_ERROR "Packaging verification behavior tests require pwsh or powershell.")
+    endif ()
+
+    set(_audiocity_verifier_fixture "${CMAKE_CURRENT_BINARY_DIR}/audiocity-release-verifier-fixture")
+    file(REMOVE_RECURSE "${_audiocity_verifier_fixture}")
+    file(MAKE_DIRECTORY
+        "${_audiocity_verifier_fixture}/scripts"
+        "${_audiocity_verifier_fixture}/installer"
+        "${_audiocity_verifier_fixture}/assets/icons"
+        "${_audiocity_verifier_fixture}/assets/factory_presets/nested"
+        "${_audiocity_verifier_fixture}/build/Audiocity_artefacts/Release/Standalone/FactoryPresets/nested"
+        "${_audiocity_verifier_fixture}/build/Audiocity_artefacts/Release/VST3/Audiocity.vst3/Contents/x86_64-win"
+        "${_audiocity_verifier_fixture}/build/Audiocity_artefacts/Release/VST3/Audiocity.vst3/Contents/Resources/FactoryPresets/nested")
+    configure_file(
+        "${_audiocity_source_dir}/scripts/verify_release_artifacts.ps1"
+        "${_audiocity_verifier_fixture}/scripts/verify_release_artifacts.ps1"
+        COPYONLY)
+
+    file(WRITE "${_audiocity_verifier_fixture}/installer/AudiocityInstaller.iss" "; verifier fixture\n")
+    file(WRITE "${_audiocity_verifier_fixture}/installer/PortableInstall.txt" "verifier fixture\n")
+    file(WRITE "${_audiocity_verifier_fixture}/LICENSE" "verifier fixture\n")
+    file(WRITE "${_audiocity_verifier_fixture}/assets/icons/audiocity_icon_multi.ico" "fixture-icon")
+    file(WRITE "${_audiocity_verifier_fixture}/assets/factory_presets/root.acp" "root-preset")
+    file(WRITE "${_audiocity_verifier_fixture}/assets/factory_presets/nested/nested.acp" "nested-preset")
+    file(WRITE "${_audiocity_verifier_fixture}/build/Audiocity_artefacts/Release/Standalone/Audiocity.exe" "fixture-exe")
+    file(WRITE "${_audiocity_verifier_fixture}/build/Audiocity_artefacts/Release/VST3/Audiocity.vst3/Contents/x86_64-win/Audiocity.vst3" "fixture-vst3")
+
+    foreach (_audiocity_preset_destination IN ITEMS
+        "${_audiocity_verifier_fixture}/build/Audiocity_artefacts/Release/Standalone/FactoryPresets"
+        "${_audiocity_verifier_fixture}/build/Audiocity_artefacts/Release/VST3/Audiocity.vst3/Contents/Resources/FactoryPresets")
+        file(WRITE "${_audiocity_preset_destination}/root.acp" "root-preset")
+        file(WRITE "${_audiocity_preset_destination}/nested/nested.acp" "nested-preset")
+    endforeach ()
+
+    set(_audiocity_verifier_command
+        "${_audiocity_powershell_executable}" -NoLogo -NoProfile -ExecutionPolicy Bypass
+        -File "${_audiocity_verifier_fixture}/scripts/verify_release_artifacts.ps1"
+        -BuildDir "${_audiocity_verifier_fixture}/build" -Configuration Release)
+    execute_process(
+        COMMAND ${_audiocity_verifier_command}
+        RESULT_VARIABLE _audiocity_verifier_result
+        OUTPUT_VARIABLE _audiocity_verifier_stdout
+        ERROR_VARIABLE _audiocity_verifier_stderr)
+    if (NOT _audiocity_verifier_result EQUAL 0)
+        message(FATAL_ERROR
+            "Matching recursive factory-preset banks must pass release verification.\n"
+            "stdout:\n${_audiocity_verifier_stdout}\nstderr:\n${_audiocity_verifier_stderr}")
+    endif ()
+
+    file(WRITE
+        "${_audiocity_verifier_fixture}/build/Audiocity_artefacts/Release/Standalone/FactoryPresets/nested/nested.acp"
+        "tampered-preset")
+    execute_process(
+        COMMAND ${_audiocity_verifier_command}
+        RESULT_VARIABLE _audiocity_verifier_result
+        OUTPUT_VARIABLE _audiocity_verifier_stdout
+        ERROR_VARIABLE _audiocity_verifier_stderr)
+    string(CONCAT _audiocity_verifier_output "${_audiocity_verifier_stdout}" "${_audiocity_verifier_stderr}")
+    if (_audiocity_verifier_result EQUAL 0 OR NOT _audiocity_verifier_output MATCHES "content differs")
+        message(FATAL_ERROR "Release verification must reject same-count Standalone preset content drift.")
+    endif ()
+
+    file(WRITE
+        "${_audiocity_verifier_fixture}/build/Audiocity_artefacts/Release/Standalone/FactoryPresets/nested/nested.acp"
+        "nested-preset")
+    file(RENAME
+        "${_audiocity_verifier_fixture}/build/Audiocity_artefacts/Release/VST3/Audiocity.vst3/Contents/Resources/FactoryPresets/nested/nested.acp"
+        "${_audiocity_verifier_fixture}/build/Audiocity_artefacts/Release/VST3/Audiocity.vst3/Contents/Resources/FactoryPresets/renamed.acp")
+    execute_process(
+        COMMAND ${_audiocity_verifier_command}
+        RESULT_VARIABLE _audiocity_verifier_result
+        OUTPUT_VARIABLE _audiocity_verifier_stdout
+        ERROR_VARIABLE _audiocity_verifier_stderr)
+    string(CONCAT _audiocity_verifier_output "${_audiocity_verifier_stdout}" "${_audiocity_verifier_stderr}")
+    if (_audiocity_verifier_result EQUAL 0 OR NOT _audiocity_verifier_output MATCHES "missing 'nested/nested[.]acp'")
+        message(FATAL_ERROR "Release verification must reject same-count VST3 preset relative-path drift.")
+    endif ()
+
+    file(REMOVE_RECURSE "${_audiocity_verifier_fixture}")
 endif ()
 
 if (NOT _audiocity_build_and_test_workflow MATCHES "ctest --preset ci-windows")
@@ -309,9 +420,13 @@ if (NOT _audiocity_plugin_processor_header MATCHES "struct EngineControlSnapshot
 endif ()
 
 if (NOT _audiocity_engine_core MATCHES "publishPreparedSample"
-    OR NOT _audiocity_engine_core MATCHES "programPublishSequence_"
+    OR NOT _audiocity_engine_core MATCHES "PublishedProgramSnapshot"
+    OR NOT _audiocity_engine_core_header MATCHES "publishedProgramSnapshot_"
     OR NOT _audiocity_engine_core MATCHES "appliedSamplePublishGeneration_"
-    OR NOT _audiocity_rt_snapshot_cell MATCHES "activeReaders_"
+    OR NOT _audiocity_rt_snapshot_cell MATCHES "readerHazards_"
+    OR NOT _audiocity_rt_snapshot_cell MATCHES "readerDepths_"
+    OR NOT _audiocity_rt_snapshot_cell MATCHES "readerAcquiring_"
+    OR NOT _audiocity_rt_snapshot_cell MATCHES "readerReleasing_"
     OR NOT _audiocity_rt_rules MATCHES "Audio thread only")
     message(FATAL_ERROR "Immutable structural publication and its thread-ownership contract must remain documented.")
 endif ()

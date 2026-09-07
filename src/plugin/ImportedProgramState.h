@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../engine/ProgramModel.h"
+#include "ImportedAssetResolver.h"
 #include "ProgramMappingModel.h"
 
 #include <juce_data_structures/juce_data_structures.h>
@@ -74,7 +75,8 @@ void appendImportedProgramState(juce::ValueTree& state,
                                 const juce::String& programPath,
                                 const juce::ValueTree& mappingState,
                                 ImportedProgramFormat format = ImportedProgramFormat::unknown,
-                                int selectionIndex = -1);
+                                int selectionIndex = -1,
+                                const ImportedAssetManifest& assetManifest = {});
 [[nodiscard]] juce::String readImportedProgramStatePath(const juce::ValueTree& state);
 [[nodiscard]] int readImportedProgramStateSelectionIndex(const juce::ValueTree& state);
 [[nodiscard]] juce::ValueTree readImportedProgramMappingState(const juce::ValueTree& state);

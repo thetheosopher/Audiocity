@@ -6,10 +6,15 @@ on:
     branches:
       - main
     paths:
-      - '.github/workflows/build-and-test.yml'
+      - '.github/workflows/**'
+      - '.vscode/**'
       - 'CMakeLists.txt'
       - 'CMakePresets.json'
+      - 'LICENSE'
+      - 'README.md'
       - 'assets/**'
+      - 'docs/**'
+      - 'installer/**'
       - 'scripts/**'
       - 'src/**'
       - 'tests/**'
@@ -17,10 +22,15 @@ on:
       - 'tools/**'
   pull_request:
     paths:
-      - '.github/workflows/build-and-test.yml'
+      - '.github/workflows/**'
+      - '.vscode/**'
       - 'CMakeLists.txt'
       - 'CMakePresets.json'
+      - 'LICENSE'
+      - 'README.md'
       - 'assets/**'
+      - 'docs/**'
+      - 'installer/**'
       - 'scripts/**'
       - 'src/**'
       - 'tests/**'
@@ -47,10 +57,108 @@ jobs:
         shell: pwsh
         run: cmake --preset ci-windows
 
-      - name: Build shipped products and test targets
+      - name: Build fast test targets
         shell: pwsh
-        run: cmake --build --preset ci-windows --target Audiocity_All audiocity_offline_tests audiocity_preset_runtime_smoke
+        run: cmake --build --preset ci-windows --target audiocity_offline_tests audiocity_preset_runtime_smoke audiocity_ui_snapshot_header_smoke audiocity_ui_snapshot_core_smoke
 
       - name: Run non-UI CTest suite
         shell: pwsh
         run: ctest --preset ci-windows --exclude-regex '^audiocity_ui_snapshot_harness$'
+
+      - name: Build Release wrappers
+        shell: pwsh
+        run: cmake --build --preset ci-windows-release
+
+      - name: Verify Release resources and compile installer inputs
+        shell: pwsh
+        run: ./scripts/verify_release_artifacts.ps1 -BuildDir build/ci-windows -Configuration Release -CompileInstaller
+
+      - name: Build Release library-index benchmark
+        shell: pwsh
+        run: cmake --build build/ci-windows --config Release --target audiocity_offline_tests --parallel 2
+
+      - name: Enforce Release 50k library scan and search budgets
+        shell: pwsh
+        run: ./build/ci-windows/tests/Release/audiocity_offline_tests.exe --filter LibraryFileIndex50kScanSearchIntegration
+
+      - name: Build Release performance harness
+        shell: pwsh
+        run: cmake --build build/ci-windows --config Release --target audiocity_engine_profile --parallel 2
+
+      - name: Record render-deadline measurement
+        shell: pwsh
+        run: ./scripts/check_render_deadline.ps1 -BuildDir build/ci-windows -Configuration Release
+
+      - name: Validate VST3 in pluginval
+        shell: pwsh
+        run: ./scripts/validate_vst3.ps1 -BuildDir build/ci-windows -Configuration Release -StrictnessLevel 5
+
+      - name: Upload validation and performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-validation
+          path: |
+            artifacts/installer-validation/**
+            artifacts/performance/**
+            artifacts/pluginval/logs/**
+          if-no-files-found: warn
+
+  importer-sanitizers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:strict_string_checks=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sanitizer toolchain versions
+        run: |
+          cmake --version
+          clang++ --version
+          ninja --version
+
+      - name: Configure importer fuzz targets
+        run: >-
+          cmake -S tests/fuzz -B build/importer-fuzz -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_CXX_COMPILER=clang++
+
+      - name: Build ASan and UBSan importer targets
+        run: cmake --build build/importer-fuzz --parallel 2
+
+      - name: Run bounded sanitizer corpus
+        run: ctest --test-dir build/importer-fuzz --output-on-failure --timeout 60
+
+  coverage-baseline:
+    runs-on: windows-2022
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        shell: pwsh
+        run: cmake --preset ci-windows
+
+      - name: Build consolidated offline tests
+        shell: pwsh
+        run: cmake --build --preset ci-windows --target audiocity_offline_tests
+
+      - name: Install native coverage collector
+        shell: pwsh
+        run: choco install opencppcoverage --version=0.9.9.0 --yes --no-progress
+
+      - name: Report native coverage baseline
+        shell: pwsh
+        run: ./scripts/report_test_coverage.ps1 -BuildDir build/ci-windows -Configuration Debug
+
+      - name: Upload native coverage baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-coverage
+          path: artifacts/coverage/**

@@ -8,12 +8,13 @@
   "configurePresets": [
     {
       "name": "ci-windows",
-      "displayName": "CI Windows (VS2022, no ASIO)",
+      "displayName": "CI Windows (VS2022, self-contained, no ASIO)",
       "generator": "Visual Studio 17 2022",
       "binaryDir": "${sourceDir}/build/ci-windows",
       "architecture": "x64",
       "cacheVariables": {
-        "AUDIOCITY_ENABLE_ASIO": "OFF"
+        "AUDIOCITY_ENABLE_ASIO": "OFF",
+        "AUDIOCITY_SELF_CONTAINED_RUNTIME": "ON"
       }
     },
     {
@@ -55,6 +56,15 @@
       "displayName": "CI Windows Debug build",
       "configurePreset": "ci-windows",
       "configuration": "Debug"
+    },
+    {
+      "name": "ci-windows-release",
+      "displayName": "CI Windows Release products",
+      "configurePreset": "ci-windows",
+      "configuration": "Release",
+      "targets": [
+        "Audiocity_All"
+      ]
     },
     {
       "name": "default",

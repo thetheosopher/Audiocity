@@ -47,7 +47,7 @@
 
 ## 1. What Audiocity Does
 
-Audiocity loads audio samples (WAV, AIFF, FLAC, OGG, MP3 where supported), maps them across MIDI keys and velocities, and plays them back with multi‑voice polyphony, ADSR envelopes, filtering, modulation, and a small built‑in effects rack. It also imports SFZ instruments, REX/RX2 sliced loops, and a subset of legacy NKI patches, and provides on‑the‑spot tools to **generate** simple waveforms and **capture** live input as new samples.
+Audiocity loads WAV, AIFF, FLAC, and OGG audio samples, maps them across MIDI keys and velocities, and plays them back with multi‑voice polyphony, ADSR envelopes, filtering, modulation, and a small built‑in effects rack. It also imports SFZ instruments, REX/RX2 sliced loops, and a subset of legacy NKI patches, and provides on‑the‑spot tools to **generate** simple waveforms and **capture** live input as new samples.
 
 Audiocity is delivered as:
 
@@ -428,16 +428,22 @@ Presets live as XML payloads (`.acp` extension) under your user data folder; the
 
 ---
 
-## 11. Importing Samples, SFZ, REX, and NKI
+## 11. Importing Samples and Instruments
 
-Audiocity recognizes several file types. Drag any of them onto the editor window to import:
+Audiocity recognizes the following file types. Drag a supported type onto the editor window to import it; diagnostic-only entries report why they cannot be loaded:
 
 | Type | Behavior |
 | --- | --- |
-| `.wav`, `.aif`, `.aiff`, `.flac`, `.ogg`, `.mp3` | Loads as a single sample. The file's embedded loop and root‑note metadata are honored when present. |
+| `.wav`, `.aif`, `.aiff`, `.flac`, `.ogg` | Loads as a single sample. The file's embedded loop and root‑note metadata are honored when present. |
+| `.ncw` | Loads through the converter named by `AUDIOCITY_NCW_CONVERTER_COMMAND`; Audiocity shows a setup diagnostic when no converter is configured. |
 | `.sfz` | Runs the SFZ pre‑processor and importer (`#include`, `#define`, core opcode subset). Produces a multi‑zone imported program with key/velocity ranges, round‑robin groups, loop modes, gain/pan/tune, choke groups (`off_by`), and SFZ velocity crossfades. |
 | `.rex`, `.rx2` | Decoded by the bundled REX runtime; each slice becomes its own playable region mapped chromatically from MIDI note 36. |
 | `.nki` | A subset of legacy NKI patches with discrete external samples is supported. Container‑style NKIs are flagged in the diagnostics line. |
+| `.sf2`, `.dspreset`, `.multisample`, `.xpm` | Imports SoundFont, DecentSampler, Bitwig, and MPC keygroup programs. |
+| `preset.xml`, `.talsmpl`, `.txprog` | Imports 1010music Bento, TAL Sampler, and TX16Wx programs. Only a file named exactly `preset.xml` is treated as Bento content. |
+| `.korgmultisample`, `.kmp`, `.adv`, `.adg` | Imports Korg multisamples/KMP programs and Ableton Sampler presets. |
+| `.dexpreset`, `.exs` | Imports disting EX and EXS24 programs. |
+| `.sxt` | Recognized as Reason NN-XT for a specific diagnostic; import is not yet supported. |
 
 #### Auto‑slice
 

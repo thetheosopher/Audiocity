@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 
+#include "AudioStateCodec.h"
 #include "ImportedProgramState.h"
 #include "PluginEditor.h"
 #include "PresetJson.h"
@@ -23,6 +24,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <thread>
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -51,13 +53,18 @@ constexpr auto kZoneChokeGroup = "chokeGroup";
 constexpr auto kZoneTriggerMode = "triggerMode";
 constexpr auto kZoneLoopMode = "loopMode";
 constexpr auto kGeneratedWaveformData = "generatedWaveformData";
+constexpr auto kGeneratedWaveformAsset = "generatedWaveformAssetV1";
 constexpr auto kCapturedSampleData = "capturedSampleData";
+constexpr auto kCapturedSampleAsset = "capturedSampleAssetV1";
 constexpr auto kCapturedSampleRate = "capturedSampleRate";
 constexpr auto kEmbeddedSampleData = "embeddedSampleData";
+constexpr auto kEmbeddedSampleAsset = "embeddedSampleAssetV1";
 constexpr auto kEmbeddedSampleRate = "embeddedSampleRate";
 constexpr auto kEmbeddedSampleRootMidiNote = "embeddedSampleRootMidiNote";
 constexpr auto kEmbeddedSampleName = "embeddedSampleName";
 constexpr auto kEmbeddedSampleChannels = "embeddedSampleChannels";
+constexpr auto kAudioStateDecodedBytes = "audioStateDecodedBytes";
+constexpr auto kAudioStateSizeWarning = "audioStateSizeWarning";
 constexpr auto kSampleBrowserRootFolder = "sampleBrowserRootFolder";
 constexpr auto kRootMidiNote = "rootMidiNote";
 constexpr auto kCoarseTuneSemitones = "coarseTuneSemitones";
@@ -282,59 +289,108 @@ bool isPlaybackPresetExcludedProperty(const juce::Identifier& property)
         || propertyName == kCaptureInputGain;
 }
 
-juce::MemoryBlock serializeAudioBufferSamples(const juce::AudioBuffer<float>& buffer)
+bool containsOnlyFiniteFloatSamples(const void* const data, const std::size_t byteCount) noexcept
 {
-    const auto channels = juce::jmax(0, buffer.getNumChannels());
-    const auto samples = juce::jmax(0, buffer.getNumSamples());
-    juce::MemoryBlock bytes(static_cast<std::size_t>(channels) * static_cast<std::size_t>(samples) * sizeof(float));
-    auto* dest = static_cast<float*>(bytes.getData());
-
-    for (int channel = 0; channel < channels; ++channel)
-    {
-        std::memcpy(dest + static_cast<std::size_t>(channel) * static_cast<std::size_t>(samples),
-                    buffer.getReadPointer(channel),
-                    static_cast<std::size_t>(samples) * sizeof(float));
-    }
-
-    return bytes;
-}
-
-bool deserializeAudioBufferSamples(const juce::MemoryBlock& bytes,
-                                   const int channels,
-                                   juce::AudioBuffer<float>& buffer)
-{
-    const auto safeChannels = juce::jmax(1, channels);
-    const auto totalBytes = bytes.getSize();
-    const auto channelStrideBytes = static_cast<std::size_t>(safeChannels) * sizeof(float);
-    if (totalBytes < channelStrideBytes || (totalBytes % channelStrideBytes) != 0)
+    if (data == nullptr || byteCount == 0 || (byteCount % sizeof(float)) != 0)
         return false;
 
-    const auto samples = static_cast<int>(totalBytes / sizeof(float) / static_cast<std::size_t>(safeChannels));
-    if (samples <= 0)
-        return false;
-
-    buffer.setSize(safeChannels, samples, false, false, true);
-    const auto* src = static_cast<const float*>(bytes.getData());
-    for (int channel = 0; channel < safeChannels; ++channel)
+    const auto* source = static_cast<const std::uint8_t*>(data);
+    for (std::size_t offset = 0; offset < byteCount; offset += sizeof(float))
     {
-        std::memcpy(buffer.getWritePointer(channel),
-                    src + static_cast<std::size_t>(channel) * static_cast<std::size_t>(samples),
-                    static_cast<std::size_t>(samples) * sizeof(float));
+        float sample = 0.0f;
+        std::memcpy(&sample, source + offset, sizeof(sample));
+        if (!std::isfinite(sample))
+            return false;
     }
 
     return true;
 }
 
-void writeEmbeddedSampleState(juce::ValueTree& state,
+bool deserializeAudioBufferSamples(const juce::MemoryBlock& bytes,
+                                   const int channels,
+                                   juce::AudioBuffer<float>& buffer,
+                                   juce::String* const errorMessage = nullptr)
+{
+    if (errorMessage != nullptr)
+        errorMessage->clear();
+
+    const auto safeChannels = juce::jmax(1, channels);
+    const auto totalBytes = bytes.getSize();
+    if (safeChannels > audiocity::plugin::AudioStateCodecLimits::maximumChannels
+        || totalBytes > audiocity::plugin::AudioStateCodecLimits::maximumDecodedBytes)
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = "Legacy audio state exceeds the 64 MiB/8-channel limit";
+        return false;
+    }
+    const auto channelStrideBytes = static_cast<std::size_t>(safeChannels) * sizeof(float);
+    if (totalBytes < channelStrideBytes || (totalBytes % channelStrideBytes) != 0)
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = "Legacy audio state has an invalid planar-float byte count";
+        return false;
+    }
+
+    if (!containsOnlyFiniteFloatSamples(bytes.getData(), totalBytes))
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = "Legacy audio state contains a non-finite sample";
+        return false;
+    }
+
+    const auto samples = static_cast<int>(totalBytes / sizeof(float) / static_cast<std::size_t>(safeChannels));
+    if (samples <= 0)
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = "Legacy audio state contains no complete samples";
+        return false;
+    }
+
+    juce::AudioBuffer<float> restored(safeChannels, samples);
+    const auto* src = static_cast<const float*>(bytes.getData());
+    for (int channel = 0; channel < safeChannels; ++channel)
+    {
+        std::memcpy(restored.getWritePointer(channel),
+                    src + static_cast<std::size_t>(channel) * static_cast<std::size_t>(samples),
+                    static_cast<std::size_t>(samples) * sizeof(float));
+    }
+
+    buffer = std::move(restored);
+    return true;
+}
+
+bool writeEmbeddedSampleState(juce::ValueTree& state,
                               const juce::AudioBuffer<float>& buffer,
                               const double sampleRate,
                               const int rootMidiNote,
-                              const juce::String& sampleName)
+                              const juce::String& sampleName,
+                              juce::String* const errorMessage = nullptr)
 {
-    if (buffer.getNumChannels() <= 0 || buffer.getNumSamples() <= 0)
-        return;
+    if (errorMessage != nullptr)
+        errorMessage->clear();
 
-    state.setProperty(kEmbeddedSampleData, juce::var(serializeAudioBufferSamples(buffer)), nullptr);
+    if (buffer.getNumChannels() <= 0 || buffer.getNumSamples() <= 0)
+    {
+        const auto error = juce::String("Embedded audio state is empty");
+        state.setProperty(kAudioStateSizeWarning, error, nullptr);
+        if (errorMessage != nullptr)
+            *errorMessage = error;
+        return false;
+    }
+
+    juce::String codecError;
+    const auto encoded = audiocity::plugin::encodeAudioStateAsset(buffer, &codecError);
+    if (encoded.isEmpty())
+    {
+        if (codecError.isEmpty())
+            codecError = "Embedded audio state serialization failed";
+        state.setProperty(kAudioStateSizeWarning, codecError, nullptr);
+        if (errorMessage != nullptr)
+            *errorMessage = codecError;
+        return false;
+    }
+
+    state.setProperty(kEmbeddedSampleAsset, juce::var(encoded), nullptr);
     state.setProperty(kEmbeddedSampleRate, juce::jmax(1.0, sampleRate), nullptr);
     state.setProperty(kEmbeddedSampleRootMidiNote, juce::jlimit(0, 127, rootMidiNote), nullptr);
     state.setProperty(kEmbeddedSampleChannels, buffer.getNumChannels(), nullptr);
@@ -343,6 +399,8 @@ void writeEmbeddedSampleState(juce::ValueTree& state,
         state.setProperty(kEmbeddedSampleName, sampleName, nullptr);
     else
         state.removeProperty(kEmbeddedSampleName, nullptr);
+
+    return true;
 }
 
 juce::ValueTree buildPlaybackPresetStateTree(const juce::ValueTree& fullState)
@@ -789,6 +847,10 @@ AudiocityAudioProcessor::AudiocityAudioProcessor()
 
 AudiocityAudioProcessor::~AudiocityAudioProcessor()
 {
+    captureRecording_.store(false, std::memory_order_release);
+    waitForCaptureAudioReaders();
+    releaseCaptureWorkingStorage();
+    samplePreviewSnapshot_.publish(nullptr);
     stopStreamPrimeWorker();
 }
 
@@ -1256,8 +1318,7 @@ void AudiocityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         return;
     }
 
-    if (samplePreviewPlaying_.load(std::memory_order_relaxed)
-        && samplePreviewSamples_.load(std::memory_order_relaxed) > 0)
+    if (samplePreviewPlaying_.load(std::memory_order_relaxed))
     {
         renderSampleFilePreview(buffer);
         applyOutputBoundarySmoothing(buffer);
@@ -1494,6 +1555,8 @@ juce::AudioProcessorEditor* AudiocityAudioProcessor::createEditor()
 void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     auto state = juce::ValueTree(kPatchRoot);
+    auto decodedAssetBytes = std::uint64_t{ 0 };
+    juce::String assetWarning;
 
     state.setProperty(kSamplePath, engine_.getSamplePath(), nullptr);
     const auto importedProgramState = importedProgramStore_.capturePersistentState();
@@ -1503,35 +1566,73 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
                                   importedProgramState.programPath,
                                   importedProgramState.mappingState,
                                   importedProgramState.format,
-                                  importedProgramState.selectionIndex);
+                                  importedProgramState.selectionIndex,
+                                  importedProgramState.assetManifest);
     }
     {
         std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
         if (generatedWaveformLoaded_.load(std::memory_order_relaxed) && !generatedWaveformState_.empty())
         {
-            juce::MemoryBlock generatedBytes(generatedWaveformState_.size() * sizeof(float));
-            std::memcpy(generatedBytes.getData(), generatedWaveformState_.data(), generatedBytes.getSize());
-            state.setProperty(kGeneratedWaveformData, juce::var(generatedBytes), nullptr);
+            juce::String codecError;
+            const auto generatedAsset = audiocity::plugin::encodeMonoAudioStateAsset(generatedWaveformState_, &codecError);
+            if (!generatedAsset.isEmpty())
+            {
+                state.setProperty(kGeneratedWaveformAsset, juce::var(generatedAsset), nullptr);
+                decodedAssetBytes += generatedWaveformState_.size() * sizeof(float);
+            }
+            else
+            {
+                assetWarning = codecError;
+            }
         }
 
         if (capturedAudioLoaded_.load(std::memory_order_relaxed) && !capturedSampleState_.empty())
         {
-            juce::MemoryBlock capturedBytes(capturedSampleState_.size() * sizeof(float));
-            std::memcpy(capturedBytes.getData(), capturedSampleState_.data(), capturedBytes.getSize());
-            state.setProperty(kCapturedSampleData, juce::var(capturedBytes), nullptr);
+            juce::String codecError;
+            const auto capturedAsset = audiocity::plugin::encodeMonoAudioStateAsset(capturedSampleState_, &codecError);
+            if (!capturedAsset.isEmpty())
+            {
+                state.setProperty(kCapturedSampleAsset, juce::var(capturedAsset), nullptr);
+                decodedAssetBytes += capturedSampleState_.size() * sizeof(float);
+            }
+            else if (assetWarning.isEmpty())
+            {
+                assetWarning = codecError;
+            }
             state.setProperty(kCapturedSampleRate, capturedSampleRateState_, nullptr);
         }
 
         if (embeddedSampleLoaded_.load(std::memory_order_relaxed) && !embeddedSampleState_.empty())
         {
             const auto embeddedBuffer = engine_.copyLoadedSampleDisplayData();
-            writeEmbeddedSampleState(state,
-                                     embeddedBuffer,
-                                     embeddedSampleRateState_,
-                                     embeddedSampleRootMidiNoteState_,
-                                     embeddedSampleNameState_);
+            juce::String codecError;
+            if (writeEmbeddedSampleState(state,
+                                         embeddedBuffer,
+                                         embeddedSampleRateState_,
+                                         embeddedSampleRootMidiNoteState_,
+                                         embeddedSampleNameState_,
+                                         &codecError))
+            {
+                decodedAssetBytes += static_cast<std::uint64_t>(juce::jmax(0, embeddedBuffer.getNumChannels()))
+                    * static_cast<std::uint64_t>(juce::jmax(0, embeddedBuffer.getNumSamples()))
+                    * sizeof(float);
+            }
+            else if (assetWarning.isEmpty())
+            {
+                assetWarning = codecError.isNotEmpty()
+                    ? codecError
+                    : juce::String("Embedded audio state serialization failed");
+            }
         }
     }
+    constexpr auto kStateAssetWarningThresholdBytes = std::uint64_t{ 32 } * 1024u * 1024u;
+    if (decodedAssetBytes > kStateAssetWarningThresholdBytes && assetWarning.isEmpty())
+        assetWarning = "Embedded audio state exceeds 32 MiB decoded; consider referencing a file instead";
+    state.setProperty(kAudioStateDecodedBytes, static_cast<juce::int64>(decodedAssetBytes), nullptr);
+    if (assetWarning.isNotEmpty())
+        state.setProperty(kAudioStateSizeWarning, assetWarning, nullptr);
+    lastSerializedAssetStateBytes_.store(decodedAssetBytes, std::memory_order_relaxed);
+    stateAssetSizeWarning_.store(assetWarning.isNotEmpty(), std::memory_order_relaxed);
     state.setProperty(kSampleBrowserRootFolder, sampleBrowserRootFolderPath_, nullptr);
     {
         std::lock_guard<std::mutex> lock(libraryMetadataMutex_);
@@ -1694,188 +1795,218 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
         return;
 
     panicAllAudio();
+    clearPendingImportedAssetRelink();
 
     const auto importedProgramPath = audiocity::plugin::readImportedProgramStatePath(state);
     const auto importedProgramSelectionIndex =
         audiocity::plugin::readImportedProgramStateSelectionIndex(state);
+    const auto importedProgramFormat = audiocity::plugin::readImportedProgramStateFormat(state);
+    const auto importedProgramMappingState =
+        audiocity::plugin::readImportedProgramMappingState(state);
     const auto samplePath = state.getProperty(kSamplePath).toString();
     const auto storedRootMidiNote = static_cast<int>(state.getProperty(kRootMidiNote, getRootMidiNote()));
 
     bool restoredSample = false;
     int restoredSampleSource = 0;
 
-    if (const auto* embeddedData = state.getProperty(kEmbeddedSampleData).getBinaryData(); embeddedData != nullptr)
+    juce::AudioBuffer<float> restoredEmbeddedBuffer;
+    auto decodedEmbeddedAsset = false;
+    if (const auto* embeddedAsset = state.getProperty(kEmbeddedSampleAsset).getBinaryData(); embeddedAsset != nullptr)
+    {
+        juce::String codecError;
+        decodedEmbeddedAsset = audiocity::plugin::decodeAudioStateAsset(
+            *embeddedAsset, restoredEmbeddedBuffer, &codecError);
+        if (!decodedEmbeddedAsset)
+            setLastImportDiagnosticSummary("Embedded state asset rejected: " + codecError);
+    }
+    else if (const auto* embeddedData = state.getProperty(kEmbeddedSampleData).getBinaryData(); embeddedData != nullptr)
     {
         const auto embeddedChannels = juce::jmax(1,
             static_cast<int>(state.getProperty(kEmbeddedSampleChannels, 1)));
-        juce::AudioBuffer<float> restoredBuffer;
-        if (deserializeAudioBufferSamples(*embeddedData, embeddedChannels, restoredBuffer))
-        {
-            const auto storedSampleRate = juce::jmax(1.0,
-                static_cast<double>(state.getProperty(kEmbeddedSampleRate, 44100.0)));
-            const auto embeddedRoot = juce::jlimit(0, 127,
-                static_cast<int>(state.getProperty(kEmbeddedSampleRootMidiNote, storedRootMidiNote)));
-            const auto embeddedName = state.getProperty(kEmbeddedSampleName, juce::var{}).toString();
+        juce::String codecError;
+        decodedEmbeddedAsset = deserializeAudioBufferSamples(
+            *embeddedData, embeddedChannels, restoredEmbeddedBuffer, &codecError);
+        if (!decodedEmbeddedAsset)
+            setLastImportDiagnosticSummary("Legacy embedded state rejected: " + codecError);
+    }
 
-            loadEmbeddedSampleAsSample(restoredBuffer, storedSampleRate, embeddedRoot, embeddedName);
-            restoredSample = true;
-            restoredSampleSource = 5;
-        }
+    if (decodedEmbeddedAsset)
+    {
+        const auto storedSampleRate = juce::jmax(1.0,
+            static_cast<double>(state.getProperty(kEmbeddedSampleRate, 44100.0)));
+        const auto embeddedRoot = juce::jlimit(0, 127,
+            static_cast<int>(state.getProperty(kEmbeddedSampleRootMidiNote, storedRootMidiNote)));
+        const auto embeddedName = state.getProperty(kEmbeddedSampleName, juce::var{}).toString();
+
+        loadEmbeddedSampleAsSample(restoredEmbeddedBuffer, storedSampleRate, embeddedRoot, embeddedName);
+        restoredSample = true;
+        restoredSampleSource = 5;
     }
 
     if (!restoredSample && importedProgramPath.isNotEmpty())
     {
-        const juce::File importedProgramFile(importedProgramPath);
-        switch (audiocity::plugin::readImportedProgramStateFormat(state))
+        auto importedProgramFile = juce::File(importedProgramPath);
+        auto assetsReady = true;
+        auto assetManifest = audiocity::plugin::readImportedAssetManifestState(state);
+        if (assetManifest.isValid())
         {
-            case audiocity::plugin::ImportedProgramFormat::sfz:
-                restoredSample = importSfzProgram(importedProgramFile);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::rex:
-                restoredSample = importRexSliceProgram(importedProgramFile);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::sampleSlices:
-                restoredSample = importTransientSliceProgram(importedProgramFile);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::nki:
-                restoredSample = importLegacyNkiProgram(importedProgramFile);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::sf2:
-                restoredSample = importSf2Program(importedProgramFile,
-                                                  importedProgramSelectionIndex >= 0
-                                                      ? importedProgramSelectionIndex
-                                                      : 0);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::decentSampler:
-                restoredSample = importDecentSamplerProgram(importedProgramFile);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::bitwigMultisample:
-                restoredSample = importBitwigMultisampleProgram(importedProgramFile);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::mpcKeygroup:
-                restoredSample = importMpcKeygroupProgram(importedProgramFile);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::bento1010:
-                restoredSample = import1010MusicPresetProgram(importedProgramFile);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::talSampler:
-                restoredSample = importTalSamplerProgram(importedProgramFile);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::tx16wx:
-                restoredSample = importTx16WxProgram(importedProgramFile);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::korgMultisample:
-                restoredSample = importKorgMultisampleProgram(importedProgramFile);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::abletonSampler:
-                restoredSample = importAbletonSamplerProgram(importedProgramFile);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::distingExPreset:
-                restoredSample = importDistingExPresetProgram(importedProgramFile);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::korgKmp:
-                restoredSample = importKorgKmpProgram(importedProgramFile);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::logicExs24:
-                restoredSample = importLogicExs24Program(importedProgramFile);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::nnxt:
-                restoredSample = importNnxtProgram(importedProgramFile);
-                break;
-            case audiocity::plugin::ImportedProgramFormat::unknown:
-            default:
-                restoredSample = false;
-                break;
+            std::vector<juce::File> knownRoots;
+            const auto storedBrowserRoot = state.getProperty(kSampleBrowserRootFolder).toString();
+            if (storedBrowserRoot.isNotEmpty())
+                knownRoots.emplace_back(storedBrowserRoot);
+            if (samplePath.isNotEmpty())
+                knownRoots.push_back(juce::File(samplePath).getParentDirectory());
+            knownRoots.push_back(juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                .getChildFile("Audiocity").getChildFile("Libraries"));
+
+            const auto resolution = audiocity::plugin::resolveImportedAssetManifest(
+                assetManifest, knownRoots);
+            if (resolution.complete)
+            {
+                importedProgramFile = resolution.resolvedProgramFile();
+            }
+            else
+            {
+                assetsReady = false;
+                setPendingImportedAssetRelink(
+                    assetManifest,
+                    importedProgramFormat,
+                    importedProgramSelectionIndex,
+                    importedProgramMappingState,
+                    "Imported program recovery required: " + resolution.diagnostic
+                        + "\nOriginal program: " + importedProgramPath
+                        + "\nChoose the moved library root to relink every asset at once.");
+            }
+        }
+        else if (!importedProgramFile.existsAsFile())
+        {
+            assetsReady = false;
+            assetManifest = audiocity::plugin::createLegacyImportedProgramManifest(importedProgramFile);
+            setPendingImportedAssetRelink(
+                assetManifest,
+                importedProgramFormat,
+                importedProgramSelectionIndex,
+                importedProgramMappingState,
+                "Imported program file is missing: " + importedProgramPath
+                    + "\nThis is a legacy state without an asset manifest; choose the moved library folder.");
         }
 
-        if (restoredSample)
-            restoredSampleSource = 4;
+        if (assetsReady)
+        {
+            restoredSample = restoreImportedProgramFromState(importedProgramFile,
+                                                              importedProgramFormat,
+                                                              importedProgramSelectionIndex,
+                                                              importedProgramMappingState);
+            if (restoredSample)
+                restoredSampleSource = 4;
+        }
     }
 
-    if (!restoredSample && samplePath.isNotEmpty())
+    if (!restoredSample && !hasPendingImportedAssetRelink() && samplePath.isNotEmpty())
     {
         restoredSample = loadSampleFromFile(juce::File(samplePath));
         if (restoredSample)
             restoredSampleSource = 1;
     }
 
-    if (restoredSample && restoredSampleSource == 4)
+    if (!restoredSample && !hasPendingImportedAssetRelink())
     {
-        const auto mappingEdits = audiocity::plugin::readImportedProgramMappingState(state);
-        if (mappingEdits.isValid())
+        std::vector<float> waveform;
+        auto decodedGeneratedAsset = false;
+        if (const auto* generatedAsset = state.getProperty(kGeneratedWaveformAsset).getBinaryData(); generatedAsset != nullptr)
         {
-            importedProgramStore_.edit([&mappingEdits](audiocity::plugin::ImportedProgramEdit& edit)
-            {
-                audiocity::plugin::ImportedProgramEditOutcome outcome;
-                const auto restored = audiocity::plugin::buildImportedProgramRestoreResult(edit.program,
-                                                                                           mappingEdits);
-                if (!restored)
-                    return outcome;
-
-                edit.program = restored->program;
-                outcome.ok = true;
-                outcome.label = "Mapping restored";
-                // A restore that leaves nothing playable still updates the stored program, but
-                // there is no point handing the engine a program it cannot sound.
-                outcome.publish = restored->hasPublishableZones;
-                return outcome;
-            });
+            juce::String codecError;
+            decodedGeneratedAsset = audiocity::plugin::decodeMonoAudioStateAsset(
+                *generatedAsset, waveform, &codecError);
+            if (!decodedGeneratedAsset)
+                setLastImportDiagnosticSummary("Generated waveform state rejected: " + codecError);
         }
-    }
-
-    if (!restoredSample)
-    {
-        if (const auto* generatedData = state.getProperty(kGeneratedWaveformData).getBinaryData(); generatedData != nullptr)
+        else if (const auto* generatedData = state.getProperty(kGeneratedWaveformData).getBinaryData(); generatedData != nullptr)
         {
             const auto totalBytes = generatedData->getSize();
-            if (totalBytes >= sizeof(float) && (totalBytes % sizeof(float)) == 0)
+            if (totalBytes >= sizeof(float)
+                && totalBytes <= audiocity::plugin::AudioStateCodecLimits::maximumDecodedBytes
+                && (totalBytes % sizeof(float)) == 0
+                && containsOnlyFiniteFloatSamples(generatedData->getData(), totalBytes))
             {
                 const auto sampleCount = static_cast<std::size_t>(totalBytes / sizeof(float));
-                std::vector<float> waveform(sampleCount, 0.0f);
+                waveform.resize(sampleCount, 0.0f);
                 std::memcpy(waveform.data(), generatedData->getData(), totalBytes);
-                loadGeneratedWaveformAsSample(waveform, storedRootMidiNote);
-                restoredSample = true;
-                restoredSampleSource = 2;
+                decodedGeneratedAsset = true;
             }
+            else
+            {
+                setLastImportDiagnosticSummary(
+                    "Legacy generated waveform state rejected: invalid size or non-finite sample");
+            }
+        }
+
+        if (decodedGeneratedAsset)
+        {
+            loadGeneratedWaveformAsSample(waveform, storedRootMidiNote);
+            restoredSample = true;
+            restoredSampleSource = 2;
         }
     }
 
-    if (!restoredSample)
+    if (!restoredSample && !hasPendingImportedAssetRelink())
     {
-        if (const auto* capturedData = state.getProperty(kCapturedSampleData).getBinaryData(); capturedData != nullptr)
+        std::vector<float> capturedSamples;
+        auto decodedCapturedAsset = false;
+        if (const auto* capturedAsset = state.getProperty(kCapturedSampleAsset).getBinaryData(); capturedAsset != nullptr)
+        {
+            juce::String codecError;
+            decodedCapturedAsset = audiocity::plugin::decodeMonoAudioStateAsset(
+                *capturedAsset, capturedSamples, &codecError);
+            if (!decodedCapturedAsset)
+                setLastImportDiagnosticSummary("Captured audio state rejected: " + codecError);
+        }
+        else if (const auto* capturedData = state.getProperty(kCapturedSampleData).getBinaryData(); capturedData != nullptr)
         {
             const auto totalBytes = capturedData->getSize();
-            if (totalBytes >= sizeof(float) && (totalBytes % sizeof(float)) == 0)
+            if (totalBytes >= sizeof(float)
+                && totalBytes <= audiocity::plugin::AudioStateCodecLimits::maximumDecodedBytes
+                && (totalBytes % sizeof(float)) == 0
+                && containsOnlyFiniteFloatSamples(capturedData->getData(), totalBytes))
             {
-                const auto sampleCount = static_cast<int>(totalBytes / sizeof(float));
-                const auto storedSampleRate = static_cast<double>(state.getProperty(kCapturedSampleRate, 44100.0));
-                const auto restoredSampleRate = juce::jmax(1.0, storedSampleRate);
-
-                juce::AudioBuffer<float> restoredBuffer(1, sampleCount);
-                std::memcpy(restoredBuffer.getWritePointer(0), capturedData->getData(), totalBytes);
-
-                engine_.publishSampleData(restoredBuffer, restoredSampleRate);
-                engine_.clearSamplePath();
-
-                generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
-                capturedAudioLoaded_.store(true, std::memory_order_relaxed);
-                embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
-                {
-                    std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
-                    generatedWaveformState_.clear();
-                    capturedSampleState_.resize(static_cast<std::size_t>(sampleCount));
-                    std::memcpy(capturedSampleState_.data(), capturedData->getData(), totalBytes);
-                    capturedSampleRateState_ = restoredSampleRate;
-                }
-
-                resetControlsForPublishedSample(storedRootMidiNote, sampleCount);
-                restoredSample = true;
-                restoredSampleSource = 3;
+                capturedSamples.resize(totalBytes / sizeof(float));
+                std::memcpy(capturedSamples.data(), capturedData->getData(), totalBytes);
+                decodedCapturedAsset = true;
             }
+            else
+            {
+                setLastImportDiagnosticSummary(
+                    "Legacy captured audio state rejected: invalid size or non-finite sample");
+            }
+        }
+
+        if (decodedCapturedAsset && !capturedSamples.empty())
+        {
+            const auto sampleCount = static_cast<int>(capturedSamples.size());
+            const auto restoredSampleRate = juce::jmax(1.0,
+                static_cast<double>(state.getProperty(kCapturedSampleRate, 44100.0)));
+            juce::AudioBuffer<float> restoredBuffer(1, sampleCount);
+            std::memcpy(restoredBuffer.getWritePointer(0), capturedSamples.data(), capturedSamples.size() * sizeof(float));
+
+            engine_.publishSampleData(restoredBuffer, restoredSampleRate);
+            engine_.clearSamplePath();
+            generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
+            capturedAudioLoaded_.store(true, std::memory_order_relaxed);
+            embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
+            {
+                std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
+                generatedWaveformState_.clear();
+                capturedSampleState_ = capturedSamples;
+                capturedSampleRateState_ = restoredSampleRate;
+            }
+
+            resetControlsForPublishedSample(storedRootMidiNote, sampleCount);
+            restoredSample = true;
+            restoredSampleSource = 3;
         }
     }
 
-    if (!restoredSample)
+    if (!restoredSample && !hasPendingImportedAssetRelink())
     {
         generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
         capturedAudioLoaded_.store(false, std::memory_order_relaxed);
@@ -2111,12 +2242,14 @@ juce::String AudiocityAudioProcessor::createPlaybackPresetXml()
         const auto displaySample = engine_.copyLoadedSampleDisplayData();
         if (displaySample.getNumChannels() > 0 && displaySample.getNumSamples() > 0)
         {
-            writeEmbeddedSampleState(presetState,
-                                     displaySample,
-                                     engine_.getLoadedSampleRateHz(),
-                                     static_cast<int>(presetState.getProperty(kRootMidiNote, getRootMidiNote())),
-                                     juce::File(samplePath).getFileName());
-            presetState.removeProperty(kSamplePath, nullptr);
+            if (writeEmbeddedSampleState(presetState,
+                                         displaySample,
+                                         engine_.getLoadedSampleRateHz(),
+                                         static_cast<int>(presetState.getProperty(kRootMidiNote, getRootMidiNote())),
+                                         juce::File(samplePath).getFileName()))
+            {
+                presetState.removeProperty(kSamplePath, nullptr);
+            }
         }
     }
 
@@ -2581,7 +2714,12 @@ bool AudiocityAudioProcessor::createEmptyImportedSfzProgram(const juce::String& 
 
     panicAllAudio();
     engine_.clearSamplePath();
-    engine_.setProgram(program, sampleData);
+    const auto publishResult = engine_.setProgram(program, sampleData);
+    if (!publishResult)
+    {
+        setLastImportDiagnosticSummary(publishResult.diagnostic);
+        return false;
+    }
     generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
     capturedAudioLoaded_.store(false, std::memory_order_relaxed);
     embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
@@ -2933,6 +3071,123 @@ juce::String AudiocityAudioProcessor::getLastImportDiagnosticSummary() const
     return importedProgramStore_.getLastDiagnosticSummary();
 }
 
+juce::String AudiocityAudioProcessor::getPendingImportedAssetRelinkDiagnostic() const
+{
+    std::lock_guard<std::mutex> lock(pendingImportedAssetMutex_);
+    return pendingImportedAssetDiagnostic_;
+}
+
+void AudiocityAudioProcessor::setPendingImportedAssetRelink(
+    const audiocity::plugin::ImportedAssetManifest& manifest,
+    const audiocity::plugin::ImportedProgramFormat format,
+    const int selectionIndex,
+    const juce::ValueTree& mappingState,
+    const juce::String& diagnostic)
+{
+    {
+        std::lock_guard<std::mutex> lock(pendingImportedAssetMutex_);
+        pendingImportedAssetManifest_ = manifest;
+        pendingImportedAssetFormat_ = format;
+        pendingImportedAssetSelectionIndex_ = selectionIndex;
+        pendingImportedAssetMappingState_ = mappingState.createCopy();
+        pendingImportedAssetDiagnostic_ = diagnostic;
+    }
+    pendingImportedAssetRelink_.store(true, std::memory_order_release);
+    setLastImportDiagnosticSummary(diagnostic);
+}
+
+void AudiocityAudioProcessor::clearPendingImportedAssetRelink()
+{
+    pendingImportedAssetRelink_.store(false, std::memory_order_release);
+    std::lock_guard<std::mutex> lock(pendingImportedAssetMutex_);
+    pendingImportedAssetManifest_ = {};
+    pendingImportedAssetFormat_ = audiocity::plugin::ImportedProgramFormat::unknown;
+    pendingImportedAssetSelectionIndex_ = -1;
+    pendingImportedAssetMappingState_ = {};
+    pendingImportedAssetDiagnostic_.clear();
+}
+
+bool AudiocityAudioProcessor::restoreImportedProgramFromState(
+    const juce::File& file,
+    const audiocity::plugin::ImportedProgramFormat format,
+    const int selectionIndex,
+    const juce::ValueTree& mappingState)
+{
+    auto prepared = prepareBackgroundImport(file, format, selectionIndex);
+    if (!prepared.ok || !prepared.importedProgram)
+    {
+        setLastImportDiagnosticSummary(prepared.diagnosticSummary.isNotEmpty()
+            ? prepared.diagnosticSummary
+            : juce::String("Imported program restore could not prepare a complete instrument"));
+        return false;
+    }
+
+    if (mappingState.isValid())
+    {
+        const auto restored = audiocity::plugin::buildImportedProgramRestoreResult(
+            prepared.program, mappingState);
+        if (!restored || !restored->hasPublishableZones)
+        {
+            setLastImportDiagnosticSummary(
+                "Imported program restore rejected its saved mapping; the current instrument was preserved");
+            return false;
+        }
+        prepared.program = std::move(restored->program);
+        prepared.diagnosticSummary += "\nSaved mapping restored";
+    }
+
+    return publishPreparedBackgroundImport(file, std::move(prepared));
+}
+
+bool AudiocityAudioProcessor::relinkPendingImportedProgramFromFolder(const juce::File& selectedRoot)
+{
+    audiocity::plugin::ImportedAssetManifest manifest;
+    auto format = audiocity::plugin::ImportedProgramFormat::unknown;
+    int selectionIndex = -1;
+    juce::ValueTree mappingState;
+    {
+        std::lock_guard<std::mutex> lock(pendingImportedAssetMutex_);
+        if (!pendingImportedAssetRelink_.load(std::memory_order_acquire))
+            return false;
+        manifest = pendingImportedAssetManifest_;
+        format = pendingImportedAssetFormat_;
+        selectionIndex = pendingImportedAssetSelectionIndex_;
+        mappingState = pendingImportedAssetMappingState_.createCopy();
+    }
+
+    // A manual choice is an explicit search boundary. Do not allow the stale original root
+    // to introduce a second solution outside the folder the user selected.
+    manifest.originalRoot.clear();
+    const auto resolution = audiocity::plugin::resolveImportedAssetManifest(manifest, { selectedRoot });
+    if (!resolution.complete)
+    {
+        setPendingImportedAssetRelink(manifest,
+                                      format,
+                                      selectionIndex,
+                                      mappingState,
+                                      "Relink failed: " + resolution.diagnostic);
+        return false;
+    }
+
+    const auto resolvedProgram = resolution.resolvedProgramFile();
+    if (resolvedProgram == juce::File{}
+        || !restoreImportedProgramFromState(resolvedProgram, format, selectionIndex, mappingState))
+    {
+        setPendingImportedAssetRelink(manifest,
+                                      format,
+                                      selectionIndex,
+                                      mappingState,
+                                      "Relink found the files but import failed: " + getLastImportDiagnosticSummary());
+        return false;
+    }
+
+    clearPendingImportedAssetRelink();
+    setLastImportDiagnosticSummary("Relinked all imported assets under "
+        + resolution.resolvedRoot.getFullPathName());
+    lastStateRestoreSource_.store(4, std::memory_order_relaxed);
+    return true;
+}
+
 bool AudiocityAudioProcessor::loadSampleFromFile(const juce::File& file)
 {
     auto prepared = prepareBackgroundImport(file, audiocity::plugin::ImportedProgramFormat::unknown);
@@ -2991,7 +3246,12 @@ bool AudiocityAudioProcessor::importSf2Program(const juce::File& file, const int
     const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
     engine_.publishSampleData(displaySample, displaySampleRate);
     engine_.clearSamplePath();
-    engine_.setProgram(result.program, result.sampleDataByAsset);
+    const auto publishResult = engine_.setProgram(result.program, result.sampleDataByAsset);
+    if (!publishResult)
+    {
+        setLastImportDiagnosticSummary(publishResult.diagnostic);
+        return false;
+    }
 
     generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
     capturedAudioLoaded_.store(false, std::memory_order_relaxed);
@@ -3065,7 +3325,12 @@ bool AudiocityAudioProcessor::importDecentSamplerProgram(const juce::File& file)
     const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
     engine_.publishSampleData(displaySample, displaySampleRate);
     engine_.clearSamplePath();
-    engine_.setProgram(result.program, result.sampleDataByAsset);
+    const auto publishResult = engine_.setProgram(result.program, result.sampleDataByAsset);
+    if (!publishResult)
+    {
+        setLastImportDiagnosticSummary(publishResult.diagnostic);
+        return false;
+    }
 
     generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
     capturedAudioLoaded_.store(false, std::memory_order_relaxed);
@@ -3138,7 +3403,12 @@ bool AudiocityAudioProcessor::importBitwigMultisampleProgram(const juce::File& f
     const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
     engine_.publishSampleData(displaySample, displaySampleRate);
     engine_.clearSamplePath();
-    engine_.setProgram(result.program, result.sampleDataByAsset);
+    const auto publishResult = engine_.setProgram(result.program, result.sampleDataByAsset);
+    if (!publishResult)
+    {
+        setLastImportDiagnosticSummary(publishResult.diagnostic);
+        return false;
+    }
 
     generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
     capturedAudioLoaded_.store(false, std::memory_order_relaxed);
@@ -3230,7 +3500,12 @@ bool AudiocityAudioProcessor::publishXmlMultisampleImport(
     const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
     engine_.publishSampleData(displaySample, displaySampleRate);
     engine_.clearSamplePath();
-    engine_.setProgram(program, sampleData);
+    const auto publishResult = engine_.setProgram(program, sampleData);
+    if (!publishResult)
+    {
+        setLastImportDiagnosticSummary(publishResult.diagnostic);
+        return false;
+    }
 
     generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
     capturedAudioLoaded_.store(false, std::memory_order_relaxed);
@@ -3513,6 +3788,45 @@ AudiocityAudioProcessor::PreparedBackgroundImport AudiocityAudioProcessor::prepa
             return prepareBackgroundImportedProgramResult(std::move(result), std::move(summary), format, "Reason NN-XT");
         }
         case ImportedProgramFormat::sampleSlices:
+        {
+            PreparedBackgroundImport prepared;
+            prepared.format = format;
+            prepared.importedProgram = true;
+
+            juce::AudioBuffer<float> sampleBuffer;
+            auto sampleRateHz = 0.0;
+            if (!readAudioFileToBuffer(file, sampleBuffer, sampleRateHz))
+            {
+                prepared.diagnosticSummary = "Transient slice import failed: sample file could not be read";
+                return prepared;
+            }
+            if (audiocity::engine::isImportCancellationRequested())
+                return cancelled();
+
+            audiocity::engine::transient_slice::TransientSliceProgram sliceProgram;
+            if (!audiocity::engine::transient_slice::buildTransientSliceProgram(
+                    file, sampleBuffer, sampleRateHz, sliceProgram))
+            {
+                prepared.diagnosticSummary = "Transient slice import failed: not enough slice boundaries were detected";
+                return prepared;
+            }
+
+            prepared.displaySample = audiocity::engine::EngineCore::prepareSampleFile(
+                file, fallbackRootMidiNote, fallbackPlaybackMode);
+            if (!prepared.displaySample.ok)
+            {
+                prepared.diagnosticSummary = "Transient slice import failed: display waveform could not be loaded";
+                return prepared;
+            }
+
+            prepared.diagnosticSummary = makeTransientSliceImportSummary(sliceProgram);
+            prepared.program = std::move(sliceProgram.program);
+            prepared.sampleData = std::move(sliceProgram.sampleDataByAsset);
+            prepared.displayAssetIndex = 0;
+            prepared.selectionIndex = selectionIndex;
+            prepared.ok = !prepared.program.zones.empty() && !prepared.sampleData.empty();
+            return prepared;
+        }
         case ImportedProgramFormat::unknown:
         default:
             break;
@@ -3539,6 +3853,7 @@ bool AudiocityAudioProcessor::publishPreparedBackgroundImport(const juce::File& 
         stopGeneratedWaveformPreview();
         panicAllAudio();
         engine_.publishPreparedSample(prepared.displaySample);
+        engine_.clearProgram();
 
         clearImportedProgramMetadata();
         generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
@@ -3567,7 +3882,12 @@ bool AudiocityAudioProcessor::publishPreparedBackgroundImport(const juce::File& 
         stopGeneratedWaveformPreview();
         panicAllAudio();
         engine_.publishPreparedSample(prepared.displaySample);
-        engine_.setProgram(prepared.program, prepared.sampleData);
+        const auto publishResult = engine_.setProgram(prepared.program, prepared.sampleData);
+        if (!publishResult)
+        {
+            setLastImportDiagnosticSummary(publishResult.diagnostic);
+            return false;
+        }
 
         generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
         capturedAudioLoaded_.store(false, std::memory_order_relaxed);
@@ -3630,7 +3950,12 @@ bool AudiocityAudioProcessor::publishPreparedImportedProgram(
     const auto displaySampleRate = displayAsset.sampleRateHz > 0.0 ? displayAsset.sampleRateHz : 44100.0;
     engine_.publishSampleData(displaySample, displaySampleRate);
     engine_.clearSamplePath();
-    engine_.setProgram(program, sampleData);
+    const auto publishResult = engine_.setProgram(program, sampleData);
+    if (!publishResult)
+    {
+        setLastImportDiagnosticSummary(publishResult.diagnostic);
+        return false;
+    }
 
     generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
     capturedAudioLoaded_.store(false, std::memory_order_relaxed);
@@ -3825,59 +4150,8 @@ bool AudiocityAudioProcessor::importRexSliceProgram(const juce::File& file)
 
 bool AudiocityAudioProcessor::importTransientSliceProgram(const juce::File& file)
 {
-    juce::AudioBuffer<float> sampleBuffer;
-    auto sampleRateHz = 0.0;
-    if (!readAudioFileToBuffer(file, sampleBuffer, sampleRateHz))
-    {
-        setLastImportDiagnosticSummary("Transient slice import failed: sample file could not be read");
-        return false;
-    }
-
-    audiocity::engine::transient_slice::TransientSliceProgram sliceProgram;
-    if (!audiocity::engine::transient_slice::buildTransientSliceProgram(file, sampleBuffer, sampleRateHz, sliceProgram))
-    {
-        setLastImportDiagnosticSummary("Transient slice import failed: not enough slice boundaries were detected");
-        return false;
-    }
-
-    samplePreviewPlaying_.store(false, std::memory_order_relaxed);
-    stopGeneratedWaveformPreview();
-    panicAllAudio();
-
-    const auto preparedDisplaySample = audiocity::engine::EngineCore::prepareSampleFile(
-        file, getRootMidiNote(), getPlaybackMode());
-    if (!preparedDisplaySample.ok)
-    {
-        setLastImportDiagnosticSummary("Transient slice import failed: display waveform could not be loaded");
-        return false;
-    }
-
-    engine_.publishPreparedSample(preparedDisplaySample);
-    engine_.setProgram(sliceProgram.program, sliceProgram.sampleDataByAsset);
-
-    generatedWaveformLoaded_.store(false, std::memory_order_relaxed);
-    capturedAudioLoaded_.store(false, std::memory_order_relaxed);
-    embeddedSampleLoaded_.store(false, std::memory_order_relaxed);
-    {
-        std::lock_guard<std::mutex> lock(generatedWaveformStateMutex_);
-        generatedWaveformState_.clear();
-        capturedSampleState_.clear();
-        capturedSampleRateState_ = 44100.0;
-        embeddedSampleState_.clear();
-        embeddedSampleNameState_.clear();
-        embeddedSampleRateState_ = 44100.0;
-        embeddedSampleRootMidiNoteState_ = 60;
-    }
-
-    setImportedProgramMetadata(file,
-                               audiocity::plugin::ImportedProgramFormat::sampleSlices,
-                               sliceProgram.program,
-                               sliceProgram.sampleDataByAsset,
-                               makeTransientSliceImportSummary(sliceProgram),
-                               static_cast<int>(sliceProgram.program.zones.size()));
-    applyPreparedSampleControls(preparedDisplaySample);
-    setWaveformViewRange(0, engine_.getLoadedSampleLength());
-    return true;
+    auto prepared = prepareBackgroundImport(file, audiocity::plugin::ImportedProgramFormat::sampleSlices);
+    return publishPreparedBackgroundImport(file, std::move(prepared));
 }
 
 void AudiocityAudioProcessor::loadGeneratedWaveformAsSample(const std::vector<float>& waveform, const int rootMidiNote)
@@ -4335,6 +4609,23 @@ int AudiocityAudioProcessor::getGenerateSketchSmoothing() const noexcept
 
 void AudiocityAudioProcessor::startInputCapture() noexcept
 {
+    captureRecording_.store(false, std::memory_order_release);
+    waitForCaptureAudioReaders();
+    if (captureInputLeft_ == nullptr || captureInputRight_ == nullptr)
+    {
+        captureInputLeft_.reset(new (std::nothrow) float[static_cast<std::size_t>(kCaptureMaxSamplesPerChannel)]);
+        captureInputRight_.reset(new (std::nothrow) float[static_cast<std::size_t>(kCaptureMaxSamplesPerChannel)]);
+        if (captureInputLeft_ == nullptr || captureInputRight_ == nullptr)
+        {
+            releaseCaptureWorkingStorage();
+            captureOverflow_.store(true, std::memory_order_relaxed);
+            return;
+        }
+        captureWorkingStorageBytes_.store(
+            static_cast<std::size_t>(kCaptureMaxSamplesPerChannel) * 2u * sizeof(float),
+            std::memory_order_release);
+    }
+
     captureInputSamples_.store(0, std::memory_order_relaxed);
     captureOverflow_.store(false, std::memory_order_relaxed);
     captureInputSampleRate_.store(juce::jmax(1.0, getSampleRate()), std::memory_order_relaxed);
@@ -4349,8 +4640,23 @@ void AudiocityAudioProcessor::stopInputCapture() noexcept
 void AudiocityAudioProcessor::clearInputCapture() noexcept
 {
     captureRecording_.store(false, std::memory_order_release);
+    waitForCaptureAudioReaders();
     captureInputSamples_.store(0, std::memory_order_relaxed);
     captureOverflow_.store(false, std::memory_order_relaxed);
+    releaseCaptureWorkingStorage();
+}
+
+void AudiocityAudioProcessor::waitForCaptureAudioReaders() noexcept
+{
+    while (captureAudioReaders_.load(std::memory_order_acquire) != 0)
+        std::this_thread::yield();
+}
+
+void AudiocityAudioProcessor::releaseCaptureWorkingStorage() noexcept
+{
+    captureInputLeft_.reset();
+    captureInputRight_.reset();
+    captureWorkingStorageBytes_.store(0, std::memory_order_release);
 }
 
 void AudiocityAudioProcessor::resetInputCaptureOverflow() noexcept
@@ -4440,6 +4746,9 @@ std::vector<AudiocityAudioProcessor::CaptureDisplayMinMax> AudiocityAudioProcess
     const int startSample,
     const int endSample) const
 {
+    if (captureInputLeft_ == nullptr || captureInputRight_ == nullptr)
+        return {};
+
     const auto totalSamples = juce::jlimit(0, kCaptureMaxSamplesPerChannel,
         captureInputSamples_.load(std::memory_order_acquire));
     if (totalSamples <= 0)
@@ -4512,6 +4821,9 @@ std::vector<AudiocityAudioProcessor::CaptureDisplayMinMax> AudiocityAudioProcess
 bool AudiocityAudioProcessor::cutCapturedAudioRange(const int startSample, const int endSample) noexcept
 {
     stopInputCapture();
+    waitForCaptureAudioReaders();
+    if (captureInputLeft_ == nullptr || captureInputRight_ == nullptr)
+        return false;
     const auto total = juce::jlimit(0, kCaptureMaxSamplesPerChannel,
         captureInputSamples_.load(std::memory_order_acquire));
     const auto start = juce::jlimit(0, total, startSample);
@@ -4523,11 +4835,11 @@ bool AudiocityAudioProcessor::cutCapturedAudioRange(const int startSample, const
     const auto tailLength = total - end;
     if (tailLength > 0)
     {
-        std::memmove(captureInputLeft_.data() + start,
-            captureInputLeft_.data() + end,
+        std::memmove(captureInputLeft_.get() + start,
+            captureInputLeft_.get() + end,
             static_cast<std::size_t>(tailLength) * sizeof(float));
-        std::memmove(captureInputRight_.data() + start,
-            captureInputRight_.data() + end,
+        std::memmove(captureInputRight_.get() + start,
+            captureInputRight_.get() + end,
             static_cast<std::size_t>(tailLength) * sizeof(float));
     }
 
@@ -4538,6 +4850,9 @@ bool AudiocityAudioProcessor::cutCapturedAudioRange(const int startSample, const
 bool AudiocityAudioProcessor::trimCapturedAudioRange(const int startSample, const int endSample) noexcept
 {
     stopInputCapture();
+    waitForCaptureAudioReaders();
+    if (captureInputLeft_ == nullptr || captureInputRight_ == nullptr)
+        return false;
     const auto total = juce::jlimit(0, kCaptureMaxSamplesPerChannel,
         captureInputSamples_.load(std::memory_order_acquire));
     const auto start = juce::jlimit(0, total, startSample);
@@ -4548,11 +4863,11 @@ bool AudiocityAudioProcessor::trimCapturedAudioRange(const int startSample, cons
     const auto newLength = end - start;
     if (start > 0)
     {
-        std::memmove(captureInputLeft_.data(),
-            captureInputLeft_.data() + start,
+        std::memmove(captureInputLeft_.get(),
+            captureInputLeft_.get() + start,
             static_cast<std::size_t>(newLength) * sizeof(float));
-        std::memmove(captureInputRight_.data(),
-            captureInputRight_.data() + start,
+        std::memmove(captureInputRight_.get(),
+            captureInputRight_.get() + start,
             static_cast<std::size_t>(newLength) * sizeof(float));
     }
 
@@ -4563,6 +4878,9 @@ bool AudiocityAudioProcessor::trimCapturedAudioRange(const int startSample, cons
 bool AudiocityAudioProcessor::normalizeCapturedAudio(const float targetPeak) noexcept
 {
     stopInputCapture();
+    waitForCaptureAudioReaders();
+    if (captureInputLeft_ == nullptr || captureInputRight_ == nullptr)
+        return false;
     const auto total = juce::jlimit(0, kCaptureMaxSamplesPerChannel,
         captureInputSamples_.load(std::memory_order_acquire));
     if (total <= 0)
@@ -4591,6 +4909,9 @@ bool AudiocityAudioProcessor::normalizeCapturedAudio(const float targetPeak) noe
 bool AudiocityAudioProcessor::loadCapturedAudioAsSample(int startSample, int endSample)
 {
     stopInputCapture();
+    waitForCaptureAudioReaders();
+    if (captureInputLeft_ == nullptr || captureInputRight_ == nullptr)
+        return false;
     const auto total = juce::jlimit(0, kCaptureMaxSamplesPerChannel,
         captureInputSamples_.load(std::memory_order_acquire));
     if (total <= 1)
@@ -4719,6 +5040,8 @@ bool AudiocityAudioProcessor::loadCapturedAudioAsSample(int startSample, int end
     engine_.clearSamplePath();
     resetControlsForPublishedSample(publishedRootMidiNote, publishedSampleLength);
     setWaveformViewRange(0, engine_.getLoadedSampleLength());
+    captureInputSamples_.store(0, std::memory_order_relaxed);
+    releaseCaptureWorkingStorage();
     return true;
 }
 
@@ -4788,6 +5111,9 @@ void AudiocityAudioProcessor::stopGeneratedWaveformPreview() noexcept
 bool AudiocityAudioProcessor::previewCapturedAudio()
 {
     stopInputCapture();
+    waitForCaptureAudioReaders();
+    if (captureInputLeft_ == nullptr || captureInputRight_ == nullptr)
+        return false;
 
     const auto total = juce::jlimit(0, kCaptureMaxSamplesPerChannel,
         captureInputSamples_.load(std::memory_order_acquire));
@@ -4796,6 +5122,9 @@ bool AudiocityAudioProcessor::previewCapturedAudio()
 
     const auto samplesToPreview = juce::jlimit(1, kSamplePreviewMaxSamples, total);
     const auto mode = getCaptureChannelMode();
+    auto preview = std::make_shared<SamplePreviewSnapshot>();
+    preview->samples.resize(static_cast<std::size_t>(samplesToPreview));
+    preview->sourceRate = juce::jmax(1.0, captureInputSampleRate_.load(std::memory_order_relaxed));
     for (int sample = 0; sample < samplesToPreview; ++sample)
     {
         const auto left = captureInputLeft_[static_cast<std::size_t>(sample)];
@@ -4807,12 +5136,10 @@ bool AudiocityAudioProcessor::previewCapturedAudio()
         else if (mode == 2)
             mono = right;
 
-        samplePreviewData_[static_cast<std::size_t>(sample)] = juce::jlimit(-1.0f, 1.0f, mono);
+        preview->samples[static_cast<std::size_t>(sample)] = juce::jlimit(-1.0f, 1.0f, mono);
     }
 
-    samplePreviewSourceRate_.store(juce::jmax(1.0, captureInputSampleRate_.load(std::memory_order_relaxed)),
-        std::memory_order_relaxed);
-    samplePreviewSamples_.store(samplesToPreview, std::memory_order_relaxed);
+    samplePreviewSnapshot_.publish(std::move(preview));
     samplePreviewReadPos_ = 0.0f;
     previewWavePlaying_.store(false, std::memory_order_relaxed);
     panicAllAudio();
@@ -4847,17 +5174,20 @@ bool AudiocityAudioProcessor::previewSampleFromFile(const juce::File& file)
     panicAllAudio();
 
     const auto channels = tempBuffer.getNumChannels();
+    auto preview = std::make_shared<SamplePreviewSnapshot>();
+    preview->samples.resize(static_cast<std::size_t>(samplesToRead));
+    preview->sourceRate = juce::jmax(1.0, reader->sampleRate);
     for (int i = 0; i < samplesToRead; ++i)
     {
         float mono = 0.0f;
         for (int channel = 0; channel < channels; ++channel)
             mono += tempBuffer.getSample(channel, i);
 
-        samplePreviewData_[static_cast<std::size_t>(i)] = juce::jlimit(-1.0f, 1.0f, mono / static_cast<float>(channels));
+        preview->samples[static_cast<std::size_t>(i)] =
+            juce::jlimit(-1.0f, 1.0f, mono / static_cast<float>(channels));
     }
 
-    samplePreviewSourceRate_.store(juce::jmax(1.0, reader->sampleRate), std::memory_order_relaxed);
-    samplePreviewSamples_.store(samplesToRead, std::memory_order_relaxed);
+    samplePreviewSnapshot_.publish(std::move(preview));
     samplePreviewReadPos_ = 0.0f;
     samplePreviewPlaying_.store(true, std::memory_order_relaxed);
     return true;
@@ -5041,8 +5371,28 @@ void AudiocityAudioProcessor::updateCaptureInputMonitorLevels(
 
 bool AudiocityAudioProcessor::captureInputAudio(const juce::AudioBuffer<float>& buffer, int sourceChannels) noexcept
 {
+    struct CaptureReaderScope
+    {
+        explicit CaptureReaderScope(std::atomic<int>& readersIn) noexcept : readers(readersIn)
+        {
+            readers.fetch_add(1, std::memory_order_acq_rel);
+        }
+        ~CaptureReaderScope()
+        {
+            readers.fetch_sub(1, std::memory_order_acq_rel);
+        }
+        std::atomic<int>& readers;
+    } readerScope(captureAudioReaders_);
+
     if (!captureRecording_.load(std::memory_order_acquire))
         return false;
+
+    if (captureInputLeft_ == nullptr || captureInputRight_ == nullptr)
+    {
+        captureRecording_.store(false, std::memory_order_release);
+        captureOverflow_.store(true, std::memory_order_relaxed);
+        return false;
+    }
 
     updateCaptureInputMonitorLevels(buffer, sourceChannels);
 
@@ -5286,17 +5636,18 @@ void AudiocityAudioProcessor::renderGeneratedWavePreview(juce::AudioBuffer<float
 
 void AudiocityAudioProcessor::renderSampleFilePreview(juce::AudioBuffer<float>& buffer) noexcept
 {
-    const auto count = samplePreviewSamples_.load(std::memory_order_relaxed);
-    if (count <= 0)
+    const auto preview = samplePreviewSnapshot_.read(audiocity::engine::RtReaderRole::audio);
+    if (!preview || preview->samples.empty())
     {
         buffer.clear();
         samplePreviewPlaying_.store(false, std::memory_order_relaxed);
         return;
     }
 
+    const auto count = static_cast<int>(preview->samples.size());
     const auto channels = buffer.getNumChannels();
     const auto samples = buffer.getNumSamples();
-    const auto sourceRate = samplePreviewSourceRate_.load(std::memory_order_relaxed);
+    const auto sourceRate = preview->sourceRate;
     const auto hostRate = juce::jmax(1.0, getSampleRate());
     const auto increment = static_cast<float>(sourceRate / hostRate);
     const auto masterVolume = juce::jlimit(0.0f, 1.0f,
@@ -5314,8 +5665,8 @@ void AudiocityAudioProcessor::renderSampleFilePreview(juce::AudioBuffer<float>& 
 
         const auto i1 = juce::jmin(count - 1, i0 + 1);
         const auto frac = samplePreviewReadPos_ - static_cast<float>(i0);
-        const auto s0 = samplePreviewData_[static_cast<std::size_t>(i0)];
-        const auto s1 = samplePreviewData_[static_cast<std::size_t>(i1)];
+        const auto s0 = preview->samples[static_cast<std::size_t>(i0)];
+        const auto s1 = preview->samples[static_cast<std::size_t>(i1)];
         const auto value = (s0 + (s1 - s0) * frac) * 0.35f * masterVolume;
 
         for (int channel = 0; channel < channels; ++channel)

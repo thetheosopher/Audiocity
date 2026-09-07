@@ -15,6 +15,8 @@ struct ReaderOpenResult
 
 void registerAudioFormats(juce::AudioFormatManager& formatManager);
 
+[[nodiscard]] bool isNcwConverterAvailable();
+
 [[nodiscard]] ReaderOpenResult openReaderForFile(juce::AudioFormatManager& formatManager,
                                                  const juce::File& sourceFile);
 } // namespace audiocity::engine::audio_file

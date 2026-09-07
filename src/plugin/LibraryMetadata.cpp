@@ -41,21 +41,31 @@ void LibraryMetadata::setFavorite(const juce::String& filePath, const bool shoul
     if (normalized.isEmpty())
         return;
 
-    const auto existingIndex = indexOfPath(favoritePaths_, normalized);
+    const auto key = pathKey(normalized);
+    const auto isAlreadyFavorite = favoritePathKeys_.find(key) != favoritePathKeys_.end();
     if (shouldBeFavorite)
     {
-        if (existingIndex < 0)
+        if (!isAlreadyFavorite)
+        {
             favoritePaths_.add(normalized);
+            favoritePathKeys_.insert(key);
+        }
         return;
     }
 
+    if (!isAlreadyFavorite)
+        return;
+
+    const auto existingIndex = indexOfPath(favoritePaths_, normalized);
     if (existingIndex >= 0)
         favoritePaths_.remove(existingIndex);
+    favoritePathKeys_.erase(key);
 }
 
 bool LibraryMetadata::isFavorite(const juce::String& filePath) const
 {
-    return indexOfPath(favoritePaths_, filePath) >= 0;
+    const auto key = pathKey(filePath);
+    return !key.empty() && favoritePathKeys_.find(key) != favoritePathKeys_.end();
 }
 
 void LibraryMetadata::markRecent(const juce::String& filePath)
@@ -71,6 +81,7 @@ void LibraryMetadata::markRecent(const juce::String& filePath)
     recentPaths_.insert(0, normalized);
     while (recentPaths_.size() > maxRecentItems)
         recentPaths_.remove(recentPaths_.size() - 1);
+    rebuildRecentRanks();
 }
 
 bool LibraryMetadata::isRecent(const juce::String& filePath) const
@@ -80,7 +91,10 @@ bool LibraryMetadata::isRecent(const juce::String& filePath) const
 
 int LibraryMetadata::recentRank(const juce::String& filePath) const
 {
-    return indexOfPath(recentPaths_, filePath);
+    const auto key = pathKey(filePath);
+    if (const auto found = recentRanksByPath_.find(key); found != recentRanksByPath_.end())
+        return found->second;
+    return -1;
 }
 
 void LibraryMetadata::setTags(const juce::String& filePath, const juce::StringArray& tags)
@@ -94,7 +108,11 @@ void LibraryMetadata::setTags(const juce::String& filePath, const juce::StringAr
     if (normalizedTags.isEmpty())
     {
         if (existingIndex >= 0)
+        {
+            taggedPathIndices_.erase(pathKey(normalizedPath));
             taggedPaths_.erase(taggedPaths_.begin() + existingIndex);
+            rebuildTaggedPathIndices(static_cast<std::size_t>(existingIndex));
+        }
         return;
     }
 
@@ -104,6 +122,7 @@ void LibraryMetadata::setTags(const juce::String& filePath, const juce::StringAr
         return;
     }
 
+    taggedPathIndices_[pathKey(normalizedPath)] = taggedPaths_.size();
     taggedPaths_.push_back({ normalizedPath, normalizedTags });
 }
 
@@ -119,11 +138,13 @@ juce::StringArray LibraryMetadata::getTags(const juce::String& filePath) const
 juce::StringArray LibraryMetadata::getAllTags() const
 {
     juce::StringArray tags;
+    std::unordered_set<std::string> knownTags;
     for (const auto& taggedPath : taggedPaths_)
     {
         for (const auto& tag : taggedPath.tags)
         {
-            if (indexOfPath(tags, tag) < 0)
+            const auto key = tag.toLowerCase().toStdString();
+            if (knownTags.insert(key).second)
                 tags.add(tag);
         }
     }
@@ -281,6 +302,11 @@ juce::String LibraryMetadata::normalizePath(const juce::String& filePath)
     return filePath.trim().unquoted().replaceCharacter('\\', '/');
 }
 
+std::string LibraryMetadata::pathKey(const juce::String& filePath)
+{
+    return normalizePath(filePath).toLowerCase().toStdString();
+}
+
 juce::String LibraryMetadata::normalizeTag(const juce::String& tag)
 {
     return tag.trim().unquoted().removeCharacters("#");
@@ -329,16 +355,27 @@ int LibraryMetadata::indexOfPath(const juce::StringArray& paths, const juce::Str
 
 int LibraryMetadata::indexOfTaggedPath(const juce::String& filePath) const
 {
-    const auto normalized = normalizePath(filePath);
-    if (normalized.isEmpty())
+    const auto key = pathKey(filePath);
+    if (key.empty())
         return -1;
 
-    for (int index = 0; index < static_cast<int>(taggedPaths_.size()); ++index)
-    {
-        if (taggedPaths_[static_cast<std::size_t>(index)].path.equalsIgnoreCase(normalized))
-            return index;
-    }
+    if (const auto found = taggedPathIndices_.find(key); found != taggedPathIndices_.end())
+        return static_cast<int>(found->second);
 
     return -1;
+}
+
+void LibraryMetadata::rebuildRecentRanks()
+{
+    recentRanksByPath_.clear();
+    recentRanksByPath_.reserve(static_cast<std::size_t>(recentPaths_.size()));
+    for (int index = 0; index < recentPaths_.size(); ++index)
+        recentRanksByPath_[pathKey(recentPaths_[index])] = index;
+}
+
+void LibraryMetadata::rebuildTaggedPathIndices(const std::size_t firstChangedIndex)
+{
+    for (auto index = firstChangedIndex; index < taggedPaths_.size(); ++index)
+        taggedPathIndices_[pathKey(taggedPaths_[index].path)] = index;
 }
 } // namespace audiocity::plugin

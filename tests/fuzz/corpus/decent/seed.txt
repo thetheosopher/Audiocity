@@ -1,0 +1,1 @@
+<DecentSampler><groups><group><sample path="missing.wav"/></group></groups></DecentSampler>

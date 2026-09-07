@@ -48,25 +48,25 @@ Status meanings:
 | --- | --- | --- |
 | QW-1 Repair CI/toolchain contract | **Implemented — release gate pending** | Added the ASIO-disabled VS 2022 `ci-windows` configure/build/test path and aligned both workflows, bootstrap, snapshot export, README, and toolchain reporting. Local VS 2022 configure, full product build, and CTest passed. A pushed GitHub-hosted `windows-2022` run remains the external gate. |
 | QW-2 Re-establish UI golden truth | **Complete** | Reviewed and updated all 19 baselines, aligned documentation to 64 presets, and added manifest/directory-backed count assertions. Two clean zero-difference exports and the final snapshot CTest passed. |
-| QW-3 Remove duplicate CTest entry | **Not started** | `ctest -N` still lists the duplicate `c:/projects/other/audiocity` entry; address separately. |
-| QW-4 Compile the shipped products in CI | **Partial** | CI now builds `Audiocity_All`, and local VS 2022 builds produced Standalone and VST3 artifacts. The job still uses the Debug CI preset, lacks `installer/**` path filters, and does not explicitly assert artifact/resource paths. |
-| QW-5 Make snapshot limits explicit | **Not started** | No capacity-policy implementation recorded. |
-| QW-6 Centralize supported formats | **Not started** | No descriptor-registry implementation recorded. |
-| QW-7 Debounce preload changes | **Not started** | No preload debounce/no-op implementation recorded. |
+| QW-3 Remove duplicate CTest entry | **Complete** | Removed the path-named registration. `ctest -N` now reports exactly nine unique, purpose-named tests, including the header/core compatibility smokes, and the four offline suites invoke disjoint filters. |
+| QW-4 Compile the shipped products in CI | **Implemented — release gate pending** | Installer/script/docs/config paths trigger CI; fast Debug tests and a separate self-contained `Audiocity_All` Release build are followed by explicit wrapper checks, exact recursive preset manifests, and an ISCC compile against the built inputs. The local input gate passed; the local host lacks ISCC, so a pushed GitHub-hosted installer compile remains. |
+| QW-5 Make snapshot limits explicit | **Complete** | Immutable program preparation now reports explicit 4,096-asset, 2,048-group, and 16,384-zone ceilings and refuses all-or-nothing publication while preserving the current program. Exact-limit and limit+1 regressions passed. |
+| QW-6 Centralize supported formats | **Complete** | One 18-descriptor registry now drives path recognition, chooser wildcards, badges, descriptions, state tokens, availability, and drag/drop/library behavior. REX/NCW preflights and diagnostic-only NN-XT recognition now report their exact availability. |
+| QW-7 Debounce preload changes | **Complete** | Preload drags stage the displayed value and commit once on release; unchanged quantized values bypass segment rebuilds. An actual editor-slider gesture proved one rebuild for a multi-value drag and zero for an unchanged drag. |
 | MP-1 Audio-thread-owned control plane | **Implemented — release gate pending** | UI/host controls now flow through APVTS; one block-start snapshot applies changed groups on the audio thread. Structural data uses serialized immutable publication and quiescent reader reclamation. Panic is a lossless atomic latch consumed on the audio thread. Full CTest and 25 consecutive Debug stress runs passed; the one-hour soak/profiling sign-off remains. |
 | MP-2 Owned cancellable import jobs | **Complete** | Replaced detached import/scan threads with editor-owned single workers holding at most one replacement. Jobs use immutable captures, `SafePointer` callbacks, cooperative cancellation through traversal/decode/container/peak paths, documented cancellation boundaries, and teardown joins. Replacement, cancel/join, and cancelled-import tests passed; no product `.detach()` remains. |
-| MP-3 Scalable library index and peaks | **Not started** | MP-2 cancellation is available as a prerequisite; indexing/lazy-peak redesign remains. |
-| MP-4 Lazy capture/preview memory and compact state | **Not started** | No storage/state-codec implementation recorded. |
-| MP-5 Scalable program snapshots | **Not started** | Immutable publication was strengthened under MP-1, but scalable capacity work remains. |
-| MP-6 Linear event scheduler and safe overflow | **Not started** | No scheduler redesign recorded. The MP-1 panic latch now remains effective under saturated UI-note traffic. |
-| MP-7 Test/build consolidation and hardening | **Not started** | Regression coverage was expanded, but suite consolidation, sanitizers, fuzzing, coverage, and host validation remain. |
-| MP-8 Missing-asset resolver | **Not started** | No resolver implementation recorded. |
+| MP-3 Scalable library index and peaks | **Complete** | Added atomic CRC-protected per-root indexes, globally bounded index/preview partitions, timer-drained scan delivery, cached warm starts, precomputed search order, O(1) metadata lookups, selected/viewport-only preview work, and bounded link-safe path checks. Traversal now has explicit entry/directory/depth ceilings, cancellable persistence, root-identity revalidation, and complete-snapshot rollback. A final Release scan of 50,000 real fixture files delivered its first bounded batch in 56.74 ms and searched in 25.05 ms; cancellation, incomplete-cache preservation, root replacement, same-size edits, corruption, LRU/byte ceilings, exact-case identities, and root isolation passed. |
+| MP-4 Lazy capture/preview memory and compact state | **Complete** | Idle capture working storage is zero, bounded buffers exist only while armed and release after clear/commit, and versioned GZIP+CRC audio chunks replace raw-float XML writes with strict exact-size, finite-value, and legacy decode limits. In Release, 20 idle instances held 0.16 MiB of current capture/preview payload storage with a 39.86 MiB private-memory delta; an actual maximum 30-second/96 kHz capture, state save, and restore also passed. |
+| MP-5 Scalable program snapshots | **Complete** | Program snapshots use off-thread immutable vectors within explicit security ceilings; one owner publishes program metadata/audio/generation coherently, round-robin order is precomputed, render scratch is voice-bounded, and writer-only reclamation keeps retired owners bounded without audio-thread retry/allocation. A real WAV plus 600-region SFZ retained all 600 importer/store/renderer mappings and rendered the zone mapped above the former 512-zone limit. Capacity failure and missing or empty referenced audio return structured diagnostics and preserve the prior playable program; concurrent and nested-reader publication regressions passed. |
+| MP-6 Linear event scheduler and safe overflow | **Complete** | Stable O(n log n) ingest plus a monotonic dispatch cursor replaces repeated scans. Reserved release capacity, continuous-control displacement, all-notes-off handling, panic fallback, and typed drop telemetry keep overflow note-safe. Instrumented traversal measured 190, 766, and 3,070 inspections for 64, 256, and 1,024 events (within the asserted 3n bound); mixed-saturation and safety-only saturation regressions passed. |
+| MP-7 Test/build consolidation and hardening | **Implemented — release gate pending** | Shared production/JUCE support libraries feed four filterable offline suites and explicit UI-definition variants. All 15 non-REX importers have bounded deterministic corpus/libFuzzer targets, Clang ASan/UBSan corpus CI, native-coverage reporting with non-empty production-source checks, Release deadline measurements, and pinned pluginval validation. Same-host clean/incremental test builds improved 22.2%/20.6%; the final nine-test local matrix contains 237 explicit unique cases, and representative corpora, workflow parse, strictness-5 VST3 validation, and CPU/Fidelity/Ultra deadline runs at 54.33x/49.45x/6.34x real time passed. Hosted sanitizer and coverage jobs remain the external gate. |
+| MP-8 Missing-asset resolver | **Complete** | Versioned hashed manifests resolve only within bounded known/user roots, require one unique complete library, reject traversal-limit results as inconclusive, skip link/reparse traversal, and never partially publish. Automatic moved-root restore, manual collaborator relink, duplicate ambiguity, same-size wrong content, missing subsets, legacy repair, exact hashless size/mtime matching, and preservation of the playable program when referenced audio is absent or empty all passed. |
 | SI-1 Cross-platform and wrapper expansion | **Not started** | No cross-platform implementation recorded. |
 | SI-2 Portable instrument packaging | **Not started** | No package/asset-lifecycle implementation recorded. |
 | SI-3 Modular editor/processor architecture | **Not started** | Owned job services were introduced, but the planned feature decomposition remains. |
 | SI-4 Expressive sampler evolution | **Not started** | No discovery/prototype implementation recorded. |
 
-Current totals: **2 complete**, **2 implemented with release gates pending**, **1 partial**, and **14 not started**.
+Current totals: **11 complete**, **4 implemented with release gates pending**, **0 partial**, and **4 not started**.
 
 ## 1. Quick wins — less than one day each
 
@@ -103,7 +103,8 @@ Current totals: **2 complete**, **2 implemented with release gates pending**, **
 - **Files/areas:** [tests/CMakeLists.txt](../tests/CMakeLists.txt#L76-L94)
 - **Problem:** `c:/projects/other/audiocity` reruns `audiocity_offline_tests`, leaking a developer path and doubling that test in full CTest.
 - **Recommendation:** Delete lines 84–88 and assert expected test names in a configure/CTest smoke check.
-- **Acceptance:** `ctest -N` lists four uniquely named tests; offline tests run once.
+- **Acceptance:** `ctest -N` lists nine uniquely named tests; offline tests run once.
+- **Progress (2026-09-06):** Complete. The developer-path registration is gone. The consolidated topology now has nine unique CTest entries, including four mutually exclusive offline suites plus the registered header/core compatibility smokes; `ctest -N` and the full matrix confirmed that each case is registered once.
 
 ### QW-4 — Compile the products users install on every relevant PR
 
@@ -115,7 +116,7 @@ Current totals: **2 complete**, **2 implemented with release gates pending**, **
 - **Problem:** CI compiles test executables but not Standalone/VST3. Installer-only changes do not trigger it.
 - **Recommendation:** Add `installer/**`, release scripts, and dependency docs to path filters; build `Audiocity_All` in Release with ASIO off; retain fast non-UI tests as a separate step. At minimum inspect expected executable/VST3/resource paths.
 - **Acceptance:** A wrapper compile/link/resource-copy regression fails CI, and an installer-only PR receives the packaging check.
-- **Progress (2026-09-06):** Partial. The main workflow builds `Audiocity_All` plus non-UI regression targets, and the local VS 2022 path produced both `Audiocity.exe` and the VST3 bundle. Remaining work: switch/add a Release lane, include `installer/**` and relevant documentation in path filters, and assert expected wrapper/resource/installer-input paths.
+- **Progress (2026-09-06):** Implemented; hosted gate pending. CI path filters cover installer, scripts, documentation, assets, tests, and build configuration; fast Debug behavior tests remain separate from a self-contained `/MT` `Audiocity_All` Release build and `verify_release_artifacts.ps1`. The verifier checks exact recursive preset paths and SHA-256 content in both wrapper copies, then CI uses the preinstalled Inno Setup compiler to compile the real definition against the built wrapper tree and thereby validate every referenced input. This compile does not exercise `build_release.ps1`'s release-staging copy pipeline or portable ZIP staging. Local artifact/input validation passed, but the local host lacks ISCC; a pushed `windows-2022` compile is the remaining external confirmation.
 
 ### QW-5 — Make fixed program limits visible before publish
 
@@ -127,6 +128,7 @@ Current totals: **2 complete**, **2 implemented with release gates pending**, **
 - **Problem:** Programs above 256 assets, 128 groups, or 512 zones silently lose renderable content.
 - **Recommendation:** Check `truncated` before publishing; reject with exact counts/limits, or require an explicit user-approved partial load. Keep the previous playable program active on rejection.
 - **Acceptance:** Boundary tests at limit and limit+1 prove no silent partial load; UI and copyable log name the exceeded dimension.
+- **Progress (2026-09-06):** Complete. `ProgramSnapshot` now prepares dynamic immutable vectors under explicit ceilings of 4,096 assets, 2,048 groups, and 16,384 zones, returning a structured capacity report. `EngineCore` and processor import paths publish only a fully valid snapshot, surface exact counts/limits, catch allocation failure, and keep the previous program on rejection. Exact and limit+1 tests passed.
 
 ### QW-6 — Use one authoritative supported-format registry
 
@@ -138,6 +140,7 @@ Current totals: **2 complete**, **2 implemented with release gates pending**, **
 - **Problem:** The library recognizes many formats that the main chooser and drag/drop reject.
 - **Recommendation:** Define descriptors with extension, badge, description, availability predicate, import format, chooser group, and loss/legacy caveat. Generate browser checks, wildcard, drag/drop interest, UI copy, and tests from it.
 - **Acceptance:** Every advertised loadable extension works consistently from chooser, drag/drop, and library; unavailable REX/NCW cases show actionable reasons.
+- **Progress (2026-09-06):** Complete. `ImportFormatRegistry` contains 18 descriptors and is the source for chooser groups/wildcards, drag/drop and browser recognition, state tokens, badges, descriptions, format routing, and runtime availability. A registry-wide consistency regression checks every surface; REX-unavailable, NCW-converter-unavailable, and diagnostic-only NN-XT paths fail preflight with actionable copy instead of falling through to generic import errors.
 
 ### QW-7 — Debounce preload changes and avoid no-op rebuilds
 
@@ -149,6 +152,7 @@ Current totals: **2 complete**, **2 implemented with release gates pending**, **
 - **Problem:** Each dial tick rebuilds all loaded segment data on the message thread, even if quantization yields the current value.
 - **Recommendation:** Return immediately on no-op values; show the pending value while dragging and apply once on drag end or a 250–400 ms debounce. Label the operation as applying while MP-3/MP-4 background infrastructure is not yet available.
 - **Acceptance:** A full dial drag causes at most one rebuild after release; unchanged values cause zero rebuilds; playback continues on the previous snapshot.
+- **Progress (2026-09-06):** Complete. `CcLearnDial` exposes drag begin/end callbacks; the editor stages the visible preload value during a gesture and commits once at release. `EngineCore` returns before rebuilding when the quantized preload is unchanged. An actual `PluginEditor` slider gesture through three values produced exactly one rebuild at release, and an unchanged drag produced none.
 
 ## 2. High-impact medium projects — one to two weeks each
 
@@ -195,6 +199,8 @@ Current totals: **2 complete**, **2 implemented with release gates pending**, **
 - **Risks/open questions:** filesystem timestamp granularity, network/removable drives, symlink cycles, rename detection, cache migration.
 - **Acceptance/success metrics:** synthetic 50k-file scan shows first results <500 ms on SSD, search interaction <50 ms, bounded worker/message-queue counts, bounded memory/cache size, and zero stale same-size-edit preview in tests.
 
+- **Progress (2026-09-06):** Complete. Library roots now have versioned, atomic, CRC-protected indexes with strict path/size/count/depth limits and global partition budgets. Cached records appear before a fresh reconciliation scan; the editor drains bounded batches on its timer, defers repeated filtering/sorting until final reconciliation, precomputes search order, uses O(1) metadata lookups, and requests peaks only for the selection and viewport through a cancelable worker. Link/reparse traversal is excluded with a bounded exact-case shared-directory cache whose prefixes are revalidated before publish/commit. The production scanner now owns incremental delivery and cancellation, and the editor and benchmark share its search matching primitive. A final Release scan of 50,000 actual one-byte files delivered the first bounded batch in 56.74 ms and searched the complete index in 25.05 ms; fixture creation took 18.10 seconds and the full reconciliation scan took 10.36 seconds, both reported separately from the first-result/search budgets. Release CI builds and runs this filtered acceptance gate. Directory-only cancellation, incomplete-scan cache preservation, cancellable persistence, root replacement, stale-save rejection, root isolation, exact-case identity, same-size/changed-mtime invalidation, corruption recovery, and LRU/entry/peak/byte ceilings passed.
+
 ### MP-4 — Allocate capture/preview memory lazily and replace raw-float XML state
 
 - **Category:** Performance / Reliability
@@ -206,6 +212,8 @@ Current totals: **2 complete**, **2 implemented with release gates pending**, **
 - **Approach:** Allocate a fixed-size chunk/ring pool only when capture is armed, prepared off the audio thread; publish its storage to the audio thread without resizing. Release raw capture buffers after commit. Introduce a versioned compressed binary asset chunk with checksums and hard size limits; preserve old-state reading. Track serialized state size and warn before oversized embeds.
 - **Risks/open questions:** host expectations for synchronous state serialization, compression latency, backward compatibility, stereo capture policy, shared asset deduplication.
 - **Acceptance/success metrics:** idle processor overhead for these features <1 MiB; 20 idle instances no longer consume >500 MiB; maximum capture round-trips; state is smaller than raw float XML; old sessions still restore.
+
+- **Progress (2026-09-06):** Complete. Capture storage is absent while idle, allocated before recording, and released after clear or commit. Embedded/captured audio uses a versioned GZIP binary payload with CRC32, exact-size and finite-sample validation, 64 MiB decode ceilings, atomic publication, and bounded legacy XML reads; failed embedding retains the external path and raises size-warning telemetry. In Release, 20 idle processors held 0.16 MiB of current feature payload with a 39.86 MiB private-memory delta. An actual 2,880,000-sample (30-second/96 kHz) capture commit, storage release, state serialization, and restore passed alongside corrupt/trailing/forged-size and legacy non-finite rejection.
 
 ### MP-5 — Remove silent program capacity loss with scalable immutable snapshots
 
@@ -219,6 +227,8 @@ Current totals: **2 complete**, **2 implemented with release gates pending**, **
 - **Risks/open questions:** worst-case zone matching complexity, snapshot memory ceiling, round-robin scratch sizing, malicious imports.
 - **Acceptance/success metrics:** >512-zone real-world fixture plays all mapped zones within declared budgets; explicit rejection above security limits; no audio-thread allocations; mapping UI and renderer report the same counts.
 
+- **Progress (2026-09-06):** Complete. Program snapshots are immutable dynamic vectors prepared off-thread under explicit 4,096-asset, 2,048-group, and 16,384-zone ceilings. One immutable owner publishes metadata, program audio, and generation coherently; round-robin order is precomputed and render scratch remains voice-bounded. Fixed-work reader hazards and writer-only reclamation keep retired snapshot owners bounded without audio-thread retry, allocation, or deletion, including nested reads from the same render role. Allocation/capacity, missing/empty referenced audio, or sink-publication failure rejects the transaction while retaining the active program and returning structured diagnostics. A real WAV plus 600-region SFZ preserved every mapping and rendered a note assigned only to zone 599; concurrent 256-publication retention, nested-reader publication, exact-limit, and limit+1 regressions passed.
+
 ### MP-6 — Linearize pending-event dispatch and make overflow note-safe
 
 - **Category:** Performance / Reliability
@@ -230,6 +240,8 @@ Current totals: **2 complete**, **2 implemented with release gates pending**, **
 - **Approach:** Normalize input into one already-ordered bounded array, stable-order equal offsets, and advance a single cursor through render segments. Reserve capacity or priority lanes for note-off/all-notes-off. Count drops by type and initiate bounded panic recovery if release events cannot be retained.
 - **Risks/open questions:** preserving exact same-offset semantics and deterministic goldens; MIDI messages can arrive from UI and host paths.
 - **Acceptance/success metrics:** 1,024-event cost grows linearly after ingest; current offline output remains bit-stable where ordering is defined; overflow test cannot leave a held voice; counters are visible outside the RT thread.
+
+- **Progress (2026-09-06):** Complete. One stable O(n log n) ingest and monotonic cursor now dispatch each pending event once. Reserved release slots, priority displacement of continuous controls, all-notes-off retention, a bounded panic fallback, and typed drop telemetry make saturation observable and note-safe. Equal-offset determinism, 1,024-event load, mixed-overflow release retention, safety-only overflow, and stuck-voice recovery tests passed.
 
 ### MP-7 — Consolidate test builds and add hostile-input/runtime hardening
 
@@ -243,6 +255,8 @@ Current totals: **2 complete**, **2 implemented with release gates pending**, **
 - **Risks/open questions:** JUCE platform differences, REX exclusion on non-Windows, reproducible UI fonts, CI duration.
 - **Acceptance/success metrics:** materially lower clean/incremental CI time, individually filterable suites, sanitizer-clean corpus, coverage baseline reported (not necessarily gated initially), built VST3 passes host validation.
 
+- **Progress (2026-09-06):** Implemented; hosted gate pending. One shared production/JUCE support library replaces repeated compilation and feeds four disjoint `--suite` offline registrations, the performance harness, and all 15 non-REX importer fuzz targets; explicit current/compatibility UI variants remain separate where compile definitions differ. The runtime registry validates 237 explicit, unique, non-empty suite assignments (engine 103, import 72, state 58, preset 4), and CTest registers nine exact generator-path tests with the UI header/core compatibility smokes. Against the pre-change `HEAD` on the same VS 2022 host with two build jobs, the target pair's clean build fell from 127.12 s to 98.95 s (22.2%) and an `EngineCore.cpp` incremental rebuild fell from 9.50 s to 7.54 s (20.6%). Clang ASan/UBSan CI, Windows native coverage with non-empty production-source validation, Release deadline measurements, pinned strictness-5 pluginval validation, bounded deterministic corpus failures, exact recursive preset-content verification, and hosted installer compilation are wired. The full local Debug and Release matrices, representative SFZ/NKI/MPC/disting EX corpora, machine-parsed workflow, self-contained Release product build, 54.33x/49.45x/6.34x CPU/Fidelity/Ultra deadline run, and VST3 validation passed. Ninja/OpenCppCoverage and ISCC are not installed locally, so GitHub-hosted sanitizer, coverage, and installer execution remain the external confirmation.
+
 ### MP-8 — Add a guided missing-asset resolver
 
 - **Category:** Reliability / UX
@@ -254,6 +268,8 @@ Current totals: **2 complete**, **2 implemented with release gates pending**, **
 - **Approach:** Store a versioned manifest with original relative path, file name, size, mtime, optional fast hash, format, and asset references. On miss, search project/session folder and known roots, then show one resolver for manual folder selection and persistent relinking. Never scan entire disks automatically. Keep the old program until resolution succeeds.
 - **Risks/open questions:** host project path is not always available; duplicate filenames; privacy of persisted absolute paths; scan bounds.
 - **Acceptance/success metrics:** moving a library folder and reopening can be repaired once for all matching assets; collaborators can choose a root; failure is explicit and copyable; no silent partial instrument.
+
+- **Progress (2026-09-06):** Complete. Imported state stores a versioned role/index manifest with relative path, name, size, mtime, and optional fast hash while omitting embedded assets. Resolution is limited to known or explicitly selected roots, rejects link/reparse traversal, caps files/depth/bytes, treats a traversal-limited search as inconclusive rather than unique, requires exactly one complete unambiguous solution, and never publishes a partial program. Automatic moved-root recovery, one-folder collaborator repair, duplicate ambiguity, bounded-search ambiguity, same-size wrong-content rejection, missing subsets, legacy state, and preservation of the active playable program all passed.
 
 ## 3. Strategic initiatives — multi-week
 

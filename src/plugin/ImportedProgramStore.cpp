@@ -1,5 +1,7 @@
 #include "ImportedProgramStore.h"
 
+#include "../engine/EngineCore.h"
+
 #include <utility>
 
 namespace audiocity::plugin
@@ -80,55 +82,74 @@ void ImportedProgramStore::clear()
 
 ImportedProgramEditOutcome ImportedProgramStore::edit(const Mutator& mutator)
 {
-    audiocity::engine::Program programToPublish;
-    std::vector<juce::AudioBuffer<float>> sampleDataToPublish;
     ImportedProgramEditOutcome outcome;
-    auto audioChanged = true;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!loaded_.load(std::memory_order_relaxed) || mutator == nullptr)
+        return {};
 
+    auto workingProgram = program_;
+    ImportedProgramEdit edit{ workingProgram, sampleDataByAsset_ };
+    outcome = mutator(edit);
+
+    if (!outcome.ok)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!loaded_.load(std::memory_order_relaxed) || mutator == nullptr)
-            return {};
-
-        auto workingProgram = program_;
-        ImportedProgramEdit edit{ workingProgram, sampleDataByAsset_ };
-        outcome = mutator(edit);
-
-        if (!outcome.ok)
-        {
-            outcome.resultIndex = -1;
-            outcome.appendedSampleData.clear();
-            return outcome;
-        }
-
-        // Most edits only move zones around. Recognising that lets the sink skip re-deriving
-        // audio it already holds.
-        audioChanged = !outcome.appendedSampleData.empty()
-            || !describesSameAudio(program_.sampleAssets, workingProgram.sampleAssets);
-
-        program_ = std::move(workingProgram);
-        for (auto& appended : outcome.appendedSampleData)
-            sampleDataByAsset_.push_back(std::move(appended));
-
+        outcome.resultIndex = -1;
         outcome.appendedSampleData.clear();
-
-        refreshDerivedStateLocked(outcome.label);
-
-        if (!outcome.publish)
-            return outcome;
-
-        programToPublish = program_;
-        if (audioChanged)
-            sampleDataToPublish = sampleDataByAsset_;
+        return outcome;
     }
 
-    if (!audioChanged && sink_.republishProgramMetadata(programToPublish))
+    const auto capacity = audiocity::engine::EngineCore::validateProgramForPublish(workingProgram);
+    if (!capacity)
+    {
+        outcome.ok = false;
+        outcome.resultIndex = -1;
+        outcome.appendedSampleData.clear();
+        outcome.label = capacity.diagnostic;
+        lastDiagnosticSummary_ = capacity.diagnostic;
         return outcome;
+    }
 
-    if (!audioChanged)
-        captureSnapshot(programToPublish, sampleDataToPublish);
+    // Most edits only move zones around. Recognising that lets the sink skip re-deriving
+    // audio it already holds.
+    const auto audioChanged = !outcome.appendedSampleData.empty()
+        || !describesSameAudio(program_.sampleAssets, workingProgram.sampleAssets);
 
-    sink_.republishProgram(programToPublish, sampleDataToPublish);
+    std::vector<juce::AudioBuffer<float>> workingSampleData;
+    if (audioChanged || outcome.publish)
+    {
+        workingSampleData = sampleDataByAsset_;
+        for (const auto& appended : outcome.appendedSampleData)
+            workingSampleData.push_back(appended);
+    }
+
+    if (outcome.publish)
+    {
+        auto published = !audioChanged && sink_.republishProgramMetadata(workingProgram);
+        juce::String publishDiagnostic;
+        if (!published)
+        {
+            published = sink_.republishProgramChecked(
+                workingProgram, workingSampleData, publishDiagnostic);
+        }
+
+        if (!published)
+        {
+            outcome.ok = false;
+            outcome.resultIndex = -1;
+            outcome.appendedSampleData.clear();
+            outcome.label = publishDiagnostic.isNotEmpty()
+                ? publishDiagnostic
+                : "Program publication failed; previous program preserved";
+            lastDiagnosticSummary_ = outcome.label;
+            return outcome;
+        }
+    }
+
+    program_ = std::move(workingProgram);
+    if (audioChanged)
+        sampleDataByAsset_ = std::move(workingSampleData);
+    outcome.appendedSampleData.clear();
+    refreshDerivedStateLocked(outcome.label);
     return outcome;
 }
 
@@ -192,13 +213,18 @@ void ImportedProgramStore::setSavedLocation(const juce::File& programFile,
 
 ImportedProgramPersistentState ImportedProgramStore::capturePersistentState() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-
     ImportedProgramPersistentState state;
-    state.programPath = programPath_;
-    state.format = format_;
-    state.selectionIndex = selectionIndex_;
-    state.mappingState = createProgramZoneMappingState(program_);
+    audiocity::engine::Program program;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        state.programPath = programPath_;
+        state.format = format_;
+        state.selectionIndex = selectionIndex_;
+        state.mappingState = createProgramZoneMappingState(program_);
+        program = program_;
+    }
+    if (state.programPath.isNotEmpty())
+        state.assetManifest = createImportedAssetManifest(juce::File(state.programPath), program);
     return state;
 }
 
