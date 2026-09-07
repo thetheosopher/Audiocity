@@ -7517,30 +7517,6 @@ bool runEditorModulationPanelExtractionTest()
         && !editorClassBody.contains("void syncModulationControlsFromProcessor()");
 }
 
-bool runEditorPersistentBrowserRailTabGateTest()
-{
-    const auto editorFile = fixtureFile("src/plugin/PluginEditor.cpp");
-    if (!editorFile.existsAsFile())
-        return false;
-
-    const auto editorSource = editorFile.loadFileAsString();
-    const auto functionStart = editorSource.indexOf(
-        "bool AudiocityAudioProcessorEditor::shouldShowPersistentBrowserRail() const noexcept");
-    if (functionStart < 0)
-        return false;
-
-    const auto functionEnd = editorSource.indexOf(
-        functionStart,
-        "bool AudiocityAudioProcessorEditor::shouldShowSampleInspectorRail() const noexcept");
-    if (functionEnd <= functionStart)
-        return false;
-
-    const auto functionBody = editorSource.substring(functionStart, functionEnd);
-    return functionBody.contains("currentTabIndex_ == 4")
-        && functionBody.contains("currentTabIndex_ == 5")
-        && functionBody.contains("return false;");
-}
-
 bool runBackgroundImportWorkerPublishContractTest()
 {
     const auto editorHeader = fixtureFile("src/plugin/PluginEditor.h");
@@ -7647,7 +7623,7 @@ bool runAboutPageExtractionContractTest()
         && !editorHeaderText.contains("paintAboutPane(")
         && editorSourceText.contains("addAndMakeVisible(aboutPage_);")
         && editorSourceText.contains("aboutPage_.setVisible(showAboutTab);")
-        && editorSourceText.contains("aboutPage_.setBounds(area.reduced(8, 6));")
+        && fixtureFile("src/plugin/PluginInstrumentWorkspace.cpp").loadFileAsString().contains("place(aboutPage_, area)")
         && !editorSourceText.contains("paintAboutPane(")
         && cmakeText.contains("src/plugin/PluginAboutPage.cpp")
         && testsCmakeText.contains("../src/plugin/PluginAboutPage.cpp");
@@ -7686,7 +7662,7 @@ bool runGeneratePageExtractionContractTest()
         && editorHeaderText.contains("PluginGeneratePage generatePage_;")
         && editorSourceText.contains("addAndMakeVisible(generatePage_);")
         && editorSourceText.contains("generatePage_.setVisible(showGenerateTab);")
-        && editorSourceText.contains("generatePage_.setBounds(area.reduced(8, 6));")
+        && fixtureFile("src/plugin/PluginInstrumentWorkspace.cpp").loadFileAsString().contains("place(generatePage_, area)")
         && !editorSourceText.contains("generateWaveformView_.setVisible(showGenerateTab);")
         && !editorSourceText.contains("generateWaveformView_.setBounds(waveformArea);")
         && cmakeText.contains("src/plugin/PluginGeneratePage.cpp")
@@ -7726,7 +7702,7 @@ bool runCapturePageExtractionContractTest()
         && editorHeaderText.contains("PluginCapturePage capturePage_;")
         && editorSourceText.contains("addAndMakeVisible(capturePage_);")
         && editorSourceText.contains("capturePage_.setVisible(showCaptureTab);")
-        && editorSourceText.contains("capturePage_.setBounds(area.reduced(8, 6));")
+        && fixtureFile("src/plugin/PluginInstrumentWorkspace.cpp").loadFileAsString().contains("place(capturePage_, area)")
         && !editorSourceText.contains("captureWaveformView_.setVisible(showCaptureTab);")
         && !editorSourceText.contains("captureWaveformView_.setBounds(waveformArea);")
         && cmakeText.contains("src/plugin/PluginCapturePage.cpp")
@@ -16372,7 +16348,6 @@ int main(const int argc, char** argv)
         AUDIOCITY_TEST(state, runPeakPreviewCacheLruAndPeakBoundsTest, 270),
         AUDIOCITY_TEST(state, runPlayerPadStateUtilityTest, 23),
         AUDIOCITY_TEST(state, runSampleBrowserTooltipFormattingTest, 236),
-        AUDIOCITY_TEST(state, runEditorPersistentBrowserRailTabGateTest, 237),
         AUDIOCITY_TEST(engine, runFilterModeDifferenceTest, 25),
         AUDIOCITY_TEST(engine, runFilterModulationDifferenceTest, 26),
         AUDIOCITY_TEST(engine, runFilterKeytrackPolarityTest, 30),

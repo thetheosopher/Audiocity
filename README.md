@@ -2,7 +2,7 @@
 
 ![Audiocity](assets/icons/audiocity_icon_256.png)
 
-A Windows-focused hybrid sampler built with JUCE and C++20, delivered as a standalone application and a VST3 instrument plugin.
+**Turn any sound into an instrument.** A focused sampler for Windows, available as a standalone application and VST3 instrument.
 
 ![Version 1.3.2.0](https://img.shields.io/badge/version-1.3.2.0-blue)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue?logo=cplusplus)
@@ -12,9 +12,21 @@ A Windows-focused hybrid sampler built with JUCE and C++20, delivered as a stand
 
 ## Overview
 
-Audiocity 1.3.2.0 combines broad multisample import coverage, transient slicing, expressive modulation, and a modernized sampler workspace with a curated 64-preset factory bank, auditioner-backed preset QA, and a dedicated profiling workflow for engine tuning.
+Audiocity brings sample and multisample import, slicing, recording, generated waveforms and expressive modulation into one instrument workflow. Start in Sound, shape and play, then save. The curated 64-preset factory bank is immediately available from Browse.
 
-The engine and UI are still driven by one JUCE `AudioProcessor`, with deterministic offline tests, snapshot-based UI validation, and shared behavior across the plugin and standalone targets.
+The standalone and plugin share the same JUCE/C++20 engine. Existing formats, presets, mappings, MIDI expression and host parameter IDs are preserved.
+
+## Sampler simplification
+
+- Sound and on-demand Modulation replace seven peer tabs.
+- Amp, filter, tuning and essential effects fit at 980 × 720 without scrolling.
+- One scoped browser supports search, favorites, recent items, sample preview and optional docking.
+- One compact keyboard or pad surface replaces the permanent keyboard-plus-pads footer.
+- Save As honors the selected path. Sound identity, edited state, Save and master output remain accessible.
+- Record and Generate use preview, commit and cancel; replacement recovery and shaping Undo are covered by focused checks.
+- Details and advanced single-zone repair/export retain depth while library authoring leaves the main experience.
+
+Read the [user guide](docs/USER_GUIDE.md) and [implementation and validation notes](docs/SAMPLER_SIMPLIFICATION_2026-09-07.md).
 
 ## New in 1.3.2.0
 
@@ -36,52 +48,20 @@ The engine and UI are still driven by one JUCE `AudioProcessor`, with determinis
 
 ## Screenshots
 
-The screenshots below come from the deterministic UI snapshot harness used in the test suite, so they match the current application state.
-
-### Sample Workspace
+Fresh offscreen renders from the same JUCE editor used by the standalone and VST3 builds:
 
 <p align="center">
-	<img src="tests/ui-snapshot-baselines/current/sample_wide.png" alt="Audiocity Sample page with wide browser and inspector rails" width="49%" />
-	<img src="tests/ui-snapshot-baselines/current/sample_preset_search.png" alt="Audiocity Sample page showing searchable preset strip" width="49%" />
+  <img src="tests/ui-snapshot-baselines/current/sample.png" alt="Sound workspace" width="49%" />
+  <img src="tests/ui-snapshot-baselines/current/sound_constrained.png" alt="Sound at the minimum 980 by 720 window size" width="49%" />
 </p>
-
 <p align="center">
-	<img src="tests/ui-snapshot-baselines/current/sample_modulation.png" alt="Audiocity Sample page showing modulation routing feedback" width="49%" />
-	<img src="tests/ui-snapshot-baselines/current/sample_wide_inspector_only.png" alt="Audiocity Sample page with inspector-focused layout and output controls" width="49%" />
+  <img src="tests/ui-snapshot-baselines/current/browser_docked.png" alt="Browser docked beside the instrument" width="49%" />
+  <img src="tests/ui-snapshot-baselines/current/sample_modulation.png" alt="Expression sources and their routing amounts" width="49%" />
 </p>
-
-### Browser, Mapping, and Performance
-
 <p align="center">
-	<img src="tests/ui-snapshot-baselines/current/library.png" alt="Audiocity Library tab with searchable browser and preview information" width="49%" />
-	<img src="tests/ui-snapshot-baselines/current/mapping.png" alt="Audiocity Mapping tab with zone editing tools and overview keyboard" width="49%" />
+  <img src="tests/ui-snapshot-baselines/current/slices.png" alt="Explicit slicing and compact pads" width="49%" />
+  <img src="tests/ui-snapshot-baselines/current/capture.png" alt="Contextual recording workflow" width="49%" />
 </p>
-
-<p align="center">
-	<img src="tests/ui-snapshot-baselines/current/player.png" alt="Audiocity Player tab with piano keyboard, pads, and performance status" width="49%" />
-	<img src="tests/ui-snapshot-baselines/current/sample_single_voice.png" alt="Audiocity Sample page showing the compact performance strip and one active voice" width="49%" />
-</p>
-
-### Generate, Capture, and About
-
-<p align="center">
-	<img src="tests/ui-snapshot-baselines/current/generate.png" alt="Audiocity Generate tab with waveform creation tools" width="49%" />
-	<img src="tests/ui-snapshot-baselines/current/capture.png" alt="Audiocity Capture tab with live recording controls" width="49%" />
-</p>
-
-<p align="center">
-	<img src="tests/ui-snapshot-baselines/current/about.png" alt="Audiocity About page with feature summary and workflow tips" width="70%" />
-</p>
-
-## Feature Highlights
-
-- Browse the bundled 64-preset factory bank or import one-shots and multisample instruments from modern XML, ZIP, and legacy formats while keeping restore behavior deterministic.
-- Preview and load from the browser rail without leaving the page you are editing.
-- Search presets from the Sample header, then load or save `.acp` patches without switching tabs.
-- Edit imported programs with mapping batch operations, slice workflows, and one shared undo history.
-- Play from the full Player tab or the compact performance strip, with external MIDI note display and live voice or output status.
-- Generate synthetic source material, capture audio, trim it, and move it into the same sampler workflow.
-- Track preload, streaming, and playback diagnostics without touching the audio thread.
 
 ## Factory Presets and Auditioning
 
@@ -226,19 +206,19 @@ The workspace includes:
 
 ```text
 Audiocity/
-├── artifacts/          # Generated preset audition and validation reports
-├── assets/             # Icons, artwork, and factory presets
-├── docs/               # Architecture, roadmap, RT rules, testing specs
-├── installer/          # Inno Setup script and portable package docs
-├── prompts/            # Milestone-oriented Copilot prompts
-├── scripts/            # Bootstrap, cleanup, ASIO integration, release packaging
-├── src/engine/         # EngineCore, streaming, importers, and engine-side utilities
-├── src/plugin/         # PluginProcessor, PluginEditor, UI components, presets
-├── tests/              # Offline render, packaging, and UI snapshot validation
-├── third_party/        # JUCE, REX SDK, optional ASIO SDK
-├── tools/              # Preset authoring, auditioning, and support utilities
-├── CMakeLists.txt
-└── CMakePresets.json
+â”œâ”€â”€ artifacts/          # Generated preset audition and validation reports
+â”œâ”€â”€ assets/             # Icons, artwork, and factory presets
+â”œâ”€â”€ docs/               # Architecture, roadmap, RT rules, testing specs
+â”œâ”€â”€ installer/          # Inno Setup script and portable package docs
+â”œâ”€â”€ prompts/            # Milestone-oriented Copilot prompts
+â”œâ”€â”€ scripts/            # Bootstrap, cleanup, ASIO integration, release packaging
+â”œâ”€â”€ src/engine/         # EngineCore, streaming, importers, and engine-side utilities
+â”œâ”€â”€ src/plugin/         # PluginProcessor, PluginEditor, UI components, presets
+â”œâ”€â”€ tests/              # Offline render, packaging, and UI snapshot validation
+â”œâ”€â”€ third_party/        # JUCE, REX SDK, optional ASIO SDK
+â”œâ”€â”€ tools/              # Preset authoring, auditioning, and support utilities
+â”œâ”€â”€ CMakeLists.txt
+â””â”€â”€ CMakePresets.json
 ```
 
 ## Architecture Notes

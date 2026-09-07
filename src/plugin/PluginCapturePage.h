@@ -35,6 +35,9 @@ public:
     void resized() override;
 
 private:
+    juce::Label guidance_;
+    juce::TextButton advancedButton_{ "Recording format" };
+    bool advanced_ = false;
     [[nodiscard]] int measureButtonWidth(juce::TextButton& button,
                                          const juce::StringArray& labels,
                                          int minWidth,

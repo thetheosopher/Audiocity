@@ -116,61 +116,22 @@ void PluginMappingPage::layout(juce::Rectangle<int> area) const
     auto mappingArea = area.reduced(8, 6);
     constexpr int kMappingOverviewPreferredHeight = 150;
     constexpr int kMappingOverviewMinimumHeight = 72;
-    constexpr int kMappingEditRowHeight = 18;
+    constexpr int kMappingEditRowHeight = 24;
     constexpr int kMappingEditRowGap = 2;
-    constexpr int kMappingEditRowCount = 19;
+    constexpr int kMappingEditRowCount = 13;
     constexpr int kMappingEditApplyRowHeight = 24;
     constexpr int kMappingOverviewGap = 4;
     const int kMappingEditRequiredHeight =
         (kMappingEditRowCount * (kMappingEditRowHeight + kMappingEditRowGap)) + kMappingEditApplyRowHeight;
 
-    auto header = mappingArea.removeFromTop(60);
-    constexpr int kMappingHeaderGap = 6;
-    constexpr int kMappingHeaderRowHeight = 27;
-    constexpr int kMappingHeaderRowGap = 6;
-    auto getMappingHeaderButtonWidth = [](juce::TextButton& button,
-                                          const int buttonHeight,
-                                          const int minWidth,
-                                          const int horizontalPadding,
-                                          const int maxWidth)
-    {
-        const auto font = button.getLookAndFeel().getTextButtonFont(button, buttonHeight);
-        return juce::jlimit(minWidth,
-                            maxWidth,
-                            juce::GlyphArrangement::getStringWidthInt(font, button.getButtonText()) + horizontalPadding);
-    };
-
-    auto libraryRow = header.removeFromTop(kMappingHeaderRowHeight);
-    header.removeFromTop(kMappingHeaderRowGap);
-    auto zoneRow = header.removeFromTop(kMappingHeaderRowHeight);
-
-    const auto newLibraryWidth = getMappingHeaderButtonWidth(newLibraryButton_, libraryRow.getHeight(), 104, 32, 132);
-    const auto addSampleWidth = getMappingHeaderButtonWidth(addSampleButton_, libraryRow.getHeight(), 100, 32, 128);
-    const auto saveLibraryWidth = getMappingHeaderButtonWidth(saveLibraryButton_, libraryRow.getHeight(), 112, 34, 142);
-
-    newLibraryButton_.setBounds(libraryRow.removeFromLeft(newLibraryWidth));
-    libraryRow.removeFromLeft(kMappingHeaderGap);
-    addSampleButton_.setBounds(libraryRow.removeFromLeft(addSampleWidth));
-    libraryRow.removeFromLeft(kMappingHeaderGap);
-    saveLibraryButton_.setBounds(libraryRow.removeFromLeft(saveLibraryWidth));
-    libraryRow.removeFromLeft(kMappingHeaderGap + 2);
-    summaryLabel_.setBounds(libraryRow);
-
-    const auto newZoneWidth = getMappingHeaderButtonWidth(createZoneButton_, zoneRow.getHeight(), 82, 28, 100);
-    const auto duplicateWidth = getMappingHeaderButtonWidth(duplicateZoneButton_, zoneRow.getHeight(), 84, 30, 104);
-    const auto splitWidth = getMappingHeaderButtonWidth(splitZoneButton_, zoneRow.getHeight(), 60, 26, 78);
-    const auto deleteWidth = getMappingHeaderButtonWidth(deleteZoneButton_, zoneRow.getHeight(), 68, 26, 86);
-    const auto refreshWidth = getMappingHeaderButtonWidth(refreshButton_, zoneRow.getHeight(), 78, 28, 96);
-
-    createZoneButton_.setBounds(zoneRow.removeFromLeft(newZoneWidth));
-    zoneRow.removeFromLeft(kMappingHeaderGap);
-    duplicateZoneButton_.setBounds(zoneRow.removeFromLeft(duplicateWidth));
-    zoneRow.removeFromLeft(kMappingHeaderGap);
-    splitZoneButton_.setBounds(zoneRow.removeFromLeft(splitWidth));
-    zoneRow.removeFromLeft(kMappingHeaderGap);
-    deleteZoneButton_.setBounds(zoneRow.removeFromLeft(deleteWidth));
-    zoneRow.removeFromLeft(kMappingHeaderGap);
-    refreshButton_.setBounds(zoneRow.removeFromLeft(refreshWidth));
+    auto header = mappingArea.removeFromTop(32);
+    saveLibraryButton_.setBounds(header.removeFromLeft(150));
+    header.removeFromLeft(8);
+    deleteZoneButton_.setBounds(header.removeFromRight(100));
+    header.removeFromRight(8);
+    summaryLabel_.setBounds(header);
+    for (auto* button : { &newLibraryButton_, &addSampleButton_, &createZoneButton_, &duplicateZoneButton_, &splitZoneButton_, &refreshButton_ })
+        button->setBounds({});
 
     mappingArea.removeFromTop(4);
     const auto mappingOverviewHeight = juce::jlimit(
@@ -188,28 +149,15 @@ void PluginMappingPage::layout(juce::Rectangle<int> area) const
     auto editPanel = details.removeFromTop(details.getHeight());
     auto layoutEditRow = [](juce::Rectangle<int>& panel, juce::Label& label, juce::Slider& slider)
     {
-        auto row = panel.removeFromTop(18);
+        auto row = panel.removeFromTop(24);
         label.setBounds(row.removeFromLeft(72));
         row.removeFromLeft(6);
         slider.setBounds(row);
         panel.removeFromTop(2);
     };
-    auto layoutPairedEditRow = [](juce::Rectangle<int>& panel,
-                                  juce::Label& label,
-                                  juce::Slider& leftSlider,
-                                  juce::Slider& rightSlider)
-    {
-        auto row = panel.removeFromTop(18);
-        label.setBounds(row.removeFromLeft(72));
-        row.removeFromLeft(6);
-        auto left = row.removeFromLeft(row.getWidth() / 2);
-        rightSlider.setBounds(row.withTrimmedLeft(4));
-        leftSlider.setBounds(left.withTrimmedRight(4));
-        panel.removeFromTop(2);
-    };
     auto layoutEditComboRow = [](juce::Rectangle<int>& panel, juce::Label& label, juce::ComboBox& combo)
     {
-        auto row = panel.removeFromTop(18);
+        auto row = panel.removeFromTop(24);
         label.setBounds(row.removeFromLeft(72));
         row.removeFromLeft(6);
         combo.setBounds(row);
@@ -220,8 +168,6 @@ void PluginMappingPage::layout(juce::Rectangle<int> area) const
     layoutEditRow(editPanel, editKeyHighLabel_, editKeyHighSlider_);
     layoutEditRow(editPanel, editVelocityLowLabel_, editVelocityLowSlider_);
     layoutEditRow(editPanel, editVelocityHighLabel_, editVelocityHighSlider_);
-    layoutPairedEditRow(editPanel, editVelocityFadeInLabel_, editVelocityFadeInLowSlider_, editVelocityFadeInHighSlider_);
-    layoutPairedEditRow(editPanel, editVelocityFadeOutLabel_, editVelocityFadeOutLowSlider_, editVelocityFadeOutHighSlider_);
     layoutEditRow(editPanel, editRootLabel_, editRootSlider_);
     layoutEditRow(editPanel, editSampleStartLabel_, editSampleStartSlider_);
     layoutEditRow(editPanel, editSampleEndLabel_, editSampleEndSlider_);
@@ -229,10 +175,6 @@ void PluginMappingPage::layout(juce::Rectangle<int> area) const
     layoutEditRow(editPanel, editLoopEndLabel_, editLoopEndSlider_);
     layoutEditRow(editPanel, editGainLabel_, editGainSlider_);
     layoutEditRow(editPanel, editPanLabel_, editPanSlider_);
-    layoutEditRow(editPanel, editRoundRobinGroupLabel_, editRoundRobinGroupSlider_);
-    layoutEditRow(editPanel, editRoundRobinPositionLabel_, editRoundRobinPositionSlider_);
-    layoutEditComboRow(editPanel, editRoundRobinModeLabel_, editRoundRobinModeCombo_);
-    layoutEditRow(editPanel, editChokeLabel_, editChokeSlider_);
     layoutEditComboRow(editPanel, editTriggerLabel_, editTriggerCombo_);
     layoutEditComboRow(editPanel, editLoopLabel_, editLoopCombo_);
 

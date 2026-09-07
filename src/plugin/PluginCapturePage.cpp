@@ -49,6 +49,11 @@ PluginCapturePage::PluginCapturePage(juce::Component& waveformView,
       statusLabel_(statusLabel),
       buttonLookAndFeel_(buttonLookAndFeel)
 {
+    addAndMakeVisible(guidance_);
+    guidance_.setText("Record a source  |  Record, select a region, preview it, then Use sample.", juce::dontSendNotification);
+    guidance_.setFont(juce::Font(juce::FontOptions(15.0f)));
+    addAndMakeVisible(advancedButton_);
+    advancedButton_.onClick = [this] { advanced_ = !advanced_; resized(); };
     addAndMakeVisible(waveformView_);
     for (auto* button : actionButtons_)
         addAndMakeVisible(*button);
@@ -92,8 +97,9 @@ int PluginCapturePage::measureButtonWidth(juce::TextButton& button,
 
 void PluginCapturePage::resized()
 {
-    auto area = getLocalBounds();
-    waveformView_.setBounds(area.removeFromTop(juce::jmax(220, area.getHeight() / 2)));
+    auto area = getLocalBounds().reduced(8);
+    guidance_.setBounds(area.removeFromTop(32)); area.removeFromTop(8);
+    waveformView_.setBounds(area.removeFromTop(juce::jlimit(160, 280, area.getHeight() / 2)));
 
     area.removeFromTop(10);
     auto controlsRow = area.removeFromTop(32).reduced(10, 0);
@@ -102,7 +108,7 @@ void PluginCapturePage::resized()
     const int clearWidth = measureButtonWidth(*actionButtons_[1], {}, 62, 84, controlsRow.getHeight());
     const int cutWidth = measureButtonWidth(*actionButtons_[2], {}, 92, 116, controlsRow.getHeight());
     const int trimWidth = measureButtonWidth(*actionButtons_[3], {}, 100, 124, controlsRow.getHeight());
-    const int playWidth = measureButtonWidth(*actionButtons_[4], { "Stop" }, 76, 92, controlsRow.getHeight());
+    const int playWidth = measureButtonWidth(*actionButtons_[4], { "Stop preview" }, 96, 128, controlsRow.getHeight());
     const int normalizeWidth = measureButtonWidth(*actionButtons_[5], {}, 98, 116, controlsRow.getHeight());
 
     loadAsSampleButton_.setBounds(controlsRow.removeFromRight(loadAsSampleWidth));
@@ -122,17 +128,6 @@ void PluginCapturePage::resized()
     area.removeFromTop(10);
     sourceLabel_.setBounds(area.removeFromTop(20));
 
-    area.removeFromTop(6);
-    auto settingsRow = area.removeFromTop(30);
-    sampleRateLabel_.setBounds(settingsRow.removeFromLeft(28));
-    sampleRateCombo_.setBounds(settingsRow.removeFromLeft(96));
-    settingsRow.removeFromLeft(10);
-    channelLabel_.setBounds(settingsRow.removeFromLeft(28));
-    channelCombo_.setBounds(settingsRow.removeFromLeft(118));
-    settingsRow.removeFromLeft(10);
-    bitDepthLabel_.setBounds(settingsRow.removeFromLeft(34));
-    bitDepthCombo_.setBounds(settingsRow.removeFromLeft(96));
-
     area.removeFromTop(8);
     auto levelRow = area.removeFromTop(40);
     rootNoteLabel_.setBounds(levelRow.removeFromLeft(72));
@@ -145,4 +140,19 @@ void PluginCapturePage::resized()
 
     area.removeFromTop(8);
     statusLabel_.setBounds(area.removeFromTop(22));
+    area.removeFromTop(6);
+    auto settingsRow = area.removeFromTop(30);
+    advancedButton_.setBounds(settingsRow.removeFromLeft(146)); settingsRow.removeFromLeft(12);
+    sampleRateLabel_.setBounds(settingsRow.removeFromLeft(28));
+    sampleRateCombo_.setBounds(settingsRow.removeFromLeft(96));
+    settingsRow.removeFromLeft(10);
+    channelLabel_.setBounds(settingsRow.removeFromLeft(28));
+    channelCombo_.setBounds(settingsRow.removeFromLeft(118));
+    settingsRow.removeFromLeft(10);
+    bitDepthLabel_.setBounds(settingsRow.removeFromLeft(34));
+    bitDepthCombo_.setBounds(settingsRow.removeFromLeft(96));
+
+    advancedButton_.setToggleState(advanced_, juce::dontSendNotification);
+    for (auto* c : std::initializer_list<juce::Component*>{ &sampleRateLabel_, &sampleRateCombo_, &channelLabel_, &channelCombo_, &bitDepthLabel_, &bitDepthCombo_ }) c->setVisible(advanced_);
+
 }

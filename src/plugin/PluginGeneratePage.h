@@ -31,6 +31,9 @@ public:
     void resized() override;
 
 private:
+    juce::Label guidance_;
+    juce::TextButton advancedButton_{ "Format settings" };
+    bool advanced_ = false;
     juce::Component& waveformView_;
     std::array<juce::TextButton*, 7> waveButtons_;
     juce::Label& samplesLabel_;

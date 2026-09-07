@@ -55,6 +55,13 @@ public:
 
     // Set a tooltip on the label that describes this control
     void setLabelTooltip(const juce::String& tooltip);
+    void setDisplayName(const juce::String& name) { label_.setText(name, juce::dontSendNotification); slider_.setName(name); }
+    void setTooltip(const juce::String& tooltip) { label_.setTooltip(tooltip); slider_.setTooltip(tooltip); }
+    void useHorizontalControl()
+    {
+        slider_.setSliderStyle(juce::Slider::LinearHorizontal);
+        slider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 78, 20);
+    }
 
     // Set a custom LookAndFeel for the slider
     void setDialLookAndFeel(juce::LookAndFeel* laf);

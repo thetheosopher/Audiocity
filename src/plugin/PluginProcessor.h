@@ -251,6 +251,10 @@ public:
     bool previewCapturedAudio();
     bool previewSampleFromFile(const juce::File& file);
     void panicAllAudio() noexcept;
+    // Stop browser/take audition without interrupting the instrument's MIDI voices.
+    void stopAuditionPreview() noexcept { samplePreviewPlaying_.store(false, std::memory_order_relaxed); }
+    void setAuditionPreviewGain(float gain) noexcept { auditionPreviewGain_.store(juce::jlimit(0.0f, 1.0f, gain), std::memory_order_relaxed); }
+    [[nodiscard]] float getAuditionPreviewGain() const noexcept { return auditionPreviewGain_.load(std::memory_order_relaxed); }
     [[nodiscard]] bool isGeneratedWaveformPreviewPlaying() const noexcept
     {
         return previewWavePlaying_.load(std::memory_order_relaxed);
@@ -335,6 +339,18 @@ public:
     [[nodiscard]] std::pair<int, int> getWaveformViewRange() const noexcept;
     void setEditorTabIndex(int tabIndex) noexcept;
     [[nodiscard]] int getEditorTabIndex() const noexcept;
+    void setAuditionViewMode(int mode) noexcept { auditionViewMode_.store(juce::jlimit(1, 4, mode)); }
+    [[nodiscard]] int getAuditionViewMode() const noexcept { return auditionViewMode_.load(); }
+    struct WorkspaceSoundIdentity
+    {
+        juce::String name, savePath;
+        bool edited = false;
+        std::vector<float> savedParameters;
+    };
+    [[nodiscard]] WorkspaceSoundIdentity getWorkspaceSoundIdentity() const
+    { std::lock_guard<std::mutex> lock(workspaceIdentityMutex_); return workspaceIdentity_; }
+    void setWorkspaceSoundIdentity(WorkspaceSoundIdentity identity)
+    { std::lock_guard<std::mutex> lock(workspaceIdentityMutex_); workspaceIdentity_ = std::move(identity); }
     void setSampleInspectorFilterModExpanded(bool expanded) noexcept;
     [[nodiscard]] bool getSampleInspectorFilterModExpanded() const noexcept;
     void setSampleInspectorEffectsExpanded(bool expanded) noexcept;
@@ -645,6 +661,9 @@ private:
     std::atomic<int> waveformViewStartSample_{ 0 };
     std::atomic<int> waveformViewSampleCount_{ 0 };
     std::atomic<int> editorTabIndex_{ 0 };
+    std::atomic<int> auditionViewMode_{ 1 };
+    mutable std::mutex workspaceIdentityMutex_;
+    WorkspaceSoundIdentity workspaceIdentity_;
     std::atomic<bool> sampleInspectorFilterModExpanded_{ true };
     std::atomic<bool> sampleInspectorEffectsExpanded_{ true };
     std::atomic<int> waveformDisplayMode_{ 1 };
@@ -674,6 +693,7 @@ private:
     };
     audiocity::engine::RtSnapshotCell<SamplePreviewSnapshot> samplePreviewSnapshot_;
     std::atomic<bool> samplePreviewPlaying_{ false };
+    std::atomic<float> auditionPreviewGain_{ 0.35f };
     float samplePreviewReadPos_ = 0.0f;
     static constexpr int kCaptureMaxSeconds = 30;
     static constexpr int kCaptureMaxSampleRate = 96000;

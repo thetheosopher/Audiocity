@@ -156,6 +156,7 @@ target_sources(Audiocity
         src/plugin/PluginSampleInfoMetricsLayout.cpp
         src/plugin/PluginSampleInspectorCardLayout.cpp
         src/plugin/PluginEditor.cpp
+        src/plugin/PluginInstrumentWorkspace.cpp
         src/plugin/PeakPreviewCache.cpp
         src/plugin/AudioStateCodec.cpp
         src/plugin/ImportedAssetResolver.cpp

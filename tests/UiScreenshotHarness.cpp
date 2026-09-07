@@ -12,6 +12,8 @@
 #include <numbers>
 #include <vector>
 
+#include "WorkspaceInteractionChecks.h"
+
 namespace
 {
 constexpr double kSnapshotSampleRate = 48000.0;
@@ -36,6 +38,11 @@ struct SnapshotScenario
     const char* presetSearchText = nullptr;
     int switchToTabIndex = -1;
     int snapshotActiveMidiNoteCount = -1;
+    bool detailsView = false;
+    bool browserOpen = false;
+    int browserScope = 1;
+    int auditionMode = 1;
+    bool browserDocked = false;
 };
 
 enum SnapshotStateFlags : unsigned int
@@ -143,7 +150,10 @@ juce::Result prepareTransientSliceFixtureFile(juce::File& sliceFixtureFile)
 
 void configureProcessorForSnapshots(AudiocityAudioProcessor& processor)
 {
+    processor.setWorkspaceSoundIdentity({});
     processor.prepareToPlay(kSnapshotSampleRate, kSnapshotBlockSize);
+    processor.setModulationRoutingSettings({});
+    processor.setMacroControlValues({0.0f, 0.0f});
     processor.loadGeneratedWaveformAsSample(makeSnapshotWaveform(), 60);
     processor.setSampleWindow(kWaveformSampleCount / 12, (kWaveformSampleCount * 10) / 12);
     processor.setLoopPoints(kWaveformSampleCount / 4, (kWaveformSampleCount * 3) / 4);
@@ -176,23 +186,23 @@ void configureModulationSnapshotState(AudiocityAudioProcessor& processor)
     AudiocityAudioProcessor::ModulationRoutingSettings routing;
     routing.modWheel.toPitchCents = 240.0f;
     routing.modWheel.toFilterHz = 3600.0f;
-    routing.modWheel.toAmp = 18.0f;
+    routing.modWheel.toAmp = 0.18f;
 
     routing.aftertouch.toPitchCents = -90.0f;
     routing.aftertouch.toFilterHz = 5200.0f;
-    routing.aftertouch.toAmp = 12.0f;
+    routing.aftertouch.toAmp = 0.12f;
 
     routing.velocity.toPitchCents = 0.0f;
     routing.velocity.toFilterHz = -2600.0f;
-    routing.velocity.toAmp = 42.0f;
+    routing.velocity.toAmp = 0.42f;
 
     routing.macros[0].toPitchCents = 120.0f;
     routing.macros[0].toFilterHz = 8400.0f;
-    routing.macros[0].toAmp = 24.0f;
+    routing.macros[0].toAmp = 0.24f;
 
     routing.macros[1].toPitchCents = -340.0f;
     routing.macros[1].toFilterHz = -6800.0f;
-    routing.macros[1].toAmp = -28.0f;
+    routing.macros[1].toAmp = -0.28f;
 
     processor.setModulationRoutingSettings(routing);
     processor.setMacroControlValues({ 0.72f, 0.38f });
@@ -254,7 +264,8 @@ bool writeSnapshot(juce::Component& component, const juce::File& outputFile)
         return false;
 
     juce::FileOutputStream stream(outputFile);
-    if (!stream.openedOk())
+    // FileOutputStream appends by default; repeated runs must replace the old PNG.
+    if (!stream.openedOk() || !stream.setPosition(0) || stream.truncate().failed())
         return false;
 
     juce::PNGImageFormat png;
@@ -322,8 +333,12 @@ juce::Result renderScenario(AudiocityAudioProcessor& processor,
     editor->setBounds(0, 0, editorWidth, editorHeight);
     editor->resized();
 
-    if (scenario.switchToTabIndex >= 0)
-        audiocityEditor->setSnapshotTabIndex(scenario.switchToTabIndex);
+    audiocityEditor->setSnapshotTabIndex(scenario.switchToTabIndex >= 0 ? scenario.switchToTabIndex : scenario.tabIndex);
+    audiocityEditor->setWorkspaceSnapshotState(hasSnapshotState(scenario, snapshotStateModulation),
+        scenario.detailsView, scenario.browserOpen || scenario.tabIndex == 1 || scenario.switchToTabIndex == 1,
+        scenario.browserScope, scenario.auditionMode);
+
+    AudiocityWorkspaceTestAccess::prepareSnapshot(*audiocityEditor, transientSliceFixtureFile, scenario.browserScope, scenario.browserDocked);
 
     const auto targetTabIndex = scenario.switchToTabIndex >= 0 ? scenario.switchToTabIndex : scenario.tabIndex;
     if (targetTabIndex == 0 || targetTabIndex == 2 || targetTabIndex == 3 || targetTabIndex == 4 || targetTabIndex == 5)
@@ -406,6 +421,11 @@ int main(int argc, char* argv[])
     logProgress("Created processor");
     configureProcessorForSnapshots(*processor);
     logProgress("Configured processor state");
+    if (const auto result = AudiocityWorkspaceTestAccess::run(*processor, outputDirectory); result.failed())
+    {
+        std::fprintf(stderr, "%s\n", result.getErrorMessage().toRawUTF8());
+        return 1;
+    }
 
     juce::File transientSliceFixtureFile;
     if (const auto result = prepareTransientSliceFixtureFile(transientSliceFixtureFile); result.failed())
@@ -415,25 +435,29 @@ int main(int argc, char* argv[])
     }
 
     constexpr SnapshotScenario scenarios[] = {
-        { "sample", 0, snapshotStateSliceProgram, 0 },
-        { "sample_single_voice", 0, snapshotStateSliceProgram, 0, 0, 0, false, true, true, false, true, true, false, nullptr, -1, 1 },
-        { "sample_browser_only", 0, snapshotStateSliceProgram, 0, 0, 0, true, true, false },
-        { "sample_preset_search", 0, snapshotStateSliceProgram, 0, 0, 0, false, true, true, false, true, true, true, "bass" },
-        { "sample_modulation", 0, snapshotStateModulation, 320 },
-        { "sample_wide", 0, snapshotStateSliceProgram, 0, 1240, 1100 },
-        { "sample_wide_medium", 0, snapshotStateSliceProgram, 0, 1240, 1060 },
-        { "sample_wide_browser_only", 0, snapshotStateSliceProgram, 0, 1240, 1100, true, true, false },
-        { "sample_wide_inspector_only", 0, snapshotStateSliceProgram, 0, 1240, 1100, true, false, true },
-        { "sample_wide_cards_collapsed", 0, snapshotStateSliceProgram, 0, 1240, 1100, false, true, true, true, false, false },
-        { "sample_wide_tall", 0, snapshotStateSliceProgram, 0, 1240, 1600 },
-        { "sample_wide_focus", 0, snapshotStateSliceProgram, 0, 1240, 1100, true, false, false },
-        { "library", 0, snapshotStateBaseline, 0, 0, 0, false, true, true, false, true, true, false, nullptr, 1 },
-        { "mapping", 2, snapshotStateSliceProgram, 0 },
-        { "player", 3, snapshotStateBaseline, 0 },
-        { "player_single_voice", 3, snapshotStateBaseline, 0, 0, 0, false, true, true, false, true, true, false, nullptr, -1, 1 },
-        { "generate", 4, snapshotStateBaseline, 0 },
-        { "capture", 5, snapshotStateBaseline, 0 },
-        { "about", 6, snapshotStateBaseline, 0 }
+        { .fileStem="sample", .tabIndex=0 },
+        { .fileStem="sound_constrained", .tabIndex=0, .editorWidth=980, .editorHeight=720 },
+        { .fileStem="sound_wide", .tabIndex=0, .editorWidth=1500, .editorHeight=900 },
+        { .fileStem="slices", .tabIndex=0, .stateFlags=snapshotStateSliceProgram },
+        { .fileStem="sample_modulation", .tabIndex=0, .stateFlags=snapshotStateModulation },
+        { .fileStem="modulation_lower", .tabIndex=0, .stateFlags=snapshotStateModulation, .viewportScrollY=680 },
+        { .fileStem="details", .tabIndex=0, .detailsView=true },
+        { .fileStem="details_lower", .tabIndex=0, .viewportScrollY=400, .detailsView=true },
+        { .fileStem="presets", .tabIndex=0, .overridePresetSearchState=true, .presetSearchText="", .browserOpen=true },
+        { .fileStem="preset_search", .tabIndex=0, .overridePresetSearchState=true, .presetSearchText="bass", .browserOpen=true },
+        { .fileStem="preset_empty", .tabIndex=0, .overridePresetSearchState=true, .presetSearchText="nothing-matches", .browserOpen=true },
+        { .fileStem="samples_browser", .tabIndex=0, .browserOpen=true, .browserScope=2 },
+        { .fileStem="instruments_browser", .tabIndex=0, .browserOpen=true, .browserScope=3 },
+        { .fileStem="browser_constrained", .tabIndex=0, .editorWidth=980, .editorHeight=720, .overridePresetSearchState=true, .presetSearchText="", .browserOpen=true },
+        { .fileStem="browser_docked", .tabIndex=0, .editorWidth=1500, .editorHeight=900, .overridePresetSearchState=true, .presetSearchText="", .browserOpen=true, .browserDocked=true },
+        { .fileStem="mapping", .tabIndex=2, .stateFlags=snapshotStateSliceProgram },
+        { .fileStem="mapping_constrained", .tabIndex=2, .stateFlags=snapshotStateSliceProgram, .viewportScrollY=180, .editorWidth=980, .editorHeight=720 },
+        { .fileStem="generate", .tabIndex=4 },
+        { .fileStem="generate_constrained", .tabIndex=4, .editorWidth=980, .editorHeight=720 },
+        { .fileStem="capture", .tabIndex=5 },
+        { .fileStem="capture_constrained", .tabIndex=5, .editorWidth=980, .editorHeight=720 },
+        { .fileStem="about", .tabIndex=6 },
+        { .fileStem="audition_hidden", .tabIndex=0, .auditionMode=4 }
     };
 
     for (const auto& scenario : scenarios)

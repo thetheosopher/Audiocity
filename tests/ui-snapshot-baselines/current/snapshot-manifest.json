@@ -1,116 +1,140 @@
-﻿[
-    {
-        "fileName":  "about.png",
-        "relativePath":  "about.png",
-        "sizeBytes":  87569,
-        "sha256":  "80059f1ef2a57cca76e8e279e12000e6180dd64d407752d0e8568f3968780f99"
-    },
-    {
-        "fileName":  "capture.png",
-        "relativePath":  "capture.png",
-        "sizeBytes":  44308,
-        "sha256":  "e8d8428380b879a4c0941830c6973585237cf5ae7708076b9a1aaa0658814106"
-    },
-    {
-        "fileName":  "generate.png",
-        "relativePath":  "generate.png",
-        "sizeBytes":  54017,
-        "sha256":  "7b213e5c48abbc53c6670b9b08ab22045be80b7c5925072ccd53b4743cb9a5c8"
-    },
-    {
-        "fileName":  "library.png",
-        "relativePath":  "library.png",
-        "sizeBytes":  38823,
-        "sha256":  "98f97e04c7eda7a3e31afedadaad975a84bb9051d16fefb67bea5366e7e0d488"
-    },
-    {
-        "fileName":  "mapping.png",
-        "relativePath":  "mapping.png",
-        "sizeBytes":  83039,
-        "sha256":  "1eb2abcbd07d11407877072598e3af5354be4ea825df3c709084ae88c21700bc"
-    },
-    {
-        "fileName":  "player.png",
-        "relativePath":  "player.png",
-        "sizeBytes":  33318,
-        "sha256":  "719c665c0f523b9909aa764df07cd3c7b628350276fc6bbc098ca5bd7b74c754"
-    },
-    {
-        "fileName":  "player_single_voice.png",
-        "relativePath":  "player_single_voice.png",
-        "sizeBytes":  33066,
-        "sha256":  "a028e2afadad0737317a13c083d5c630121e28ddd4981ed8804178709f85acda"
-    },
-    {
-        "fileName":  "sample.png",
-        "relativePath":  "sample.png",
-        "sizeBytes":  77305,
-        "sha256":  "6cf6b59a69c82a529ad96039008b386f7726ff1e8e3dca052fca08c208be43f9"
-    },
-    {
-        "fileName":  "sample_browser_only.png",
-        "relativePath":  "sample_browser_only.png",
-        "sizeBytes":  82380,
-        "sha256":  "9eb18280f3b12ba4b450bc20cc5d2a47899374a829328079376f86be40b31b0a"
-    },
-    {
-        "fileName":  "sample_modulation.png",
-        "relativePath":  "sample_modulation.png",
-        "sizeBytes":  92241,
-        "sha256":  "c85ec7de8df792610cc244dd8934b2d1320d266270a357c56ff2c266ed46457a"
-    },
-    {
-        "fileName":  "sample_preset_search.png",
-        "relativePath":  "sample_preset_search.png",
-        "sizeBytes":  76781,
-        "sha256":  "9c9b49f69f0628c9ece254f61d3fc71457cbbcf2aafd2198bbac98342f18f5ec"
-    },
-    {
-        "fileName":  "sample_single_voice.png",
-        "relativePath":  "sample_single_voice.png",
-        "sizeBytes":  76820,
-        "sha256":  "55f102aad7a490d66e58c51fb9695f8a0306f7649e85a8986aa412ae7650720f"
-    },
-    {
-        "fileName":  "sample_wide.png",
-        "relativePath":  "sample_wide.png",
-        "sizeBytes":  144780,
-        "sha256":  "b762cda6ed952555a328fd758c0cb82ed324baf62cdef794fd6eade0faf28f99"
-    },
-    {
-        "fileName":  "sample_wide_browser_only.png",
-        "relativePath":  "sample_wide_browser_only.png",
-        "sizeBytes":  114022,
-        "sha256":  "93a909a42925abe61375e3a43344157e6f4fbacd1ffae5e16b5abf21439394bc"
-    },
-    {
-        "fileName":  "sample_wide_cards_collapsed.png",
-        "relativePath":  "sample_wide_cards_collapsed.png",
-        "sizeBytes":  133911,
-        "sha256":  "49d2768e5b70f12c560822fdb81d60356eea32c97510e72f4c7a6b540e66df13"
-    },
-    {
-        "fileName":  "sample_wide_focus.png",
-        "relativePath":  "sample_wide_focus.png",
-        "sizeBytes":  104268,
-        "sha256":  "7f30f7ab0a57e78b541ee13dde92262d05c9fff04c648f7493b54bc655167f3e"
-    },
-    {
-        "fileName":  "sample_wide_inspector_only.png",
-        "relativePath":  "sample_wide_inspector_only.png",
-        "sizeBytes":  138444,
-        "sha256":  "d63d15d9beff8ba101bf82e74af774cb797d8e4e754846acf734f20612b47e99"
-    },
-    {
-        "fileName":  "sample_wide_medium.png",
-        "relativePath":  "sample_wide_medium.png",
-        "sizeBytes":  124729,
-        "sha256":  "26b84427b5a89edffc48bb75d0ba043a440057b3346d7693916d6e5033ea6709"
-    },
-    {
-        "fileName":  "sample_wide_tall.png",
-        "relativePath":  "sample_wide_tall.png",
-        "sizeBytes":  215259,
-        "sha256":  "64f861e66d8749a524723dc6e4a8e2bdc2ca01ddec631eb92b5239eb9192ff22"
-    }
+[
+  {
+    "fileName": "about.png",
+    "relativePath": "about.png",
+    "sizeBytes": 59735,
+    "sha256": "d5a8fd74b739219e30ddfb4da03e45f1c9dc979592a766ca19355776dd87188e"
+  },
+  {
+    "fileName": "audition_hidden.png",
+    "relativePath": "audition_hidden.png",
+    "sizeBytes": 64873,
+    "sha256": "70c6c5fd951da0aa79fca2cf4a2d9c2f91064fea5f836d352a4ddf75674d8d85"
+  },
+  {
+    "fileName": "browser_constrained.png",
+    "relativePath": "browser_constrained.png",
+    "sizeBytes": 60548,
+    "sha256": "63227c21bdc50746239f2b53272da387c7950b10fa0cc6a0700ea159fd6948db"
+  },
+  {
+    "fileName": "browser_docked.png",
+    "relativePath": "browser_docked.png",
+    "sizeBytes": 89357,
+    "sha256": "bee00e10c8b3e35e3a5c22a6a44fe0f5f934470716651758682f1e7e39f67ea7"
+  },
+  {
+    "fileName": "capture_constrained.png",
+    "relativePath": "capture_constrained.png",
+    "sizeBytes": 36378,
+    "sha256": "0c38d65c340f8f97dd1fd857493abd80c3886bb50ed9a0938e5c99de925954e7"
+  },
+  {
+    "fileName": "capture.png",
+    "relativePath": "capture.png",
+    "sizeBytes": 37622,
+    "sha256": "0ec74253f38174537eb4dd36b42b1656bf6d7c8408e9ee46b1db41f8fc2a861c"
+  },
+  {
+    "fileName": "details_lower.png",
+    "relativePath": "details_lower.png",
+    "sizeBytes": 59371,
+    "sha256": "11a5f471c357327dcee400ea4e6e10bf8996bd88ca073a7205120e26ebe7735c"
+  },
+  {
+    "fileName": "details.png",
+    "relativePath": "details.png",
+    "sizeBytes": 70634,
+    "sha256": "64d20a2655e50c86401e4708ea4805ba345311ef0ecec695e6c9bcf1188c1e9a"
+  },
+  {
+    "fileName": "generate_constrained.png",
+    "relativePath": "generate_constrained.png",
+    "sizeBytes": 47938,
+    "sha256": "be0d5169ecbd85cfa32c6030f5e48779ba2899e3d184bbc3580fe64a35e83656"
+  },
+  {
+    "fileName": "generate.png",
+    "relativePath": "generate.png",
+    "sizeBytes": 49907,
+    "sha256": "95910f505fe2864add19916f67a942f51ff1688eee20897f57ccf8704b29d093"
+  },
+  {
+    "fileName": "instruments_browser.png",
+    "relativePath": "instruments_browser.png",
+    "sizeBytes": 65011,
+    "sha256": "16ae7fb8b24f72e3d3e3991e7ac5cfaac99d70afa47321ce586bc27014056809"
+  },
+  {
+    "fileName": "mapping_constrained.png",
+    "relativePath": "mapping_constrained.png",
+    "sizeBytes": 54713,
+    "sha256": "dc2581ca93418e6b9f0e30650c55a67a11f90cf89ae508720821572ee280a612"
+  },
+  {
+    "fileName": "mapping.png",
+    "relativePath": "mapping.png",
+    "sizeBytes": 62032,
+    "sha256": "b115fe60be4cbe512c734ed9273107241b42ff56a3ca6e40eb50f0f8e1c37e0c"
+  },
+  {
+    "fileName": "modulation_lower.png",
+    "relativePath": "modulation_lower.png",
+    "sizeBytes": 67252,
+    "sha256": "7981e8fa2fddc0d4d9d4b4fa7ffe327e2dc93a7a31edd49836e63932437b8858"
+  },
+  {
+    "fileName": "preset_empty.png",
+    "relativePath": "preset_empty.png",
+    "sizeBytes": 57244,
+    "sha256": "327d62d3b6e73e894a56fc56908c520d84e255eef6e4e444666088fffc2a94ca"
+  },
+  {
+    "fileName": "preset_search.png",
+    "relativePath": "preset_search.png",
+    "sizeBytes": 59971,
+    "sha256": "b92a98e6307302669fd7fee995eca787366bb75ae31ffbfac5de57b2c66f3480"
+  },
+  {
+    "fileName": "presets.png",
+    "relativePath": "presets.png",
+    "sizeBytes": 63254,
+    "sha256": "20e0ca3c52c7ce53838f6ac256a583ed77e41d33684ea91a8a4ddcb63294186f"
+  },
+  {
+    "fileName": "sample_modulation.png",
+    "relativePath": "sample_modulation.png",
+    "sizeBytes": 60028,
+    "sha256": "96133a68a1ca0a88475644269c514a80ea9aaeda4b1b9336cc9f7f51dc05b8a4"
+  },
+  {
+    "fileName": "sample.png",
+    "relativePath": "sample.png",
+    "sizeBytes": 67240,
+    "sha256": "3f84e2a72cfe16b03d9eb0a4047110a5dcac0c53da58925dc890f8c47346f30f"
+  },
+  {
+    "fileName": "samples_browser.png",
+    "relativePath": "samples_browser.png",
+    "sizeBytes": 68253,
+    "sha256": "9a6e800628cb5e4711bee33507ca1b9404e1e306c0d1d46e21a8fce465756438"
+  },
+  {
+    "fileName": "slices.png",
+    "relativePath": "slices.png",
+    "sizeBytes": 63611,
+    "sha256": "d15d0fd6f3b84448e4dfb755c8104421e08f66a392b05372b79cb92527494005"
+  },
+  {
+    "fileName": "sound_constrained.png",
+    "relativePath": "sound_constrained.png",
+    "sizeBytes": 62998,
+    "sha256": "1db41e7c89a7e650ffd7f3b2160b00646541400d8311ecc5b3b81d96f47e5f86"
+  },
+  {
+    "fileName": "sound_wide.png",
+    "relativePath": "sound_wide.png",
+    "sizeBytes": 73980,
+    "sha256": "004fe0a4004c62d804f5ff8fdf119245d1141fede259854ea46d72a57ba87af7"
+  }
 ]

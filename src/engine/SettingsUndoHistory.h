@@ -30,6 +30,8 @@ struct SettingsSnapshot
     int captureChannelMode = 0;
     int captureBitDepth = 16;
     float captureInputGain = 1.0f;
+    // Editor history only; this snapshot is never read by the audio callback.
+    std::vector<float> parameterValues;
 
     [[nodiscard]] bool operator==(const SettingsSnapshot& other) const noexcept
     {
@@ -53,7 +55,8 @@ struct SettingsSnapshot
                 && captureTargetSampleRate == other.captureTargetSampleRate
                 && captureChannelMode == other.captureChannelMode
                     && captureBitDepth == other.captureBitDepth
-                    && captureInputGain == other.captureInputGain;
+                    && captureInputGain == other.captureInputGain
+                    && parameterValues == other.parameterValues;
     }
 
     [[nodiscard]] bool operator!=(const SettingsSnapshot& other) const noexcept

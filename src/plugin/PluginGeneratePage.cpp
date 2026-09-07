@@ -41,6 +41,11 @@ PluginGeneratePage::PluginGeneratePage(juce::Component& waveformView,
       frequencyCombo_(frequencyCombo),
       loadAsSampleButton_(loadAsSampleButton)
 {
+    addAndMakeVisible(guidance_);
+    guidance_.setText("Generate a source  |  Choose a shape or draw the waveform, preview it, then Use sample.", juce::dontSendNotification);
+    guidance_.setFont(juce::Font(juce::FontOptions(15.0f)));
+    addAndMakeVisible(advancedButton_);
+    advancedButton_.onClick = [this] { advanced_ = !advanced_; resized(); };
     addAndMakeVisible(waveformView_);
     for (auto* button : waveButtons_)
         addAndMakeVisible(*button);
@@ -61,39 +66,27 @@ PluginGeneratePage::PluginGeneratePage(juce::Component& waveformView,
 
 void PluginGeneratePage::resized()
 {
-    auto area = getLocalBounds();
-
-    auto waveformArea = area.removeFromTop(juce::jmax(200, area.getHeight() / 2));
-    waveformView_.setBounds(waveformArea);
+    auto area = getLocalBounds().reduced(8);
+    guidance_.setBounds(area.removeFromTop(32)); area.removeFromTop(8);
+    waveformView_.setBounds(area.removeFromTop(juce::jlimit(160, 280, area.getHeight() / 2)));
     area.removeFromTop(12);
-
-    auto waveButtons = area.removeFromTop(32).reduced(12, 0);
-    loadAsSampleButton_.setBounds(waveButtons.removeFromRight(140));
-    waveButtons.removeFromRight(kGenerateButtonGap);
+    auto shapes = area.removeFromTop(32);
     for (auto* button : waveButtons_)
-    {
-        button->setBounds(waveButtons.removeFromLeft(kGenerateButtonWidth));
-        waveButtons.removeFromLeft(kGenerateButtonGap);
-    }
-
-    area.removeFromTop(10);
-    auto settingsRow = area.removeFromTop(32).reduced(12, 0);
-    samplesLabel_.setBounds(settingsRow.removeFromLeft(58));
-    samplesCombo_.setBounds(settingsRow.removeFromLeft(98));
-    settingsRow.removeFromLeft(14);
-    bitDepthLabel_.setBounds(settingsRow.removeFromLeft(34));
-    bitDepthCombo_.setBounds(settingsRow.removeFromLeft(96));
-    settingsRow.removeFromLeft(14);
-    sketchSmoothingLabel_.setBounds(settingsRow.removeFromLeft(54));
-    sketchSmoothingCombo_.setBounds(settingsRow.removeFromLeft(96));
-    settingsRow.removeFromLeft(14);
-    pulseWidthLabel_.setBounds(settingsRow.removeFromLeft(36));
-    pulseWidthSlider_.setBounds(settingsRow);
-
-    area.removeFromTop(10);
-    auto actionsRow = area.removeFromTop(32).reduced(12, 0);
-    previewButton_.setBounds(actionsRow.removeFromLeft(96));
-    actionsRow.removeFromLeft(12);
-    frequencyLabel_.setBounds(actionsRow.removeFromLeft(72));
-    frequencyCombo_.setBounds(actionsRow.removeFromLeft(190));
+    { button->setBounds(shapes.removeFromLeft(kGenerateButtonWidth)); shapes.removeFromLeft(kGenerateButtonGap); }
+    area.removeFromTop(12);
+    auto actions = area.removeFromTop(32);
+    loadAsSampleButton_.setBounds(actions.removeFromRight(140));
+    previewButton_.setBounds(actions.removeFromLeft(120)); actions.removeFromLeft(12);
+    frequencyLabel_.setBounds(actions.removeFromLeft(72)); frequencyCombo_.setBounds(actions.removeFromLeft(180));
+    area.removeFromTop(12);
+    auto drawing = area.removeFromTop(32);
+    sketchSmoothingLabel_.setBounds(drawing.removeFromLeft(72)); sketchSmoothingCombo_.setBounds(drawing.removeFromLeft(120));
+    drawing.removeFromLeft(20); pulseWidthLabel_.setBounds(drawing.removeFromLeft(70)); pulseWidthSlider_.setBounds(drawing.removeFromLeft(200));
+    area.removeFromTop(12);
+    auto format = area.removeFromTop(32);
+    advancedButton_.setBounds(format.removeFromLeft(130)); format.removeFromLeft(12);
+    samplesLabel_.setBounds(format.removeFromLeft(66)); samplesCombo_.setBounds(format.removeFromLeft(100)); format.removeFromLeft(12);
+    bitDepthLabel_.setBounds(format.removeFromLeft(48)); bitDepthCombo_.setBounds(format.removeFromLeft(100));
+    advancedButton_.setToggleState(advanced_, juce::dontSendNotification);
+    for (auto* c : std::initializer_list<juce::Component*>{ &samplesLabel_, &samplesCombo_, &bitDepthLabel_, &bitDepthCombo_ }) c->setVisible(advanced_);
 }

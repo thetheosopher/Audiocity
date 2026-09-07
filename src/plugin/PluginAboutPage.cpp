@@ -17,28 +17,17 @@ struct AboutRow
     const char* detail;
 };
 
-constexpr std::array<AboutRow, 9> kFeatureRows{{
-    { "Import", "Load WAV and AIFF plus SFZ, SoundFont, DecentSampler, Bitwig, XPM, TAL, TX16Wx, Korg, Ableton, EXS24, NKI, REX, RX2, and NCW" },
-    { "Preset Strip", "Multi-preset imports open a chooser, and the Sample header keeps a searchable preset strip in view" },
-    { "Browser Rail", "Persistent browser and preview controls stay visible on Sample, Mapping, Generate, and Capture" },
-    { "Mapping", "Batch edit, create, duplicate, split, merge, chromatic remap, key spread, and root-note tools" },
-    { "Slicing", "Transient slice imports, waveform overlays, and direct split or merge gestures for slice programs" },
-    { "Modulation", "Route mod wheel, aftertouch, velocity, Macro 1, and Macro 2 to pitch, filter, and amp" },
-    { "Performance", "Compact performance strip, external MIDI highlights, stereo output bars, and LED voice count" },
-    { "Quality", "CPU, Fidelity, and Ultra modes with disk streaming, preload control, and live diagnostics" },
-    { "Create", "Generate custom waves or capture audio while keeping the same browser and performance tools" }
+constexpr std::array<AboutRow, 4> kFeatureRows{{
+    { "Find a sound", "Browse presets, samples and instruments, or drop an audio file into Sound" },
+    { "Shape it", "Trim and loop, tune, adjust amp and filter, then add effects" },
+    { "Play it", "Use MIDI, the compact keyboard or pads, and two expressive macros" },
+    { "Save it", "Save the current sound as a portable single-sample preset" }
 }};
-
-constexpr std::array<AboutRow, 9> kWorkflowRows{{
-    { "Open Files", "Press Ctrl+O or drag a file in; multi-preset formats prompt for a preset before loading" },
-    { "NCW", "Set AUDIOCITY_NCW_CONVERTER_COMMAND before loading NCW-backed libraries" },
-    { "Preset Search", "Use the Sample top-bar search to filter preset names without leaving the current workflow" },
-    { "Browser", "Use the preview buttons, Enter to load the selected row, and Esc to panic audio" },
-    { "Mapping", "Ctrl+N creates a zone, Ctrl+A selects all, Ctrl+D duplicates, Ctrl+Shift+D splits, Delete removes" },
-    { "Waveform", "Double-click slice boundaries to split; waveform menus expose merge and chromatic actions" },
-    { "Performance", "Keys 1-7 switch tabs; Sample, Mapping, Generate, and Capture keep the compact keyboard visible" },
-    { "Undo", "Ctrl+Z and Ctrl+Y walk one shared history across sample, settings, and mapping edits" },
-    { "Inspect", "Wide Sample layouts show browser and inspector rails; Inspect mode enlarges the Output dials" }
+constexpr std::array<AboutRow, 4> kWorkflowRows{{
+    { "Create", "Source opens Record and Generate; preview first, then Use sample or Cancel" },
+    { "Recover", "Menu > Restore previous sound recovers a replacement while this editor stays open" },
+    { "Repair", "Menu > Advanced mapping / export opens single-zone repairs and export" },
+    { "Shortcuts", "Ctrl+S Save, Ctrl+Shift+S Save As, Ctrl+Z Undo, Ctrl+Y Redo, Esc Sound" }
 }};
 } // namespace
 
@@ -73,7 +62,7 @@ void PluginAboutPage::paint(juce::Graphics& g)
 
     area = area.reduced(14, 14);
 
-    constexpr int kIconSize = 96;
+    constexpr int kIconSize = 56;
     constexpr int kButtonHeight = 36;
     constexpr int kFooterHeight = 26;
     constexpr int kFooterGap = 14;
@@ -103,7 +92,7 @@ void PluginAboutPage::paint(juce::Graphics& g)
 
     g.setColour(aboutTextMutedColour());
     g.setFont(juce::Font(juce::FontOptions(15.0f)));
-    g.drawText("A hybrid sampler for import, slicing, modulation, and performance",
+    g.drawText("Turn any sound into an instrument.",
                area.getX(),
                textY,
                area.getWidth(),
@@ -203,7 +192,7 @@ void PluginAboutPage::paint(juce::Graphics& g)
 
     g.setColour(juce::Colour(0xff8990b0));
     g.setFont(juce::Font(juce::FontOptions(11.5f)));
-    g.drawText("Built with JUCE, tuned for deterministic offline tests, and designed for broad sampler import workflows.",
+    g.drawText("Audiocity keeps existing imported mappings, presets, MIDI expression and host automation compatible.",
                footerArea,
                juce::Justification::centred,
                true);

@@ -1,0 +1,1426 @@
+<!doctype html>
+<html lang="en" data-visualize-standalone>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Audiocity Refined Sampler</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+</head>
+<body>
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="Audiocity Refined Sampler" srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot; data-visualize-standalone&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;Audiocity Refined Sampler&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(
+    --background,
+    var(--color-background-primary, light-dark(rgb(255 255 255), rgb(24 24 24)))
+  ) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: var(
+    --color-background-primary,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --card: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  --card-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --popover: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255), rgb(45 45 45))
+  );
+  --popover-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --primary: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --primary-foreground: var(
+    --color-text-inverse,
+    light-dark(rgb(255 255 255), rgb(13 13 13))
+  );
+  --secondary: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%))
+  );
+  --secondary-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: var(
+    --color-text-secondary,
+    light-dark(rgb(26 28 31 / 49.4%), rgb(255 255 255 / 49.8%))
+  );
+  --accent: var(
+    --color-background-info,
+    light-dark(rgb(229 242 255), rgb(13 39 63))
+  );
+  --accent-foreground: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --destructive: var(
+    --color-text-warning,
+    light-dark(rgb(226 85 7), rgb(255 133 73))
+  );
+  --border: var(
+    --color-border-secondary,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+  --input: var(
+    --color-border-primary,
+    light-dark(
+      rgb(26 28 31 / 11.8%),
+      color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+    )
+  );
+  --ring: var(
+    --color-ring-primary,
+    light-dark(rgb(51 156 255), rgb(131 195 255 / 76%))
+  );
+  --font-size-base: var(--font-text-md-size, 14px);
+  --blue: light-dark(rgb(51 156 255), rgb(51 156 255));
+  --orange: light-dark(rgb(226 85 7), rgb(251 106 34));
+  --green: light-dark(rgb(0 162 64), rgb(64 201 119));
+  --red: light-dark(rgb(224 46 42), rgb(255 103 100));
+  --purple: light-dark(rgb(146 79 247), rgb(173 123 249));
+  --yellow: light-dark(rgb(255 195 0), rgb(255 210 64));
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, &quot;Segoe UI&quot;, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --icon-size: 16px;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --corner-shape: round;
+  --radius: var(--border-radius-lg, 10px);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  /* Preserve MCP aliases for older inline renderers without creating :root cycles. */
+  --color-background-primary: var(
+    --background,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --color-text-primary: var(
+    --foreground,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --color-border-secondary: var(
+    --border,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+
+  margin: 0;
+  padding: var(--visualize-paint-gutter, 0px);
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans) !important;
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: pointer;
+  font-weight: var(--font-weight-medium, 500);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table-responsive &gt; .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead th {
+  padding-block: 8px;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 6px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align=&quot;right&quot;]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align=&quot;center&quot;]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: var(--corner-shape);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+#widget &gt; :not(.card, .progress) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: none;
+  font-size: var(--font-size-tooltip);
+  line-height: var(--line-height-tooltip);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+hr {
+  width: 100%;
+  height: 1px;
+  margin-block: 6px;
+  border: 0;
+  background: var(--border);
+}
+
+.nav {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.progress {
+  display: flex;
+  height: 8px;
+  margin-block: calc((var(--line-height-normal, 1.5em) - 8px) / 2);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+}
+
+.progress-bar:only-child {
+  border-radius: var(--radius-full);
+}
+
+.progress-bar {
+  height: 100%;
+  flex-shrink: 0;
+  border: 0;
+  background: var(--viz-series-1);
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.nav-link,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn,
+.nav-link {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover,
+.nav-link:not(:disabled):not([aria-disabled=&quot;true&quot;]):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.nav-pills .nav-link {
+  min-width: 0;
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.nav-justified .nav-link {
+  flex: 1 1 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.nav-pills .nav-link.active {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+.btn:disabled,
+.nav-link:disabled,
+.nav-link[aria-disabled=&quot;true&quot;] {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: var(--corner-shape);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+  [aria-pressed=&quot;true&quot;],
+  [aria-selected=&quot;true&quot;],
+  .is-selected
+) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible,
+.nav-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .btn,
+  .nav-link,
+  .form-control,
+  .form-select {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Keep small-screen WebKit from zooming when a text field receives focus. */
+  .form-control,
+  .form-select {
+    font-size: max(16px, var(--font-size-normal));
+  }
+
+  .form-control[type=&quot;file&quot;]::file-selector-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .form-control-color[type=&quot;color&quot;] {
+    width: 44px;
+    height: 44px;
+  }
+
+  .form-control:is(
+    [type=&quot;date&quot;],
+    [type=&quot;datetime-local&quot;],
+    [type=&quot;month&quot;],
+    [type=&quot;time&quot;],
+    [type=&quot;week&quot;]
+  ) {
+    min-width: 0;
+    max-width: 100%;
+    padding-block: 8px;
+  }
+
+  .form-check {
+    min-height: 44px;
+    padding-inline: 15px;
+  }
+
+  .form-check-input {
+    position: relative;
+  }
+
+  .form-check-input::after {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    content: &quot;&quot;;
+    transform: translate(-50%, -50%);
+  }
+
+  .form-check-label {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+  }
+
+  .form-range {
+    height: 44px;
+    touch-action: pan-y;
+  }
+
+  .form-range::-webkit-slider-runnable-track {
+    height: 44px;
+  }
+
+  .form-range::-moz-range-track {
+    height: 44px;
+  }
+
+  .form-range::-webkit-slider-thumb {
+    margin-top: 12px;
+  }
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+/* Model-authored chart rules can otherwise stretch icons after these styles load. */
+svg.lucide {
+  display: block;
+  width: var(--icon-size) !important;
+  height: var(--icon-size) !important;
+  flex: none;
+  margin: 0 !important;
+  stroke-width: 1.6;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;ac-refined&quot; aria-label=&quot;Audiocity proposed instrument layout&quot;&gt;
+&lt;style&gt;
+#ac-refined{--ac-bg:light-dark(#f2f5f6,#10171c);--ac-panel:light-dark(#fff,#182228);--ac-line:light-dark(#ccd6da,#304047);--ac-text:light-dark(#17282f,#e2eced);--ac-muted:light-dark(#4c626b,#a0b4bc);--ac-accent:light-dark(#08798e,#72d5df);--ac-soft:light-dark(#def1f3,#233b42);background:var(--ac-bg);color:var(--ac-text);font:14px/1.45 &#x27;Segoe UI&#x27;,sans-serif;border:1px solid var(--ac-line);border-radius:12px;overflow:hidden;container-type:inline-size}
+#ac-refined *{box-sizing:border-box}#ac-refined button,#ac-refined select,#ac-refined input{font:inherit;color:inherit}#ac-refined button,#ac-refined select{background:var(--ac-panel);border:1px solid var(--ac-line);border-radius:6px;padding:7px 11px;cursor:pointer}#ac-refined button:disabled{cursor:default;opacity:.55}#ac-refined button[aria-pressed=true]{background:var(--ac-soft);border-color:var(--ac-accent);color:var(--ac-accent)}#ac-refined input[type=range]{width:100%;accent-color:var(--ac-accent);margin:10px 0 0}#ac-refined .ac-head{display:flex;gap:14px;align-items:center;padding:16px 18px;border-bottom:1px solid var(--ac-line);flex-wrap:wrap}#ac-refined .ac-brand{letter-spacing:2px;font-weight:500}#ac-refined .ac-title{flex:1;min-width:140px}#ac-refined small{display:block;font-size:12px;color:var(--ac-muted)}#ac-refined .ac-output{display:flex;gap:9px;align-items:center;font-size:12px;color:var(--ac-muted)}#ac-refined .ac-main{display:grid;grid-template-columns:minmax(0,1fr)}#ac-refined .ac-main.ac-browsing{grid-template-columns:205px minmax(0,1fr)}#ac-refined .ac-browser{padding:18px 14px;background:var(--ac-panel);border-right:1px solid var(--ac-line)}#ac-refined .ac-browser input{width:100%;background:var(--ac-bg);border:1px solid var(--ac-line);padding:9px;border-radius:5px;margin:12px 0}#ac-refined .ac-browser button{display:block;width:100%;text-align:left;margin:7px 0}#ac-refined .ac-work{padding:18px;min-width:0}#ac-refined .ac-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}#ac-refined .ac-spread{justify-content:space-between}#ac-refined .ac-source{margin:0 0 12px}#ac-refined .ac-wave{height:150px;width:100%;display:block;background:var(--ac-panel);border-radius:8px;border:1px solid var(--ac-line);color:var(--ac-accent)}#ac-refined .ac-meta{display:flex;gap:18px;align-items:center;flex-wrap:wrap;padding:12px 0;color:var(--ac-muted);font-size:12px}#ac-refined .ac-meta strong{color:var(--ac-text);font-weight:500}#ac-refined .ac-tabs{display:flex;gap:8px;margin:3px 0 15px}#ac-refined .ac-shape{display:grid;grid-template-columns:1.12fr 1fr .8fr;gap:20px}#ac-refined .ac-section{min-width:0;border-top:1px solid var(--ac-line);padding-top:12px}#ac-refined .ac-section h3{font-size:14px;font-weight:500;margin:0 0 10px}#ac-refined .ac-control{display:block;margin-top:12px;font-size:12px;color:var(--ac-muted)}#ac-refined .ac-control output{float:right;color:var(--ac-text);font-variant-numeric:tabular-nums}#ac-refined .ac-envelope{display:block;width:100%;height:65px;color:var(--ac-accent)}#ac-refined .ac-values{display:grid;grid-template-columns:repeat(2,1fr);gap:4px 16px}#ac-refined .ac-values .ac-control{margin-top:5px}#ac-refined .ac-expression{display:flex;gap:25px;margin-top:19px;border-top:1px solid var(--ac-line);padding-top:10px;align-items:center;flex-wrap:wrap}#ac-refined .ac-expression&gt;.ac-control{flex:1;min-width:130px;margin:0}#ac-refined .ac-expression&gt;span{font-size:12px;color:var(--ac-muted)}#ac-refined .ac-foot{padding:12px 18px 16px;border-top:1px solid var(--ac-line)}#ac-refined .ac-foothead{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--ac-muted);margin-bottom:8px}#ac-refined .ac-keyboard{display:flex;height:48px;gap:2px}#ac-refined .ac-key{flex:1;min-width:0;background:var(--ac-panel);border:1px solid var(--ac-line);border-radius:0 0 3px 3px;position:relative;color:var(--ac-muted);font-size:11px;padding:27px 0 0 4px}#ac-refined .ac-key.ac-black:after{content:&#x27;&#x27;;position:absolute;right:-19%;top:0;width:38%;height:26px;background:var(--ac-bg);border:1px solid var(--ac-line);z-index:1}#ac-refined .ac-pads{display:grid;grid-template-columns:repeat(8,1fr);gap:7px}#ac-refined .ac-pad{height:48px;padding:5px;font-size:12px}#ac-refined .ac-routes{min-height:205px}#ac-refined .ac-route{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;padding:13px 0;border-bottom:1px solid var(--ac-line);align-items:center}#ac-refined .ac-route label{font-size:12px;color:var(--ac-muted)}#ac-refined details{margin-top:10px;font-size:12px;color:var(--ac-muted)}#ac-refined summary{cursor:pointer}#ac-refined [hidden]{display:none!important}#ac-refined .ac-empty{color:var(--ac-muted);padding:8px 0;font-size:12px}#ac-refined .ac-selection{fill:var(--ac-soft)}#ac-refined .ac-marker{stroke:var(--ac-accent);stroke-width:2}#ac-refined .ac-gridline{stroke:var(--ac-line);stroke-width:1}
+@container(max-width:760px){#ac-refined .ac-shape{grid-template-columns:1fr 1fr}#ac-refined .ac-effects{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:0 20px}#ac-refined .ac-effects h3{grid-column:1/-1}#ac-refined .ac-main.ac-browsing{grid-template-columns:1fr}#ac-refined .ac-browser{border-right:0;border-bottom:1px solid var(--ac-line)}#ac-refined .ac-browser button{display:inline-block;width:auto;margin-right:5px}}
+@container(max-width:480px){#ac-refined .ac-shape{grid-template-columns:1fr}#ac-refined .ac-effects{display:block}#ac-refined .ac-output{display:none}#ac-refined .ac-route{grid-template-columns:1fr}#ac-refined .ac-pads{grid-template-columns:repeat(4,1fr)}#ac-refined .ac-work{padding:14px}#ac-refined .ac-head{gap:10px}}
+&lt;/style&gt;
+&lt;div class=&quot;ac-head&quot;&gt;&lt;span class=&quot;ac-brand&quot;&gt;AUDIOCITY&lt;/span&gt;&lt;button id=&quot;ac-browse&quot; type=&quot;button&quot; aria-pressed=&quot;false&quot;&gt;Browse&lt;/button&gt;&lt;div class=&quot;ac-title&quot;&gt;&lt;span id=&quot;ac-name&quot;&gt;Glass Keys&lt;/span&gt;&lt;span id=&quot;ac-dirty&quot; aria-label=&quot;Edited&quot; hidden&gt; · Edited&lt;/span&gt;&lt;small&gt;Keys / My sounds&lt;/small&gt;&lt;/div&gt;&lt;button type=&quot;button&quot; disabled&gt;Save&lt;/button&gt;&lt;div class=&quot;ac-output&quot;&gt;Output &lt;span&gt;−6.0 dB&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
+&lt;div class=&quot;ac-main&quot; id=&quot;ac-main&quot;&gt;&lt;aside class=&quot;ac-browser&quot; id=&quot;ac-browser&quot; hidden aria-label=&quot;Preset browser&quot;&gt;&lt;div&gt;Presets&lt;/div&gt;&lt;input id=&quot;ac-search&quot; type=&quot;search&quot; aria-label=&quot;Search example presets&quot; placeholder=&quot;Search sounds…&quot;&gt;&lt;small&gt;Example sounds&lt;/small&gt;&lt;div id=&quot;ac-results&quot;&gt;&lt;button type=&quot;button&quot; data-preset=&quot;Glass Keys&quot;&gt;Glass Keys&lt;small&gt;Keys · Single sample&lt;/small&gt;&lt;/button&gt;&lt;button type=&quot;button&quot; data-preset=&quot;Soft Pluck&quot;&gt;Soft Pluck&lt;small&gt;Pluck · Single sample&lt;/small&gt;&lt;/button&gt;&lt;button type=&quot;button&quot; data-preset=&quot;Broken Beat&quot;&gt;Broken Beat&lt;small&gt;Drums · 8 slices&lt;/small&gt;&lt;/button&gt;&lt;/div&gt;&lt;div class=&quot;ac-empty&quot; id=&quot;ac-empty&quot; hidden&gt;No matching sounds&lt;/div&gt;&lt;/aside&gt;
+&lt;div class=&quot;ac-work&quot;&gt;&lt;div class=&quot;ac-row ac-spread ac-source&quot;&gt;&lt;div&gt;&lt;span id=&quot;ac-source-name&quot;&gt;glass-strike.wav&lt;/span&gt;&lt;small id=&quot;ac-source-detail&quot;&gt;Single sample · 2.40 s&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;ac-row&quot; aria-label=&quot;Source editing task&quot;&gt;&lt;button type=&quot;button&quot; id=&quot;ac-pitched&quot; aria-pressed=&quot;true&quot;&gt;Pitched&lt;/button&gt;&lt;button type=&quot;button&quot; id=&quot;ac-slices&quot; aria-pressed=&quot;false&quot;&gt;Slices&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;
+&lt;svg id=&quot;ac-wave&quot; class=&quot;ac-wave&quot; role=&quot;img&quot; aria-label=&quot;Sample waveform with loop region&quot;&gt;&lt;/svg&gt;
+&lt;div class=&quot;ac-meta&quot; id=&quot;ac-pitch-meta&quot;&gt;&lt;label&gt;Playback &lt;select aria-label=&quot;Playback behavior&quot; id=&quot;ac-playback&quot;&gt;&lt;option&gt;Loop&lt;/option&gt;&lt;option&gt;Gate&lt;/option&gt;&lt;option&gt;One-shot&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;&lt;span&gt;Root &lt;strong&gt;C3 · 60&lt;/strong&gt;&lt;/span&gt;&lt;span&gt;Tune &lt;strong&gt;0 st&lt;/strong&gt;&lt;/span&gt;&lt;span id=&quot;ac-loop-label&quot;&gt;Loop &lt;strong&gt;0.40–1.80 s&lt;/strong&gt;&lt;/span&gt;&lt;/div&gt;
+&lt;div class=&quot;ac-meta&quot; id=&quot;ac-slice-meta&quot; hidden&gt;&lt;span&gt;&lt;strong&gt;8 slices&lt;/strong&gt; · C1–G1&lt;/span&gt;&lt;span&gt;Trigger &lt;strong&gt;One-shot&lt;/strong&gt;&lt;/span&gt;&lt;span id=&quot;ac-slice-selected&quot;&gt;Selected: Slice 1&lt;/span&gt;&lt;/div&gt;
+&lt;div class=&quot;ac-tabs&quot; aria-label=&quot;Editing view&quot;&gt;&lt;button type=&quot;button&quot; id=&quot;ac-sound&quot; aria-pressed=&quot;true&quot;&gt;Sound&lt;/button&gt;&lt;button type=&quot;button&quot; id=&quot;ac-mod&quot; aria-pressed=&quot;false&quot;&gt;Modulation&lt;/button&gt;&lt;/div&gt;
+&lt;div class=&quot;ac-shape&quot; id=&quot;ac-sound-view&quot;&gt;&lt;section class=&quot;ac-section&quot;&gt;&lt;h3&gt;Amp envelope&lt;/h3&gt;&lt;svg id=&quot;ac-envelope&quot; class=&quot;ac-envelope&quot; role=&quot;img&quot; aria-label=&quot;Amplitude envelope&quot;&gt;&lt;/svg&gt;&lt;div class=&quot;ac-values&quot;&gt;&lt;label class=&quot;ac-control&quot;&gt;Attack &lt;output&gt;5 ms&lt;/output&gt;&lt;input type=&quot;range&quot; id=&quot;ac-attack&quot; min=&quot;1&quot; max=&quot;500&quot; value=&quot;5&quot; data-unit=&quot; ms&quot;&gt;&lt;/label&gt;&lt;label class=&quot;ac-control&quot;&gt;Decay &lt;output&gt;180 ms&lt;/output&gt;&lt;input type=&quot;range&quot; min=&quot;10&quot; max=&quot;1500&quot; value=&quot;180&quot; data-unit=&quot; ms&quot;&gt;&lt;/label&gt;&lt;label class=&quot;ac-control&quot;&gt;Sustain &lt;output&gt;65%&lt;/output&gt;&lt;input type=&quot;range&quot; min=&quot;0&quot; max=&quot;100&quot; value=&quot;65&quot; data-unit=&quot;%&quot;&gt;&lt;/label&gt;&lt;label class=&quot;ac-control&quot;&gt;Release &lt;output&gt;420 ms&lt;/output&gt;&lt;input type=&quot;range&quot; min=&quot;10&quot; max=&quot;2000&quot; value=&quot;420&quot; data-unit=&quot; ms&quot;&gt;&lt;/label&gt;&lt;/div&gt;&lt;/section&gt;
+&lt;section class=&quot;ac-section&quot;&gt;&lt;h3&gt;Filter &lt;small&gt;Low-pass · 24 dB/oct&lt;/small&gt;&lt;/h3&gt;&lt;label class=&quot;ac-control&quot;&gt;Cutoff &lt;output&gt;2.8 kHz&lt;/output&gt;&lt;input type=&quot;range&quot; id=&quot;ac-cutoff&quot; min=&quot;100&quot; max=&quot;16000&quot; step=&quot;100&quot; value=&quot;2800&quot; data-unit=&quot; Hz&quot;&gt;&lt;/label&gt;&lt;label class=&quot;ac-control&quot;&gt;Resonance &lt;output&gt;18%&lt;/output&gt;&lt;input type=&quot;range&quot; min=&quot;0&quot; max=&quot;100&quot; value=&quot;18&quot; data-unit=&quot;%&quot;&gt;&lt;/label&gt;&lt;details&gt;&lt;summary&gt;Filter envelope&lt;/summary&gt;&lt;label class=&quot;ac-control&quot;&gt;Amount &lt;output&gt;2400 Hz&lt;/output&gt;&lt;input type=&quot;range&quot; min=&quot;-12000&quot; max=&quot;12000&quot; step=&quot;100&quot; value=&quot;2400&quot; data-unit=&quot; Hz&quot;&gt;&lt;/label&gt;&lt;/details&gt;&lt;/section&gt;
+&lt;section class=&quot;ac-section ac-effects&quot;&gt;&lt;h3&gt;Effects&lt;/h3&gt;&lt;label class=&quot;ac-control&quot;&gt;Reverb &lt;output&gt;18%&lt;/output&gt;&lt;input type=&quot;range&quot; min=&quot;0&quot; max=&quot;100&quot; value=&quot;18&quot; data-unit=&quot;%&quot;&gt;&lt;/label&gt;&lt;label class=&quot;ac-control&quot;&gt;Delay mix &lt;output&gt;8%&lt;/output&gt;&lt;input type=&quot;range&quot; min=&quot;0&quot; max=&quot;100&quot; value=&quot;8&quot; data-unit=&quot;%&quot;&gt;&lt;/label&gt;&lt;details&gt;&lt;summary&gt;Delay settings&lt;/summary&gt;&lt;label class=&quot;ac-control&quot;&gt;Time &lt;output&gt;320 ms&lt;/output&gt;&lt;input type=&quot;range&quot; min=&quot;1&quot; max=&quot;2000&quot; value=&quot;320&quot; data-unit=&quot; ms&quot;&gt;&lt;/label&gt;&lt;label class=&quot;ac-control&quot;&gt;Feedback &lt;output&gt;25%&lt;/output&gt;&lt;input type=&quot;range&quot; min=&quot;0&quot; max=&quot;95&quot; value=&quot;25&quot; data-unit=&quot;%&quot;&gt;&lt;/label&gt;&lt;/details&gt;&lt;/section&gt;&lt;/div&gt;
+&lt;div class=&quot;ac-routes&quot; id=&quot;ac-mod-view&quot; hidden&gt;&lt;small&gt;Active routes · Entire sound&lt;/small&gt;&lt;div class=&quot;ac-route&quot;&gt;&lt;span&gt;Mod wheel&lt;/span&gt;&lt;span&gt;→ Pitch&lt;/span&gt;&lt;label&gt;Amount &lt;output&gt;24 ct&lt;/output&gt;&lt;input type=&quot;range&quot; min=&quot;-1200&quot; max=&quot;1200&quot; value=&quot;24&quot; data-unit=&quot; ct&quot;&gt;&lt;/label&gt;&lt;/div&gt;&lt;div class=&quot;ac-route&quot;&gt;&lt;span&gt;Brightness · Macro 1&lt;/span&gt;&lt;span&gt;→ Filter cutoff&lt;/span&gt;&lt;label&gt;Amount &lt;output&gt;4000 Hz&lt;/output&gt;&lt;input type=&quot;range&quot; min=&quot;-20000&quot; max=&quot;20000&quot; step=&quot;100&quot; value=&quot;4000&quot; data-unit=&quot; Hz&quot;&gt;&lt;/label&gt;&lt;/div&gt;&lt;div class=&quot;ac-route&quot;&gt;&lt;span&gt;Pitch · Macro 2&lt;/span&gt;&lt;span&gt;→ Pitch&lt;/span&gt;&lt;label&gt;Amount &lt;output&gt;12 ct&lt;/output&gt;&lt;input type=&quot;range&quot; min=&quot;-1200&quot; max=&quot;1200&quot; value=&quot;12&quot; data-unit=&quot; ct&quot;&gt;&lt;/label&gt;&lt;/div&gt;&lt;/div&gt;
+&lt;div class=&quot;ac-expression&quot;&gt;&lt;span&gt;Expression&lt;/span&gt;&lt;label class=&quot;ac-control&quot;&gt;Brightness · Macro 1 &lt;output&gt;40%&lt;/output&gt;&lt;input type=&quot;range&quot; min=&quot;0&quot; max=&quot;100&quot; value=&quot;40&quot; data-unit=&quot;%&quot;&gt;&lt;/label&gt;&lt;label class=&quot;ac-control&quot;&gt;Pitch · Macro 2 &lt;output&gt;0%&lt;/output&gt;&lt;input type=&quot;range&quot; min=&quot;0&quot; max=&quot;100&quot; value=&quot;0&quot; data-unit=&quot;%&quot;&gt;&lt;/label&gt;&lt;/div&gt;
+&lt;/div&gt;&lt;/div&gt;&lt;div class=&quot;ac-foot&quot; id=&quot;ac-foot&quot;&gt;&lt;div class=&quot;ac-foothead&quot;&gt;&lt;span id=&quot;ac-foot-title&quot;&gt;Keyboard · C2–C4&lt;/span&gt;&lt;span id=&quot;ac-state&quot; aria-live=&quot;polite&quot;&gt;Layout concept · No audio&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;ac-keyboard&quot; id=&quot;ac-keyboard&quot; role=&quot;img&quot; aria-label=&quot;Compact keyboard spanning C2 to C4&quot;&gt;&lt;/div&gt;&lt;div class=&quot;ac-pads&quot; id=&quot;ac-pads&quot; hidden aria-label=&quot;Slice selection&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+&lt;script&gt;
+(()=&gt;{const root=document.getElementById(&#x27;ac-refined&#x27;);const el=id=&gt;root.querySelector(&#x27;#&#x27;+id);const state={browser:false,slices:false,mod:false,compactAudition:true};let selected=0;
+const wave=el(&#x27;ac-wave&#x27;);const ns=&#x27;http://www.w3.org/2000/svg&#x27;;const node=(tag,attrs)=&gt;{const n=document.createElementNS(ns,tag);for(const[k,v]of Object.entries(attrs))n.setAttribute(k,v);return n;};
+function draw(){const w=Math.max(220,wave.clientWidth),h=150;wave.setAttribute(&#x27;viewBox&#x27;,`0 0 ${w} ${h}`);wave.replaceChildren();wave.append(node(&#x27;line&#x27;,{x1:0,y1:75,x2:w,y2:75,class:&#x27;ac-gridline&#x27;}));if(!state.slices&amp;&amp;el(&#x27;ac-playback&#x27;).value===&#x27;Loop&#x27;){wave.append(node(&#x27;rect&#x27;,{x:w*.17,y:0,width:w*.58,height:h,class:&#x27;ac-selection&#x27;}));[.17,.75].forEach(x=&gt;wave.append(node(&#x27;line&#x27;,{x1:w*x,x2:w*x,y1:0,y2:h,class:&#x27;ac-marker&#x27;})));}if(state.slices){wave.append(node(&#x27;rect&#x27;,{x:selected*w/8,y:0,width:w/8,height:h,class:&#x27;ac-selection&#x27;}));for(let i=1;i&lt;8;i++)wave.append(node(&#x27;line&#x27;,{x1:w*i/8,y1:0,x2:w*i/8,y2:h,class:&#x27;ac-marker&#x27;}));}let d=&#x27;&#x27;;for(let x=1;x&lt;w;x+=3){const t=x/w;const env=state.slices?Math.exp(-((t*8)%1)*5):Math.exp(-t*2.7);const amp=(Math.abs(Math.sin(x*.73)*Math.cos(x*.19))*.65+.25)*env*58;d+=`M${x.toFixed(1)} ${(75-amp).toFixed(1)}V${(75+amp).toFixed(1)}`;}wave.append(node(&#x27;path&#x27;,{d,stroke:&#x27;currentColor&#x27;,&#x27;stroke-width&#x27;:1.3,fill:&#x27;none&#x27;}));const env=el(&#x27;ac-envelope&#x27;),ew=Math.max(180,env.clientWidth);env.setAttribute(&#x27;viewBox&#x27;,`0 0 ${ew} 65`);const a=12+Number(el(&#x27;ac-attack&#x27;).value)/500*ew*.3;env.replaceChildren(node(&#x27;path&#x27;,{d:`M1 60 L${a} 5 L${ew*.45} 32 L${ew*.72} 32 L${ew-2} 60`,fill:&#x27;none&#x27;,stroke:&#x27;currentColor&#x27;,&#x27;stroke-width&#x27;:2}));}
+function render(){el(&#x27;ac-browser&#x27;).hidden=!state.browser;el(&#x27;ac-main&#x27;).classList.toggle(&#x27;ac-browsing&#x27;,state.browser);el(&#x27;ac-browse&#x27;).setAttribute(&#x27;aria-pressed&#x27;,state.browser);el(&#x27;ac-pitched&#x27;).setAttribute(&#x27;aria-pressed&#x27;,!state.slices);el(&#x27;ac-slices&#x27;).setAttribute(&#x27;aria-pressed&#x27;,state.slices);el(&#x27;ac-pitch-meta&#x27;).hidden=state.slices;el(&#x27;ac-slice-meta&#x27;).hidden=!state.slices;el(&#x27;ac-sound-view&#x27;).hidden=state.mod;el(&#x27;ac-mod-view&#x27;).hidden=!state.mod;el(&#x27;ac-sound&#x27;).setAttribute(&#x27;aria-pressed&#x27;,!state.mod);el(&#x27;ac-mod&#x27;).setAttribute(&#x27;aria-pressed&#x27;,state.mod);el(&#x27;ac-keyboard&#x27;).hidden=state.slices;el(&#x27;ac-pads&#x27;).hidden=!state.slices;el(&#x27;ac-foot&#x27;).hidden=!state.compactAudition;el(&#x27;ac-foot-title&#x27;).textContent=state.slices?&#x27;Slices · C1–G1&#x27;:&#x27;Keyboard · C2–C4&#x27;;el(&#x27;ac-loop-label&#x27;).hidden=el(&#x27;ac-playback&#x27;).value!==&#x27;Loop&#x27;;el(&#x27;ac-source-name&#x27;).textContent=state.slices?&#x27;broken-beat.wav&#x27;:&#x27;glass-strike.wav&#x27;;el(&#x27;ac-source-detail&#x27;).textContent=state.slices?&#x27;Sliced sample · 2.40 s&#x27;:&#x27;Single sample · 2.40 s&#x27;;draw();}
+for(let i=0;i&lt;15;i++){const key=document.createElement(&#x27;div&#x27;);key.className=&#x27;ac-key&#x27;+([0,1,3,4,5].includes(i%7)&amp;&amp;i&lt;14?&#x27; ac-black&#x27;:&#x27;&#x27;);key.textContent=i%7===0?&#x27;C&#x27;+(2+i/7):&#x27;&#x27;;el(&#x27;ac-keyboard&#x27;).append(key);}for(let i=0;i&lt;8;i++){const pad=document.createElement(&#x27;button&#x27;);pad.type=&#x27;button&#x27;;pad.className=&#x27;ac-pad&#x27;;pad.textContent=&#x27;Slice &#x27;+(i+1);pad.setAttribute(&#x27;aria-pressed&#x27;,i===0);pad.onclick=()=&gt;{selected=i;for(const[b,p]of Array.from(el(&#x27;ac-pads&#x27;).children).entries())p.setAttribute(&#x27;aria-pressed&#x27;,b===i);el(&#x27;ac-slice-selected&#x27;).textContent=&#x27;Selected: Slice &#x27;+(i+1);draw();};el(&#x27;ac-pads&#x27;).append(pad);}
+el(&#x27;ac-browse&#x27;).onclick=()=&gt;{state.browser=!state.browser;render();};el(&#x27;ac-pitched&#x27;).onclick=()=&gt;{state.slices=false;render();};el(&#x27;ac-slices&#x27;).onclick=()=&gt;{state.slices=true;render();};el(&#x27;ac-sound&#x27;).onclick=()=&gt;{state.mod=false;render();};el(&#x27;ac-mod&#x27;).onclick=()=&gt;{state.mod=true;render();};el(&#x27;ac-playback&#x27;).onchange=()=&gt;{el(&#x27;ac-dirty&#x27;).hidden=false;render();};
+for(const input of root.querySelectorAll(&#x27;input[type=range]&#x27;))input.addEventListener(&#x27;input&#x27;,()=&gt;{const out=input.parentElement.querySelector(&#x27;output&#x27;);if(out)out.textContent=input.value+input.dataset.unit;el(&#x27;ac-dirty&#x27;).hidden=false;draw();});
+el(&#x27;ac-search&#x27;).oninput=()=&gt;{let matches=0;for(const b of el(&#x27;ac-results&#x27;).children){b.hidden=!b.dataset.preset.toLowerCase().includes(el(&#x27;ac-search&#x27;).value.toLowerCase());if(!b.hidden)matches++;}el(&#x27;ac-empty&#x27;).hidden=matches&gt;0;};for(const b of el(&#x27;ac-results&#x27;).children)b.onclick=()=&gt;{el(&#x27;ac-name&#x27;).textContent=b.dataset.preset;state.slices=b.dataset.preset===&#x27;Broken Beat&#x27;;state.browser=false;el(&#x27;ac-dirty&#x27;).hidden=true;render();el(&#x27;ac-source-name&#x27;).textContent=state.slices?&#x27;broken-beat.wav&#x27;:b.dataset.preset===&#x27;Soft Pluck&#x27;?&#x27;soft-pluck.wav&#x27;:&#x27;glass-strike.wav&#x27;;};
+render();new ResizeObserver(draw).observe(wave);if(globalThis.Tweak){const t=new Tweak({container:root,onChange:render});t.addToggle(state,&#x27;browser&#x27;,{label:&#x27;Browser open&#x27;});t.addToggle(state,&#x27;slices&#x27;,{label:&#x27;Slice workflow&#x27;});t.addToggle(state,&#x27;compactAudition&#x27;,{label:&#x27;Show audition strip&#x27;});}
+})();
+&lt;/script&gt;
+&lt;/div&gt;
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+  let lastPointerWasTouch = false;
+  let pinnedByTouch = false;
+
+  const getTrigger = (target) =&gt;
+    target?.nodeType === Node.ELEMENT_NODE
+      ? target.closest(&quot;[data-tooltip]&quot;)
+      : null;
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    pinnedByTouch = false;
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handlePointer = (event) =&gt; {
+    lastPointerWasTouch =
+      event.type === &quot;pointerdown&quot; &amp;&amp; event.pointerType === &quot;touch&quot;;
+  };
+  const handleTouchClick = (event) =&gt; {
+    const isTouch = event.pointerType === &quot;touch&quot; || lastPointerWasTouch;
+    lastPointerWasTouch = false;
+    if (!isTouch || event.detail === 0) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (
+      trigger == null ||
+      !trigger.isConnected ||
+      getContent(trigger).length === 0 ||
+      (pinnedByTouch &amp;&amp; activeTrigger === trigger)
+    ) {
+      if (pinnedByTouch) {
+        closeTooltip();
+      }
+      return;
+    }
+    openTooltip(trigger);
+    pinnedByTouch = activeTrigger === trigger;
+    window.setTimeout(() =&gt; {
+      if (activeTrigger === trigger &amp;&amp; !trigger.isConnected) {
+        closeTooltip(false);
+      }
+    }, 0);
+  };
+  const handleLeave = (event) =&gt; {
+    if (pinnedByTouch) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    lastPointerWasTouch = false;
+    const trigger = getTrigger(event.target);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    lastPointerWasTouch = false;
+    document.removeEventListener(&quot;pointerover&quot;, handlePointerOpen);
+    document.removeEventListener(&quot;pointerdown&quot;, handlePointer);
+    document.removeEventListener(&quot;pointercancel&quot;, handlePointer);
+    document.removeEventListener(&quot;click&quot;, handleTouchClick);
+    document.removeEventListener(&quot;pointerout&quot;, handleLeave);
+    document.removeEventListener(&quot;focusin&quot;, handleFocusIn);
+    document.removeEventListener(&quot;focusout&quot;, handleLeave);
+    document.removeEventListener(&quot;keydown&quot;, handleKeyDown);
+    document.removeEventListener(&quot;contextmenu&quot;, handleContextMenu);
+    tooltip = null;
+  };
+
+  document.addEventListener(&quot;pointerover&quot;, handlePointerOpen);
+  document.addEventListener(&quot;pointerdown&quot;, handlePointer);
+  document.addEventListener(&quot;pointercancel&quot;, handlePointer);
+  document.addEventListener(&quot;click&quot;, handleTouchClick);
+  document.addEventListener(&quot;pointerout&quot;, handleLeave);
+  document.addEventListener(&quot;focusin&quot;, handleFocusIn);
+  document.addEventListener(&quot;focusout&quot;, handleLeave);
+  document.addEventListener(&quot;keydown&quot;, handleKeyDown);
+  document.addEventListener(&quot;contextmenu&quot;, handleContextMenu);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-tabs&quot;&gt;
+(() =&gt; {
+  const selector = &#x27;.nav[role=&quot;tablist&quot;] [role=&quot;tab&quot;]&#x27;;
+  const disabled = &#x27;:disabled,[aria-disabled=&quot;true&quot;]&#x27;;
+  const selectTab = (selected) =&gt; {
+    const panelId = selected.getAttribute(&quot;aria-controls&quot;);
+    for (const tab of selected.closest(&#x27;[role=&quot;tablist&quot;]&#x27;).querySelectorAll(&#x27;[role=&quot;tab&quot;]&#x27;)) {
+      const active = tab === selected;
+      tab.classList.toggle(&quot;active&quot;, active);
+      tab.setAttribute(&quot;aria-selected&quot;, String(active));
+      const id = tab.getAttribute(&quot;aria-controls&quot;);
+      const panel = id &amp;&amp; document.getElementById(id);
+      if (panel != null) {
+        panel.hidden = id !== panelId;
+        if (!panel.hidden &amp;&amp; selected.id) {
+          panel.setAttribute(&quot;aria-labelledby&quot;, selected.id);
+        }
+      }
+    }
+  };
+  const interact = (event) =&gt; {
+    const tab = event.target?.closest?.(selector);
+    if (event.defaultPrevented || tab == null || tab.matches(disabled)) {
+      return;
+    }
+    if (event.type === &quot;click&quot;) {
+      selectTab(tab);
+      return;
+    }
+    const tabs = Array.from(
+      tab.closest(&#x27;[role=&quot;tablist&quot;]&#x27;).querySelectorAll(&#x27;[role=&quot;tab&quot;]&#x27;),
+    ).filter((candidate) =&gt; !candidate.matches(disabled));
+    const current = tabs.indexOf(tab);
+    let next;
+    if (event.key === &quot;ArrowRight&quot; || event.key === &quot;ArrowDown&quot;) {
+      next = (current + 1) % tabs.length;
+    } else if (event.key === &quot;ArrowLeft&quot; || event.key === &quot;ArrowUp&quot;) {
+      next = (current + tabs.length - 1) % tabs.length;
+    } else if (event.key === &quot;Home&quot;) {
+      next = 0;
+    } else if (event.key === &quot;End&quot;) {
+      next = tabs.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    tabs[next].focus();
+    selectTab(tabs[next]);
+  };
+
+  for (const list of document.querySelectorAll(&#x27;.nav[role=&quot;tablist&quot;]&#x27;)) {
+    const selected =
+      list.querySelector(&#x27;[role=&quot;tab&quot;][aria-selected=&quot;true&quot;]&#x27;) ??
+      list.querySelector(&#x27;[role=&quot;tab&quot;].active&#x27;) ??
+      list.querySelector(&#x27;[role=&quot;tab&quot;]&#x27;);
+    if (selected != null) {
+      selectTab(selected);
+    }
+  }
+  document.addEventListener(&quot;click&quot;, interact);
+  document.addEventListener(&quot;keydown&quot;, interact);
+  window.addEventListener(&quot;pagehide&quot;, () =&gt; {
+    document.removeEventListener(&quot;click&quot;, interact);
+    document.removeEventListener(&quot;keydown&quot;, interact);
+  }, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+</body>
+</html>

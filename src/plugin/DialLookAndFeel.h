@@ -494,10 +494,10 @@ public:
             label->setColour(juce::Label::outlineColourId,    juce::Colours::transparentBlack);
             label->setColour(juce::Label::backgroundWhenEditingColourId, juce::Colour(0xff1d2530));
             label->setColour(juce::Label::outlineWhenEditingColourId,    juce::Colour(0xff78d7ff).withAlpha(0.8f));
-            label->setColour(juce::Label::textColourId, juce::Colour(0xff9ba7b9));
+            label->setColour(juce::Label::textColourId, juce::Colour(0xffc4d1db));
             label->setColour(juce::Label::textWhenEditingColourId, juce::Colour(0xffedf3ff));
             label->setJustificationType(juce::Justification::centred);
-            label->setFont(juce::Font(juce::FontOptions(11.0f)));
+            label->setFont(juce::Font(juce::FontOptions(13.0f)));
         }
         return label;
     }

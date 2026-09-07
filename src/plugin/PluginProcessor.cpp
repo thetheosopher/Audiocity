@@ -274,6 +274,8 @@ bool isPlaybackPresetExcludedProperty(const juce::Identifier& property)
         || propertyName == kWaveformViewStartSample
         || propertyName == kWaveformViewSampleCount
         || propertyName == kEditorTabIndex
+        || propertyName == "auditionViewMode"
+        || propertyName.startsWith("workspaceSound")
         || propertyName == kSampleInspectorFilterModExpanded
         || propertyName == kSampleInspectorEffectsExpanded
         || propertyName == kWaveformDisplayMode
@@ -1726,6 +1728,13 @@ void AudiocityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(kWaveformViewStartSample, waveformViewStartSample_.load(std::memory_order_relaxed), nullptr);
     state.setProperty(kWaveformViewSampleCount, waveformViewSampleCount_.load(std::memory_order_relaxed), nullptr);
     state.setProperty(kEditorTabIndex, editorTabIndex_.load(std::memory_order_relaxed), nullptr);
+    state.setProperty("auditionViewMode", getAuditionViewMode(), nullptr);
+    const auto identity = getWorkspaceSoundIdentity();
+    state.setProperty("workspaceSoundName", identity.name, nullptr);
+    state.setProperty("workspaceSoundSavePath", identity.savePath, nullptr);
+    state.setProperty("workspaceSoundEdited", identity.edited, nullptr);
+    if (!identity.savedParameters.empty())
+        state.setProperty("workspaceSoundParameters", juce::var(juce::MemoryBlock(identity.savedParameters.data(), identity.savedParameters.size() * sizeof(float))), nullptr);
     state.setProperty(kSampleInspectorFilterModExpanded,
         sampleInspectorFilterModExpanded_.load(std::memory_order_relaxed) ? 1 : 0,
         nullptr);
@@ -2137,6 +2146,18 @@ void AudiocityAudioProcessor::setStateInformation(const void* data, const int si
         static_cast<int>(state.getProperty(kWaveformViewStartSample, waveformViewStartSample_.load(std::memory_order_relaxed))),
         static_cast<int>(state.getProperty(kWaveformViewSampleCount, waveformViewSampleCount_.load(std::memory_order_relaxed))));
     setEditorTabIndex(0);
+    setAuditionViewMode(static_cast<int>(state.getProperty("auditionViewMode", 1)));
+    WorkspaceSoundIdentity identity;
+    identity.name = state.getProperty("workspaceSoundName").toString();
+    identity.savePath = state.getProperty("workspaceSoundSavePath").toString();
+    identity.edited = static_cast<bool>(state.getProperty("workspaceSoundEdited", false));
+    if (const auto* values = state.getProperty("workspaceSoundParameters").getBinaryData(); values != nullptr
+        && values->getSize() == static_cast<std::size_t>(getParameters().size()) * sizeof(float))
+    {
+        identity.savedParameters.resize(static_cast<std::size_t>(getParameters().size()));
+        std::memcpy(identity.savedParameters.data(), values->getData(), values->getSize());
+    }
+    setWorkspaceSoundIdentity(std::move(identity));
     setSampleInspectorFilterModExpanded(static_cast<int>(state.getProperty(
         kSampleInspectorFilterModExpanded,
         sampleInspectorFilterModExpanded_.load(std::memory_order_relaxed) ? 1 : 0)) != 0);
@@ -5653,6 +5674,8 @@ void AudiocityAudioProcessor::renderSampleFilePreview(juce::AudioBuffer<float>& 
     const auto masterVolume = juce::jlimit(0.0f, 1.0f,
         apvts_.getRawParameterValue(kParamMasterVolume)->load());
 
+    const auto previewGain = auditionPreviewGain_.load(std::memory_order_relaxed);
+
     for (int sample = 0; sample < samples; ++sample)
     {
         const auto i0 = static_cast<int>(samplePreviewReadPos_);
@@ -5667,7 +5690,7 @@ void AudiocityAudioProcessor::renderSampleFilePreview(juce::AudioBuffer<float>& 
         const auto frac = samplePreviewReadPos_ - static_cast<float>(i0);
         const auto s0 = preview->samples[static_cast<std::size_t>(i0)];
         const auto s1 = preview->samples[static_cast<std::size_t>(i1)];
-        const auto value = (s0 + (s1 - s0) * frac) * 0.35f * masterVolume;
+        const auto value = (s0 + (s1 - s0) * frac) * previewGain * masterVolume;
 
         for (int channel = 0; channel < channels; ++channel)
             buffer.setSample(channel, sample, value);

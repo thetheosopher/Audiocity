@@ -56,6 +56,7 @@ public:
     void syncFromProcessor();
     void setControlTooltips();
     void forEachDial(const std::function<void(CcLearnDial&, const juce::String&)>& visitor);
+    CcLearnDial& macroControl(int index) { return index == 0 ? macro1ValueDial_ : macro2ValueDial_; }
 
 private:
     enum class RouteSlot
@@ -242,6 +243,8 @@ public:
     void setSampleInspectorCardSnapshotState(bool filterModExpanded, bool effectsExpanded);
     void setPresetSearchSnapshotState(const juce::StringArray& presetNames, const juce::String& filterText);
     void setSnapshotActiveMidiNotes(const std::vector<int>& noteNumbers);
+    void setWorkspaceSnapshotState(bool modulation, bool details, bool browser, int scope = 1, int audition = 1);
+    friend struct AudiocityWorkspaceTestAccess;
 
 private:
     void handleNoteOn(juce::MidiKeyboardState* source, int midiChannel, int midiNoteNumber, float velocity) override;
@@ -299,9 +302,11 @@ private:
     {
     public:
         std::function<void(bool)> onEngagementChanged;
+        std::function<void()> onAssignmentRequested;
 
         void mouseDown(const juce::MouseEvent& event) override
         {
+            if (event.mods.isPopupMenu()) { if (onAssignmentRequested) onAssignmentRequested(); return; }
             juce::TextButton::mouseDown(event);
             updateEngagement(true, isEventInside(event));
         }
@@ -508,6 +513,69 @@ private:
     PluginAboutPage aboutPage_;
     int currentTabIndex_ = 0;
     bool showDiagnosticsPanel_ = false;
+
+    // The legacy page numbers remain a state-compatibility detail. Only Sound and
+    // Modulation are primary destinations; the other pages are contextual tools.
+    void initialiseInstrumentWorkspace();
+    void showWorkspace(int legacyPage, bool modulation = false, bool details = false);
+    void showWorkspaceMenu();
+    void layoutInstrumentBrowser(juce::Rectangle<int> area);
+    void updateSoundIdentity();
+    void markSoundSaved();
+    void recordPendingSettingsChange();
+    void rememberSoundBeforeReplacement();
+    void captureSoundRecovery(juce::MemoryBlock& destination);
+    void restorePreviousSound();
+    bool savePresetToFile(const juce::File& file);
+    void loadPresetFile(const juce::File& file);
+    juce::Result replaceSoundFromPreset(const juce::File& file);
+    bool workspaceReady_ = false;
+    bool modulationView_ = false;
+    bool soundDetailsView_ = false;
+    bool browserOpen_ = false;
+    bool browserDocked_ = false;
+    bool soundEdited_ = false;
+    juce::ComboBox auditionModeCombo_, browserScopeCombo_;
+    juce::TextButton soundViewButton_{ "Sound" }, modulationViewButton_{ "Modulation" };
+    juce::TextButton sourceMenuButton_{ "Source..." }, workspaceMenuButton_{ "Menu" };
+    juce::TextButton closeToolButton_{ "Back to Sound" }, panicButton_{ "All Notes Off" };
+    juce::TextButton detailsButton_{ "Details" }, sliceButton_{ "Slice..." };
+    juce::TextButton browserLoadButton_{ "Load sound" }, browserStopButton_{ "Stop preview" };
+    juce::TextButton browserCloseButton_{ "Close" }, browserDockButton_{ "Dock" };
+    juce::Label browserHelpLabel_;
+    juce::ToggleButton browserAutoPreview_{ "Auto preview" };
+    juce::Slider browserPreviewLevel_;
+    juce::Label soundIdentityLabel_, sourceIdentityLabel_, workspaceStatusLabel_;
+    juce::MemoryBlock previousSoundState_;
+    juce::MemoryBlock pendingReplacementState_;
+    juce::String pendingReplacementName_;
+    juce::String previousSoundName_;
+    juce::File currentSoundFile_;
+    std::optional<audiocity::engine::SettingsSnapshot> savedSettingsSnapshot_;
+    std::vector<float> savedParameterValues_;
+    juce::uint32 lastSettingsEditTime_ = 0;
+    int settingsCoalesceKey_ = 1;
+    int lastChangedParameter_ = -1;
+    juce::TextButton editZonesButton_{ "Edit zones" };
+    juce::Label zoneScopeLabel_;
+    juce::Rectangle<int> workspaceBrowserBounds_;
+    PaintCallbackComponent browserBackdrop_;
+    PaintCallbackComponent mappingControlsContent_;
+    juce::Viewport mappingControlsViewport_;
+    struct PresetBrowserModel final : juce::ListBoxModel
+    {
+        std::function<int()> count;
+        std::function<void(int, juce::Graphics&, int, int, bool)> paintRow;
+        std::function<void(int)> load;
+        std::function<void()> selectionChanged;
+        int getNumRows() override { return count ? count() : 0; }
+        void paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected) override
+        { if (paintRow) paintRow(row, g, w, h, selected); }
+        void listBoxItemDoubleClicked(int row, const juce::MouseEvent&) override { if (load) load(row); }
+        void returnKeyPressed(int row) override { if (load) load(row); }
+        void selectedRowsChanged(int) override { if (selectionChanged) selectionChanged(); }
+    } presetBrowserModel_;
+    juce::ListBox presetBrowserList_{ "Sounds", &presetBrowserModel_ };
 
     struct SampleListEntry
     {

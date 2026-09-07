@@ -67,11 +67,11 @@ CcLearnDial::CcLearnDial(const juce::String& name,
     : label_(*this, name)
 {
     label_.setColour(juce::Label::textColourId, juce::Colour(0xffb0b0c0));
-    label_.setFont(juce::Font(juce::FontOptions(10.5f)));
+    label_.setFont(juce::Font(juce::FontOptions(12.0f)));
     addAndMakeVisible(label_);
 
     slider_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    slider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 70, 13);
+    slider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 78, 18);
     slider_.setName(name);
     slider_.setRange(rangeMin, rangeMax, step);
     slider_.setShiftWheelFineFactor(8.0);
@@ -102,7 +102,7 @@ CcLearnDial::CcLearnDial(const juce::String& name,
 void CcLearnDial::resized()
 {
     auto area = getLocalBounds();
-    label_.setBounds(area.removeFromTop(14));
+    label_.setBounds(area.removeFromTop(18));
     slider_.setBounds(area);
 }
 

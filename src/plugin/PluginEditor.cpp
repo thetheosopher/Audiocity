@@ -3095,7 +3095,14 @@ PlayerModulationPanel::PlayerModulationPanel(AudiocityAudioProcessor& processor)
         addAndMakeVisible(dial);
         dial.setDoubleClickResetValue(0.0);
         dial.onValueChange = [this] { pushToProcessor(); };
+        dial.useHorizontalControl();
     });
+    for (const auto& route : routeDialSets())
+    {
+        route.pitchDial->setDisplayName("Pitch");
+        route.filterDial->setDisplayName("Filter cutoff");
+        route.ampDial->setDisplayName("Amplitude");
+    }
 }
 
 std::array<PlayerModulationPanel::RouteDialSet, 5> PlayerModulationPanel::routeDialSets() noexcept
@@ -3152,358 +3159,27 @@ void PlayerModulationPanel::forEachDial(const std::function<void(CcLearnDial&, c
 
 void PlayerModulationPanel::paint(juce::Graphics& g)
 {
-    constexpr int kDial = 56;
-    constexpr int kGrpPadH = 12;
-    constexpr int kGrpPadV = 8;
-    constexpr int kGrpHdr = 22;
-    constexpr int kRowH = 154;
-    constexpr int kGrpGap = 10;
-    constexpr int kDialGap = 4;
-
-    auto area = getLocalBounds();
-    paintGroupBox(g, area.removeFromTop(kRowH), "Expressive Mod");
-    area.removeFromTop(kGrpGap);
-    paintGroupBox(g, area.removeFromTop(kRowH), "Macro Mod");
-
-    struct SummarySourceState
+    g.fillAll(juce::Colour(0xff18232c));
+    g.setColour(juce::Colour(0xffe2ecf0)); g.setFont(14.0f);
+    g.drawText("Expression routing - source to destination", 12, 2, getWidth()-24, 24, juce::Justification::centredLeft);
+    const juce::StringArray sources { "Mod wheel", "Pressure", "Velocity", "Macro 1", "Macro 2" };
+    for (int i=0; i<5; ++i)
     {
-        juce::String shortLabel;
-        juce::Colour colour;
-        float pitch = 0.0f;
-        float filter = 0.0f;
-        float amp = 0.0f;
-    };
-
-    const auto expressiveSummarySources = std::array<SummarySourceState, 3>{ {
-        { "MW", juce::Colour(0xff61d9ff), static_cast<float>(modWheelPitchDial_.getValue()), static_cast<float>(modWheelFilterDial_.getValue()), static_cast<float>(modWheelAmpDial_.getValue()) },
-        { "AT", juce::Colour(0xffffba75), static_cast<float>(aftertouchPitchDial_.getValue()), static_cast<float>(aftertouchFilterDial_.getValue()), static_cast<float>(aftertouchAmpDial_.getValue()) },
-        { "VEL", juce::Colour(0xff62d59d), static_cast<float>(velocityPitchDial_.getValue()), static_cast<float>(velocityFilterDial_.getValue()), static_cast<float>(velocityAmpDial_.getValue()) }
-    } };
-
-    const auto macroSummarySources = std::array<SummarySourceState, 2>{ {
-        { "M1", juce::Colour(0xff4fc3ff), static_cast<float>(macro1PitchDial_.getValue()), static_cast<float>(macro1FilterDial_.getValue()), static_cast<float>(macro1AmpDial_.getValue()) },
-        { "M2", juce::Colour(0xffff976b), static_cast<float>(macro2PitchDial_.getValue()), static_cast<float>(macro2FilterDial_.getValue()), static_cast<float>(macro2AmpDial_.getValue()) }
-    } };
-
-    const auto paintDestinationChip = [&g](juce::Rectangle<float> chipBounds,
-                                           const juce::String& label,
-                                           const float value,
-                                           const float magnitudeMax,
-                                           const juce::Colour activeColour)
-    {
-        g.setColour(juce::Colour(0xff1a2031));
-        g.fillRoundedRectangle(chipBounds, 3.5f);
-        g.setColour(juce::Colour(0xff34415f));
-        g.drawRoundedRectangle(chipBounds.reduced(0.5f), 3.5f, 1.0f);
-
-        const auto normalized = juce::jlimit(0.0f, 1.0f,
-            magnitudeMax > 0.0f ? std::abs(value) / magnitudeMax : 0.0f);
-        if (normalized > 0.0f)
-        {
-            auto fillBounds = chipBounds.reduced(1.5f);
-            fillBounds.setWidth(fillBounds.getWidth() * normalized);
-            const auto fillColour = value >= 0.0f
-                ? activeColour.withAlpha(0.85f)
-                : juce::Colour(0xffef7f73).withAlpha(0.85f);
-            g.setColour(fillColour);
-            g.fillRoundedRectangle(fillBounds, 2.5f);
-        }
-
-        g.setColour(juce::Colour(0xffe5e5ef));
-        g.setFont(juce::Font(juce::FontOptions(9.0f)).boldened());
-        g.drawText(label, chipBounds.toNearestInt(), juce::Justification::centred, false);
-    };
-
-    const auto routeLabel = [](const PlayerModulationPanel::RouteSlot slot, const float macroValue)
-    {
-        switch (slot)
-        {
-            case PlayerModulationPanel::RouteSlot::modWheel: return juce::String("MW");
-            case PlayerModulationPanel::RouteSlot::aftertouch: return juce::String("AT");
-            case PlayerModulationPanel::RouteSlot::velocity: return juce::String("VEL");
-            case PlayerModulationPanel::RouteSlot::macro1: return juce::String("M1 ") + juce::String(std::round(macroValue)) + "%";
-            case PlayerModulationPanel::RouteSlot::macro2: return juce::String("M2 ") + juce::String(std::round(macroValue)) + "%";
-        }
-
-        return juce::String();
-    };
-
-    for (const auto& route : routeDialSets())
-    {
-        auto clusterBounds = route.pitchDial->getBounds()
-            .getUnion(route.filterDial->getBounds())
-            .getUnion(route.ampDial->getBounds());
-        if (clusterBounds.isEmpty())
-            continue;
-
-        auto feedbackBounds = clusterBounds.withY(clusterBounds.getBottom() + 4).withHeight(14).toFloat();
-        auto labelBounds = feedbackBounds.removeFromLeft(route.slot == RouteSlot::macro1 || route.slot == RouteSlot::macro2 ? 50.0f : 34.0f);
-        g.setColour(juce::Colour(0xff9ea6c5));
-        g.setFont(juce::Font(juce::FontOptions(9.0f)).boldened());
-
-        const auto macroValue = route.slot == RouteSlot::macro1 ? static_cast<float>(macro1ValueDial_.getValue())
-            : (route.slot == RouteSlot::macro2 ? static_cast<float>(macro2ValueDial_.getValue()) : 0.0f);
-        g.drawText(routeLabel(route.slot, macroValue), labelBounds.toNearestInt(), juce::Justification::centredLeft, false);
-
-        constexpr float kChipGap = 4.0f;
-        const auto chipWidth = (feedbackBounds.getWidth() - (2.0f * kChipGap)) / 3.0f;
-        auto pitchChip = feedbackBounds.removeFromLeft(chipWidth);
-        feedbackBounds.removeFromLeft(kChipGap);
-        auto filterChip = feedbackBounds.removeFromLeft(chipWidth);
-        feedbackBounds.removeFromLeft(kChipGap);
-        auto ampChip = feedbackBounds;
-
-        paintDestinationChip(pitchChip, "Pitch", static_cast<float>(route.pitchDial->getValue()), 1200.0f, juce::Colour(0xff61d9ff));
-        paintDestinationChip(filterChip, "Filter", static_cast<float>(route.filterDial->getValue()), 20000.0f, juce::Colour(0xfff2c14e));
-        paintDestinationChip(ampChip, "Amp", static_cast<float>(route.ampDial->getValue()), 100.0f, juce::Colour(0xff62d59d));
+        g.setColour(juce::Colour(0xffadbdc7));
+        g.drawText(sources[i] + "  ->", 12, 32+i*76, 135, 68, juce::Justification::centredLeft);
     }
-
-    const auto computeSummaryArea = [kDial, kDialGap](juce::Rectangle<int> body,
-                                                      const int clusterCount,
-                                                      const int dialsPerCluster)
-    {
-        auto remainder = body;
-        for (int cluster = 0; cluster < clusterCount; ++cluster)
-        {
-            for (int dial = 0; dial < dialsPerCluster; ++dial)
-            {
-                remainder.removeFromLeft(kDial);
-                remainder.removeFromLeft(kDialGap);
-            }
-        }
-
-        return remainder.reduced(4, 2);
-    };
-
-    const auto paintDestinationMatrix = [&g](juce::Rectangle<int> bounds,
-                                             const juce::String& title,
-                                             const auto& sourceStates)
-    {
-        if (bounds.getWidth() < 118 || bounds.getHeight() < 58)
-            return;
-
-        struct FocusState
-        {
-            juce::String text;
-            juce::Colour colour = juce::Colour(0xff7f8aa6);
-            float magnitude = 0.0f;
-        };
-
-        const auto countActiveRoutes = [&sourceStates]()
-        {
-            int activeCount = 0;
-            for (const auto& source : sourceStates)
-            {
-                activeCount += std::abs(source.pitch) >= 1.0f ? 1 : 0;
-                activeCount += std::abs(source.filter) >= 25.0f ? 1 : 0;
-                activeCount += std::abs(source.amp) >= 1.0f ? 1 : 0;
-            }
-
-            return activeCount;
-        };
-
-        const auto formatPitchValue = [](const float value)
-        {
-            return juce::String(value >= 0.0f ? "+" : "-")
-                + juce::String(static_cast<int>(std::round(std::abs(value))))
-                + "c";
-        };
-
-        const auto formatFilterValue = [](const float value)
-        {
-            const auto magnitude = std::abs(value);
-            const auto sign = value >= 0.0f ? "+" : "-";
-            if (magnitude >= 1000.0f)
-                return juce::String(sign) + juce::String(magnitude / 1000.0f, 1) + "k";
-
-            return juce::String(sign) + juce::String(static_cast<int>(std::round(magnitude)));
-        };
-
-        const auto formatAmpValue = [](const float value)
-        {
-            return juce::String(value >= 0.0f ? "+" : "-")
-                + juce::String(static_cast<int>(std::round(std::abs(value))))
-                + "%";
-        };
-
-        FocusState focusState;
-        const auto captureFocus = [&sourceStates, &focusState](const juce::String& destinationLabel,
-                                                               auto&& valueGetter,
-                                                               auto&& formatter)
-        {
-            for (std::size_t index = 0; index < sourceStates.size(); ++index)
-            {
-                const auto value = static_cast<float>(valueGetter(sourceStates[index]));
-                const auto magnitude = std::abs(value);
-                if (magnitude <= focusState.magnitude)
-                    continue;
-
-                focusState.magnitude = magnitude;
-                focusState.text = sourceStates[index].shortLabel + " -> " + destinationLabel + " " + formatter(value);
-                focusState.colour = value >= 0.0f ? sourceStates[index].colour : juce::Colour(0xffef7f73);
-            }
-        };
-
-        captureFocus("Pitch", [](const auto& source) { return source.pitch; }, formatPitchValue);
-        captureFocus("Filter", [](const auto& source) { return source.filter; }, formatFilterValue);
-        captureFocus("Amp", [](const auto& source) { return source.amp; }, formatAmpValue);
-
-        auto card = bounds.toFloat();
-        g.setColour(juce::Colour(0xff101827).withAlpha(0.9f));
-        g.fillRoundedRectangle(card, 6.0f);
-        g.setColour(juce::Colour(0xff34415f).withAlpha(0.95f));
-        g.drawRoundedRectangle(card.reduced(0.5f), 6.0f, 1.0f);
-
-        auto inner = bounds.reduced(10, 8);
-        auto header = inner.removeFromTop(28);
-        auto titleRow = header.removeFromTop(14);
-        const int activeWidth = juce::jmin(58, titleRow.getWidth() / 3);
-        auto activeArea = titleRow.removeFromRight(activeWidth);
-        g.setColour(juce::Colour(0xff8fb7ff));
-        g.setFont(juce::Font(juce::FontOptions(9.0f)));
-        g.drawText(juce::String(countActiveRoutes()) + " active", activeArea, juce::Justification::centredRight, false);
-
-        g.setColour(juce::Colour(0xffe5e5ef));
-        g.setFont(juce::Font(juce::FontOptions(10.0f)).boldened());
-        g.drawFittedText(title, titleRow, juce::Justification::centredLeft, 1);
-
-        auto focusRow = header.removeFromTop(10);
-        g.setColour(focusState.magnitude > 0.0f ? focusState.colour : juce::Colour(0xff7f8aa6));
-        g.setFont(juce::Font(juce::FontOptions(8.0f)).boldened());
-        g.drawFittedText(focusState.magnitude > 0.0f ? juce::String("Focus ") + focusState.text : juce::String("Focus idle"),
-                         focusRow,
-                         juce::Justification::centredLeft,
-                         1);
-
-        inner.removeFromTop(2);
-
-        const auto paintDestinationRow = [&g, &sourceStates](juce::Rectangle<int> rowBounds,
-                                                             const juce::String& destinationLabel,
-                                                             auto&& valueGetter,
-                                                             const float magnitudeMax)
-        {
-            auto labelBounds = rowBounds.removeFromLeft(42);
-            g.setColour(juce::Colour(0xff9ea6c5));
-            g.setFont(juce::Font(juce::FontOptions(9.0f)).boldened());
-            g.drawText(destinationLabel, labelBounds, juce::Justification::centredLeft, false);
-
-            constexpr int kSegmentGap = 4;
-            const auto segmentWidth = (rowBounds.getWidth() - (juce::jmax(0, static_cast<int>(sourceStates.size()) - 1) * kSegmentGap))
-                / juce::jmax(1, static_cast<int>(sourceStates.size()));
-
-            int dominantIndex = -1;
-            float dominantMagnitude = 0.0f;
-            for (std::size_t index = 0; index < sourceStates.size(); ++index)
-            {
-                const auto magnitude = std::abs(static_cast<float>(valueGetter(sourceStates[index])));
-                if (magnitude > dominantMagnitude)
-                {
-                    dominantMagnitude = magnitude;
-                    dominantIndex = static_cast<int>(index);
-                }
-            }
-
-            for (std::size_t index = 0; index < sourceStates.size(); ++index)
-            {
-                auto segmentBounds = rowBounds.removeFromLeft(segmentWidth).toFloat();
-                if (index + 1 < sourceStates.size())
-                    rowBounds.removeFromLeft(kSegmentGap);
-
-                g.setColour(juce::Colour(0xff192131));
-                g.fillRoundedRectangle(segmentBounds, 4.0f);
-
-                const auto value = valueGetter(sourceStates[index]);
-                const auto normalized = juce::jlimit(0.0f, 1.0f,
-                    magnitudeMax > 0.0f ? std::abs(value) / magnitudeMax : 0.0f);
-                const auto emphasisColour = value >= 0.0f ? sourceStates[index].colour : juce::Colour(0xffef7f73);
-                const auto isDominant = dominantMagnitude > 0.0f && static_cast<int>(index) == dominantIndex;
-                if (normalized > 0.0f)
-                {
-                    auto fillBounds = segmentBounds.reduced(1.5f);
-                    fillBounds.setWidth(fillBounds.getWidth() * normalized);
-                    g.setColour(emphasisColour.withAlpha(isDominant ? 0.92f : 0.86f));
-                    g.fillRoundedRectangle(fillBounds, 3.0f);
-                }
-
-                g.setColour(isDominant ? emphasisColour.withAlpha(0.95f) : juce::Colour(0xff2b3850));
-                g.drawRoundedRectangle(segmentBounds.reduced(0.5f), 4.0f, isDominant ? 1.4f : 1.0f);
-
-                g.setColour(normalized > 0.0f ? juce::Colour(0xfff5f7ff) : juce::Colour(0xff7f8aa6));
-                g.setFont(juce::Font(juce::FontOptions(8.5f)).boldened());
-                const auto polarity = normalized > 0.0f ? (value >= 0.0f ? "+" : "-") : "";
-                g.drawText(sourceStates[index].shortLabel + polarity,
-                           segmentBounds.toNearestInt(),
-                           juce::Justification::centred,
-                           false);
-            }
-        };
-
-        constexpr int kRowGap = 5;
-        auto pitchRow = inner.removeFromTop(17);
-        paintDestinationRow(pitchRow, "Pitch", [](const auto& source) { return source.pitch; }, 1200.0f);
-        inner.removeFromTop(kRowGap);
-
-        auto filterRow = inner.removeFromTop(17);
-        paintDestinationRow(filterRow, "Filter", [](const auto& source) { return source.filter; }, 20000.0f);
-        inner.removeFromTop(kRowGap);
-
-        auto ampRow = inner.removeFromTop(17);
-        paintDestinationRow(ampRow, "Amp", [](const auto& source) { return source.amp; }, 100.0f);
-    };
-
-    auto summaryGroups = getLocalBounds();
-    auto expressiveBody = summaryGroups.removeFromTop(kRowH).withTrimmedTop(kGrpHdr).reduced(kGrpPadH, kGrpPadV);
-    summaryGroups.removeFromTop(kGrpGap);
-    auto macroBody = summaryGroups.removeFromTop(kRowH).withTrimmedTop(kGrpHdr).reduced(kGrpPadH, kGrpPadV);
-
-    paintDestinationMatrix(computeSummaryArea(expressiveBody, 3, 3), "Destinations", expressiveSummarySources);
-    paintDestinationMatrix(computeSummaryArea(macroBody, 2, 4), "Macro Routes", macroSummarySources);
 }
 
 void PlayerModulationPanel::resized()
 {
-    constexpr int kDial = 56;
-    constexpr int kGrpPadH = 12;
-    constexpr int kGrpPadV = 8;
-    constexpr int kGrpHdr = 22;
-    constexpr int kGrpGap = 10;
-    constexpr int kDialGap = 4;
-    constexpr int kRowH = 154;
-    constexpr int kFeedbackH = 14;
-    constexpr int kFeedbackGap = 4;
-
-    auto area = getLocalBounds();
-    auto expressiveInner = area.removeFromTop(kRowH).withTrimmedTop(kGrpHdr).reduced(kGrpPadH, kGrpPadV);
-    expressiveInner.removeFromBottom(kFeedbackGap + kFeedbackH);
-    area.removeFromTop(kGrpGap);
-    auto macroInner = area.removeFromTop(kRowH).withTrimmedTop(kGrpHdr).reduced(kGrpPadH, kGrpPadV);
-    macroInner.removeFromBottom(kFeedbackGap + kFeedbackH);
-
-    const auto routes = routeDialSets();
-    for (int index = 0; index < 3; ++index)
+    int y = 32;
+    for (const auto& route : routeDialSets())
     {
-        const auto& route = routes[static_cast<std::size_t>(index)];
-        route.pitchDial->setBounds(expressiveInner.removeFromLeft(kDial));
-        expressiveInner.removeFromLeft(kDialGap);
-        route.filterDial->setBounds(expressiveInner.removeFromLeft(kDial));
-        expressiveInner.removeFromLeft(kDialGap);
-        route.ampDial->setBounds(expressiveInner.removeFromLeft(kDial));
-        expressiveInner.removeFromLeft(kDialGap);
-    }
-
-    const auto macros = macroDialSets();
-    for (int index = 0; index < 2; ++index)
-    {
-        const auto& macro = macros[static_cast<std::size_t>(index)];
-        const auto& route = routes[static_cast<std::size_t>(index + 3)];
-        macro.valueDial->setBounds(macroInner.removeFromLeft(kDial));
-        macroInner.removeFromLeft(kDialGap);
-        route.pitchDial->setBounds(macroInner.removeFromLeft(kDial));
-        macroInner.removeFromLeft(kDialGap);
-        route.filterDial->setBounds(macroInner.removeFromLeft(kDial));
-        macroInner.removeFromLeft(kDialGap);
-        route.ampDial->setBounds(macroInner.removeFromLeft(kDial));
-        macroInner.removeFromLeft(kDialGap);
+        auto row = juce::Rectangle<int>(154, y, juce::jmax(1,getWidth()-166), 68);
+        const int w = (row.getWidth()-24)/3;
+        for (auto* dial : {route.pitchDial, route.filterDial, route.ampDial})
+        { dial->setBounds(row.removeFromLeft(w)); row.removeFromLeft(12); }
+        y += 76;
     }
 }
 
@@ -3889,6 +3565,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
             wasHeld = engaged;
         };
 
+        padButton.onAssignmentRequested = [this, i] { showPadAssignmentDialog(i); };
         assignButton.onClick = [this, i]
         {
             showPadAssignmentDialog(i);
@@ -4028,9 +3705,11 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         updateGeneratePreviewButtonText();
 
         const auto selectedMidiNote = getSelectedGenerateMidiNote();
+        rememberSoundBeforeReplacement();
         processor_.loadGeneratedWaveformAsSample(generatedWaveform_, selectedMidiNote);
         processor_.setRootMidiNote(selectedMidiNote);
         clearSelectedPresetAfterSourceLoad();
+        browserOpen_ = false;
         tabBar_.setCurrentTabIndex(0);
         currentTabIndex_ = 0;
         processor_.setEditorTabIndex(currentTabIndex_);
@@ -4162,11 +3841,14 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
             : processor_.getCapturedInputSamples();
 
         const auto selectedRoot = juce::jlimit(0, 127, captureRootNoteCombo_.getSelectedId() - 1);
+        juce::MemoryBlock before;
+        captureSoundRecovery(before);
+        if (!processor_.loadCapturedAudioAsSample(start, end)) return;
+        previousSoundState_.swapWith(before); previousSoundName_ = currentPresetName_;
         processor_.setRootMidiNote(selectedRoot);
-        if (!processor_.loadCapturedAudioAsSample(start, end))
-            return;
 
         clearSelectedPresetAfterSourceLoad();
+        browserOpen_ = false;
         tabBar_.setCurrentTabIndex(0);
         currentTabIndex_ = 0;
         processor_.setEditorTabIndex(currentTabIndex_);
@@ -4318,7 +4000,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addAndMakeVisible(mappingZoneListBox_);
     mappingZoneListBox_.setModel(&mappingZoneListModel_);
     mappingZoneListBox_.setRowHeight(58);
-    mappingZoneListBox_.setMultipleSelectionEnabled(true);
+    mappingZoneListBox_.setMultipleSelectionEnabled(false);
 
     addAndMakeVisible(mappingDetailsText_);
     mappingDetailsText_.setMultiLine(true);
@@ -5233,6 +4915,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
         dial->onCcClearedByUser = [this, paramId]
         {
             processor_.clearCcMappingByParam(paramId);
+            soundEdited_ = true;
         };
     }
 
@@ -5358,6 +5041,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     addToSampleControls(copyImportDiagnosticsButton_);
 
     setupTooltips();
+    initialiseInstrumentWorkspace();
     refreshSampleBrowserBookmarks();
     refreshMappingZoneRows();
     rebuildVisibleSampleList();
@@ -5380,6 +5064,7 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     updateCaptureUiState();
     lastSettingsSnapshot_ = captureSettingsSnapshot();
     syncCcMappingsFromProcessor();
+    resized();
     startTimerHz(60);
 }
 
@@ -5604,6 +5289,7 @@ void AudiocityAudioProcessorEditor::timerCallback()
             {
                 dial->assignCc(event.ccNumber);
                 processor_.setCcMapping(event.ccNumber, paramId);
+                soundEdited_ = true;
                 break;
             }
         }
@@ -5657,13 +5343,16 @@ void AudiocityAudioProcessorEditor::timerCallback()
 
     syncImportedProgramMappingUndoContext();
 
-    const auto currentSnapshot = captureSettingsSnapshot();
-    if (lastSettingsSnapshot_.has_value() && *lastSettingsSnapshot_ != currentSnapshot)
-        editorUndoHistory_.recordSettingsChange(*lastSettingsSnapshot_, currentSnapshot, 1, "Edit Settings");
-
-    lastSettingsSnapshot_ = currentSnapshot;
+    recordPendingSettingsChange();
 
     syncAutomatedControlsFromProcessor();
+    updateSoundIdentity();
+    const auto voiceCount = processor_.getActiveVoiceCount();
+    workspaceStatusLabel_.setText(backgroundImportInProgress_ ? "Loading " + backgroundImportFile_.getFileName() + " - Source cancels the load"
+        : (currentTabIndex_ == 4 || currentTabIndex_ == 5)
+        ? "Preparing source - Preview auditions the take; Use sample commits it"
+        : juce::String(processor_.isSamplePreviewPlaying() ? "Sample preview" : voiceCount > 0 ? "MIDI playing" : "Ready")
+            + "  |  " + juce::String(voiceCount) + " voices", juce::dontSendNotification);
 }
 
 void AudiocityAudioProcessorEditor::syncAutomatedControlsFromProcessor()
@@ -6073,7 +5762,7 @@ juce::String AudiocityAudioProcessorEditor::getTooltipForRow(const int row)
 
     const auto& entry = allSampleEntries_[static_cast<std::size_t>(sourceIndex)];
     const bool previewSupported = !entry.isInstrument;
-    const bool mappingDragSupported = isMappingSampleFile(entry.file);
+    const bool mappingDragSupported = currentTabIndex_ == 2 && isMappingSampleFile(entry.file);
 
     audiocity::plugin::SampleBrowserTooltipData tooltipData;
     tooltipData.fileName = entry.fileName;
@@ -6102,7 +5791,7 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
     const auto& entry = allSampleEntries_[static_cast<std::size_t>(sourceIndex)];
     const bool compactBrowserRow = shouldShowPersistentBrowserRail();
     const bool previewSupported = !entry.isInstrument;
-    const bool mappingDragSupported = isMappingSampleFile(entry.file);
+    const bool mappingDragSupported = currentTabIndex_ == 2 && isMappingSampleFile(entry.file);
     const bool rowPreviewing = previewSupported
         && processor_.isSamplePreviewPlaying()
         && sourceIndex == lastPreviewedBrowserSourceIndex_;
@@ -6465,6 +6154,7 @@ void AudiocityAudioProcessorEditor::recordImportedProgramMappingChange(
 {
     const auto afterState = captureImportedProgramMappingState();
     editorUndoHistory_.recordMappingChange(beforeState, afterState, label.toStdString());
+    soundEdited_ = true;
     mappingUndoProgramPath_ = afterState.programPath;
 }
 
@@ -6602,37 +6292,10 @@ void AudiocityAudioProcessorEditor::showMappingZoneContextMenu(const int row, co
     if (selectedRows.empty())
         return;
 
-    const auto singleSelection = selectedRows.size() == 1;
-    const auto& selectedRow = mappingZoneRows_[static_cast<std::size_t>(selectedRows.front())];
     juce::PopupMenu menu;
-    menu.addItem(1, "New Zone\tCtrl+N", processor_.hasImportedProgram());
-    menu.addItem(2, "Duplicate Zone\tCtrl+D", singleSelection);
-    menu.addItem(3, "Split Zone\tCtrl+Shift+D", singleSelection && selectedRow.keyHigh > selectedRow.keyLow);
-    menu.addItem(4,
-                 singleSelection ? "Delete Zone\tDelete" : "Delete Selected Zones\tDelete",
-                 true);
-    menu.addSeparator();
-    menu.addItem(5,
-                 singleSelection ? "Clear Velocity Fades" : "Clear Velocity Fades for Selected Zones",
-                 true);
-    menu.addItem(6,
-                 singleSelection ? "Map Zone Chromatically from C1" : "Map Selected Zones Chromatically from C1",
-                 true);
-    menu.addItem(7,
-                 singleSelection ? "Map Zone To Root Note" : "Map Selected Zones To Root Notes",
-                 true);
-    menu.addItem(8,
-                 "Spread Selected Zones Across Current Key Range",
-                 selectedRows.size() > 1);
-    menu.addItem(9,
-                 selectedRows.size() == 1
-                     ? "Derive Root Note From Key Center"
-                     : "Derive Root Notes From Key Centers",
-                 true);
-    menu.addSeparator();
-    menu.addItem(10,
-                 "Select All Zones\tCtrl+A",
-                 static_cast<int>(selectedRows.size()) < static_cast<int>(mappingZoneRows_.size()));
+    menu.addItem(4, "Delete selected zone (Undo available)");
+    menu.addItem(7, "Map selected zone to its root note");
+    menu.addItem(9, "Derive root from key range");
 
     const juce::Rectangle<int> targetArea(screenPosition.x, screenPosition.y, 1, 1);
     juce::Component::SafePointer<AudiocityAudioProcessorEditor> safeThis(this);
@@ -7965,6 +7628,9 @@ void AudiocityAudioProcessorEditor::completeInstrumentLoad(const juce::File& fil
 
     if (loaded)
     {
+        previousSoundState_.swapWith(pendingReplacementState_);
+        previousSoundName_ = pendingReplacementName_;
+
         editorUndoHistory_.clear();
         mappingUndoProgramPath_ = processor_.getImportedProgramPath();
         lastSettingsSnapshot_ = captureSettingsSnapshot();
@@ -7995,6 +7661,8 @@ void AudiocityAudioProcessorEditor::completeInstrumentLoad(const juce::File& fil
                                       processor_.getLastImportDiagnosticSummary().trim(),
                                       std::move(onDismissed));
     }
+
+    pendingReplacementState_.reset();
 
     if (completion)
         completion(loaded);
@@ -8162,6 +7830,9 @@ bool AudiocityAudioProcessorEditor::startBackgroundInstrumentLoad(
     if (backgroundImportInProgress_.load(std::memory_order_relaxed))
         cancelBackgroundInstrumentLoad();
 
+    if (pendingReplacementState_.getSize() == 0)
+    { captureSoundRecovery(pendingReplacementState_); pendingReplacementName_ = currentPresetName_; }
+
     backgroundImportFile_ = file;
     backgroundImportCompletion_ = completion;
     const auto generation = ++backgroundImportGeneration_;
@@ -8222,6 +7893,9 @@ bool AudiocityAudioProcessorEditor::startBackgroundInstrumentLoad(
 bool AudiocityAudioProcessorEditor::loadFileAsInstrument(const juce::File& file,
                                                          std::function<void(bool)> completion)
 {
+    cancelBackgroundInstrumentLoad();
+    captureSoundRecovery(pendingReplacementState_);
+    pendingReplacementName_ = currentPresetName_;
     processor_.panicAllAudio();
     updateGeneratePreviewButtonText();
 
@@ -8298,12 +7972,15 @@ void AudiocityAudioProcessorEditor::autoSliceLoadedSample()
     processor_.panicAllAudio();
     updateGeneratePreviewButtonText();
 
+    juce::MemoryBlock before;
+    captureSoundRecovery(before);
     if (!processor_.importTransientSliceProgram(file))
     {
         updateDiagnosticsStatusText();
         return;
     }
 
+    previousSoundState_.swapWith(before); previousSoundName_ = currentPresetName_;
     editorUndoHistory_.clear();
     mappingUndoProgramPath_ = processor_.getImportedProgramPath();
     lastSettingsSnapshot_ = captureSettingsSnapshot();
@@ -8955,9 +8632,19 @@ void AudiocityAudioProcessorEditor::refreshBrowserEntryLibraryFlags()
 
 void AudiocityAudioProcessorEditor::updateBrowserLibraryControls()
 {
+    if (workspaceReady_ && browserScopeCombo_.getSelectedId() == 1)
+    {
+        const auto row = presetBrowserList_.getSelectedRow();
+        const bool selected = juce::isPositiveAndBelow(row, visiblePresetFiles_.size());
+        sampleBrowserFavoriteButton_.setEnabled(selected);
+        browserLoadButton_.setEnabled(selected);
+        sampleBrowserFavoriteButton_.setToggleState(selected && processor_.isLibraryFavorite(visiblePresetFiles_[row].getFullPathName()), juce::dontSendNotification);
+        return;
+    }
     const auto row = sampleBrowserListBox_.getSelectedRow();
     const auto hasSelection = row >= 0 && row < static_cast<int>(visibleSampleEntryIndices_.size());
     sampleBrowserFavoriteButton_.setEnabled(hasSelection);
+    browserLoadButton_.setEnabled(hasSelection);
     sampleBrowserTagsEditor_.setEnabled(hasSelection);
     sampleBrowserApplyTagsButton_.setEnabled(hasSelection);
 
@@ -9121,7 +8808,9 @@ void AudiocityAudioProcessorEditor::rebuildVisibleSampleList()
             }
         }
 
-        if (matches && matchesLibraryFilters && matchesTagFilter)
+        const bool matchesScope = browserScopeCombo_.getSelectedId() < 2
+            || (browserScopeCombo_.getSelectedId() == 2 ? !item.isInstrument : item.isInstrument);
+        if (matches && matchesLibraryFilters && matchesTagFilter && matchesScope)
             visibleSampleEntryIndices_.push_back(i);
     }
 
@@ -9391,6 +9080,7 @@ void AudiocityAudioProcessorEditor::loadSampleFromBrowserRow(const int row)
             return;
 
         clearSelectedPresetAfterSourceLoad();
+        browserOpen_ = false;
         tabBar_.setCurrentTabIndex(0);
         currentTabIndex_ = 0;
         processor_.setEditorTabIndex(currentTabIndex_);
@@ -9403,6 +9093,8 @@ void AudiocityAudioProcessorEditor::loadSampleFromBrowserRow(const int row)
 
 void AudiocityAudioProcessorEditor::previewSampleFromBrowserRow(const int row, const bool forceRestart)
 {
+    if (!browserAutoPreview_.getToggleState() && !forceRestart) return;
+
     if (row < 0 || row >= static_cast<int>(visibleSampleEntryIndices_.size()))
         return;
 
@@ -9448,34 +9140,12 @@ bool AudiocityAudioProcessorEditor::shouldShowPersistentPerformanceStrip() const
 
 bool AudiocityAudioProcessorEditor::shouldShowPersistentBrowserRail() const noexcept
 {
-    if (currentTabIndex_ == 1 || currentTabIndex_ == 3 || currentTabIndex_ == 4
-        || currentTabIndex_ == 5 || currentTabIndex_ == 6)
-        return false;
-
-    if (currentTabIndex_ == 0)
-    {
-        const auto sampleLayoutMode = resolveSampleLayoutModeForWidth(computeResponsiveContentWidth(getWidth()));
-        if (!sampleBrowserRailEnabled_ || sampleLayoutMode == SampleLayoutMode::inlineStack)
-            return false;
-
-        if (sampleLayoutMode == SampleLayoutMode::browserWorkspaceInspector)
-            return true;
-
-        return !sampleInspectorRailEnabled_;
-    }
-
-    return true;
+    return browserOpen_;
 }
 
 bool AudiocityAudioProcessorEditor::shouldShowSampleInspectorRail() const noexcept
 {
-    if (currentTabIndex_ != 0 || !sampleInspectorRailEnabled_)
-        return false;
-
-    const auto sampleLayoutMode = resolveSampleLayoutModeForWidth(computeResponsiveContentWidth(getWidth()));
-    return sampleLayoutMode != SampleLayoutMode::inlineStack
-        && (sampleLayoutMode == SampleLayoutMode::browserWorkspaceInspector
-            || !sampleBrowserRailEnabled_);
+    return false;
 }
 
 bool AudiocityAudioProcessorEditor::shouldShowWideSampleInspectorMode() const noexcept
@@ -9580,830 +9250,18 @@ void AudiocityAudioProcessorEditor::layoutSampleBrowserArea(juce::Rectangle<int>
 
 // ─── Layout ────────────────────────────────────────────────────────────────────
 
-void AudiocityAudioProcessorEditor::resized()
-{
-    constexpr int kMargin   = 14;
-    constexpr int kDial     = 78;
-    constexpr int kDialH    = 96;
-    constexpr int kGrpPadH  = 12;
-    constexpr int kGrpPadV  = 8;
-    constexpr int kGrpHdr   = 22;
-    constexpr int kGrpGap   = 10;
-    constexpr int kDialGap  = 6;
-    constexpr int kModeStackW = 104;
-    constexpr int kStackLabelH = 16;
-    constexpr int kStackButtonH = 22;
-    constexpr int kStackGap = 2;
-    constexpr int kStackColGap = kDialGap + 8;
-    constexpr int kRowH     = kGrpHdr + kGrpPadV + kDialH + kGrpPadV;  // 134
 
-    updateTabVisibility();
 
-    auto content = getLocalBounds().reduced(kMargin);
-    tabBar_.setBounds(content.removeFromTop(kEditorTabBarHeight));
-    content.removeFromTop(kEditorTabBarGap);
-    auto area = content;
-    juce::Rectangle<int> browserRailArea;
-    juce::Rectangle<int> performanceStripArea;
-    const bool showBrowserRail = shouldShowPersistentBrowserRail();
-    const bool showPerformanceStrip = shouldShowPersistentPerformanceStrip();
 
-    if (showPerformanceStrip)
-    {
-        constexpr int kPerformanceStripGap = 10;
-        const int kPerformanceStripHeight = computePersistentPerformanceStripHeight(area.getHeight());
-        performanceStripArea = area.removeFromBottom(kPerformanceStripHeight);
-        area.removeFromBottom(kPerformanceStripGap);
-    }
-
-    if (showBrowserRail)
-    {
-        constexpr int kBrowserRailGap = 10;
-        const int kBrowserRailWidth = computePersistentBrowserRailWidth(area.getWidth());
-        browserRailArea = area.removeFromLeft(kBrowserRailWidth);
-        area.removeFromLeft(kBrowserRailGap);
-    }
-
-    groupBoxes_.clear();
-
-    if (currentTabIndex_ == 1)
-    {
-        layoutSampleBrowserArea(area, false);
-        if (showPerformanceStrip)
-            playerPage_.layout(performanceStripArea, true);
-        return;
-    }
-
-    if (showBrowserRail)
-    {
-        const bool showBrowserCancelButton = sampleScanInProgress_.load(std::memory_order_relaxed);
-        sampleBrowserRootLabel_.setVisible(true);
-        sampleBrowserChooseRootButton_.setVisible(true);
-        sampleBrowserRefreshButton_.setVisible(true);
-        sampleBrowserCancelButton_.setVisible(showBrowserCancelButton);
-        sampleBrowserFilterEditor_.setVisible(true);
-        sampleBrowserSortCombo_.setVisible(true);
-        sampleBrowserFavoriteButton_.setVisible(true);
-        sampleBrowserFavoritesOnlyToggle_.setVisible(true);
-        sampleBrowserRecentOnlyToggle_.setVisible(true);
-        sampleBrowserListBox_.setVisible(true);
-        sampleBrowserCountLabel_.setVisible(true);
-        sampleBrowserPreviewLabel_.setVisible(true);
-        sampleBrowserListBox_.setRowHeight(54);
-        layoutSampleBrowserArea(browserRailArea, true);
-    }
-
-    if (currentTabIndex_ == 2)
-    {
-        mappingPage_.layout(area);
-        if (showPerformanceStrip)
-            playerPage_.layout(performanceStripArea, true);
-        return;
-    }
-
-    if (currentTabIndex_ == 3)
-    {
-        playerPage_.layout(area, false);
-        return;
-    }
-
-    if (currentTabIndex_ == 4)
-    {
-        generatePage_.setBounds(area.reduced(8, 6));
-
-        if (showPerformanceStrip)
-            playerPage_.layout(performanceStripArea, true);
-
-        return;
-    }
-
-    if (currentTabIndex_ == 5)
-    {
-        capturePage_.setBounds(area.reduced(8, 6));
-        if (showPerformanceStrip)
-            playerPage_.layout(performanceStripArea, true);
-        return;
-    }
-
-    if (currentTabIndex_ == 6)
-    {
-        aboutPage_.setBounds(area.reduced(8, 6));
-        return;
-    }
-
-    aboutPage_.setBounds({});
-
-    sampleHeaderPage_.layout(area);
-
-    area.removeFromTop(kGrpGap);
-
-    sampleInspectorInfoBounds_ = {};
-    sampleInspectorProgramMapBounds_ = {};
-    sampleInspectorOutputBounds_ = {};
-    sampleInspectorFilterModBounds_ = {};
-    sampleInspectorEffectsBounds_ = {};
-
-    const bool useSampleInspectorRail = shouldShowSampleInspectorRail();
-    const bool useProgramMapInspector = shouldShowSampleProgramMapInspector();
-    const bool useFilterModInspector = shouldShowSampleFilterModInspector();
-    const bool useEffectsInspector = shouldShowSampleEffectsInspector();
-
-    const auto reparentInspectorComponent = [this](juce::Component& component, juce::Component& target)
-    {
-        if (component.getParentComponent() != &target)
-            target.addAndMakeVisible(component);
-    };
-
-    const int visibleMetricCount = sampleInfoMetricsLayout_.countVisibleMetrics();
-    const int metricRows = juce::jmax(1, (visibleMetricCount + 1) / 2);
-    const int infoCardHeight = 74 + metricRows * 34;
-    const bool useOutputInspector = useSampleInspectorRail;
-
-    const auto setSampleInspectorParenting = [&](const bool useInfoInspector,
-                                                 const bool useProgramInspector,
-                                                 const bool useOutputInspectorCard,
-                                                 const bool useFilterModInspectorCard,
-                                                 const bool useEffectsInspectorCard)
-    {
-        auto& infoTarget = useInfoInspector ? static_cast<juce::Component&>(*this)
-                                            : static_cast<juce::Component&>(sampleControlsContent_);
-
-        reparentInspectorComponent(sampleInfoSourceLabel_, infoTarget);
-        reparentInspectorComponent(sampleInfoSourceValue_, infoTarget);
-        reparentInspectorComponent(sampleInfoRateLabel_, infoTarget);
-        reparentInspectorComponent(sampleInfoRateValue_, infoTarget);
-        reparentInspectorComponent(sampleInfoBitDepthLabel_, infoTarget);
-        reparentInspectorComponent(sampleInfoBitDepthValue_, infoTarget);
-        reparentInspectorComponent(sampleInfoChannelsLabel_, infoTarget);
-        reparentInspectorComponent(sampleInfoChannelsValue_, infoTarget);
-        reparentInspectorComponent(sampleInfoDurationLabel_, infoTarget);
-        reparentInspectorComponent(sampleInfoDurationValue_, infoTarget);
-        reparentInspectorComponent(sampleInfoFileSizeLabel_, infoTarget);
-        reparentInspectorComponent(sampleInfoFileSizeValue_, infoTarget);
-        reparentInspectorComponent(sampleInfoSamplesLabel_, infoTarget);
-        reparentInspectorComponent(sampleInfoSamplesValue_, infoTarget);
-        reparentInspectorComponent(sampleInfoPlaybackLabel_, infoTarget);
-        reparentInspectorComponent(sampleInfoPlaybackValue_, infoTarget);
-        reparentInspectorComponent(sampleInfoPlaybackDurationLabel_, infoTarget);
-        reparentInspectorComponent(sampleInfoPlaybackDurationValue_, infoTarget);
-        reparentInspectorComponent(sampleInfoLoopLabel_, infoTarget);
-        reparentInspectorComponent(sampleInfoLoopValue_, infoTarget);
-        reparentInspectorComponent(sampleInfoLoopDurationLabel_, infoTarget);
-        reparentInspectorComponent(sampleInfoLoopDurationValue_, infoTarget);
-        reparentInspectorComponent(sampleInfoTempoLabel_, infoTarget);
-        reparentInspectorComponent(sampleInfoTempoValue_, infoTarget);
-        reparentInspectorComponent(sampleInfoMetaRootLabel_, infoTarget);
-        reparentInspectorComponent(sampleInfoMetaRootValue_, infoTarget);
-        reparentInspectorComponent(sampleInfoBadge_, infoTarget);
-
-        auto& programMapTarget = useProgramInspector ? static_cast<juce::Component&>(*this)
-                                                     : static_cast<juce::Component&>(sampleControlsContent_);
-        reparentInspectorComponent(programMapText_, programMapTarget);
-
-        auto& outputTarget = useOutputInspectorCard ? static_cast<juce::Component&>(*this)
-                                                    : static_cast<juce::Component&>(sampleControlsContent_);
-        reparentInspectorComponent(fadeInDial_, outputTarget);
-        reparentInspectorComponent(fadeOutDial_, outputTarget);
-        reparentInspectorComponent(preloadDial_, outputTarget);
-        reparentInspectorComponent(masterVolumeDial_, outputTarget);
-        reparentInspectorComponent(panDial_, outputTarget);
-        reparentInspectorComponent(outputLevelMeter_, outputTarget);
-        reparentInspectorComponent(qualityLabel_, outputTarget);
-        reparentInspectorComponent(qualityCpuButton_, outputTarget);
-        reparentInspectorComponent(qualityFidelityButton_, outputTarget);
-        reparentInspectorComponent(qualityUltraButton_, outputTarget);
-
-        auto& filterModTarget = useFilterModInspectorCard ? static_cast<juce::Component&>(*this)
-                                  : static_cast<juce::Component&>(sampleControlsContent_);
-        reparentInspectorComponent(filterAttackDial_, filterModTarget);
-        reparentInspectorComponent(filterDecayDial_, filterModTarget);
-        reparentInspectorComponent(filterSustainDial_, filterModTarget);
-        reparentInspectorComponent(filterReleaseDial_, filterModTarget);
-        reparentInspectorComponent(filterEnvelopeGraph_, filterModTarget);
-        reparentInspectorComponent(filterKeytrackDial_, filterModTarget);
-        reparentInspectorComponent(filterVelDial_, filterModTarget);
-        reparentInspectorComponent(filterLfoRateDial_, filterModTarget);
-        reparentInspectorComponent(filterLfoAmtDial_, filterModTarget);
-        reparentInspectorComponent(filterLfoShapeLabel_, filterModTarget);
-        reparentInspectorComponent(filterLfoShapeCombo_, filterModTarget);
-        reparentInspectorComponent(filterLfoRetriggerToggle_, filterModTarget);
-        reparentInspectorComponent(filterLfoTempoSyncToggle_, filterModTarget);
-        reparentInspectorComponent(filterLfoDivisionLabel_, filterModTarget);
-        reparentInspectorComponent(filterLfoDivisionCombo_, filterModTarget);
-
-        auto& effectsTarget = useEffectsInspectorCard ? static_cast<juce::Component&>(*this)
-                                                      : static_cast<juce::Component&>(sampleControlsContent_);
-        reparentInspectorComponent(reverbMixDial_, effectsTarget);
-        reparentInspectorComponent(delayTimeDial_, effectsTarget);
-        reparentInspectorComponent(delayFeedbackDial_, effectsTarget);
-        reparentInspectorComponent(delayMixDial_, effectsTarget);
-        reparentInspectorComponent(delayTempoSyncToggle_, effectsTarget);
-        reparentInspectorComponent(dcFilterEnabledToggle_, effectsTarget);
-        reparentInspectorComponent(dcFilterCutoffDial_, effectsTarget);
-        reparentInspectorComponent(autopanRateDial_, effectsTarget);
-        reparentInspectorComponent(autopanDepthDial_, effectsTarget);
-        reparentInspectorComponent(saturationDriveDial_, effectsTarget);
-        reparentInspectorComponent(saturationModeCombo_, effectsTarget);
-    };
-
-    setSampleInspectorParenting(useSampleInspectorRail,
-        useProgramMapInspector,
-        useOutputInspector,
-        useFilterModInspector,
-        useEffectsInspector);
-
-    const auto layoutSampleInfoInline = [&](juce::Rectangle<int> infoInner)
-    {
-        auto row1 = infoInner.removeFromTop(24);
-        const auto badgeVisible = sampleInfoBadge_.isVisible() && sampleInfoBadge_.getText().isNotEmpty();
-        const auto badgeWidth = badgeVisible ? (sampleInfoBadge_.getText() == "Apple Loop" ? 72 : 56) : 0;
-        if (badgeVisible)
-        {
-            sampleInfoBadge_.setBounds(row1.removeFromRight(badgeWidth).withSizeKeepingCentre(badgeWidth, 18));
-            row1.removeFromRight(8);
-        }
-        else
-        {
-            sampleInfoBadge_.setBounds({});
-        }
-        sampleInfoSourceLabel_.setBounds(row1.removeFromLeft(40));
-        sampleInfoSourceValue_.setBounds(row1);
-        infoInner.removeFromTop(4);
-        sampleInfoMetricsLayout_.layoutInline(infoInner);
-    };
-
-    const auto layoutSampleInfoInspector = [&](juce::Rectangle<int> inspectorBounds)
-    {
-        auto infoInner = inspectorBounds.withTrimmedTop(30).reduced(12, 10);
-        const auto badgeVisible = sampleInfoBadge_.isVisible() && sampleInfoBadge_.getText().isNotEmpty();
-        const auto badgeWidth = badgeVisible ? (sampleInfoBadge_.getText() == "Apple Loop" ? 72 : 56) : 0;
-
-        auto sourceHeader = infoInner.removeFromTop(14);
-        if (badgeVisible)
-        {
-            sampleInfoBadge_.setBounds(sourceHeader.removeFromRight(badgeWidth).withSizeKeepingCentre(badgeWidth, 18));
-            sourceHeader.removeFromRight(8);
-        }
-        else
-        {
-            sampleInfoBadge_.setBounds({});
-        }
-
-        sampleInfoSourceLabel_.setBounds(sourceHeader.removeFromLeft(46));
-        sampleInfoSourceValue_.setBounds(infoInner.removeFromTop(22));
-        infoInner.removeFromTop(8);
-
-        sampleInfoMetricsLayout_.layoutInspector(infoInner);
-    };
-
-    const auto layoutOutputInspectorCard = [&](juce::Rectangle<int>& inspectorArea)
-    {
-        if (!useOutputInspector)
-        {
-            sampleInspectorCardLayout_.clearOutput();
-            return;
-        }
-
-        inspectorArea.removeFromTop(kGrpGap);
-        const int outputCardHeight = juce::jmin(kSampleOutputInspectorCardHeight, inspectorArea.getHeight());
-        if (outputCardHeight <= 0)
-        {
-            sampleInspectorCardLayout_.clearOutput();
-            return;
-        }
-
-        sampleInspectorOutputBounds_ = inspectorArea.removeFromTop(outputCardHeight);
-        sampleInspectorCardLayout_.layoutOutput(sampleInspectorOutputBounds_);
-    };
-
-    const auto clearFilterModInspectorControls = [&]()
-    {
-        filterAttackDial_.setBounds({});
-        filterDecayDial_.setBounds({});
-        filterSustainDial_.setBounds({});
-        filterReleaseDial_.setBounds({});
-        filterEnvelopeGraph_.setBounds({});
-        filterKeytrackDial_.setBounds({});
-        filterVelDial_.setBounds({});
-        filterLfoRateDial_.setBounds({});
-        filterLfoAmtDial_.setBounds({});
-        filterLfoShapeLabel_.setBounds({});
-        filterLfoShapeCombo_.setBounds({});
-        filterLfoRetriggerToggle_.setBounds({});
-        filterLfoTempoSyncToggle_.setBounds({});
-        filterLfoDivisionLabel_.setBounds({});
-        filterLfoDivisionCombo_.setBounds({});
-    };
-
-    auto workspaceArea = area;
-    if (useSampleInspectorRail)
-    {
-        constexpr int kSampleInspectorGap = 10;
-        const int inspectorWidth = juce::jlimit(240, 300, workspaceArea.getWidth() / 3);
-        auto inspectorArea = workspaceArea.removeFromRight(inspectorWidth);
-        workspaceArea.removeFromRight(kSampleInspectorGap);
-
-        sampleInspectorInfoBounds_ = inspectorArea.removeFromTop(infoCardHeight);
-        layoutSampleInfoInspector(sampleInspectorInfoBounds_);
-
-        if (useProgramMapInspector)
-        {
-            inspectorArea.removeFromTop(kGrpGap);
-            const int programMapHeight = useEffectsInspector
-                ? juce::jmax(150, juce::jmin(188, inspectorArea.getHeight()))
-                : juce::jmax(148, juce::jmin(214, inspectorArea.getHeight()));
-            sampleInspectorProgramMapBounds_ = inspectorArea.removeFromTop(programMapHeight);
-            programMapText_.setBounds(sampleInspectorProgramMapBounds_.withTrimmedTop(30).reduced(12, 10));
-            layoutOutputInspectorCard(inspectorArea);
-
-            if (useEffectsInspector)
-            {
-                inspectorArea.removeFromTop(kGrpGap);
-                const int effectsCardHeight = juce::jmin(
-                    getSampleInspectorCardHeight(sampleInspectorEffectsExpanded_, kExpandedSampleEffectsInspectorCardHeight),
-                    inspectorArea.getHeight());
-                sampleInspectorEffectsBounds_ = inspectorArea.removeFromTop(effectsCardHeight);
-                if (sampleInspectorEffectsExpanded_)
-                    sampleInspectorCardLayout_.layoutEffects(sampleInspectorEffectsBounds_);
-                else
-                    sampleInspectorCardLayout_.clearEffects();
-            }
-            else
-            {
-                sampleInspectorCardLayout_.clearEffects();
-            }
-
-            if (useFilterModInspector)
-            {
-                inspectorArea.removeFromTop(kGrpGap);
-                const int filterModCardHeight = juce::jmin(
-                    getSampleInspectorCardHeight(sampleInspectorFilterModExpanded_, kExpandedSampleFilterModInspectorCardHeight),
-                    inspectorArea.getHeight());
-                sampleInspectorFilterModBounds_ = inspectorArea.removeFromTop(filterModCardHeight);
-                if (sampleInspectorFilterModExpanded_)
-                    sampleInspectorCardLayout_.layoutFilterMod(sampleInspectorFilterModBounds_);
-                else
-                    sampleInspectorCardLayout_.clearFilterMod();
-            }
-        }
-        else
-        {
-            programMapText_.setBounds({});
-            layoutOutputInspectorCard(inspectorArea);
-
-            if (useEffectsInspector)
-            {
-                inspectorArea.removeFromTop(kGrpGap);
-                const int effectsCardHeight = juce::jmin(
-                    getSampleInspectorCardHeight(sampleInspectorEffectsExpanded_, kExpandedSampleEffectsInspectorCardHeight),
-                    inspectorArea.getHeight());
-                sampleInspectorEffectsBounds_ = inspectorArea.removeFromTop(effectsCardHeight);
-                if (sampleInspectorEffectsExpanded_)
-                    sampleInspectorCardLayout_.layoutEffects(sampleInspectorEffectsBounds_);
-                else
-                    sampleInspectorCardLayout_.clearEffects();
-            }
-            else
-            {
-                sampleInspectorCardLayout_.clearEffects();
-            }
-
-            if (useFilterModInspector)
-            {
-                inspectorArea.removeFromTop(kGrpGap);
-                const int filterModCardHeight = juce::jmin(
-                    getSampleInspectorCardHeight(sampleInspectorFilterModExpanded_, kExpandedSampleFilterModInspectorCardHeight),
-                    inspectorArea.getHeight());
-                sampleInspectorFilterModBounds_ = inspectorArea.removeFromTop(filterModCardHeight);
-                if (sampleInspectorFilterModExpanded_)
-                    sampleInspectorCardLayout_.layoutFilterMod(sampleInspectorFilterModBounds_);
-                else
-                    sampleInspectorCardLayout_.clearFilterMod();
-            }
-        }
-    }
-    else
-    {
-        programMapText_.setBounds({});
-        sampleInspectorCardLayout_.clearOutput();
-    }
-
-    const auto waveformHeight = juce::jlimit(180, 320, workspaceArea.getHeight() / 3);
-    waveformView_.setBounds(workspaceArea.removeFromTop(waveformHeight));
-    workspaceArea.removeFromTop(8);
-
-    auto waveformInfoRow = workspaceArea.removeFromTop(26);
-    waveformResetRangesButton_.setBounds(waveformInfoRow.removeFromRight(62));
-    waveformInfoRow.removeFromRight(8);
-    waveformInteractionSummaryLabel_.setBounds(waveformInfoRow);
-
-    workspaceArea.removeFromTop(kGrpGap);
-    sampleControlsViewport_.setBounds(workspaceArea);
-
-    const auto viewportWidth = juce::jmax(200, sampleControlsViewport_.getWidth() - sampleControlsViewport_.getScrollBarThickness() - 2);
-    int scrollY = 0;
-    groupBoxes_.clear();
-
-    auto makeGroup = [&](const juce::String& key,
-                         const juce::String& title,
-                         const int expandedHeight) -> juce::Rectangle<int>
-    {
-        const auto collapsible = isSampleGroupCollapsible(key);
-        const auto expanded = !collapsible || isSampleGroupExpanded(key);
-        const auto height = expanded ? expandedHeight : (kGrpHdr + 8);
-        auto bounds = juce::Rectangle<int>(0, scrollY, viewportWidth, height);
-        groupBoxes_.push_back({ key, title, bounds, expanded, collapsible });
-        scrollY += height + kGrpGap;
-        if (!expanded)
-            return juce::Rectangle<int>();
-
-        return bounds.withTrimmedTop(kGrpHdr).reduced(kGrpPadH, kGrpPadV);
-    };
-
-    auto layoutThreeButtonStack = [kStackLabelH, kStackButtonH, kStackGap](juce::Rectangle<int> area,
-                                                                             juce::Label& label,
-                                                                             juce::Button& topButton,
-                                                                             juce::Button& middleButton,
-                                                                             juce::Button& bottomButton)
-    {
-        label.setBounds(area.removeFromTop(kStackLabelH));
-        area.removeFromTop(kStackGap);
-        topButton.setBounds(area.removeFromTop(kStackButtonH));
-        area.removeFromTop(kStackGap);
-        middleButton.setBounds(area.removeFromTop(kStackButtonH));
-        area.removeFromTop(kStackGap);
-        bottomButton.setBounds(area.removeFromTop(kStackButtonH));
-    };
-
-    auto layoutTwoButtonStack = [kStackLabelH, kStackButtonH, kStackGap](juce::Rectangle<int> area,
-                                                                           juce::Label& label,
-                                                                           juce::Button& topButton,
-                                                                           juce::Button& bottomButton)
-    {
-        label.setBounds(area.removeFromTop(kStackLabelH));
-        area.removeFromTop(kStackGap);
-        topButton.setBounds(area.removeFromTop(kStackButtonH));
-        area.removeFromTop(kStackGap);
-        bottomButton.setBounds(area.removeFromTop(kStackButtonH));
-    };
-
-    // ── Panel 1: Sample Information ──
-    if (!useSampleInspectorRail)
-    {
-        constexpr int kSampleInfoPanelH = 108;
-        auto infoInner = makeGroup("sampleInfo", "Sample Information", kSampleInfoPanelH);
-        layoutSampleInfoInline(infoInner);
-    }
-
-    if (processor_.hasImportedProgram() && !useProgramMapInspector)
-    {
-        auto programInner = makeGroup("programMap", "Program Map", 164);
-        if (!programInner.isEmpty())
-            programMapText_.setBounds(programInner);
-        else
-            programMapText_.setBounds({});
-    }
-    else
-    {
-        programMapText_.setBounds({});
-    }
-
-    // ── Panel 2: Performance ──
-    {
-        auto perfInner = makeGroup("performance", "Performance", kRowH);
-        auto modeArea = perfInner.removeFromRight(kModeStackW);
-        layoutThreeButtonStack(modeArea,
-                       playbackModeLabel_,
-                       playbackModeGateButton_,
-                       playbackModeOneShotButton_,
-                       playbackModeLoopButton_);
-        perfInner.removeFromRight(kStackColGap);
-
-        auto toggleCol = perfInner.removeFromLeft(86);
-        monoToggle_.setBounds(toggleCol.removeFromTop(28));
-        toggleCol.removeFromTop(4);
-        legatoToggle_.setBounds(toggleCol.removeFromTop(28));
-        toggleCol.removeFromTop(4);
-        reverseToggle_.setBounds(toggleCol.removeFromTop(28));
-        perfInner.removeFromLeft(kDialGap);
-
-        glideDial_.setBounds(perfInner.removeFromLeft(kDial));
-        perfInner.removeFromLeft(kDialGap);
-        polyphonyDial_.setBounds(perfInner.removeFromLeft(kDial));
-        perfInner.removeFromLeft(kDialGap);
-        tuneCoarseDial_.setBounds(perfInner.removeFromLeft(kDial));
-        perfInner.removeFromLeft(kDialGap);
-        tuneFineDial_.setBounds(perfInner.removeFromLeft(kDial));
-        perfInner.removeFromLeft(kDialGap);
-        pitchBendRangeDial_.setBounds(perfInner.removeFromLeft(kDial));
-        perfInner.removeFromLeft(kDialGap);
-        pitchLfoRateDial_.setBounds(perfInner.removeFromLeft(kDial));
-        perfInner.removeFromLeft(kDialGap);
-        pitchLfoDepthDial_.setBounds(perfInner.removeFromLeft(kDial));
-        perfInner.removeFromLeft(kDialGap);
-        auto rightStack = perfInner.removeFromLeft(136);
-        rootNoteLabel_.setBounds(rightStack.removeFromTop(16));
-        rightStack.removeFromTop(2);
-        rootNoteCombo_.setBounds(rightStack.removeFromTop(28));
-        rightStack.removeFromTop(6);
-        velocityCurveLabel_.setBounds(rightStack.removeFromTop(16));
-        rightStack.removeFromTop(2);
-        velocityCurveCombo_.setBounds(rightStack.removeFromTop(24));
-    }
-
-    // ── Panel 3-4: Modulation ──
-    modulationPanel_.setBounds(juce::Rectangle<int>(0, scrollY, viewportWidth, PlayerModulationPanel::preferredHeight()));
-    scrollY += PlayerModulationPanel::preferredHeight() + kGrpGap;
-
-    // ── Panel 5: Trim and Loop ──
-    {
-        auto trimLoopInner = makeGroup("trimLoop", "Trim and Loop", kRowH);
-
-        playbackStartDial_.setBounds(trimLoopInner.removeFromLeft(kDial));
-        trimLoopInner.removeFromLeft(kDialGap);
-        playbackEndDial_.setBounds(trimLoopInner.removeFromLeft(kDial));
-        trimLoopInner.removeFromLeft(kDialGap);
-        loopStartDial_.setBounds(trimLoopInner.removeFromLeft(kDial));
-        trimLoopInner.removeFromLeft(kDialGap);
-        loopEndDial_.setBounds(trimLoopInner.removeFromLeft(kDial));
-        trimLoopInner.removeFromLeft(kDialGap);
-        loopCrossfadeDial_.setBounds(trimLoopInner.removeFromLeft(kDial));
-    }
-
-    // ── Panel 6: Amplitude Envelope ──
-    {
-        auto ampInner = makeGroup("ampEnv", "Amplitude Envelope", kRowH);
-        ampAttackDial_.setBounds(ampInner.removeFromLeft(kDial));
-        ampInner.removeFromLeft(kDialGap);
-        ampDecayDial_.setBounds(ampInner.removeFromLeft(kDial));
-        ampInner.removeFromLeft(kDialGap);
-        ampSustainDial_.setBounds(ampInner.removeFromLeft(kDial));
-        ampInner.removeFromLeft(kDialGap);
-        ampReleaseDial_.setBounds(ampInner.removeFromLeft(kDial));
-        ampInner.removeFromLeft(kDialGap);
-        ampLfoRateDial_.setBounds(ampInner.removeFromLeft(kDial));
-        ampInner.removeFromLeft(kDialGap);
-        ampLfoDepthDial_.setBounds(ampInner.removeFromLeft(kDial));
-        ampInner.removeFromLeft(kDialGap);
-        auto ampLfoShapeArea = ampInner.removeFromLeft(kDial + 24);
-        ampLfoShapeLabel_.setBounds(ampLfoShapeArea.removeFromTop(16));
-        ampLfoShapeArea.removeFromTop(2);
-        ampLfoShapeCombo_.setBounds(ampLfoShapeArea.removeFromTop(24));
-        ampInner.removeFromLeft(10);
-        ampEnvelopeGraph_.setBounds(ampInner.reduced(0, 8));
-    }
-
-    // ── Panel 7: Filter ──
-    {
-        auto filterInner = makeGroup("filter", "Filter", kRowH);
-        filterCutoffDial_.setBounds(filterInner.removeFromLeft(kDial));
-        filterInner.removeFromLeft(kDialGap);
-        filterResDial_.setBounds(filterInner.removeFromLeft(kDial));
-        filterInner.removeFromLeft(kDialGap);
-        filterEnvAmtDial_.setBounds(filterInner.removeFromLeft(kDial));
-        filterInner.removeFromLeft(kDialGap);
-        auto filterTypeArea = filterInner.removeFromLeft(kDial + 24);
-        filterTypeLabel_.setBounds(filterTypeArea.removeFromTop(16));
-        filterTypeArea.removeFromTop(2);
-        filterTypeCombo_.setBounds(filterTypeArea.removeFromTop(24));
-        filterInner.removeFromLeft(10);
-        filterResponseGraph_.setBounds(filterInner.reduced(0, 8));
-    }
-
-    // ── Panel 8: Filter Envelope + Mod ──
-    if (!useFilterModInspector)
-    {
-        constexpr int kFilterModPanelH = 238;
-        auto filterEnvInner = makeGroup("filterMod", "Filter Envelope + Mod", kFilterModPanelH);
-        if (!filterEnvInner.isEmpty())
-        {
-            auto row1 = filterEnvInner.removeFromTop(kDialH);
-            filterAttackDial_.setBounds(row1.removeFromLeft(kDial));
-            row1.removeFromLeft(kDialGap);
-            filterDecayDial_.setBounds(row1.removeFromLeft(kDial));
-            row1.removeFromLeft(kDialGap);
-            filterSustainDial_.setBounds(row1.removeFromLeft(kDial));
-            row1.removeFromLeft(kDialGap);
-            filterReleaseDial_.setBounds(row1.removeFromLeft(kDial));
-            row1.removeFromLeft(10);
-            filterEnvelopeGraph_.setBounds(row1.reduced(0, 8));
-
-            filterEnvInner.removeFromTop(8);
-
-            auto row2 = filterEnvInner.removeFromTop(kDialH);
-            filterKeytrackDial_.setBounds(row2.removeFromLeft(kDial));
-            row2.removeFromLeft(kDialGap);
-            filterVelDial_.setBounds(row2.removeFromLeft(kDial));
-            row2.removeFromLeft(kDialGap);
-            filterLfoRateDial_.setBounds(row2.removeFromLeft(kDial));
-            row2.removeFromLeft(kDialGap);
-            filterLfoAmtDial_.setBounds(row2.removeFromLeft(kDial));
-            row2.removeFromLeft(10);
-            auto lfoShapeArea = row2.removeFromLeft(120);
-            filterLfoShapeLabel_.setBounds(lfoShapeArea.removeFromTop(16));
-            lfoShapeArea.removeFromTop(2);
-            filterLfoShapeCombo_.setBounds(lfoShapeArea.removeFromTop(24));
-            row2.removeFromLeft(10);
-            auto divArea = row2.removeFromLeft(120);
-            filterLfoDivisionLabel_.setBounds(divArea.removeFromTop(16));
-            divArea.removeFromTop(2);
-            filterLfoDivisionCombo_.setBounds(divArea.removeFromTop(24));
-
-            row2.removeFromLeft(12);
-            auto syncArea = row2.removeFromLeft(90);
-            filterLfoRetriggerToggle_.setBounds(syncArea.removeFromTop(22));
-            syncArea.removeFromTop(6);
-            filterLfoTempoSyncToggle_.setBounds(syncArea.removeFromTop(22));
-        }
-    }
-
-    // ── Panel 9: Effects ──
-    if (!useEffectsInspector)
-    {
-        constexpr int kEffectsPanelH = kRowH + 44;
-        auto fxInner = makeGroup("effects", "Effects", kEffectsPanelH);
-        if (!fxInner.isEmpty())
-        {
-            auto fxDialRow = fxInner.removeFromTop(kDialH);
-
-            reverbMixDial_.setBounds(fxDialRow.removeFromLeft(kDial));
-            fxDialRow.removeFromLeft(kDialGap);
-
-            const auto delayTimeBounds = fxDialRow.removeFromLeft(kDial);
-            delayTimeDial_.setBounds(delayTimeBounds);
-            fxDialRow.removeFromLeft(kDialGap);
-
-            const auto delayFeedbackBounds = fxDialRow.removeFromLeft(kDial);
-            delayFeedbackDial_.setBounds(delayFeedbackBounds);
-            fxDialRow.removeFromLeft(kDialGap);
-
-            const auto delayMixBounds = fxDialRow.removeFromLeft(kDial);
-            delayMixDial_.setBounds(delayMixBounds);
-            fxDialRow.removeFromLeft(kDialGap * 2);
-
-            const auto dcFilterDialBounds = fxDialRow.removeFromLeft(kDial);
-            dcFilterCutoffDial_.setBounds(dcFilterDialBounds);
-            fxDialRow.removeFromLeft(kDialGap);
-
-            autopanRateDial_.setBounds(fxDialRow.removeFromLeft(kDial));
-            fxDialRow.removeFromLeft(kDialGap);
-            const auto autopanDepthBounds = fxDialRow.removeFromLeft(kDial);
-            autopanDepthDial_.setBounds(autopanDepthBounds);
-            fxDialRow.removeFromLeft(kDialGap);
-            const auto saturationDriveBounds = fxDialRow.removeFromLeft(kDial);
-            saturationDriveDial_.setBounds(saturationDriveBounds);
-
-            fxInner.removeFromTop(10);
-            auto fxControlRow = fxInner.removeFromTop(24);
-
-            constexpr int kDelaySyncW = 120;
-            const auto delayClusterLeft = delayTimeBounds.getX();
-            const auto delayClusterRight = delayMixBounds.getRight();
-            const auto delaySyncX = delayClusterLeft + (delayClusterRight - delayClusterLeft - kDelaySyncW) / 2;
-            delayTempoSyncToggle_.setBounds(delaySyncX, fxControlRow.getY(), kDelaySyncW, 24);
-
-            constexpr int kDcFilterW = 108;
-            const auto dcFilterX = dcFilterDialBounds.getX() + (dcFilterDialBounds.getWidth() - kDcFilterW) / 2;
-            dcFilterEnabledToggle_.setBounds(dcFilterX, fxControlRow.getY(), kDcFilterW, 24);
-
-            constexpr int kSatModeW = 92;
-            const auto satModeX = saturationDriveBounds.getX() + (saturationDriveBounds.getWidth() - kSatModeW) / 2;
-            saturationModeCombo_.setBounds(satModeX, fxControlRow.getY(), kSatModeW, 24);
-        }
-    }
-
-    // ── Panel 10: Output ──
-    if (!useOutputInspector)
-    {
-        auto outInner = makeGroup("output", "Output", kRowH);
-        fadeInDial_.setBounds(outInner.removeFromLeft(kDial));
-        outInner.removeFromLeft(kDialGap);
-        fadeOutDial_.setBounds(outInner.removeFromLeft(kDial));
-        outInner.removeFromLeft(kStackColGap);
-
-        masterVolumeDial_.setBounds(outInner.removeFromLeft(kDial));
-        outInner.removeFromLeft(kDialGap);
-
-        panDial_.setBounds(outInner.removeFromLeft(kDial));
-        outInner.removeFromLeft(kDialGap);
-
-        preloadDial_.setBounds(outInner.removeFromLeft(kDial));
-        outInner.removeFromLeft(kStackColGap);
-
-        auto qualArea = outInner.removeFromRight(kModeStackW);
-        layoutThreeButtonStack(qualArea,
-                 qualityLabel_,
-                 qualityCpuButton_,
-                 qualityFidelityButton_,
-                 qualityUltraButton_);
-
-        outInner.removeFromRight(kStackColGap);
-        outputLevelMeter_.setBounds(outInner.reduced(0, 6));
-    }
-
-    if (showDiagnosticsPanel_)
-    {
-        auto diagInner = makeGroup("diagnostics", "Diagnostics", 56);
-        auto diagnosticsRow = diagInner.removeFromTop(24);
-        copyImportDiagnosticsButton_.setBounds(diagnosticsRow.removeFromRight(94));
-        diagnosticsRow.removeFromRight(8);
-        diagnosticsLabel_.setBounds(diagnosticsRow);
-    }
-    else
-    {
-        diagnosticsLabel_.setBounds({});
-        copyImportDiagnosticsButton_.setBounds({});
-    }
-
-    sampleControlsContent_.setSize(viewportWidth, juce::jmax(sampleControlsViewport_.getHeight(), scrollY + 4));
-
-    if (showPerformanceStrip)
-        playerPage_.layout(performanceStripArea, true);
-}
-
-void AudiocityAudioProcessorEditor::paint(juce::Graphics& g)
-{
-    g.fillAll(uiBackgroundColour());
-
-    constexpr int kMargin = 14;
-
-    // Soft top chrome: a thin raised band with a single 1px accent hairline.
-    g.setColour(uiPanelRaisedColour());
-    g.fillRect(0, 0, getWidth(), 6);
-    g.setColour(uiAccentColour().withAlpha(0.32f));
-    g.fillRect(0, 6, getWidth(), 1);
-
-    auto content = getLocalBounds().reduced(kMargin);
-    content.removeFromTop(kEditorTabBarHeight);
-    content.removeFromTop(kEditorTabBarGap);
-    juce::Rectangle<int> browserRailArea;
-    juce::Rectangle<int> performanceStripArea;
-    const bool showBrowserRail = shouldShowPersistentBrowserRail();
-    const bool showPerformanceStrip = shouldShowPersistentPerformanceStrip();
-
-    if (showPerformanceStrip)
-    {
-        constexpr int kPerformanceStripGap = 10;
-        const int kPerformanceStripHeight = computePersistentPerformanceStripHeight(content.getHeight());
-        performanceStripArea = content.removeFromBottom(kPerformanceStripHeight);
-        content.removeFromBottom(kPerformanceStripGap);
-    }
-
-    if (showBrowserRail)
-    {
-        constexpr int kBrowserRailGap = 10;
-        const int kBrowserRailWidth = computePersistentBrowserRailWidth(content.getWidth());
-        browserRailArea = content.removeFromLeft(kBrowserRailWidth);
-        content.removeFromLeft(kBrowserRailGap);
-    }
-
-    auto paintContentCard = [&g](juce::Rectangle<int> areaToPaint)
-    {
-        auto card = areaToPaint.reduced(6).toFloat();
-        g.setColour(uiPanelColour());
-        g.fillRoundedRectangle(card, 10.0f);
-        g.setColour(uiBorderColour());
-        g.drawRoundedRectangle(card.reduced(0.5f), 10.0f, 1.0f);
-    };
-
-    if (currentTabIndex_ == 1)
-        paintSampleBrowserPane(g, content);
-    else if (showBrowserRail)
-        paintSampleBrowserPane(g, browserRailArea);
-
-    if (currentTabIndex_ == 2)
-        paintContentCard(content);
-    else if (currentTabIndex_ == 3)
-        playerPage_.paint(g, content, false);
-    else if (currentTabIndex_ == 4 || currentTabIndex_ == 5)
-        paintContentCard(content);
-
-    if (currentTabIndex_ == 0)
-        paintSampleInspectorPane(g);
-
-    if (showPerformanceStrip)
-        playerPage_.paint(g, performanceStripArea, true);
-
-    if (!isHoveringValidDrop_)
-        return;
-
-    // Drop overlay
-    auto overlay = content.reduced(6);
-    g.setColour(uiAccentColour().withAlpha(0.12f));
-    g.fillRect(overlay);
-    g.setColour(uiAccentColour().withAlpha(0.85f));
-    g.drawRect(overlay, 2);
-    g.setColour(uiTextStrongColour().withAlpha(0.95f));
-    g.setFont(14.0f);
-    const auto dropText = juce::String("Drop a supported sample or instrument to open");
-    g.drawText(dropText, overlay, juce::Justification::centred);
-}
 
 bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 {
     const auto modifiers = key.getModifiers();
     const bool commandDown = modifiers.isCommandDown() || modifiers.isCtrlDown();
     const auto* focusedComponent = juce::Component::getCurrentlyFocusedComponent();
+    if (dynamic_cast<const juce::TextEditor*>(focusedComponent) != nullptr) return false;
+    if (key.getKeyCode() == juce::KeyPress::escapeKey)
+    { showWorkspace(0); return true; }
     const bool mappingShortcutContext = currentTabIndex_ == 2
         && focusedComponent != nullptr
         && (focusedComponent == &mappingZoneListBox_
@@ -10414,31 +9272,6 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
             || focusedComponent == &mappingDuplicateZoneButton_
             || focusedComponent == &mappingSplitZoneButton_
             || focusedComponent == &mappingDeleteZoneButton_);
-
-    if (mappingShortcutContext && commandDown && (key.getTextCharacter() == 'n' || key.getTextCharacter() == 'N'))
-    {
-        createMappingZone();
-        return true;
-    }
-
-    if (mappingShortcutContext && commandDown && modifiers.isShiftDown()
-        && (key.getTextCharacter() == 'd' || key.getTextCharacter() == 'D'))
-    {
-        splitSelectedMappingZone();
-        return true;
-    }
-
-    if (mappingShortcutContext && commandDown && (key.getTextCharacter() == 'd' || key.getTextCharacter() == 'D'))
-    {
-        duplicateSelectedMappingZone();
-        return true;
-    }
-
-    if (mappingShortcutContext && commandDown && (key.getTextCharacter() == 'a' || key.getTextCharacter() == 'A'))
-    {
-        selectAllMappingZones();
-        return true;
-    }
 
     if (mappingShortcutContext
         && (key.getKeyCode() == juce::KeyPress::deleteKey || key.getKeyCode() == juce::KeyPress::backspaceKey))
@@ -10463,22 +9296,20 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
     if (commandDown && modifiers.isAltDown()
         && (key.getTextCharacter() == 'd' || key.getTextCharacter() == 'D'))
     {
-        showDiagnosticsPanel_ = !showDiagnosticsPanel_;
-        diagnosticsToggleButton_.setToggleState(showDiagnosticsPanel_, juce::dontSendNotification);
-        resized();
-        repaint();
+        showWorkspace(0, false, true);
         return true;
     }
 
     if (commandDown && (key.getTextCharacter() == 's' || key.getTextCharacter() == 'S'))
     {
-        saveStateToFile();
+        presetSaveButton_.onClick();
         return true;
     }
 
-    if (commandDown && (key.getTextCharacter() == 'z' || key.getTextCharacter() == 'Z'))
+    if (commandDown && !modifiers.isShiftDown() && (key.getTextCharacter() == 'z' || key.getTextCharacter() == 'Z'))
     {
         syncImportedProgramMappingUndoContext();
+        recordPendingSettingsChange();
         const auto currentSnapshot = captureSettingsSnapshot();
         const auto currentMappingState = captureImportedProgramMappingState();
         if (const auto previous = editorUndoHistory_.undo(currentSnapshot, currentMappingState); previous.has_value())
@@ -10498,9 +9329,11 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
-    if (commandDown && (key.getTextCharacter() == 'y' || key.getTextCharacter() == 'Y'))
+    if (commandDown && ((key.getTextCharacter() == 'y' || key.getTextCharacter() == 'Y')
+        || (modifiers.isShiftDown() && (key.getTextCharacter() == 'z' || key.getTextCharacter() == 'Z'))))
     {
         syncImportedProgramMappingUndoContext();
+        recordPendingSettingsChange();
         const auto currentSnapshot = captureSettingsSnapshot();
         const auto currentMappingState = captureImportedProgramMappingState();
         if (const auto next = editorUndoHistory_.redo(currentSnapshot, currentMappingState); next.has_value())
@@ -10520,22 +9353,6 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
-    if (!commandDown && !modifiers.isAltDown())
-    {
-        const auto character = key.getTextCharacter();
-        if (character >= '1' && character <= '7')
-        {
-            const auto tabIndex = static_cast<int>(character - '1');
-            tabBar_.setCurrentTabIndex(tabIndex);
-            currentTabIndex_ = tabIndex;
-            processor_.setEditorTabIndex(currentTabIndex_);
-            updateTabVisibility();
-            resized();
-            repaint();
-            return true;
-        }
-    }
-
     if (!commandDown && !modifiers.isAltDown()
         && key.getKeyCode() == juce::KeyPress::spaceKey
         && currentTabIndex_ == 4)
@@ -10553,29 +9370,8 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
-    if (key.getKeyCode() == juce::KeyPress::returnKey && (currentTabIndex_ == 1 || shouldShowPersistentBrowserRail()))
-    {
-        const auto selectedRow = sampleBrowserListBox_.getSelectedRow();
-        if (selectedRow >= 0)
-        {
-            loadSampleFromBrowserRow(selectedRow);
-            return true;
-        }
-    }
-
-    if (key == juce::KeyPress::escapeKey)
-    {
-        if (processor_.isInputCaptureRecording())
-        {
-            processor_.stopInputCapture();
-            refreshCaptureWaveform(true);
-            updateCaptureUiState();
-        }
-
-        processor_.panicAllAudio();
-        updateGeneratePreviewButtonText();
-        return true;
-    }
+    if (key.getKeyCode() == juce::KeyPress::returnKey && browserOpen_)
+    { browserLoadButton_.onClick(); return true; }
 
     return juce::AudioProcessorEditor::keyPressed(key);
 }
@@ -10583,6 +9379,7 @@ bool AudiocityAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 void AudiocityAudioProcessorEditor::setSampleRailSnapshotState(const bool browserRailEnabled,
                                                               const bool inspectorRailEnabled)
 {
+    browserOpen_ = browserRailEnabled;
     sampleBrowserRailEnabled_ = browserRailEnabled;
     sampleInspectorRailEnabled_ = inspectorRailEnabled;
     sampleBrowserRailToggleButton_.setToggleState(sampleBrowserRailEnabled_, juce::dontSendNotification);
@@ -10821,6 +9618,16 @@ void AudiocityAudioProcessorEditor::refreshPresetList(const juce::String& prefer
         presetDirectory.findChildFiles(userFiles, juce::File::TypesOfFileToFind::findFiles, false,
             juce::String("*") + kPresetFileExtension);
 
+        auto externalPaths = processor_.getLibraryMetadataSnapshot().getRecentPaths();
+        externalPaths.addArray(processor_.getLibraryMetadataSnapshot().getFavoritePaths());
+        for (const auto& externalPath : externalPaths)
+        {
+            const juce::File externalFile(externalPath);
+            if (externalFile.hasFileExtension("acp") && externalFile.existsAsFile()
+                && !presetFiles.contains(externalFile) && !userFiles.contains(externalFile))
+                userFiles.add(externalFile);
+        }
+
         juce::StringArray seenNames;
         for (const auto& f : presetFiles)
             seenNames.add(f.getFileNameWithoutExtension().toLowerCase());
@@ -10851,6 +9658,12 @@ void AudiocityAudioProcessorEditor::refreshPresetList(const juce::String& prefer
         if (filterText.isNotEmpty() && !label.containsIgnoreCase(filterText))
             continue;
 
+        if (!useSnapshotOverride && index < availablePresetFiles_.size())
+        {
+            const auto path = availablePresetFiles_[index].getFullPathName();
+            if (sampleBrowserFavoritesOnlyToggle_.getToggleState() && !processor_.isLibraryFavorite(path)) continue;
+            if (sampleBrowserRecentOnlyToggle_.getToggleState() && processor_.getLibraryMetadataSnapshot().recentRank(path) < 0) continue;
+        }
         visiblePresetNames.add(label);
         presetCombo_.addItem(label, visiblePresetNames.size());
 
@@ -10918,6 +9731,8 @@ void AudiocityAudioProcessorEditor::refreshPresetList(const juce::String& prefer
 
     suppressPresetComboChange_ = false;
     updatePresetActionButtons();
+    presetBrowserList_.updateContent();
+    presetBrowserList_.repaint();
 }
 
 void AudiocityAudioProcessorEditor::savePreset(const juce::String& presetName)
@@ -10985,84 +9800,19 @@ void AudiocityAudioProcessorEditor::promptSavePreset()
         if (!file.hasFileExtension(kPresetFileExtension))
             file = file.withFileExtension(kPresetFileExtension);
 
-        const auto name = file.getFileName().upToLastOccurrenceOf(kPresetFileExtension, false, false);
-        if (name.isNotEmpty())
-            savePreset(name);
+        savePresetToFile(file);
     });
 }
 
-void AudiocityAudioProcessorEditor::showPresetLoadErrorAndOfferDelete(const juce::File& presetFile,
-    const juce::String& errorMessage)
+void AudiocityAudioProcessorEditor::showPresetLoadErrorAndOfferDelete(const juce::File& file, const juce::String& error)
 {
-    const auto presetName = presetFile.getFileName().upToLastOccurrenceOf(kPresetFileExtension, false, false);
-    juce::String message;
-    message << "There was an error loading preset '" << presetName << "'.\n\n";
-    if (errorMessage.isNotEmpty())
-        message << errorMessage << "\n\n";
-    message << "Delete this preset from disk?";
-
-    auto options = juce::MessageBoxOptions::makeOptionsYesNo(
-        juce::MessageBoxIconType::WarningIcon,
-        "Preset Load Error",
-        message,
-        "Delete Preset",
-        "Keep Preset",
-        this);
-
-    juce::Component::SafePointer<AudiocityAudioProcessorEditor> safeThis(this);
-    juce::NativeMessageBox::showAsync(options, [safeThis, presetFile](int result)
-    {
-        if (safeThis == nullptr)
-            return;
-
-        if (result == 0)
-        {
-            const auto deletedName = presetFile.getFileName().upToLastOccurrenceOf(kPresetFileExtension, false, false);
-            if (!presetFile.deleteFile())
-            {
-                juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                    "Delete Preset",
-                    "Failed to delete preset file.");
-                return;
-            }
-
-            if (safeThis->currentPresetName_ == deletedName)
-                safeThis->currentPresetName_.clear();
-
-            safeThis->refreshPresetList();
-        }
-    });
+    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Unable to load sound",
+        "Could not load " + file.getFileName() + ".\n\n" + error + "\n\nYour previous sound has been retained. Check the source files and try again.");
 }
 
 void AudiocityAudioProcessorEditor::loadPresetFromSelection()
 {
-    const auto file = getSelectedPresetFile();
-    if (file == juce::File{})
-        return;
-
-    if (!file.existsAsFile())
-    {
-        showPresetLoadErrorAndOfferDelete(file, "Preset file does not exist.");
-        return;
-    }
-
-    const auto presetXml = file.loadFileAsString();
-    if (presetXml.isEmpty())
-    {
-        showPresetLoadErrorAndOfferDelete(file, "Failed to read preset file.");
-        return;
-    }
-
-    juce::String errorMessage;
-    if (!processor_.loadPlaybackPresetXml(presetXml, errorMessage))
-    {
-        showPresetLoadErrorAndOfferDelete(file,
-            errorMessage.isNotEmpty() ? errorMessage : "Failed to load preset.");
-        return;
-    }
-
-    currentPresetName_ = presetCombo_.getText();
-    refreshUI(true);
+    loadPresetFile(getSelectedPresetFile());
 }
 
 void AudiocityAudioProcessorEditor::renameSelectedPreset()
@@ -11161,6 +9911,8 @@ void AudiocityAudioProcessorEditor::deleteSelectedPreset()
 
 void AudiocityAudioProcessorEditor::clearSelectedPresetAfterSourceLoad()
 {
+    currentSoundFile_ = {};
+    soundEdited_ = true;
     currentPresetName_.clear();
     suppressPresetComboChange_ = true;
     presetCombo_.setSelectedId(0, juce::dontSendNotification);
@@ -11170,12 +9922,12 @@ void AudiocityAudioProcessorEditor::clearSelectedPresetAfterSourceLoad()
 
 void AudiocityAudioProcessorEditor::updateGeneratePreviewButtonText()
 {
-    generatePreviewButton_.setButtonText(processor_.isGeneratedWaveformPreviewPlaying() ? "Stop" : "Play");
+    generatePreviewButton_.setButtonText(processor_.isGeneratedWaveformPreviewPlaying() ? "Stop preview" : "Preview");
 
     const auto hasCapturedAudio = processor_.getCapturedInputSamples() > 0;
     const auto samplePreviewPlaying = processor_.isSamplePreviewPlaying();
     capturePlayButton_.setEnabled(hasCapturedAudio || samplePreviewPlaying);
-    capturePlayButton_.setButtonText(samplePreviewPlaying ? "Stop" : "Play");
+    capturePlayButton_.setButtonText(samplePreviewPlaying ? "Stop preview" : "Preview");
 }
 
 void AudiocityAudioProcessorEditor::refreshCaptureWaveform(const bool force)
@@ -11607,7 +10359,7 @@ void AudiocityAudioProcessorEditor::paintGroupBoxes(juce::Graphics& g) const
 void AudiocityAudioProcessorEditor::setupTooltips()
 {
     samplePathLabel_.setTooltip(
-        "Shortcuts: Ctrl+O Load  |  Ctrl+Alt+D Toggle Tech Panel  |  Ctrl+Z Undo  |  Ctrl+Y Redo  |  Ctrl+S Save State  |  Ctrl+Shift+S Save Preset  |  Ctrl+D Duplicate Zone  |  Ctrl+Shift+D Split Zone  |  Delete Remove Zone  |  Space Play/Stop (Generate)  |  1-7 Switch Tabs");
+        "Ctrl+O Import | Ctrl+S Save | Ctrl+Shift+S Save As | Ctrl+Z Undo | Ctrl+Y Redo | Esc Return to Sound");
     presetCombo_.setTooltip(
         "Preset Browser - Select a saved sample playback preset");
     presetSaveButton_.setTooltip(
@@ -11714,7 +10466,7 @@ void AudiocityAudioProcessorEditor::setupTooltips()
     mappingEditApplyButton_.setTooltip(
         "Apply zone mapping; with multiple selected rows, Apply uses edited batch controls for every selected zone");
     mappingZoneListBox_.setTooltip(
-        "Imported Program Zones - Ctrl+N creates a zone; Ctrl+A selects all rows; Ctrl or Shift multi-select enables batch edit for velocity fades, gain, pan, RR group/mode, choke, trigger, and loop, or right-click for New, Duplicate, Split, Map Chromatically, Delete, and Clear Velocity Fades");
+        "Select one zone to repair its root, key range, region, gain or playback behavior. Existing round-robin and velocity-fade data is retained.");
     captureRecordButton_.setTooltip(
         "Start/Stop Capture from Plugin Input");
     captureClearButton_.setTooltip(
@@ -12013,14 +10765,12 @@ void AudiocityAudioProcessorEditor::openSampleChooser()
 
 void AudiocityAudioProcessorEditor::updatePlayerKeyboardSizing()
 {
-    const auto whiteKeyCount = countWhiteKeysInRange(kPlayerKeyboardMinMidiNote, kPlayerKeyboardMaxMidiNote);
     constexpr float kWhiteKeyLengthRatio = 6.4f;
     const auto viewportBounds = playerKeyboardViewport_.getLocalBounds();
     if (viewportBounds.isEmpty())
         return;
 
-    const auto whiteKeyWidth = juce::jmax(6.0f,
-        juce::jmin(18.0f, static_cast<float>(viewportBounds.getWidth()) / static_cast<float>(whiteKeyCount)));
+    const auto whiteKeyWidth = 24.0f;
 
     const auto preferredKeyLength = static_cast<int>(std::round(whiteKeyWidth * kWhiteKeyLengthRatio));
     const auto maxKeyboardHeight = juce::jmin(64, viewportBounds.getHeight());
@@ -12028,8 +10778,7 @@ void AudiocityAudioProcessorEditor::updatePlayerKeyboardSizing()
     const auto keyboardHeight = juce::jlimit(minKeyboardHeight, maxKeyboardHeight, preferredKeyLength);
 
     playerKeyboard_.setKeyWidth(whiteKeyWidth);
-    playerKeyboard_.setSize(static_cast<int>(std::ceil(whiteKeyWidth * static_cast<float>(whiteKeyCount))),
-                            keyboardHeight);
+    playerKeyboard_.setSize(viewportBounds.getWidth(), keyboardHeight);
     playerKeyboardViewport_.setViewPosition(0, 0);
 }
 
@@ -12065,6 +10814,7 @@ void AudiocityAudioProcessorEditor::showPadAssignmentDialog(const int padIndex)
                                                                     const auto noteNumber = juce::jlimit(0, 127, note);
                                                                     const auto velocity = juce::jlimit(1, 127, vel);
                                                                     processor_.setPlayerPadAssignment(padIndex, noteNumber, velocity);
+                                                                    soundEdited_ = true;
                                                                     playerPadAssignments_[static_cast<std::size_t>(padIndex)] = { noteNumber, velocity };
                                                                     refreshPlayerPadButtons();
                                                                 });
@@ -12462,28 +11212,14 @@ void AudiocityAudioProcessorEditor::updateSampleInformationDisplay()
 
     waveformResetRangesButton_.setEnabled(sampleLength > 0);
 
-    juce::String waveformSummaryText;
-    if (sampleLength > 0)
-    {
-        waveformSummaryText = "Trim " + sampleInfoPlaybackValue_.getText();
-        if (!playbackIsFullRange)
-            waveformSummaryText += " (" + sampleInfoPlaybackDurationValue_.getText() + ")";
-
-        waveformSummaryText += "  |  Loop " + sampleInfoLoopValue_.getText();
-        if (!loopIsFullRange)
-            waveformSummaryText += " (" + sampleInfoLoopDurationValue_.getText() + ")";
-
-        if (sliceCount > 0)
-            waveformSummaryText += "  |  Slices " + juce::String(sliceCount) + ". Hover to inspect, double-click to split, right-click a boundary to merge or re-slice.";
-
-        waveformSummaryText += "  |  Drag waveform handles. Shift-drag loop handles to move playback too. Wheel zoom, middle-drag pan.";
-    }
-    else
-    {
-        waveformSummaryText = "Load a sample, then drag waveform handles to trim or loop. Wheel zoom, middle-drag pan.";
-    }
-
+    const auto waveformSummaryText = sliceCount > 0
+        ? juce::String(sliceCount) + " slices  |  Double-click to split; right-click a boundary to merge"
+        : hasImportedProgram ? juce::String("Reference sample - edit zone roots, regions and loops in Advanced mapping")
+        : processor_.isGeneratedWaveformLoaded() ? juce::String("Generated cycle  |  Drag handles to trim or loop; wheel to zoom")
+        : sampleLength > 0 ? "Length " + formatDurationFromSamples(sampleLength, sampleRate) + "  |  Drag handles to trim or loop; wheel to zoom"
+        : juce::String("Drop a sample here or Browse factory sounds");
     waveformInteractionSummaryLabel_.setText(waveformSummaryText, juce::dontSendNotification);
+    waveformInteractionSummaryLabel_.setFont(juce::Font(juce::FontOptions(12.0f)));
     waveformInteractionSummaryLabel_.setTooltip(sliceCount > 0
         ? "Slice view: hover a slice to inspect it, double-click the waveform to split at that point, and right-click near a boundary to merge adjacent slices or re-run transient slicing"
         : "Trim and loop are edited directly in the waveform: drag handles, Shift-drag loop handles to move playback too, use the mouse wheel to zoom, and middle-drag to pan");
@@ -12724,7 +11460,7 @@ audiocity::engine::SettingsSnapshot AudiocityAudioProcessorEditor::captureSettin
     else if (processor_.getQualityTier() == AudiocityAudioProcessor::QualityTier::ultra)
         qualityTierIndex = 2;
 
-    return {
+    audiocity::engine::SettingsSnapshot snapshot {
         processor_.getPreloadSamples(),
         qualityTierIndex,
         playbackModeIndex,
@@ -12745,12 +11481,24 @@ audiocity::engine::SettingsSnapshot AudiocityAudioProcessorEditor::captureSettin
         processor_.getCaptureTargetSampleRate(),
         processor_.getCaptureChannelMode(),
         processor_.getCaptureBitDepth(),
-        processor_.getCaptureInputGain()
+        processor_.getCaptureInputGain(),
+        {}
     };
+    for (auto* parameter : processor_.getParameters()) snapshot.parameterValues.push_back(parameter->getValue());
+    return snapshot;
 }
 
 void AudiocityAudioProcessorEditor::applySettingsSnapshot(const audiocity::engine::SettingsSnapshot& snapshot)
 {
+    const auto& parameters = processor_.getParameters();
+    for (int i = 0; i < parameters.size() && i < static_cast<int>(snapshot.parameterValues.size()); ++i)
+    {
+        auto* parameter = parameters[i];
+        const auto value = snapshot.parameterValues[static_cast<std::size_t>(i)];
+        if (parameter->getValue() != value)
+        { parameter->beginChangeGesture(); parameter->setValueNotifyingHost(value); parameter->endChangeGesture(); }
+    }
+
     processor_.setPreloadSamples(snapshot.preloadSamples);
     processor_.setCoarseTuneSemitones(snapshot.coarseTuneSemitones);
     processor_.setFineTuneCents(snapshot.fineTuneCents);

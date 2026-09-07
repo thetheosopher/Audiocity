@@ -262,7 +262,8 @@ set(AUDIOCITY_UI_TEST_VARIANT_SOURCES
     ../src/plugin/PluginSampleHeaderPage.cpp
     ../src/plugin/PluginSampleInfoMetricsLayout.cpp
     ../src/plugin/PluginSampleInspectorCardLayout.cpp
-    ../src/plugin/PluginEditor.cpp)
+    ../src/plugin/PluginEditor.cpp
+    ../src/plugin/PluginInstrumentWorkspace.cpp)
 
 function(audiocity_add_ui_test_support target version_string)
     add_library(${target} STATIC
