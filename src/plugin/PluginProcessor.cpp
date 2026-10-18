@@ -2641,6 +2641,14 @@ bool AudiocityAudioProcessor::ensureImportedProgramSampleAsset(const juce::File&
         return false;
     }
 
+    const auto samplerMetadata = audiocity::engine::audio_file::readEmbeddedSamplerMetadata(
+        sampleFile, buffer.getNumSamples());
+    if (samplerMetadata.errorMessage.isNotEmpty())
+    {
+        errorOut = samplerMetadata.errorMessage;
+        return false;
+    }
+
     // The program may have changed while the file was being decoded, so re-check before adding.
     auto raced = false;
     const auto outcome = importedProgramStore_.edit(
@@ -2662,7 +2670,12 @@ bool AudiocityAudioProcessor::ensureImportedProgramSampleAsset(const juce::File&
             asset.lengthSamples = buffer.getNumSamples();
             asset.numChannels = buffer.getNumChannels();
             asset.sampleRateHz = sampleRateHz;
-            asset.rootMidiNote = 60;
+            asset.rootMidiNote = samplerMetadata.rootMidiNote >= 0
+                ? samplerMetadata.rootMidiNote
+                : 60;
+            asset.defaultTuneCents = samplerMetadata.defaultTuneCents;
+            asset.defaultLoopStart = samplerMetadata.defaultLoopStart;
+            asset.defaultLoopEndExclusive = samplerMetadata.defaultLoopEndExclusive;
             asset.bitDepth = 0;
             asset.embeddedInProgram = false;
 
@@ -2675,7 +2688,11 @@ bool AudiocityAudioProcessor::ensureImportedProgramSampleAsset(const juce::File&
         });
 
     if (raced)
+    {
+        if (samplerMetadata.warningMessage.isNotEmpty())
+            errorOut = "Sample metadata: " + samplerMetadata.warningMessage;
         return sampleAssetIndexOut >= 0;
+    }
 
     if (!outcome.ok)
     {
@@ -2683,6 +2700,8 @@ bool AudiocityAudioProcessor::ensureImportedProgramSampleAsset(const juce::File&
         return false;
     }
 
+    if (samplerMetadata.warningMessage.isNotEmpty())
+        errorOut = "Sample metadata: " + samplerMetadata.warningMessage;
     sampleAssetIndexOut = outcome.resultIndex;
     return sampleAssetIndexOut >= 0;
 }
@@ -2767,6 +2786,9 @@ bool AudiocityAudioProcessor::addSampleAssetToImportedProgram(const juce::File& 
         errorOut = "Failed to create zone for sample asset.";
         return false;
     }
+
+    if (errorOut.isNotEmpty())
+        setLastImportDiagnosticSummary(errorOut);
 
     return true;
 }

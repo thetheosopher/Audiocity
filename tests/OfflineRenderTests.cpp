@@ -2,6 +2,7 @@
 #include <juce_core/juce_core.h>
 #include <juce_dsp/juce_dsp.h>
 
+#include "../src/engine/AudioFileSupport.h"
 #include "../src/engine/EngineCore.h"
 #include "../src/engine/ImportCancellation.h"
 #include "../src/engine/LegacyNkiProbe.h"
@@ -33,6 +34,7 @@
 #include "../src/plugin/ProgramMappingModel.h"
 #include "../src/plugin/ProgramMappingUndoHistory.h"
 #include "../src/plugin/SampleBrowserTooltip.h"
+#include "SamplerMetadataFixtures.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1847,6 +1849,9 @@ bool runProgramMappingCreateZoneTest()
     firstSample.displayName = "first.wav";
     firstSample.lengthSamples = 512;
     firstSample.rootMidiNote = 60;
+    firstSample.defaultTuneCents = 3.25f;
+    firstSample.defaultLoopStart = 16;
+    firstSample.defaultLoopEndExclusive = 32;
     program.sampleAssets.push_back(firstSample);
 
     SampleAsset secondSample;
@@ -1870,7 +1875,11 @@ bool runProgramMappingCreateZoneTest()
         && program.zones[0].velocityRange.low == 0
         && program.zones[0].velocityRange.high == 127
         && program.zones[0].sampleStart == 0
-        && program.zones[0].sampleEndExclusive == 512))
+        && program.zones[0].sampleEndExclusive == 512
+        && std::abs(program.zones[0].tuneCents - 3.25f) <= 1.0e-6f
+        && program.zones[0].loopStart == 16
+        && program.zones[0].loopEndExclusive == 32
+        && program.zones[0].loopMode == ZoneLoopMode::sustain))
     {
         return false;
     }
@@ -8378,6 +8387,404 @@ bool runFilterModulationAmountsAreBipolarTest()
         && std::abs(applied.velocityAmountHz - 12000.0f) <= 1.0e-6f;
 }
 
+struct TemporaryWaveSamplerFile
+{
+    juce::File file = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_wave_sampler_metadata", ".wav");
+
+    ~TemporaryWaveSamplerFile()
+    {
+        file.deleteFile();
+    }
+};
+
+bool writeWaveSamplerFixture(const juce::File& file,
+                             const juce::uint32 loopType,
+                             const juce::uint32 loopFraction,
+                             const juce::uint32 playCount,
+                             const juce::uint32 samplerDataBytes,
+                             const juce::uint32 rootPitchFraction = 0)
+{
+    constexpr juce::uint32 sampleRate = 48000;
+    constexpr int sampleCount = 32;
+
+    juce::MemoryOutputStream body;
+    appendFourcc(body, "WAVE");
+    auto appendChunk = [&body](const char* id, const juce::MemoryOutputStream& payload)
+    {
+        appendFourcc(body, id);
+        appendU32LE(body, static_cast<juce::uint32>(payload.getDataSize()));
+        body.write(payload.getData(), payload.getDataSize());
+        if ((payload.getDataSize() & 1u) != 0)
+            body.writeByte(0);
+    };
+
+    juce::MemoryOutputStream format;
+    appendU16LE(format, 1);
+    appendU16LE(format, 1);
+    appendU32LE(format, sampleRate);
+    appendU32LE(format, sampleRate * 2);
+    appendU16LE(format, 2);
+    appendU16LE(format, 16);
+    appendChunk("fmt ", format);
+
+    juce::MemoryOutputStream sampler;
+    appendU32LE(sampler, 0);
+    appendU32LE(sampler, 0);
+    appendU32LE(sampler, 20833);
+    appendU32LE(sampler, 48);
+    appendU32LE(sampler, rootPitchFraction);
+    appendU32LE(sampler, 0);
+    appendU32LE(sampler, 0);
+    appendU32LE(sampler, 1);
+    appendU32LE(sampler, samplerDataBytes);
+    appendU32LE(sampler, 0);
+    appendU32LE(sampler, loopType);
+    appendU32LE(sampler, 4);
+    appendU32LE(sampler, 11);
+    appendU32LE(sampler, loopFraction);
+    appendU32LE(sampler, playCount);
+    appendChunk("smpl", sampler);
+
+    juce::MemoryOutputStream audio;
+    for (int sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex)
+        appendS16LE(audio, sampleIndex >= 4 && sampleIndex < 12 ? 8192 : 0);
+    appendChunk("data", audio);
+
+    juce::MemoryOutputStream wave;
+    appendFourcc(wave, "RIFF");
+    appendU32LE(wave, static_cast<juce::uint32>(body.getDataSize()));
+    wave.write(body.getData(), body.getDataSize());
+    return file.replaceWithData(wave.getData(), wave.getDataSize());
+}
+
+bool runWaveSamplerMetadataLibraryPlaybackGoldenTest()
+{
+    using namespace audiocity::engine;
+
+    constexpr int sampleCount = 32;
+    constexpr int sampleRate = 48000;
+    constexpr int loopStart = 4;
+    constexpr int loopEndExclusive = 12;
+    constexpr int blockSize = 16;
+
+    TemporaryWaveSamplerFile fixture;
+    if (!writeWaveSamplerFixture(fixture.file, 0, 0, 0, 0))
+        return false;
+
+    const auto metadata = audio_file::readWaveSamplerMetadata(fixture.file, sampleCount);
+    if (metadata.errorMessage.isNotEmpty()
+        || metadata.rootMidiNote != 48
+        || !metadata.hasForwardLoop()
+        || metadata.defaultLoopStart != loopStart
+        || metadata.defaultLoopEndExclusive != loopEndExclusive)
+    {
+        return false;
+    }
+
+    juce::AudioFormatManager formatManager;
+    audio_file::registerAudioFormats(formatManager);
+    auto openResult = audio_file::openReaderForFile(formatManager, fixture.file);
+    if (openResult.reader == nullptr
+        || openResult.reader->lengthInSamples != sampleCount
+        || openResult.reader->numChannels != 1)
+    {
+        return false;
+    }
+
+    juce::AudioBuffer<float> sample(1, sampleCount);
+    if (!openResult.reader->read(&sample, 0, sampleCount, 0, true, true))
+        return false;
+
+    Program program;
+    SampleAsset asset;
+    asset.sourcePath = fixture.file.getFullPathName().toStdString();
+    asset.displayName = fixture.file.getFileNameWithoutExtension().toStdString();
+    asset.lengthSamples = sampleCount;
+    asset.numChannels = 1;
+    asset.sampleRateHz = sampleRate;
+    asset.rootMidiNote = metadata.rootMidiNote;
+    asset.defaultLoopStart = metadata.defaultLoopStart;
+    asset.defaultLoopEndExclusive = metadata.defaultLoopEndExclusive;
+    program.sampleAssets.push_back(asset);
+
+    if (audiocity::plugin::createProgramZoneForSampleAsset(program, 0, -1) != 0)
+        return false;
+
+    const auto& zone = program.zones.front();
+    if (zone.rootMidiNote != 48
+        || zone.keyRange.low != 48
+        || zone.keyRange.high != 48
+        || zone.loopStart != loopStart
+        || zone.loopEndExclusive != loopEndExclusive
+        || zone.loopMode != ZoneLoopMode::sustain)
+    {
+        return false;
+    }
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, 2);
+    EngineCore::AdsrSettings amp;
+    amp.attackSeconds = 0.0001f;
+    amp.decaySeconds = 0.001f;
+    amp.sustainLevel = 1.0f;
+    amp.releaseSeconds = 0.1f;
+    engine.setAmpEnvelope(amp);
+
+    EngineCore::FilterSettings filter;
+    filter.baseCutoffHz = 20000.0f;
+    filter.envAmountHz = 0.0f;
+    filter.resonance = 0.0f;
+    engine.setFilterSettings(filter);
+
+    EngineCore::DcFilterSettings dc;
+    dc.enabled = false;
+    engine.setDcFilterSettings(dc);
+
+    if (!engine.setProgram(program, { sample }))
+        return false;
+
+    juce::AudioBuffer<float> block(2, blockSize);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 48, 1.0f), 0);
+    engine.render(block, midi);
+    const auto firstBlockEnergy = blockEnergy(block);
+
+    midi.clear();
+    engine.render(block, midi);
+    const auto playbackStates = engine.getVoicePlaybackStates();
+    for (const auto& state : playbackStates)
+    {
+        if (state.active)
+        {
+            return firstBlockEnergy > 0.1f
+                && state.zoneIndex == 0
+                && state.sampleAssetIndex == 0
+                && state.sampleIndex == 8;
+        }
+    }
+
+    return false;
+}
+
+bool runWaveSamplerMetadataRejectsUnsupportedAndMalformedLoopsTest()
+{
+    constexpr int sampleCount = 32;
+    TemporaryWaveSamplerFile unsupportedFixture;
+    if (!writeWaveSamplerFixture(unsupportedFixture.file, 1, 0, 0, 0))
+        return false;
+
+    const auto unsupported = audiocity::engine::audio_file::readWaveSamplerMetadata(
+        unsupportedFixture.file, sampleCount);
+    if (unsupported.errorMessage.isNotEmpty()
+        || unsupported.rootMidiNote != 48
+        || unsupported.hasForwardLoop()
+        || unsupported.warningMessage.isEmpty())
+    {
+        return false;
+    }
+
+    TemporaryWaveSamplerFile malformedFixture;
+    if (!writeWaveSamplerFixture(malformedFixture.file, 0, 0, 0, 1))
+        return false;
+
+    const auto malformed = audiocity::engine::audio_file::readWaveSamplerMetadata(
+        malformedFixture.file, sampleCount);
+    return malformed.errorMessage.isNotEmpty();
+}
+
+bool runWaveMidiPitchFractionSetsDefaultZoneTuneTest()
+{
+    using namespace audiocity::engine;
+    constexpr juce::uint32 quarterSemitone = 0x40000000u;
+    TemporaryWaveSamplerFile fixture;
+    if (!writeWaveSamplerFixture(fixture.file, 0, 0, 0, 0, quarterSemitone))
+        return false;
+
+    const auto metadata = audio_file::readWaveSamplerMetadata(fixture.file, 32);
+    if (metadata.errorMessage.isNotEmpty()
+        || metadata.rootMidiNote != 48
+        || std::abs(metadata.defaultTuneCents - 25.0f) > 1.0e-5f)
+    {
+        return false;
+    }
+
+    Program program;
+    SampleAsset asset;
+    asset.lengthSamples = 32;
+    asset.numChannels = 1;
+    asset.sampleRateHz = 48000.0;
+    asset.rootMidiNote = metadata.rootMidiNote;
+    asset.defaultTuneCents = metadata.defaultTuneCents;
+    program.sampleAssets.push_back(asset);
+    if (audiocity::plugin::createProgramZoneForSampleAsset(program, 0, -1) != 0)
+        return false;
+
+    return std::abs(program.zones.front().tuneCents - 25.0f) <= 1.0e-5f;
+}
+
+struct TemporaryAiffSamplerFile
+{
+    juce::File file = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("audiocity_aiff_sampler_metadata", ".aiff");
+
+    ~TemporaryAiffSamplerFile()
+    {
+        file.deleteFile();
+    }
+};
+
+bool runAiffSamplerMetadataLibraryPlaybackGoldenTest()
+{
+    using namespace audiocity::engine;
+    constexpr int sampleCount = 32;
+    constexpr int sampleRate = 44100;
+    constexpr int blockSize = 16;
+    constexpr int loopStart = 4;
+    constexpr int loopEndExclusive = 12;
+
+    TemporaryAiffSamplerFile fixture;
+    if (!audiocity::test_fixtures::writeAiffSamplerFixture(fixture.file, 0))
+        return false;
+
+    const auto metadata = audio_file::readAiffSamplerMetadata(fixture.file, sampleCount);
+    if (metadata.errorMessage.isNotEmpty()
+        || metadata.warningMessage.isNotEmpty()
+        || metadata.rootMidiNote != 48
+        || std::abs(metadata.defaultTuneCents) > 1.0e-6f
+        || !metadata.hasForwardLoop()
+        || metadata.defaultLoopStart != loopStart
+        || metadata.defaultLoopEndExclusive != loopEndExclusive)
+    {
+        return false;
+    }
+
+    juce::AudioFormatManager formatManager;
+    audio_file::registerAudioFormats(formatManager);
+    auto openResult = audio_file::openReaderForFile(formatManager, fixture.file);
+    if (openResult.reader == nullptr
+        || openResult.reader->lengthInSamples != sampleCount
+        || openResult.reader->numChannels != 1)
+    {
+        return false;
+    }
+
+    juce::AudioBuffer<float> sample(1, sampleCount);
+    if (!openResult.reader->read(&sample, 0, sampleCount, 0, true, true))
+        return false;
+
+    Program program;
+    SampleAsset asset;
+    asset.sourcePath = fixture.file.getFullPathName().toStdString();
+    asset.displayName = fixture.file.getFileNameWithoutExtension().toStdString();
+    asset.lengthSamples = sampleCount;
+    asset.numChannels = 1;
+    asset.sampleRateHz = sampleRate;
+    asset.rootMidiNote = metadata.rootMidiNote;
+    asset.defaultTuneCents = metadata.defaultTuneCents;
+    asset.defaultLoopStart = metadata.defaultLoopStart;
+    asset.defaultLoopEndExclusive = metadata.defaultLoopEndExclusive;
+    program.sampleAssets.push_back(asset);
+    if (audiocity::plugin::createProgramZoneForSampleAsset(program, 0, -1) != 0)
+        return false;
+
+    const auto& zone = program.zones.front();
+    if (zone.rootMidiNote != 48
+        || zone.keyRange.low != 48
+        || zone.keyRange.high != 48
+        || std::abs(zone.tuneCents) > 1.0e-6f
+        || zone.loopStart != loopStart
+        || zone.loopEndExclusive != loopEndExclusive
+        || zone.loopMode != ZoneLoopMode::sustain)
+    {
+        return false;
+    }
+
+    EngineCore engine;
+    engine.prepare(sampleRate, blockSize, 2);
+    EngineCore::AdsrSettings amp;
+    amp.attackSeconds = 0.0001f;
+    amp.decaySeconds = 0.001f;
+    amp.sustainLevel = 1.0f;
+    amp.releaseSeconds = 0.1f;
+    engine.setAmpEnvelope(amp);
+
+    EngineCore::FilterSettings filter;
+    filter.baseCutoffHz = 20000.0f;
+    filter.envAmountHz = 0.0f;
+    filter.resonance = 0.0f;
+    engine.setFilterSettings(filter);
+
+    EngineCore::DcFilterSettings dc;
+    dc.enabled = false;
+    engine.setDcFilterSettings(dc);
+
+    if (!engine.setProgram(program, { sample }))
+        return false;
+
+    juce::AudioBuffer<float> block(2, blockSize);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 48, 1.0f), 0);
+    engine.render(block, midi);
+    const auto firstBlockEnergy = blockEnergy(block);
+    midi.clear();
+    engine.render(block, midi);
+
+    const auto playbackStates = engine.getVoicePlaybackStates();
+    for (const auto& state : playbackStates)
+    {
+        if (state.active)
+            return firstBlockEnergy > 0.1f
+                && state.zoneIndex == 0
+                && state.sampleAssetIndex == 0
+                && state.sampleIndex == 8;
+    }
+
+    return false;
+}
+
+bool runAiffSamplerMetadataRejectsUnsupportedAndMalformedLoopsTest()
+{
+    TemporaryAiffSamplerFile unsupportedFixture;
+    if (!audiocity::test_fixtures::writeAiffSamplerFixture(unsupportedFixture.file, -15, 2))
+        return false;
+
+    const auto unsupported = audiocity::engine::audio_file::readAiffSamplerMetadata(
+        unsupportedFixture.file, 32);
+    if (unsupported.errorMessage.isNotEmpty()
+        || unsupported.rootMidiNote != 48
+        || std::abs(unsupported.defaultTuneCents - (-15.0f)) > 1.0e-6f
+        || unsupported.hasForwardLoop()
+        || unsupported.warningMessage.isEmpty())
+    {
+        return false;
+    }
+
+    TemporaryAiffSamplerFile missingMarkerFixture;
+    if (!audiocity::test_fixtures::writeAiffSamplerFixture(
+            missingMarkerFixture.file, -15, 1, 77, false, 88))
+    {
+        return false;
+    }
+
+    const auto missingMarker = audiocity::engine::audio_file::readAiffSamplerMetadata(
+        missingMarkerFixture.file, 32);
+    if (missingMarker.errorMessage.isNotEmpty()
+        || missingMarker.hasForwardLoop()
+        || !missingMarker.warningMessage.contains("missing or ambiguous MARK IDs"))
+    {
+        return false;
+    }
+
+    TemporaryAiffSamplerFile malformedFixture;
+    if (!audiocity::test_fixtures::writeAiffSamplerFixture(malformedFixture.file, -15, 1, 77, true))
+        return false;
+
+    const auto malformed = audiocity::engine::audio_file::readAiffSamplerMetadata(
+        malformedFixture.file, 32);
+    return malformed.errorMessage.isNotEmpty();
+}
+
 bool runEmbeddedLoopMetadataLoadsWithoutRootNoteTest()
 {
     constexpr int channels = 2;
@@ -14162,7 +14569,7 @@ bool runSfzExporterRoundTripTest()
     zoneLow.rootMidiNote = 55;
     zoneLow.gainDb = -3.0f;
     zoneLow.pan = -0.5f;
-    zoneLow.tuneCents = 12.0f;
+    zoneLow.tuneCents = 12.375f;
     zoneLow.sampleEndExclusive = sampleLength;
     zoneLow.loopMode = ZoneLoopMode::noLoop;
     program.zones.push_back(zoneLow);
@@ -14230,7 +14637,7 @@ bool runSfzExporterRoundTripTest()
         return cleanupAndFail();
     if (std::abs(lowImported->pan - (-0.5f)) > 0.05f)
         return cleanupAndFail();
-    if (std::abs(lowImported->tuneCents - 12.0f) > 1.0f)
+    if (std::abs(lowImported->tuneCents - 12.375f) > 1.0e-5f)
         return cleanupAndFail();
     if (lowImported->loopMode != ZoneLoopMode::noLoop)
         return cleanupAndFail();
@@ -16277,6 +16684,11 @@ int main(const int argc, char** argv)
         AUDIOCITY_TEST(engine, runLoadNcwSampleViaConverterTest, 223),
         AUDIOCITY_TEST(engine, runLoadNcwSampleViaConverterQuotesShellMetacharactersTest, 239),
         AUDIOCITY_TEST(engine, runFilterModulationAmountsAreBipolarTest, 70),
+        AUDIOCITY_TEST(import, runWaveSamplerMetadataLibraryPlaybackGoldenTest, 258),
+        AUDIOCITY_TEST(import, runWaveSamplerMetadataRejectsUnsupportedAndMalformedLoopsTest, 259),
+        AUDIOCITY_TEST(import, runWaveMidiPitchFractionSetsDefaultZoneTuneTest, 260),
+        AUDIOCITY_TEST(import, runAiffSamplerMetadataLibraryPlaybackGoldenTest, 261),
+        AUDIOCITY_TEST(import, runAiffSamplerMetadataRejectsUnsupportedAndMalformedLoopsTest, 262),
         AUDIOCITY_TEST(state, runEmbeddedLoopMetadataLoadsWithoutRootNoteTest, 64),
         AUDIOCITY_TEST(engine, runRexRuntimeFallbackSmokeTest, 62),
         AUDIOCITY_TEST(import, runRexSliceProgramBuildTest, 114),

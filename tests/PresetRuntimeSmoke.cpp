@@ -17,6 +17,7 @@
 #include "plugin/AudioStateCodec.h"
 #include "plugin/PluginProcessor.h"
 #include "plugin/PresetJson.h"
+#include "SamplerMetadataFixtures.h"
 
 #if JUCE_WINDOWS
 #include <windows.h>
@@ -84,14 +85,31 @@ int readEmbeddedChannelCount(const juce::ValueTree& state)
         : 0;
 }
 
-bool writeStereoToneWav(const juce::File& wavFile, const int sampleRate, const int sampleLength)
+bool writeStereoToneWav(const juce::File& wavFile,
+                        const int sampleRate,
+                        const int sampleLength,
+                        const bool includeSamplerLoop = false)
 {
     juce::WavAudioFormat wav;
     std::unique_ptr<juce::FileOutputStream> out(wavFile.createOutputStream());
     if (out == nullptr)
         return false;
 
-    std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(out.get(), sampleRate, 2, 16, {}, 0));
+    juce::StringPairArray metadata;
+    if (includeSamplerLoop)
+    {
+        metadata.set("MidiUnityNote", "48");
+        metadata.set("MidiPitchFraction", "1073741824");
+        metadata.set("NumSampleLoops", "1");
+        metadata.set("Loop0Type", "0");
+        metadata.set("Loop0Start", "4");
+        metadata.set("Loop0End", "11");
+        metadata.set("Loop0Fraction", "0");
+        metadata.set("Loop0PlayCount", "0");
+    }
+
+    std::unique_ptr<juce::AudioFormatWriter> writer(
+        wav.createWriterFor(out.get(), sampleRate, 2, 16, metadata, 0));
     if (writer == nullptr)
         return false;
 
@@ -897,7 +915,7 @@ int main()
     // Adding a sample asset commits the decoded audio alongside the program, and asking for the
     // same file twice reuses the asset that is already held.
     const auto addedSampleFile = tempDirectory.getChildFile("AddedAsset.wav");
-    if (!writeStereoToneWav(addedSampleFile, 48000, 256))
+    if (!writeStereoToneWav(addedSampleFile, 48000, 256, true))
     {
         std::fprintf(stderr, "Failed to write the sample used for asset-add coverage.\n");
         tempDirectory.deleteRecursively();
@@ -908,11 +926,120 @@ int main()
     juce::String addAssetError;
     if (!editProcessor->ensureImportedProgramSampleAsset(addedSampleFile, addedAssetIndex, addAssetError)
         || addedAssetIndex != 1
-        || editProcessor->getImportedProgramSampleAssetNames().size() != 2)
+        || editProcessor->getImportedProgramSampleAssetNames().size() != 2
+        || addAssetError.isNotEmpty())
     {
         std::fprintf(stderr, "Adding an imported-program sample asset failed: %s\n", addAssetError.toRawUTF8());
         tempDirectory.deleteRecursively();
         return 29;
+    }
+
+    const auto metadataZoneIndex = editProcessor->createImportedProgramZoneForSampleAsset(addedAssetIndex);
+    const auto metadataRows = editProcessor->getImportedProgramZoneRows();
+    if (metadataZoneIndex < 0
+        || metadataRows.size() != 3
+        || metadataRows.back().zoneIndex != metadataZoneIndex
+        || metadataRows.back().rootMidiNote != 48
+        || metadataRows.back().loopStart != 4
+        || metadataRows.back().loopEnd != 11
+        || metadataRows.back().loopModeValue != audiocity::engine::ZoneLoopMode::sustain)
+    {
+        std::fprintf(stderr, "WAVE sampler metadata did not seed the newly added sample zone.\n");
+        tempDirectory.deleteRecursively();
+        return 33;
+    }
+
+    const auto waveMappingState = editProcessor->createImportedProgramMappingState();
+    const auto waveZoneTune = static_cast<float>(
+        waveMappingState.getChild(2).getProperty("tuneCents", 0.0));
+    if (std::abs(waveZoneTune - 25.0f) > 1.0e-5f)
+    {
+        std::fprintf(stderr, "WAVE MIDI pitch fraction did not become default zone tuning.\n");
+        tempDirectory.deleteRecursively();
+        return 35;
+    }
+
+    if (!editProcessor->deleteImportedProgramZone(metadataZoneIndex)
+        || editProcessor->getImportedProgramZoneCount() != 2)
+    {
+        std::fprintf(stderr, "Could not remove the temporary WAVE metadata test zone.\n");
+        tempDirectory.deleteRecursively();
+        return 34;
+    }
+
+    const auto addedAiffFile = tempDirectory.getChildFile("AiffSampler.aiff");
+    if (!audiocity::test_fixtures::writeAiffSamplerFixture(addedAiffFile))
+    {
+        std::fprintf(stderr, "Failed to write the AIFF sampler metadata fixture.\n");
+        tempDirectory.deleteRecursively();
+        return 36;
+    }
+
+    AudiocityAudioProcessor aiffProcessor;
+    juce::String aiffError;
+    if (!aiffProcessor.createEmptyImportedSfzProgram("AIFF metadata smoke")
+        || !aiffProcessor.addSampleAssetToImportedProgram(addedAiffFile, aiffError))
+    {
+        std::fprintf(stderr, "Adding the AIFF sampler fixture failed: %s\n", aiffError.toRawUTF8());
+        tempDirectory.deleteRecursively();
+        return 37;
+    }
+
+    auto aiffRows = aiffProcessor.getImportedProgramZoneRows();
+    const auto aiffMappingState = aiffProcessor.createImportedProgramMappingState();
+    const auto aiffZoneTune = static_cast<float>(
+        aiffMappingState.getChild(0).getProperty("tuneCents", 0.0));
+    if (aiffRows.size() != 1
+        || aiffRows[0].rootMidiNote != 48
+        || aiffRows[0].loopStart != 4
+        || aiffRows[0].loopEnd != 11
+        || aiffRows[0].loopModeValue != audiocity::engine::ZoneLoopMode::sustain
+        || std::abs(aiffZoneTune - (-15.0f)) > 1.0e-6f)
+    {
+        std::fprintf(stderr, "AIFF INST/MARK metadata did not seed the sample zone.\n");
+        tempDirectory.deleteRecursively();
+        return 38;
+    }
+
+    const auto aiffLibraryFile = tempDirectory.getChildFile("AiffSamplerLibrary.sfz");
+    if (!aiffProcessor.saveImportedProgramAsSfz(aiffLibraryFile, false, aiffError))
+    {
+        std::fprintf(stderr, "Saving the AIFF metadata library failed: %s\n", aiffError.toRawUTF8());
+        tempDirectory.deleteRecursively();
+        return 39;
+    }
+
+    const auto serializedAiffLibrary = aiffLibraryFile.loadFileAsString();
+    if (!serializedAiffLibrary.contains("pitch_keycenter=48")
+        || !serializedAiffLibrary.contains("tune=-15")
+        || !serializedAiffLibrary.contains("loop_start=4 loop_end=11"))
+    {
+        std::fprintf(stderr, "SFZ export omitted AIFF root, tuning, or loop metadata.\n");
+        tempDirectory.deleteRecursively();
+        return 40;
+    }
+
+    if (!aiffProcessor.importSfzProgram(aiffLibraryFile))
+    {
+        std::fprintf(stderr, "Re-importing the AIFF metadata SFZ library failed.\n");
+        tempDirectory.deleteRecursively();
+        return 41;
+    }
+
+    aiffRows = aiffProcessor.getImportedProgramZoneRows();
+    const auto restoredAiffMappingState = aiffProcessor.createImportedProgramMappingState();
+    const auto restoredAiffZoneTune = static_cast<float>(
+        restoredAiffMappingState.getChild(0).getProperty("tuneCents", 0.0));
+    if (aiffRows.size() != 1
+        || aiffRows[0].rootMidiNote != 48
+        || aiffRows[0].loopStart != 4
+        || aiffRows[0].loopEnd != 11
+        || aiffRows[0].loopModeValue != audiocity::engine::ZoneLoopMode::sustain
+        || std::abs(restoredAiffZoneTune - (-15.0f)) > 1.0e-6f)
+    {
+        std::fprintf(stderr, "AIFF metadata changed across SFZ export/re-import.\n");
+        tempDirectory.deleteRecursively();
+        return 42;
     }
 
     auto repeatedAssetIndex = -1;

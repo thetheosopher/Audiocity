@@ -1290,7 +1290,9 @@ private:
     bool commitMappingZoneEdit(const audiocity::plugin::ProgramZoneEdit& edit, const juce::String& statusText);
     [[nodiscard]] bool isSampleBrowserDragSource(const juce::DragAndDropTarget::SourceDetails& dragSourceDetails) const;
     [[nodiscard]] juce::File sampleFileFromDragSource(const juce::DragAndDropTarget::SourceDetails& dragSourceDetails) const;
-    bool ensureDraggedSampleAvailable(const juce::File& sampleFile, int& sampleAssetIndexOut);
+    bool ensureDraggedSampleAvailable(const juce::File& sampleFile,
+                                      int& sampleAssetIndexOut,
+                                      juce::String& warningOut);
     bool assignDraggedSampleToMappingZone(const juce::File& sampleFile, int zoneIndex);
     bool createMappingZoneFromDraggedSample(const juce::File& sampleFile, int midiNote);
     void handleMappingZoneListSampleDrop(int row, const juce::DragAndDropTarget::SourceDetails& dragSourceDetails);
@@ -1400,4 +1402,3 @@ private:
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudiocityAudioProcessorEditor)
 };
-

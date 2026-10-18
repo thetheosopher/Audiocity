@@ -126,6 +126,9 @@ struct SampleAsset
     int numChannels = 0;
     double sampleRateHz = 0.0;
     int rootMidiNote = 60;
+    float defaultTuneCents = 0.0f;
+    int defaultLoopStart = -1;
+    int defaultLoopEndExclusive = -1;
     int bitDepth = 0;
     bool embeddedInProgram = false;
 

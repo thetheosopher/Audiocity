@@ -116,10 +116,45 @@ Audiocity's native export format.
   * **Save Library…** — save-mode file chooser writing `.sfz`. Default
     enables copy-samples-on-save.
 
-## 5. Tests
+## 5. Embedded WAVE sampler metadata
+
+When a raw WAVE sample is added, Audiocity reads the MIDI unity note and its
+`MidiPitchFraction` correction. It imports the first `smpl` loop only when it
+is an integer, forward loop with unlimited play count. The WAVE loop end is
+inclusive on disk and is converted to the program model's exclusive end.
+These values seed a newly created zone; they do not replace explicit settings
+on an existing mapping. Finite loops, alternate/backward loops, and additional
+loops are not imported and produce a diagnostic.
+
+## 6. Embedded AIFF sampler metadata
+
+For AIFF/AIFC samples, Audiocity reads `INST` base note and signed detune, then
+resolves sustain-loop marker IDs through `MARK`. This profile imports only
+forward sustain loops (mode 1). The end marker position is treated as
+exclusive, matching the libsndfile compatibility profile; this is deliberate
+and tested rather than inferred from WAVE's inclusive-end rule. Missing or
+ambiguous marker IDs, ping-pong/release loops, and non-default note/velocity
+ranges or gain produce diagnostics instead of being silently applied.
+
+## 7. Tests
 
 `tests/OfflineRenderTests.cpp` gains:
 
+* `runWaveSamplerMetadataLibraryPlaybackGoldenTest` — build a RIFF/WAVE file
+  with an actual `smpl` chunk, verify root/loop metadata becomes a new zone's
+  default, and render the looped zone against a fixed playback-position
+  expectation.
+* `runWaveSamplerMetadataRejectsUnsupportedAndMalformedLoopsTest` — verify
+  unsupported loop semantics produce a warning and malformed sampler payloads
+  produce an error.
+* `runWaveMidiPitchFractionSetsDefaultZoneTuneTest` — verify the fractional
+  root correction becomes zone tuning in cents.
+* `runAiffSamplerMetadataLibraryPlaybackGoldenTest` and
+  `runAiffSamplerMetadataRejectsUnsupportedAndMalformedLoopsTest` — cover
+  marker-ID resolution, the exclusive end convention, playback, and failures.
+* `PresetRuntimeSmoke` — exercise the actual processor asset-add path with a
+  WAVE `smpl` chunk and AIFF `INST`/`MARK` chunks, then save/re-import SFZ to
+  verify root, tuning, and loop metadata round-trip.
 * `runSfzExporterRoundTripTest` — build a 2-zone `Program` referencing
   a synthesised WAV, export, re-import via `SfzImporter`, assert zone
   count, key/velocity ranges, root note, loop mode, gain/pan/tune,
@@ -129,7 +164,7 @@ Audiocity's native export format.
   2 → `saveImportedProgramAsSfz`, then re-import the saved SFZ and
   verify zone count.
 
-## 6. Future work (not in this milestone)
+## 8. Future work (not in this milestone)
 
 * Per-zone batch sample-replace (point an existing zone at a new file).
 * Velocity-layer / round-robin assistants that auto-fill ranges given a

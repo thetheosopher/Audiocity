@@ -290,7 +290,7 @@ ExportResult exportProgramToSfz(const juce::File& destSfz,
                 << " xfout_hivel=" << juce::String(zone.velocityFadeOut.high) << '\n';
 
         if (std::fabs(zone.tuneCents) > 0.0001f)
-            out << "tune=" << juce::String(static_cast<int>(std::lround(zone.tuneCents))) << '\n';
+            out << "tune=" << formatFloatShort(zone.tuneCents, 6) << '\n';
         if (std::fabs(zone.gainDb) > 0.0001f)
             out << "volume=" << formatFloatShort(zone.gainDb, 2) << '\n';
         if (std::fabs(zone.pan) > 0.0001f)

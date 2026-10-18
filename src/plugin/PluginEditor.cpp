@@ -6860,8 +6860,11 @@ void AudiocityAudioProcessorEditor::addSampleToCurrentLibrary()
         safeThis->updateMappingDetails();
         safeThis->updateMappingEditControls();
         safeThis->updateDiagnosticsStatusText();
+        auto status = "Added " + file.getFileName() + " to library";
+        if (errorMessage.isNotEmpty())
+            status += " | " + errorMessage;
         safeThis->mappingEditStatusLabel_.setText(
-            "Added " + file.getFileName() + " to library",
+            status,
             juce::dontSendNotification);
     });
 }
@@ -7267,11 +7270,15 @@ juce::File AudiocityAudioProcessorEditor::sampleFileFromDragSource(
 }
 
 bool AudiocityAudioProcessorEditor::ensureDraggedSampleAvailable(const juce::File& sampleFile,
-                                                                 int& sampleAssetIndexOut)
+                                                                 int& sampleAssetIndexOut,
+                                                                 juce::String& warningOut)
 {
     juce::String errorOut;
     if (processor_.ensureImportedProgramSampleAsset(sampleFile, sampleAssetIndexOut, errorOut))
+    {
+        warningOut = errorOut;
         return true;
+    }
 
     mappingEditStatusLabel_.setText(
         errorOut.isNotEmpty() ? errorOut : juce::String("Could not add dragged sample"),
@@ -7286,7 +7293,8 @@ bool AudiocityAudioProcessorEditor::assignDraggedSampleToMappingZone(const juce:
         return false;
 
     int sampleAssetIndex = -1;
-    if (!ensureDraggedSampleAvailable(sampleFile, sampleAssetIndex))
+    juce::String metadataWarning;
+    if (!ensureDraggedSampleAvailable(sampleFile, sampleAssetIndex, metadataWarning))
         return false;
 
     const auto rowIt = std::find_if(mappingZoneRows_.begin(),
@@ -7311,8 +7319,17 @@ bool AudiocityAudioProcessorEditor::assignDraggedSampleToMappingZone(const juce:
     edit.velocityHigh = rowIt->velocityHigh;
     edit.rootMidiNote = rowIt->rootMidiNote;
 
-    return commitMappingZoneEdit(edit,
-        "Zone " + juce::String(zoneIndex + 1) + " sample set to " + sampleFile.getFileName());
+    auto status = "Zone " + juce::String(zoneIndex + 1) + " sample set to " + sampleFile.getFileName();
+    if (metadataWarning.isNotEmpty())
+        status += " | " + metadataWarning;
+
+    const auto committed = commitMappingZoneEdit(edit, status);
+    if (committed && metadataWarning.isNotEmpty())
+    {
+        processor_.setImportDiagnosticSummary(metadataWarning);
+        updateDiagnosticsStatusText();
+    }
+    return committed;
 }
 
 bool AudiocityAudioProcessorEditor::createMappingZoneFromDraggedSample(const juce::File& sampleFile,
@@ -7338,11 +7355,18 @@ bool AudiocityAudioProcessorEditor::createMappingZoneFromDraggedSample(const juc
     }
 
     int sampleAssetIndex = -1;
-    if (!ensureDraggedSampleAvailable(sampleFile, sampleAssetIndex))
+    juce::String metadataWarning;
+    if (!ensureDraggedSampleAvailable(sampleFile, sampleAssetIndex, metadataWarning))
         return false;
 
     createMappingZoneForSampleAssetAtNote(sampleAssetIndex,
         juce::jlimit(audiocity::engine::kMidiNoteMin, audiocity::engine::kMidiNoteMax, midiNote));
+    if (metadataWarning.isNotEmpty())
+    {
+        processor_.setImportDiagnosticSummary(metadataWarning);
+        updateDiagnosticsStatusText();
+        mappingEditStatusLabel_.setText(metadataWarning, juce::dontSendNotification);
+    }
     return true;
 }
 
@@ -11535,4 +11559,3 @@ void AudiocityAudioProcessorEditor::applySettingsSnapshot(const audiocity::engin
     refreshUI();
     updateCaptureUiState();
 }
-

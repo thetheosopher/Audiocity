@@ -623,18 +623,23 @@ int createProgramZoneForSampleAsset(audiocity::engine::Program& program,
     newZone.velocityFadeOut = audiocity::engine::VelocityFadeRange::disabled();
     newZone.sampleStart = 0;
     newZone.sampleEndExclusive = sampleAsset.lengthSamples > 0 ? sampleAsset.lengthSamples : -1;
-    newZone.loopStart = -1;
-    newZone.loopEndExclusive = -1;
+    const auto hasDefaultLoop = seedZone == nullptr
+        && sampleAsset.defaultLoopStart >= 0
+        && sampleAsset.defaultLoopEndExclusive > sampleAsset.defaultLoopStart
+        && sampleAsset.defaultLoopEndExclusive <= sampleAsset.lengthSamples;
+    newZone.loopStart = hasDefaultLoop ? sampleAsset.defaultLoopStart : -1;
+    newZone.loopEndExclusive = hasDefaultLoop ? sampleAsset.defaultLoopEndExclusive : -1;
     newZone.gainDb = 0.0f;
     newZone.pan = 0.0f;
-    newZone.tuneCents = seedZone != nullptr ? seedZone->tuneCents : 0.0f;
+    newZone.tuneCents = seedZone != nullptr ? seedZone->tuneCents : sampleAsset.defaultTuneCents;
     newZone.roundRobinGroup = 0;
     newZone.roundRobinPosition = 0;
     newZone.roundRobinLength = 0;
     newZone.roundRobinMode = audiocity::engine::RoundRobinMode::ordered;
     newZone.triggerMode = audiocity::engine::ZoneTriggerMode::gate;
     newZone.chokeGroup = 0;
-    newZone.loopMode = audiocity::engine::ZoneLoopMode::noLoop;
+    newZone.loopMode = hasDefaultLoop ? audiocity::engine::ZoneLoopMode::sustain
+                                      : audiocity::engine::ZoneLoopMode::noLoop;
 
     program.zones.push_back(newZone);
     recomputeGroupRangeFromZones(program, newZone.groupIndex);
