@@ -107,14 +107,18 @@ Audiocity's native export format.
   importers already use.
 
 * `src/plugin/PluginEditor`
-  Three buttons in the Mapping-tab header row:
-  * **New Library** — prompts for a name, replaces the imported program
-    with an empty one tagged `ImportedProgramFormat::sfz`.
-  * **Add Sample…** — file chooser, loads audio via
-    `audio_file::openReaderForFile`, appends a `SampleAsset` plus one
-    seed zone covering the detected root note, re-publishes.
-  * **Save Library…** — save-mode file chooser writing `.sfz`. Default
-    enables copy-samples-on-save.
+  Entry points in the simplified UI (the original three-button header was
+  retired by the 2026-09-07 simplification):
+  * **Menu → New empty instrument…** — remembers the current sound
+    (recoverable via *Restore previous sound*), replaces the imported program
+    with an empty one tagged `ImportedProgramFormat::sfz`, and opens the
+    Mapping page.
+  * **Add sample** (Mapping header) / **Menu → Add sample to instrument…** —
+    file chooser, loads audio via `audio_file::openReaderForFile`, appends a
+    `SampleAsset` plus one seed zone covering the detected root note,
+    re-publishes.
+  * **Export instrument** (Mapping header) — save-mode file chooser writing
+    `.sfz` or `.dspreset`. Default enables copy-samples-on-save.
 
 ## 5. Embedded WAVE sampler metadata
 

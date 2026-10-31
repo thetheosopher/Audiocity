@@ -11009,6 +11009,8 @@ bool runSampleBrowserTooltipFormattingTest()
         return false;
     if (audiocity::plugin::buildSampleBrowserActionText(false, false, false) != "Dbl-click load")
         return false;
+    if (audiocity::plugin::buildSampleBrowserActionText(false, false, false, "replace sample") != "Dbl-click replace sample")
+        return false;
 
     tooltipData.fileName = "Pad.sfz";
     tooltipData.relativePath = "Pads/Pad.sfz";

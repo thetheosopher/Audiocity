@@ -521,6 +521,8 @@ private:
     void showWorkspaceMenu();
     void layoutInstrumentBrowser(juce::Rectangle<int> area);
     void updateSoundIdentity();
+    bool refreshMacroAssignment();
+    std::array<bool, 2> macroAssigned_{};
     void markSoundSaved();
     void recordPendingSettingsChange();
     void rememberSoundBeforeReplacement();
@@ -1272,6 +1274,8 @@ private:
     void updateMappingDetails();
     void updateMappingEditControls();
     void applySelectedMappingZoneEdit();
+    void scheduleMappingLiveApply();
+    int mappingLiveApplyGeneration_ = 0;
     void beginSampleBrowserDrag(int row, const juce::MouseEvent& event);
     void createMappingZone();
     void createMappingZoneForSampleAsset(int sampleAssetIndex, int seedZoneIndex);

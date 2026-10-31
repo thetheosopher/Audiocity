@@ -127,10 +127,12 @@ void PluginMappingPage::layout(juce::Rectangle<int> area) const
     auto header = mappingArea.removeFromTop(32);
     saveLibraryButton_.setBounds(header.removeFromLeft(150));
     header.removeFromLeft(8);
+    addSampleButton_.setBounds(header.removeFromLeft(104));
+    header.removeFromLeft(8);
     deleteZoneButton_.setBounds(header.removeFromRight(100));
     header.removeFromRight(8);
     summaryLabel_.setBounds(header);
-    for (auto* button : { &newLibraryButton_, &addSampleButton_, &createZoneButton_, &duplicateZoneButton_, &splitZoneButton_, &refreshButton_ })
+    for (auto* button : { &newLibraryButton_, &createZoneButton_, &duplicateZoneButton_, &splitZoneButton_, &refreshButton_ })
         button->setBounds({});
 
     mappingArea.removeFromTop(4);

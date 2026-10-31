@@ -127,7 +127,9 @@ void AudiocityAudioProcessorEditor::initialiseInstrumentWorkspace()
     browserScopeCombo_.setSelectedId(1, juce::dontSendNotification);
     browserScopeCombo_.onChange = [this] { rebuildVisibleSampleList(); refreshPresetList(currentPresetName_); resized(); };
     sampleBrowserChooseRootButton_.setButtonText("Add folder");
-    sampleBrowserFavoriteButton_.setButtonText("Favorite");
+    sampleBrowserFavoriteButton_.setButtonText("Add to favorites");
+    sampleBrowserFavoritesOnlyToggle_.setButtonText("Only favorites");
+    sampleBrowserRecentOnlyToggle_.setButtonText("Only recent");
     auto favoriteAction = sampleBrowserFavoriteButton_.onClick;
     sampleBrowserFavoriteButton_.onClick = [this, favoriteAction]
     {
@@ -214,7 +216,7 @@ void AudiocityAudioProcessorEditor::initialiseInstrumentWorkspace()
     pitchLfoRateDial_.setDisplayName("Vibrato rate");
     pitchLfoDepthDial_.setDisplayName("Vibrato depth");
     filterResDial_.setDisplayName("Resonance");
-    filterEnvAmtDial_.setDisplayName("Envelope amt");
+    filterEnvAmtDial_.setDisplayName("Env to cutoff");
     ampLfoRateDial_.setDisplayName("Tremolo rate");
     ampLfoDepthDial_.setDisplayName("Tremolo depth");
     setResizable(true, true);
@@ -266,6 +268,8 @@ void AudiocityAudioProcessorEditor::showWorkspaceMenu()
     menu.addSeparator();
     menu.addItem(3, "Sample details and playback settings...");
     menu.addItem(4, "Advanced mapping / export...", processor_.hasImportedProgram());
+    menu.addItem(8, "New empty instrument...");
+    menu.addItem(9, "Add sample to instrument...", processor_.hasImportedProgram());
     menu.addItem(5, "About Audiocity");
     menu.addSeparator();
     menu.addItem(6, "Rename selected user preset...", presetRenameButton_.isEnabled());
@@ -283,9 +287,31 @@ void AudiocityAudioProcessorEditor::showWorkspaceMenu()
                 case 5: safe->showWorkspace(6); break;
                 case 6: safe->renameSelectedPreset(); break;
                 case 7: safe->deleteSelectedPreset(); break;
+                case 8:
+                    safe->rememberSoundBeforeReplacement();
+                    safe->createNewLibraryFromScratch();
+                    safe->clearSelectedPresetAfterSourceLoad();
+                    safe->showWorkspace(2);
+                    break;
+                case 9: safe->showWorkspace(2); safe->addSampleToCurrentLibrary(); break;
                 default: break;
             }
         });
+}
+
+bool AudiocityAudioProcessorEditor::refreshMacroAssignment()
+{
+    const auto routing = processor_.getModulationRoutingSettings();
+    std::array<bool, 2> assigned{};
+    for (std::size_t i = 0; i < assigned.size(); ++i)
+    {
+        const auto& route = routing.macros[i];
+        assigned[i] = std::abs(route.toPitchCents) > 0.01f || std::abs(route.toFilterHz) > 0.01f
+            || std::abs(route.toAmp) > 0.0001f;
+    }
+    const bool changed = assigned != macroAssigned_;
+    macroAssigned_ = assigned;
+    return changed;
 }
 
 void AudiocityAudioProcessorEditor::updateSoundIdentity()
@@ -372,6 +398,9 @@ void AudiocityAudioProcessorEditor::layoutInstrumentBrowser(juce::Rectangle<int>
     show(browserDockButton_, row.removeFromRight(64)); row.removeFromRight(6);
     browserDockButton_.setToggleState(browserDocked_, juce::dontSendNotification);
     browserDockButton_.setEnabled(getWidth() >= 1400);
+    browserDockButton_.setTooltip(getWidth() >= 1400
+        ? "Keep the browser beside Sound. Click again to return to the overlay."
+        : "Docking needs a window at least 1400 pixels wide. Widen the window to keep the browser beside Sound.");
     show(browserScopeCombo_, row);
     area.removeFromTop(8);
     const bool presets = browserScopeCombo_.getSelectedId() == 1;
@@ -379,8 +408,8 @@ void AudiocityAudioProcessorEditor::layoutInstrumentBrowser(juce::Rectangle<int>
     else show(sampleBrowserFilterEditor_, area.removeFromTop(30));
     area.removeFromTop(8);
     row = area.removeFromTop(28);
-    show(sampleBrowserFavoritesOnlyToggle_, row.removeFromLeft(95));
-    show(sampleBrowserRecentOnlyToggle_, row.removeFromLeft(76));
+    show(sampleBrowserFavoritesOnlyToggle_, row.removeFromLeft(112));
+    show(sampleBrowserRecentOnlyToggle_, row.removeFromLeft(96));
     show(sampleBrowserFavoriteButton_, row);
     if (!presets)
     {
@@ -476,10 +505,21 @@ void AudiocityAudioProcessorEditor::resized()
         }
         else { place(playerKeyboardViewport_, footer); updatePlayerKeyboardSizing(); }
     }
-    auto expression = acquisition ? juce::Rectangle<int>{} : area.removeFromBottom(compact ? 42 : 62); area.removeFromBottom(8);
-    auto firstMacro = expression.removeFromLeft((expression.getWidth() - 24) / 2); expression.removeFromLeft(24);
-    place(modulationPanel_.macroControl(0), firstMacro); place(modulationPanel_.macroControl(1), expression);
-    if (acquisition) { modulationPanel_.macroControl(0).setVisible(false); modulationPanel_.macroControl(1).setVisible(false); }
+    auto expression = juce::Rectangle<int>{};
+    refreshMacroAssignment();
+    const bool showAllMacros = currentTabIndex_ == 0 && modulationView_;
+    const std::array<bool, 2> macroShown{ !acquisition && (showAllMacros || macroAssigned_[0]),
+                                          !acquisition && (showAllMacros || macroAssigned_[1]) };
+    const int macroCount = (macroShown[0] ? 1 : 0) + (macroShown[1] ? 1 : 0);
+    if (macroCount > 0) { expression = area.removeFromBottom(compact ? 42 : 62); area.removeFromBottom(8); }
+    std::array<juce::Rectangle<int>, 2> macroBounds;
+    if (macroCount == 2)
+    {
+        macroBounds[0] = expression.removeFromLeft((expression.getWidth() - 24) / 2); expression.removeFromLeft(24);
+        macroBounds[1] = expression;
+    }
+    else if (macroCount == 1) macroBounds[macroShown[0] ? 0 : 1] = expression;
+    place(modulationPanel_.macroControl(0), macroBounds[0]); place(modulationPanel_.macroControl(1), macroBounds[1]);
     if (currentTabIndex_ == 1) { currentTabIndex_ = 0; browserOpen_ = true; tabBar_.setCurrentTabIndex(0); }
     if (currentTabIndex_ == 3) { currentTabIndex_ = 0; tabBar_.setCurrentTabIndex(0); }
     if (currentTabIndex_ == 2)
@@ -588,7 +628,8 @@ void AudiocityAudioProcessorEditor::resized()
     }
     mappingNewLibraryButton_.setVisible(false); mappingCreateZoneButton_.setVisible(false);
     mappingDuplicateZoneButton_.setVisible(false); mappingSplitZoneButton_.setVisible(false);
-    mappingAddSampleButton_.setVisible(false); mappingRefreshButton_.setVisible(false);
+    mappingAddSampleButton_.setButtonText("Add sample");
+    mappingAddSampleButton_.setVisible(currentTabIndex_ == 2); mappingRefreshButton_.setVisible(false);
     mappingSaveLibraryButton_.setButtonText("Export instrument");
     for (auto* control : std::initializer_list<juce::Component*>{ &mappingEditVelocityFadeInLabel_, &mappingEditVelocityFadeInLowSlider_, &mappingEditVelocityFadeInHighSlider_,
         &mappingEditVelocityFadeOutLabel_, &mappingEditVelocityFadeOutLowSlider_, &mappingEditVelocityFadeOutHighSlider_,

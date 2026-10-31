@@ -21,7 +21,8 @@ struct SampleBrowserTooltipData
 
 juce::String buildSampleBrowserActionText(bool previewSupported,
                                          bool mappingDragSupported,
-                                         bool previewing);
+                                         bool previewing,
+                                         const juce::String& doubleClickAction = "load");
 
 juce::String buildSampleBrowserTooltipText(const SampleBrowserTooltipData& data);
 }

@@ -242,6 +242,25 @@ juce::String formatMidiNoteCompactName(const int midiNote)
     return juce::String(name) + juce::String(octave);
 }
 
+// Accepts "36", "C1", "c#3" or "F#-1"; unparseable text yields the plain numeric reading.
+double parseMidiNoteText(const juce::String& text)
+{
+    const auto trimmed = text.upToFirstOccurrenceOf("(", false, false).trim();
+    if (trimmed.isEmpty() || juce::CharacterFunctions::isDigit(trimmed[0]))
+        return trimmed.getDoubleValue();
+
+    static constexpr int kSemitones[] = { 9, 11, 0, 2, 4, 5, 7 };
+    const auto letter = juce::CharacterFunctions::toUpperCase(trimmed[0]) - 'A';
+    if (letter < 0 || letter > 6)
+        return trimmed.getDoubleValue();
+
+    auto semitone = kSemitones[letter];
+    auto rest = trimmed.substring(1);
+    if (rest.startsWithChar('#')) { ++semitone; rest = rest.substring(1); }
+    else if (rest.startsWithChar('b') || rest.startsWithChar('B')) { --semitone; rest = rest.substring(1); }
+    return static_cast<double>(juce::jlimit(0, 127, (rest.getIntValue() + 2) * 12 + semitone));
+}
+
 juce::String formatPlayerPadButtonLabel(const int padIndex,
                                         const audiocity::plugin::PlayerPadAssignment& assignment,
                                         const bool compact)
@@ -4049,9 +4068,9 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     };
 
     configureMappingEditLabel(mappingEditKeyLowLabel_);
-    configureMappingEditSlider(mappingEditKeyLowSlider_);
+    configureMappingEditSlider(mappingEditKeyLowSlider_, 0.0, 127.0, 1.0, 80);
     configureMappingEditLabel(mappingEditKeyHighLabel_);
-    configureMappingEditSlider(mappingEditKeyHighSlider_);
+    configureMappingEditSlider(mappingEditKeyHighSlider_, 0.0, 127.0, 1.0, 80);
     configureMappingEditLabel(mappingEditVelocityLowLabel_);
     configureMappingEditSlider(mappingEditVelocityLowSlider_);
     configureMappingEditLabel(mappingEditVelocityHighLabel_);
@@ -4076,7 +4095,12 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     configureMappingFadeSlider(mappingEditVelocityFadeOutLowSlider_);
     configureMappingFadeSlider(mappingEditVelocityFadeOutHighSlider_);
     configureMappingEditLabel(mappingEditRootLabel_);
-    configureMappingEditSlider(mappingEditRootSlider_);
+    configureMappingEditSlider(mappingEditRootSlider_, 0.0, 127.0, 1.0, 80);
+    for (auto* noteSlider : { &mappingEditKeyLowSlider_, &mappingEditKeyHighSlider_, &mappingEditRootSlider_ })
+    {
+        noteSlider->textFromValueFunction = [](double value) { return formatMidiNoteName(static_cast<int>(std::round(value))); };
+        noteSlider->valueFromTextFunction = [](const juce::String& text) { return parseMidiNoteText(text); };
+    }
     configureMappingEditLabel(mappingEditSampleStartLabel_);
     configureMappingEditSlider(mappingEditSampleStartSlider_, 0.0, 1.0, 1.0, 68);
     configureMappingEditLabel(mappingEditSampleEndLabel_);
@@ -4139,6 +4163,37 @@ AudiocityAudioProcessorEditor::AudiocityAudioProcessorEditor(AudiocityAudioProce
     mappingEditChokeSlider_.onValueChange = makeBatchEditCallback(&mappingBatchChokeEdited_);
     mappingEditTriggerCombo_.onChange = makeBatchEditCallback(&mappingBatchTriggerEdited_);
     mappingEditLoopCombo_.onChange = makeBatchEditCallback(&mappingBatchLoopEdited_);
+
+    // A single selected zone applies its edits live. Batches still wait for the Apply Batch button.
+    for (auto* slider : { &mappingEditKeyLowSlider_, &mappingEditKeyHighSlider_, &mappingEditVelocityLowSlider_,
+                          &mappingEditVelocityHighSlider_, &mappingEditVelocityFadeInLowSlider_,
+                          &mappingEditVelocityFadeInHighSlider_, &mappingEditVelocityFadeOutLowSlider_,
+                          &mappingEditVelocityFadeOutHighSlider_, &mappingEditRootSlider_,
+                          &mappingEditSampleStartSlider_, &mappingEditSampleEndSlider_, &mappingEditLoopStartSlider_,
+                          &mappingEditLoopEndSlider_, &mappingEditGainSlider_, &mappingEditPanSlider_,
+                          &mappingEditRoundRobinGroupSlider_, &mappingEditRoundRobinPositionSlider_,
+                          &mappingEditChokeSlider_ })
+    {
+        auto batchCallback = slider->onValueChange;
+        slider->onValueChange = [this, slider, batchCallback]
+        {
+            if (batchCallback)
+                batchCallback();
+            if (!slider->isMouseButtonDown())
+                scheduleMappingLiveApply();
+        };
+        slider->onDragEnd = [this] { scheduleMappingLiveApply(); };
+    }
+    for (auto* combo : { &mappingEditRoundRobinModeCombo_, &mappingEditTriggerCombo_, &mappingEditLoopCombo_ })
+    {
+        auto batchCallback = combo->onChange;
+        combo->onChange = [this, batchCallback]
+        {
+            if (batchCallback)
+                batchCallback();
+            scheduleMappingLiveApply();
+        };
+    }
 
     addAndMakeVisible(mappingEditStatusLabel_);
     mappingEditStatusLabel_.setJustificationType(juce::Justification::centredLeft);
@@ -5331,11 +5386,9 @@ void AudiocityAudioProcessorEditor::timerCallback()
 
         const auto statusText = scanning
             ? juce::String("Scanning...")
-            : (processor_.isSamplePreviewPlaying()
-                ? (dragSupported ? juce::String("Previewing...  |  Drag to map")
-                                 : juce::String("Previewing...  |  Dbl-click load"))
-                : (dragSupported ? juce::String("Click preview  |  Drag to map")
-                                 : juce::String("Click preview  |  Dbl-click load")));
+            : audiocity::plugin::buildSampleBrowserActionText(
+                true, dragSupported, processor_.isSamplePreviewPlaying(),
+                browserScopeCombo_.getSelectedId() == 3 ? "load instrument" : "replace sample");
         sampleBrowserPreviewLabel_.setText(
             statusText,
             juce::dontSendNotification);
@@ -5346,6 +5399,7 @@ void AudiocityAudioProcessorEditor::timerCallback()
     recordPendingSettingsChange();
 
     syncAutomatedControlsFromProcessor();
+    if (refreshMacroAssignment()) resized();
     updateSoundIdentity();
     const auto voiceCount = processor_.getActiveVoiceCount();
     workspaceStatusLabel_.setText(backgroundImportInProgress_ ? "Loading " + backgroundImportFile_.getFileName() + " - Source cancels the load"
@@ -5912,6 +5966,17 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
         g.setFont(juce::Font(juce::FontOptions(compactBrowserRow ? 8.5f : 9.5f)));
         g.drawFittedText("Double-click to load", messageArea, juce::Justification::centred, 2);
     }
+    else
+    {
+        const auto centreY = static_cast<float>(thumbBounds.getCentreY());
+        g.setColour(juce::Colour(0xff61d9ff).withAlpha(0.25f));
+        g.drawHorizontalLine(static_cast<int>(centreY), static_cast<float>(thumbBounds.getX() + 6),
+                             static_cast<float>(thumbBounds.getRight() - 6));
+        g.setColour(uiTextMutedColour().withAlpha(0.8f));
+        g.setFont(juce::Font(juce::FontOptions(compactBrowserRow ? 9.5f : 10.5f)));
+        g.drawText(entry.previewState == SampleListEntry::PreviewState::failed ? "No preview" : "Loading...",
+                   thumbBounds.reduced(4), juce::Justification::centred, false);
+    }
 
     auto firstLine = content.removeFromTop(17);
     auto pathArea = firstLine;
@@ -5943,18 +6008,24 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
         drawRowBadge(entry.loopFormatBadge, badgeColour, badgeWidth);
     }
 
-    const auto pathWidth = compactBrowserRow
+    const bool showRelativePath = entry.relativePath.isNotEmpty() && !entry.relativePath.equalsIgnoreCase(entry.fileName);
+    const auto pathWidth = !showRelativePath ? 0 : compactBrowserRow
         ? juce::jmax(92, pathArea.getWidth() / 3)
         : juce::jmax(140, pathArea.getWidth() / 2);
-    auto fileArea = pathArea.removeFromLeft(juce::jmax(40, pathArea.getWidth() - pathWidth - 6));
+    auto fileArea = showRelativePath
+        ? pathArea.removeFromLeft(juce::jmax(40, pathArea.getWidth() - pathWidth - 6))
+        : pathArea;
 
     g.setColour(juce::Colour(0xffe5e5ef));
     g.setFont(juce::Font(juce::FontOptions(compactBrowserRow ? 12.0f : 13.0f)));
     g.drawText(entry.fileName, fileArea, juce::Justification::centredLeft, true);
 
-    g.setColour(juce::Colour(0xffa5a5b8));
-    g.setFont(juce::Font(juce::FontOptions(compactBrowserRow ? 10.0f : 10.5f)));
-    g.drawText(entry.relativePath, pathArea, juce::Justification::centredRight, true);
+    if (showRelativePath)
+    {
+        g.setColour(juce::Colour(0xffa5a5b8));
+        g.setFont(juce::Font(juce::FontOptions(compactBrowserRow ? 10.0f : 10.5f)));
+        g.drawText(entry.relativePath, pathArea, juce::Justification::centredRight, true);
+    }
 
     auto detailsLine = entry.metadataLine;
     if (entry.loopMetadataLine.isNotEmpty())
@@ -5974,7 +6045,8 @@ void AudiocityAudioProcessorEditor::paintListBoxItem(
         const auto actionText = audiocity::plugin::buildSampleBrowserActionText(
             previewSupported,
             mappingDragSupported,
-            rowPreviewing);
+            rowPreviewing,
+            browserScopeCombo_.getSelectedId() == 3 ? "load instrument" : "replace sample");
         g.drawText(actionText, actionLine, juce::Justification::centredLeft, true);
     }
 
@@ -6425,7 +6497,7 @@ void AudiocityAudioProcessorEditor::updateMappingEditControls()
     mappingEditTriggerCombo_.setEnabled(hasSelection);
     mappingEditLoopCombo_.setEnabled(hasSelection);
     mappingEditApplyButton_.setEnabled(hasSingleSelection || hasPendingBatchEdit);
-    mappingEditApplyButton_.setButtonText(hasBatchSelection ? "Apply Batch" : "Apply Zone");
+    mappingEditApplyButton_.setButtonText(hasBatchSelection ? "Apply Batch" : "Apply now");
     mappingCreateZoneButton_.setEnabled(hasImportedProgram);
     mappingDuplicateZoneButton_.setEnabled(hasSingleSelection);
     mappingDeleteZoneButton_.setEnabled(hasSelection);
@@ -6688,6 +6760,21 @@ void AudiocityAudioProcessorEditor::applySelectedMappingZoneEdit()
     edit.hasLoopMode = true;
 
     commitMappingZoneEdit(edit, "Zone " + juce::String(zoneIndex + 1) + " updated");
+}
+
+void AudiocityAudioProcessorEditor::scheduleMappingLiveApply()
+{
+    if (suppressMappingBatchEditTracking_ || getSelectedMappingRowIndices().size() != 1)
+        return;
+
+    const auto generation = ++mappingLiveApplyGeneration_;
+    juce::Timer::callAfterDelay(250,
+        [safeThis = juce::Component::SafePointer<AudiocityAudioProcessorEditor>(this), generation]
+        {
+            if (safeThis != nullptr && safeThis->mappingLiveApplyGeneration_ == generation
+                && safeThis->getSelectedMappingRowIndices().size() == 1)
+                safeThis->applySelectedMappingZoneEdit();
+        });
 }
 
 void AudiocityAudioProcessorEditor::createMappingZone()
@@ -8656,13 +8743,19 @@ void AudiocityAudioProcessorEditor::refreshBrowserEntryLibraryFlags()
 
 void AudiocityAudioProcessorEditor::updateBrowserLibraryControls()
 {
+    const auto syncFavoriteButton = [this](const bool favorite)
+    {
+        sampleBrowserFavoriteButton_.setToggleState(favorite, juce::dontSendNotification);
+        sampleBrowserFavoriteButton_.setButtonText(favorite ? "Favorited" : "Add to favorites");
+    };
+
     if (workspaceReady_ && browserScopeCombo_.getSelectedId() == 1)
     {
         const auto row = presetBrowserList_.getSelectedRow();
         const bool selected = juce::isPositiveAndBelow(row, visiblePresetFiles_.size());
         sampleBrowserFavoriteButton_.setEnabled(selected);
         browserLoadButton_.setEnabled(selected);
-        sampleBrowserFavoriteButton_.setToggleState(selected && processor_.isLibraryFavorite(visiblePresetFiles_[row].getFullPathName()), juce::dontSendNotification);
+        syncFavoriteButton(selected && processor_.isLibraryFavorite(visiblePresetFiles_[row].getFullPathName()));
         return;
     }
     const auto row = sampleBrowserListBox_.getSelectedRow();
@@ -8674,14 +8767,14 @@ void AudiocityAudioProcessorEditor::updateBrowserLibraryControls()
 
     if (!hasSelection)
     {
-        sampleBrowserFavoriteButton_.setToggleState(false, juce::dontSendNotification);
+        syncFavoriteButton(false);
         sampleBrowserTagsEditor_.setText({}, juce::dontSendNotification);
         return;
     }
 
     const auto sourceIndex = visibleSampleEntryIndices_[static_cast<std::size_t>(row)];
     const auto& item = allSampleEntries_[static_cast<std::size_t>(sourceIndex)];
-    sampleBrowserFavoriteButton_.setToggleState(item.isFavorite, juce::dontSendNotification);
+    syncFavoriteButton(item.isFavorite);
     sampleBrowserTagsEditor_.setText(item.tags.joinIntoString(", "), juce::dontSendNotification);
 }
 
@@ -10420,11 +10513,11 @@ void AudiocityAudioProcessorEditor::setupTooltips()
     sampleBrowserSortCombo_.setTooltip(
         "Sort Samples - Sort by name, path, or recent use");
     sampleBrowserFavoriteButton_.setTooltip(
-        "Favorite Selected Item");
+        "Add the selected item to your favorites, or remove it again");
     sampleBrowserFavoritesOnlyToggle_.setTooltip(
-        "Show Favorite Items Only");
+        "Filter: list favorite items only");
     sampleBrowserRecentOnlyToggle_.setTooltip(
-        "Show Recent Items Only");
+        "Filter: list recently used items only");
     sampleBrowserTagFilterCombo_.setTooltip(
         "Tag Filter - Show items with a known tag");
     sampleBrowserTagsEditor_.setTooltip(
@@ -10488,7 +10581,7 @@ void AudiocityAudioProcessorEditor::setupTooltips()
     mappingEditLoopCombo_.setTooltip(
         "Selected Zone Loop Mode; batch-enabled for multi-selection");
     mappingEditApplyButton_.setTooltip(
-        "Apply zone mapping; with multiple selected rows, Apply uses edited batch controls for every selected zone");
+        "A single zone applies its edits automatically after a short pause. Apply now commits immediately; with multiple selected rows, Apply Batch uses the edited batch controls for every selected zone");
     mappingZoneListBox_.setTooltip(
         "Select one zone to repair its root, key range, region, gain or playback behavior. Existing round-robin and velocity-fade data is retained.");
     captureRecordButton_.setTooltip(
@@ -10562,7 +10655,7 @@ void AudiocityAudioProcessorEditor::setupTooltips()
     filterResDial_.setLabelTooltip(
         "Resonance - Filter emphasis at the cutoff frequency");
     filterEnvAmtDial_.setLabelTooltip(
-        "Envelope Amount - Bipolar filter envelope modulation depth in Hz");
+        "Env to cutoff - How far the filter envelope opens (+) or closes (-) the cutoff, in Hz");
     filterAttackDial_.setLabelTooltip(
         "Filter Attack - Filter envelope attack time in milliseconds");
     filterDecayDial_.setLabelTooltip(

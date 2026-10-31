@@ -4,18 +4,21 @@ namespace audiocity::plugin
 {
 juce::String buildSampleBrowserActionText(const bool previewSupported,
                                          const bool mappingDragSupported,
-                                         const bool previewing)
+                                         const bool previewing,
+                                         const juce::String& doubleClickAction)
 {
+    const auto doubleClick = "Dbl-click " + doubleClickAction;
+
     if (previewing)
         return mappingDragSupported ? juce::String("Previewing  |  Drag to map")
-                                    : juce::String("Previewing  |  Dbl-click load");
+                                    : "Previewing  |  " + doubleClick;
 
     if (previewSupported)
         return mappingDragSupported ? juce::String("Click preview  |  Drag to map")
-                                    : juce::String("Click preview  |  Dbl-click load");
+                                    : "Click preview  |  " + doubleClick;
 
-    return mappingDragSupported ? juce::String("Drag to map  |  Dbl-click load")
-                                : juce::String("Dbl-click load");
+    return mappingDragSupported ? "Drag to map  |  " + doubleClick
+                                : doubleClick;
 }
 
 juce::String buildSampleBrowserTooltipText(const SampleBrowserTooltipData& data)

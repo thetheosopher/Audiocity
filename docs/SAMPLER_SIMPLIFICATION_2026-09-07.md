@@ -12,10 +12,10 @@ The [UX review](UX_DESIGN_REVIEW_2026-09-07.md) is implemented as a focused inst
 | Resize | Overlay browser at constrained widths; optional docking from 1400 pixels; fixed section order with no automatic inspector promotion |
 | Identity/output | Current name, edited indication, Save, master volume and stereo output remain accessible; name/save destination survive editor/project restore |
 | Audition | Auto/Keyboard/Pads/Hidden, MIDI/voice status and All Notes Off; pad assignment via right-click |
-| Expression | Existing two macro values remain playable; routing is five sources × three destinations with explicit signed units |
+| Expression | Existing two macro values remain playable; routing is five sources × three destinations with explicit signed units. Macro sliders appear only while routed (always on the Modulation view) |
 | Sources | Generate/Record have preview, Use sample, cancel/return; technical format settings are disclosed separately |
 | Advanced | Exact regions, quality/preload, detailed effects, diagnostics and metadata in Details; single-zone repair and SFZ/DecentSampler export in advanced mapping |
-| Retired surfaces | Seven peer tabs, permanent dual audition footer, main preset administration, library creation, batch authoring and bulk metadata UI |
+| Retired surfaces | Seven peer tabs, permanent dual audition footer, main preset administration, batch authoring and bulk metadata UI. Library creation is reachable again via Menu → New empty instrument / Add sample to instrument |
 
 `PluginInstrumentWorkspace.cpp` owns the new shell layout and replacement/save interactions. Existing controls and processor paths are reused. The former layout helpers and authoring implementation remain where they support compatibility or existing tests; their retired entry points are hidden/removed from normal navigation.
 
@@ -26,6 +26,8 @@ The [UX review](UX_DESIGN_REVIEW_2026-09-07.md) is implemented as a focused inst
 **Discovery.** Selecting a preset never loads it. Selecting a raw sample can preview; preview has its own level/stop control and ends when the browser closes. Loading is an explicit action. Presets and instruments have no processed preview engine. Save As destinations outside the user bank remain discoverable through recent/favorite file paths.
 
 **Saving.** The chooser's complete path is passed to the preset writer. Save reuses that destination; factory presets use Save As. Parameter edits, zone edits, pad changes and CC assignment changes mark the sound edited. Current identity and a saved parameter baseline are UI state, excluded from playback presets. The sound's audio and mappings still use the existing serialization formats.
+
+**Mapping edits.** Single-zone edits on the Mapping page apply automatically 250 ms after the last change (key/root sliders accept note names such as `C1` or `Bb2`); undo records each applied edit. Multi-zone selections still use Apply Batch.
 
 **Recovery.** One replacement snapshot is kept while the editor is open. It covers presets, source import, Generate/Record commits and initial slice conversion, and swaps with the current sound when restored. A cancelled/failed import does not replace that history with an attempted load. Single-sample recovery uses existing embedding, within its existing size/codec limits, including when its original file has moved. Imported recovery retains external-asset requirements. Malformed presets do not alter the current processor; missing-source restores roll back. Successful replacement may end held notes.
 
