@@ -205,9 +205,8 @@ void validateOpcodeValue(std::vector<SfzDiagnostic>& diagnostics,
 
 [[nodiscard]] juce::File resolveAgainstRoot(const juce::File& rootDirectory, const juce::String& path)
 {
-    juce::File candidate(path);
     if (juce::File::isAbsolutePath(path))
-        return candidate;
+        return juce::File(path);
 
     return rootDirectory.getChildFile(path);
 }

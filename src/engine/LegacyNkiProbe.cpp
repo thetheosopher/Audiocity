@@ -403,7 +403,7 @@ juce::File resolveSampleReference(const juce::File& nkiFile, const juce::String&
             return absoluteCandidate;
     }
 
-    const auto sampleName = juce::File(normalized).getFileName();
+    const auto sampleName = juce::File::createFileWithoutCheckingPath(normalized).getFileName();
     juce::StringArray relativeVariants;
     addUniqueIgnoreCase(relativeVariants, normalized);
     if (normalized.startsWithIgnoreCase("Samples/"))

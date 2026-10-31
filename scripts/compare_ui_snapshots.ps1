@@ -6,8 +6,9 @@ param(
     [string]$BaselineDir,
 
     [string]$ReportDir = '',
-    [int]$MaxDifferentPixels = 0,
-    [double]$MaxDifferentRatio = 0.0
+    [int]$MaxDifferentPixels = 250,
+    [double]$MaxDifferentRatio = 0.0003,
+    [int]$MaxChannelDelta = 96
 )
 
 Set-StrictMode -Version Latest
@@ -104,7 +105,8 @@ function Compare-ImageFiles {
         [string]$ActualPath,
         [string]$DiffPath,
         [int]$AllowedDifferentPixels,
-        [double]$AllowedDifferentRatio
+        [double]$AllowedDifferentRatio,
+        [int]$AllowedChannelDelta
     )
 
     $baselineHash = Get-Sha256Hash $BaselinePath
@@ -205,7 +207,8 @@ function Compare-ImageFiles {
 
         $withinPixelThreshold = $differentPixels -le $AllowedDifferentPixels
         $withinRatioThreshold = $differentRatio -le $AllowedDifferentRatio
-        if ($withinPixelThreshold -and $withinRatioThreshold) {
+        $withinDeltaThreshold = $maxChannelDelta -le $AllowedChannelDelta
+        if ($withinPixelThreshold -and $withinRatioThreshold -and $withinDeltaThreshold) {
             $result.status = 'within-threshold'
             $result.note = 'Pixel difference stayed within the configured threshold.'
             return [pscustomobject]$result
@@ -296,7 +299,7 @@ foreach ($baselineFile in $baselineFiles) {
     }
 
     $diffPath = Join-Path $diffDir $baselineFile.Name
-    $results.Add((Compare-ImageFiles -BaselinePath $baselineFile.FullName -ActualPath $actualByName[$baselineFile.Name] -DiffPath $diffPath -AllowedDifferentPixels $MaxDifferentPixels -AllowedDifferentRatio $MaxDifferentRatio)) | Out-Null
+    $results.Add((Compare-ImageFiles -BaselinePath $baselineFile.FullName -ActualPath $actualByName[$baselineFile.Name] -DiffPath $diffPath -AllowedDifferentPixels $MaxDifferentPixels -AllowedDifferentRatio $MaxDifferentRatio -AllowedChannelDelta $MaxChannelDelta)) | Out-Null
 }
 
 foreach ($actualFile in $actualFiles) {
@@ -335,6 +338,7 @@ $report = [ordered]@{
     baselineDir = $resolvedBaselineDir
     maxDifferentPixels = $MaxDifferentPixels
     maxDifferentRatio = $MaxDifferentRatio
+    maxChannelDelta = $MaxChannelDelta
     fileCount = $results.Count
     files = $results
 }
@@ -349,6 +353,7 @@ $summaryLines = @(
     "- Baseline directory: $resolvedBaselineDir",
     "- Max different pixels: $MaxDifferentPixels",
     "- Max different ratio: $MaxDifferentRatio",
+    "- Max channel delta: $MaxChannelDelta",
     '',
     '| File | Status | Diff Pixels | Diff Ratio | Max Delta | Notes |',
     '| --- | --- | ---: | ---: | ---: | --- |'

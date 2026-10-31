@@ -90,15 +90,19 @@ void addDiagnostic(std::vector<ImportDiagnostic>& diagnostics,
         return {};
 
     juce::String normalized = rawPath.replaceCharacter('\\', '/');
-    juce::File direct(normalized);
-    if (direct.isAbsolutePath(normalized) && direct.existsAsFile())
-        return direct;
+    if (juce::File::isAbsolutePath(normalized))
+    {
+        const juce::File direct(normalized);
+        if (direct.existsAsFile())
+            return direct;
+    }
 
     const auto relative = presetFolder.getChildFile(normalized);
     if (relative.existsAsFile())
         return relative;
 
-    const auto siblingSamples = presetFolder.getChildFile("Samples").getChildFile(juce::File(normalized).getFileName());
+    const auto baseName = juce::File::createFileWithoutCheckingPath(normalized).getFileName();
+    const auto siblingSamples = presetFolder.getChildFile("Samples").getChildFile(baseName);
     if (siblingSamples.existsAsFile())
         return siblingSamples;
 
@@ -108,7 +112,7 @@ void addDiagnostic(std::vector<ImportDiagnostic>& diagnostics,
         const auto candidate = parent.getChildFile(normalized);
         if (candidate.existsAsFile())
             return candidate;
-        const auto candidateInSamples = parent.getChildFile("Samples").getChildFile(juce::File(normalized).getFileName());
+        const auto candidateInSamples = parent.getChildFile("Samples").getChildFile(baseName);
         if (candidateInSamples.existsAsFile())
             return candidateInSamples;
         parent = parent.getParentDirectory();

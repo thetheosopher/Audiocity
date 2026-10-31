@@ -90,7 +90,11 @@ foreach ($sourceNode in $sourceNodes) {
     if ([string]::IsNullOrWhiteSpace($sourceNode.InnerText)) {
         continue
     }
-    $reportedSource = [System.IO.Path]::GetFullPath($sourceNode.InnerText.Trim())
+    $reportedSourceText = $sourceNode.InnerText.Trim()
+    if ($reportedSourceText -match '^[A-Za-z]:$') {
+        $reportedSourceText += [System.IO.Path]::DirectorySeparatorChar
+    }
+    $reportedSource = [System.IO.Path]::GetFullPath($reportedSourceText)
     $reportedSourceRoots.Add($reportedSource)
     $reportedSourceWithSeparator = $reportedSource.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
     if ($sourceRootWithSeparator.StartsWith($reportedSourceWithSeparator, [System.StringComparison]::OrdinalIgnoreCase)) {

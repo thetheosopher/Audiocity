@@ -53,9 +53,12 @@ juce::File resolveSamplePath(const juce::String& rawPath, const juce::File& pres
     if (rawPath.isEmpty()) return {};
 
     const auto normalized = rawPath.replaceCharacter('\\', '/');
-    juce::File abs(normalized);
-    if (juce::File::isAbsolutePath(normalized) && abs.existsAsFile())
-        return abs;
+    if (juce::File::isAbsolutePath(normalized))
+    {
+        const juce::File abs(normalized);
+        if (abs.existsAsFile())
+            return abs;
+    }
 
     const auto rel = presetFolder.getChildFile(normalized);
     if (rel.existsAsFile()) return rel;

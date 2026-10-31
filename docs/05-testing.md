@@ -83,7 +83,7 @@ cmake --build build/ci-windows --config Release --target audiocity_engine_profil
 
 ## Importer sanitizer and fuzz corpus
 
-The standalone Clang build under `tests/fuzz` produces one bounded libFuzzer target for each supported importer grammar exercised by the harness. On Ubuntu with Clang and Ninja:
+The standalone Clang build under `tests/fuzz` produces one bounded libFuzzer target for each supported importer grammar exercised by the harness. This build is manual only; CI no longer runs it. On a machine with Clang and Ninja (it was last used on Ubuntu):
 
 ```bash
 cmake -S tests/fuzz -B build/importer-fuzz -G Ninja \
@@ -93,7 +93,7 @@ cmake --build build/importer-fuzz --parallel 2
 ctest --test-dir build/importer-fuzz --output-on-failure --timeout 60
 ```
 
-The 15 non-REX targets use ASan, UBSan, and libFuzzer and enforce a 4 MiB input limit. REX is excluded because its runtime is proprietary and Windows-only. CI copies each committed deterministic seed corpus into the build tree, runs 1,000 mutations with a fixed seed, and leaves the source corpus untouched; longer fuzz campaigns can invoke an individual executable with normal libFuzzer flags.
+The 15 non-REX targets use ASan, UBSan, and libFuzzer and enforce a 4 MiB input limit. REX is excluded because its runtime is proprietary and Windows-only. The CTest run copies each committed deterministic seed corpus into the build tree, runs 1,000 mutations with a fixed seed, and leaves the source corpus untouched; longer fuzz campaigns can invoke an individual executable with normal libFuzzer flags.
 
 ## Native coverage baseline
 

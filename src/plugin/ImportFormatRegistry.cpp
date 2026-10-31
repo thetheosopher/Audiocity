@@ -55,7 +55,7 @@ std::span<const ImportFormatDescriptor> importFormatDescriptors() noexcept
 
 const ImportFormatDescriptor* findImportFormatDescriptorForPath(const juce::String& path) noexcept
 {
-    const juce::File file(path);
+    const auto file = juce::File::createFileWithoutCheckingPath(path);
     const auto fileName = file.getFileName();
     const auto extension = file.getFileExtension();
 

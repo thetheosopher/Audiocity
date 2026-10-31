@@ -16578,6 +16578,8 @@ int runOfflineTests(const OfflineTestCase (&tests)[TestCount],
 
 int main(const int argc, char** argv)
 {
+    const juce::ScopedJuceInitialiser_GUI juceInitialiser;
+
 #define AUDIOCITY_TEST(suite, fn, code) { #fn, fn, code, OfflineTestSuite::suite }
     const OfflineTestCase tests[] = {
         AUDIOCITY_TEST(engine, runDeterminismTest, 1),

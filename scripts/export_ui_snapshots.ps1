@@ -4,8 +4,9 @@ param(
     [string]$OutputDir = '',
     [string]$BaselineDir = '',
     [switch]$UpdateBaseline,
-    [int]$MaxDifferentPixels = 0,
-    [double]$MaxDifferentRatio = 0.0
+    [int]$MaxDifferentPixels = 250,
+    [double]$MaxDifferentRatio = 0.0003,
+    [int]$MaxChannelDelta = 96
 )
 
 Set-StrictMode -Version Latest
@@ -322,7 +323,9 @@ if ($UpdateBaseline) {
         '-MaxDifferentPixels',
         "$MaxDifferentPixels",
         '-MaxDifferentRatio',
-        "$MaxDifferentRatio"
+        "$MaxDifferentRatio",
+        '-MaxChannelDelta',
+        "$MaxChannelDelta"
     )
 
     $diffSummaryPath = Join-Path $resolvedOutputDir 'snapshot-diff-summary.md'

@@ -366,7 +366,7 @@ ImportResult importFile(const juce::File& file)
         auto resolved = resolveSamplePath(e.filename, folder);
         if (!resolved.existsAsFile())
         {
-            const auto stem = juce::File(e.filename).getFileNameWithoutExtension();
+            const auto stem = juce::File::createFileWithoutCheckingPath(e.filename).getFileNameWithoutExtension();
             resolved = resolveSamplePath(stem + ".wav", folder);
             if (!resolved.existsAsFile())
                 resolved = resolveSamplePath(stem + ".aif", folder);
