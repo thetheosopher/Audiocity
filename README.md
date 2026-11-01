@@ -4,7 +4,7 @@
 
 **Turn any sound into an instrument.** A focused sampler for Windows, available as a standalone application and VST3 instrument.
 
-![Version 1.3.2.0](https://img.shields.io/badge/version-1.3.2.0-blue)
+![Version 1.4.0.0](https://img.shields.io/badge/version-1.4.0.0-blue)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue?logo=cplusplus)
 ![JUCE 8.0.4](https://img.shields.io/badge/JUCE-8.0.4-orange)
 ![Windows x64](https://img.shields.io/badge/platform-Windows%20x64-lightgrey?logo=windows)
@@ -27,6 +27,15 @@ The standalone and plugin share the same JUCE/C++20 engine. Existing formats, pr
 - Details and advanced single-zone repair/export retain depth while library authoring leaves the main experience.
 
 Read the [user guide](docs/USER_GUIDE.md) and [implementation and validation notes](docs/SAMPLER_SIMPLIFICATION_2026-09-07.md).
+
+## New in 1.4.0.0
+
+- Mapping edits on a single zone now apply automatically a moment after you stop adjusting them; Key Low, Key High and Root show and accept note names such as `C1` or `Bb2`. Multi-zone edits still use Apply Batch.
+- Macro sliders appear only when they are routed to something, and are always shown on the Modulation view.
+- Clearer labels: the filter envelope amount is "Env to cutoff", the browser's double-click hint matches the current scope, and the disabled Dock button explains the window width it needs.
+- Browser rows no longer repeat the file name, show a "Loading..." or "No preview" placeholder instead of an empty thumbnail, and use distinct "Add to favorites", "Only favorites" and "Only recent" controls.
+- Library authoring is reachable again from Menu → New empty instrument and Menu → Add sample to instrument, plus an Add sample button on the Mapping page.
+- Release validation now runs entirely locally: Release product build, installer compile, pluginval at strictness 5, render-deadline measurement, the 50,000-file library scan budget, and a one-hour engine soak.
 
 ## New in 1.3.2.0
 
@@ -162,8 +171,8 @@ Build the release package set without ASIO:
 
 The release script derives the version from `CMakeLists.txt` and produces two artifacts in `output/`:
 
-- `Audiocity-1.3.2.0-windows-x64-setup.exe`
-- `Audiocity-1.3.2.0-windows-x64-portable.zip`
+- `Audiocity-1.4.0.0-windows-x64-setup.exe`
+- `Audiocity-1.4.0.0-windows-x64-portable.zip`
 
 ### Installer Behavior
 

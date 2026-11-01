@@ -68,6 +68,23 @@ Status meanings:
 
 Current totals: **11 complete**, **4 implemented with release gates pending**, **0 partial**, and **4 not started**.
 
+### Local release validation — 2026-10-31 (1.4.0.0 candidate)
+
+Hosted CI is intentionally disabled for this project, so the release gates were run locally on Windows (VS 2022, `ci-windows` preset):
+
+| Gate | Result |
+| --- | --- |
+| Debug `ctest --preset ci-windows` | 9/9 passed (includes UI snapshot harness against refreshed baselines) |
+| Native coverage (`report_test_coverage.ps1`) | Runs locally; 80.3% |
+| Release `ci-windows-release` build (Standalone + VST3) | Built |
+| `verify_release_artifacts.ps1 -CompileInstaller` | Passed; 64 presets in both locations; Inno Setup compile succeeded (closes the QW-4 installer gate) |
+| `check_render_deadline.ps1` (Release) | CPU 60.65x, Fidelity 52.28x, Ultra 7.11x real time |
+| 50,000-file library scan/search budget (Release) | Passed; first batch 21.5 ms, search 21.6 ms |
+| `validate_vst3.ps1` pluginval strictness 5 | Accepted |
+| One-hour soak (closes the MP-1 gate) | 2,643 iterations × {runtime smoke, engine suite, concurrent snapshot reclamation, panic} over 60 minutes; 0 failures |
+
+Not covered locally: GitHub-hosted runs (QW-1) and the Linux ASan/UBSan job (dropped; fuzz builds are manual-only). The soak loops the existing deterministic stress tests rather than a live-host session with real automation and UI drags.
+
 ## 1. Quick wins — less than one day each
 
 ### QW-1 — Repair the CI/toolchain contract

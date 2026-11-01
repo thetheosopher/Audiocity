@@ -9,7 +9,7 @@ Audiocity runs as a Windows standalone application or a VST3 instrument. The nor
 1. Open **Browse** and choose a factory preset, or drop a supported audio file into **Sound**. **Source…** also offers importing, recording and waveform generation.
 2. For a single sample, set its **Root** note, choose **Gate**, **One-shot** or **Loop**, and adjust **Coarse** or **Fine** tuning.
 3. Shape the amp envelope, filter and effects directly in Sound. Drag envelope nodes or adjust their controls; click a numeric value to enter it precisely.
-4. Play from MIDI or the compact audition surface. Adjust the two macros when the sound has assignments.
+4. Play from MIDI or the compact audition surface. Adjust the macros when the sound has assignments.
 5. Click **Save**. A new sound opens Save As. Choose a filename and folder; later saves go to that exact file. Factory sounds open Save As so the bundled bank stays intact.
 
 ![Sound workspace](../tests/ui-snapshot-baselines/current/sample.png)
@@ -26,7 +26,7 @@ The title identifies the current sound. An asterisk means it has been edited. Sa
 | Samples | Auditions the raw audio when **Auto preview** is enabled | **Replace sample**, double-click or Enter loads it into the sampler |
 | Instruments | Selects an imported multisample file; it does not preview | **Load instrument**, double-click or Enter imports its mapping |
 
-Search filters the current scope. **Favorites** and **Recent** narrow the results; **Favorite** toggles the selected item. User presets saved outside the normal preset bank appear through recent/favorite paths while those files exist. In Samples or Instruments, **Add folder** chooses the folder to scan and **Refresh** rescans it. Existing index and preview caches remain in use.
+Search filters the current scope. **Only favorites** and **Only recent** narrow the results; **Add to favorites** toggles the selected item (it reads **Favorited** once added). User presets saved outside the normal preset bank appear through recent/favorite paths while those files exist. In Samples or Instruments, **Add folder** chooses the folder to scan and **Refresh** rescans it. Existing index and preview caches remain in use.
 
 For raw samples, Preview/Stop and preview level are separate from loading and from master output. Preview is temporary audition audio; it does not become your MIDI instrument until you replace the sample. Presets and instruments require loading to hear their full mapped and processed sound.
 
@@ -48,7 +48,7 @@ For imported instruments, amp/filter/effects and tuning affect the whole instrum
 
 The audition selector offers **Auto**, **Keyboard**, **Pads** or **Hidden**. Auto shows pads for slice programs and keys for pitched sounds. Keyboard arrows reach other octaves. Pads send the existing eight note/velocity assignments; right-click a pad to change its assignment. Sources with more slices can be reached with MIDI or the keyboard. Hidden leaves MIDI/voice status and **All Notes Off** available.
 
-The two macro values are always near the playing surface. Their names indicate their current destinations: Brightness, Pitch, Level, Multiple destinations or Unassigned. This naming is inferred from the existing routes; it does not alter host parameter identifiers.
+The two macro values appear near the playing surface whenever they are routed to something. Their names indicate their current destinations: Brightness, Pitch, Level or Multiple destinations. Unrouted macros are hidden on Sound and always shown on Modulation. This naming is inferred from the existing routes; it does not alter host parameter identifiers.
 
 Open **Modulation** to edit the existing relationships: mod wheel, pressure, velocity and two macros → pitch, filter cutoff or amplitude, with signed amounts in cents, Hz or percent. Scroll here for vibrato, tremolo, filter envelope, filter LFO, tempo sync and tracking. No new destinations or modulation engine have been added.
 
@@ -70,9 +70,11 @@ After either commit, **Restore previous sound** recovers the instrument that was
 
 Load a supported audio file, then choose **Slice… → Convert source to slices**. Conversion is explicit and keeps a recovery snapshot. It is currently available for file-backed single samples; generated/recorded sources and existing multisample programs are not silently converted. In the slice waveform, double-click to split and right-click near a boundary to merge. Undo/Redo handles boundary edits. **Restore previous sound** reverses the conversion itself.
 
-**Menu → Advanced mapping / export** opens single-zone repair. Select a zone to adjust its note/velocity range, root, region, loop, gain, pan, trigger or loop behavior, then apply the edit. Zone deletion has Undo. **Export instrument** uses the existing SFZ/DecentSampler export path.
+**Menu → Advanced mapping / export** opens single-zone repair. Select a zone to adjust its note/velocity range, root, region, loop, gain, pan, trigger or loop behavior. Single-zone edits apply by themselves a moment after you stop adjusting (key and root accept note names such as `C1` or `Bb2`); **Apply now** commits immediately and **Apply Batch** is used when several zones are selected. Zone deletion has Undo. **Export instrument** uses the existing SFZ/DecentSampler export path.
 
-New Library, create/duplicate zone tools, exhaustive batch authoring, bulk tags and bookmark administration are retired from the visible workflow. Their removal does not strip round-robin groups, velocity fades, choke data, mappings or assets from existing instruments. Those data remain in playback, project state and supported exports.
+**Menu → New empty instrument** starts an empty instrument (the current sound stays recoverable through **Restore previous sound**). **Add sample** on the Mapping page, or **Menu → Add sample to instrument**, adds an audio file as a new zone.
+
+Create/duplicate zone tools, exhaustive batch authoring, bulk tags and bookmark administration are retired from the visible workflow. Their removal does not strip round-robin groups, velocity fades, choke data, mappings or assets from existing instruments. Those data remain in playback, project state and supported exports.
 
 ## Save and recover
 
