@@ -175,7 +175,9 @@ if (-not $SkipTests) {
         '--build', '--preset', 'default', '--config', 'Debug', '--target',
         'audiocity_offline_tests',
         'audiocity_ui_snapshot_harness',
-        'audiocity_preset_runtime_smoke'
+        'audiocity_preset_runtime_smoke',
+        'audiocity_ui_snapshot_header_smoke',
+        'audiocity_ui_snapshot_core_smoke'
     )
 
     Write-Step 'Run test suite'
